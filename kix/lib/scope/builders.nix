@@ -574,6 +574,7 @@ in
               spec = finalSpec;
             })
             (validators.checkPrivileged templateSpec)
+            (validators.checkCriticalPriority templateSpec)
             (
               if userSuppliedLabels then
                 validators.checkSelectorSubset selector templateMeta.labels kind
@@ -650,6 +651,7 @@ in
           [
             workloadCeiling
             (validators.checkPrivileged templateSpec)
+            (validators.checkCriticalPriority templateSpec)
             (validators.checkNamespacedRefs templateSpec)
             (validators.checkContainerResources templateSpec)
             (validators.checkDuplicateNames templateSpec)
@@ -727,6 +729,7 @@ in
           [
             workloadCeiling
             (validators.checkPrivileged templateSpec)
+            (validators.checkCriticalPriority templateSpec)
             (validators.checkNamespacedRefs templateSpec)
             (validators.checkContainerResources templateSpec)
             (validators.checkDuplicateNames templateSpec)
@@ -792,14 +795,16 @@ in
                     null
                 )
                 (
-                  builtins.seq (validators.checkNamedPorts templateSpec) (
-                    builtins.seq (validators.checkContainerResources templateSpec) (
-                      builtins.seq (validators.checkDuplicateNamesChart templateSpec) (
-                        builtins.seq (validators.checkFieldRefs templateSpec) (
-                          withWarnings (sealWorkload {
-                            inherit workloadInput selector hostNetwork;
-                            workloadKind = kind;
-                          })
+                  builtins.seq (validators.checkCriticalPriority templateSpec) (
+                    builtins.seq (validators.checkNamedPorts templateSpec) (
+                      builtins.seq (validators.checkContainerResources templateSpec) (
+                        builtins.seq (validators.checkDuplicateNamesChart templateSpec) (
+                          builtins.seq (validators.checkFieldRefs templateSpec) (
+                            withWarnings (sealWorkload {
+                              inherit workloadInput selector hostNetwork;
+                              workloadKind = kind;
+                            })
+                          )
                         )
                       )
                     )

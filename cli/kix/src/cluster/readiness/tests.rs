@@ -883,8 +883,8 @@ fn import_marker_parsed() {
 
 #[test]
 fn secret_import_marker_inherits_marker_namespace() {
-    // Namespaced imports take their namespace from the marker's own
-    // metadata.namespace, not from any annotation.
+    // A namespaced import without kix.run/import-namespace takes its
+    // namespace from the marker's own metadata.namespace.
     let manifest = json!({
         "apiVersion": keys::API_VERSION,
         "kind": "PackageInstance",
@@ -907,6 +907,31 @@ fn secret_import_marker_inherits_marker_namespace() {
     assert_eq!(target.name, "db-creds");
     assert_eq!(target.namespace.as_deref(), Some("myapp"));
     assert_eq!(target.expected_keys, vec!["username", "password"]);
+}
+
+#[test]
+fn import_marker_names_target_in_another_namespace() {
+    // GKE Autopilot refuses writes to kube-system, so the platform-dns marker
+    // lives in gke-managed and names the Service's namespace.
+    let manifest = json!({
+        "kind": "PackageInstance",
+        "metadata": {
+            "name": "platform-dns",
+            "namespace": "gke-managed",
+            "annotations": {
+                keys::MODE: "import",
+                keys::IMPORT_KIND: "Service",
+                keys::IMPORT_API_VERSION: "v1",
+                keys::IMPORT_NAME: "kube-dns",
+                keys::IMPORT_NAMESPACE: "kube-system",
+            }
+        }
+    });
+    let target = import_target_from_manifest(&manifest)
+        .unwrap()
+        .expect("should parse");
+    assert_eq!(target.name, "kube-dns");
+    assert_eq!(target.namespace.as_deref(), Some("kube-system"));
 }
 
 #[test]

@@ -243,6 +243,7 @@ spec:
 | `kix.run/optional-activated` | Activated optional instances | `"true"` when an `optional = true` instance was activated by dependency demand. |
 | `kix.run/mode` | Import and ref markers | `"import"` on markers created by `kix.mkImport`, `scope.mkSecretRef`, `scope.mkServiceRef`, and `scope.mkCRDRef`. |
 | `kix.run/import-kind`, `kix.run/import-apiversion`, `kix.run/import-name` | Import, SecretRef, ServiceRef markers | Target Kubernetes object identity verified by `kix deploy` before dependent waves run. |
+| `kix.run/import-namespace` | `kix.mkImport` markers when `namespace` differs from the instance's namespace | Namespace of the target Kubernetes object. When omitted, build validation and `kix deploy` look for a namespaced target in the marker's own namespace. |
 | `kix.run/import-secret-keys` | `scope.mkSecretRef` markers | Comma-separated keys that must exist in the external `Secret`'s `data`. |
 | `kix.run/import-fqdn`, `kix.run/service-selector`, `kix.run/service-ports`, `kix.run/service-labels` | `scope.mkServiceRef` and Service imports | Service address, JSON-encoded selector, ports, and metadata labels used by network policy derivation and scorecard rules. |
 | `kix.run/crd-kind`, `kix.run/crd-version`, `kix.run/crd-served-versions`, `kix.run/crd-scope` | `scope.mkCRDRef` and `kix.mkImport { crds }` markers | CRD kind, default version, comma-separated served versions, and scope (`Namespaced` or `Cluster`) verified against the live CRD during `kix deploy`. |

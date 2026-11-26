@@ -180,7 +180,8 @@ Some packages derive runtime settings from `resources.limits.memory` or require 
 | `gpu` | `nullOr bool` | `null` | Whether GPU scheduling (`nvidia.com/gpu`) is available on cluster nodes. |
 | `privilegedContainers` | `nullOr bool` | `null` | Whether pods may run privileged containers or use host namespaces (`hostNetwork`, `hostPID`, `hostIPC`). Set to `false` by `gke-autopilot` and `openshift`. |
 | `podSecurityEnforcement` | `nullOr ("privileged" \| "baseline" \| "restricted")` | `null` | Cluster-wide Pod Security Admission or Security Context Constraint level enforced by the platform. |
-| `daemonSets` | `nullOr bool` | `null` | Whether DaemonSets may be deployed (`false` on `gke-autopilot`). |
+| `daemonSets` | `nullOr bool` | `null` | Whether DaemonSets may be deployed. |
+| `criticalPriorityNamespaces` | `nullOr (listOf str)` | `null` | Namespaces where the cluster allows pods with both built-in PriorityClasses (`system-node-critical` and `system-cluster-critical`). Each listed namespace must allow both classes, because Kix permits either class in any listed namespace. Workloads using either class in any other namespace fail the build. `null` means no known restriction. Set to `[ "kube-system" ]` by `gke` and `[ ]` by `gke-autopilot` (disallowing both classes in every namespace). |
 
 ### `cluster.nodes`
 

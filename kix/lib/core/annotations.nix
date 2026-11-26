@@ -55,6 +55,9 @@ rec {
     importKind = key "import-kind";
     importApiVersion = key "import-apiversion";
     importName = key "import-name";
+    # Stamped only when the imported object is in another namespace than
+    # the marker.
+    importNamespace = key "import-namespace";
     importFqdn = key "import-fqdn";
     importSecretKeys = key "import-secret-keys";
     # Stamped on CRD ref markers (`scope.mkCRDRef` and `mkImport` `crds`) to

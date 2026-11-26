@@ -141,7 +141,7 @@ rec {
           [
             {
               inherit kind iname anns;
-              ns = r.metadata.namespace or "cluster-scoped";
+              ns = anns.${kixKeys.importNamespace} or r.metadata.namespace or "cluster-scoped";
             }
           ]
         else

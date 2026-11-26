@@ -169,6 +169,10 @@ pub const IMPORT_API_VERSION: &str = key!("import-apiversion");
 /// Name of the imported resource.
 pub const IMPORT_NAME: &str = key!("import-name");
 
+/// Namespace of the imported resource, when it differs from the marker's own
+/// namespace. Absent means the marker's namespace.
+pub const IMPORT_NAMESPACE: &str = key!("import-namespace");
+
 /// Comma-separated keys an imported Secret must carry.
 pub const IMPORT_SECRET_KEYS: &str = key!("import-secret-keys");
 
