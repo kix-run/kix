@@ -376,6 +376,12 @@ fn counts_labelled(r: &DeployResult, held_back: Option<&str>) -> String {
     if r.pruned > 0 {
         text.push_str(&format!(", {} pruned", output::red(&r.pruned.to_string())));
     }
+    if r.kept > 0 {
+        text.push_str(&format!(
+            ", {} left on the cluster",
+            output::yellow(&r.kept.to_string())
+        ));
+    }
     text
 }
 
@@ -460,7 +466,14 @@ pub(super) fn closing(r: &DeployResult, c: &Closing<'_>) -> String {
     if c.current {
         // The record became current although objects failed: under
         // `--on-error continue`, or when only a prune delete failed.
-        if c.on_error_continue {
+        if r.failed == 0 {
+            let _ = writeln!(
+                out,
+                "[K6315] {noun} of '{cluster}' left {} object(s) on the cluster: {}",
+                r.kept,
+                counts(r, false)
+            );
+        } else if c.on_error_continue {
             let _ = writeln!(
                 out,
                 "{noun} of '{cluster}' finished with {} failure(s) (`--on-error continue`): {}",
@@ -493,12 +506,26 @@ pub(super) fn closing(r: &DeployResult, c: &Closing<'_>) -> String {
                 let _ = writeln!(out, "    - Deployment record {record} is now Active.");
             }
         }
+        if r.kept > 0 {
+            let _ = writeln!(
+                out,
+                "    - {} object(s) that left the build are still on the cluster, kept because an object they depend on was not deleted or because they form a dependency cycle. The lines above that start with `prune>` name them.",
+                r.kept
+            );
+        }
         let _ = writeln!(out);
         let _ = writeln!(out, "  Next:");
-        let _ = write!(
-            out,
-            "    Fix the failed resource(s) above and run `{again}` again."
-        );
+        if r.failed == 0 {
+            let _ = write!(
+                out,
+                "    Resolve what kept them and run `kix gc {cluster}` to delete them."
+            );
+        } else {
+            let _ = write!(
+                out,
+                "    Fix the failed resource(s) above and run `{again}` again."
+            );
+        }
         return out;
     }
     // A run that applies the build the Active record already holds, such as

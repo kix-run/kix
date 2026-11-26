@@ -316,9 +316,9 @@ mod delete_tests {
         })
     }
 
-    /// Verify that `delete_resources` deletes unshared garbage, keeps resources
-    /// still deployed by another Kix cluster, and records resources modified
-    /// concurrently as `changed`.
+    /// Verify that `delete_resources` deletes unshared garbage, and keeps
+    /// resources another Kix cluster deploys, including one it stamps between
+    /// the guard's read and its delete.
     #[tokio::test]
     async fn delete_resources_goes_through_the_prune_guard() {
         let api = FakeApi::new([
@@ -349,8 +349,9 @@ mod delete_tests {
             Deletions {
                 deleted: 1,
                 failed: 0,
-                changed: 1,
+                changed: 0,
                 held: 0,
+                held_shared: 0,
             }
         );
         assert_eq!(api.names("ClusterRole"), vec!["racing", "shared"]);
@@ -438,6 +439,7 @@ mod delete_tests {
                 failed: 1,
                 changed: 0,
                 held: 1,
+                held_shared: 0,
             }
         );
         assert!(!done.all_gone());

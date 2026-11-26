@@ -77,6 +77,7 @@ impl Line {
                 failed_after_apply: r.failed_after_apply,
                 cancelled: r.cancelled,
                 pruned: r.pruned,
+                kept: r.kept,
                 nothing_to_apply: false,
                 left_behind: Vec::new(),
             },
@@ -109,6 +110,7 @@ impl Line {
                 failed_after_apply: 0,
                 cancelled: 0,
                 pruned: 0,
+                kept: 0,
                 nothing_to_apply: true,
                 left_behind: Vec::new(),
             },
@@ -208,7 +210,13 @@ pub enum Event {
         #[serde(default)]
         failed_after_apply: usize,
         cancelled: usize,
+        /// Orphans this run deleted. An orphan already gone is not counted.
         pruned: usize,
+        /// Orphans of this Kix cluster the prune left on the cluster, held
+        /// back by an object whose delete failed or by a dependency cycle.
+        /// The `prune_kept` lines name them.
+        #[serde(default)]
+        kept: usize,
         /// True when the plan had nothing to apply or prune, so the deploy
         /// wrote nothing and the active deployment record stays current. The
         /// log then holds no `plan` or `node` lines.
