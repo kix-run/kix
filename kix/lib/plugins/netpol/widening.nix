@@ -56,7 +56,7 @@
     fixable = false;
     detail = "node rules also match any pods with IPs in `cluster.network.nodeCidrs`";
     summary = "Standard `NetworkPolicy` has no node selector, so Kix targets cluster nodes using `cluster.network.nodeCidrs`. On this platform, CIDR rules also match any pods whose IPs fall in those ranges (Kix cannot verify whether pods and nodes share subnets).";
-    fix = "If nodes and pods use separate subnets, list only the node subnets in `cluster.network.nodeCidrs`. If they share subnets, Kix cannot exclude pod IPs; restrict node rules to specific `ports` where possible.";
+    fix = "On a default Amazon VPC CNI cluster, pods and nodes share subnets and no `cluster.network` setting narrows node rules, so restrict them to specific `ports` to limit what they open. With VPC CNI custom networking (separate pod subnets), list only the node subnets in `cluster.network.nodeCidrs` to keep pods out of node rules, though no setting removes this finding.";
   };
   host-all-nodes = {
     fixable = false;
