@@ -46,11 +46,59 @@ struct CloudIdentity {
     /// roles are granted to the Kubernetes ServiceAccount itself), or
     /// `clientId` and `tenantId` for Azure.
     identity: serde_json::Map<String, serde_json::Value>,
+    /// The ServiceAccount in the form its cloud accepts for this identity:
+    /// the `sub` of an IRSA trust policy or the subject of an Azure federated
+    /// credential (`system:serviceaccount:<namespace>:<name>`), the member
+    /// of a `roles/iam.workloadIdentityUser` binding for a Google service
+    /// account (`serviceAccount:<project-id>.svc.id.goog[<namespace>/<name>]`),
+    /// or the principal of a direct Google grant
+    /// (`principal://iam.googleapis.com/...`). Null for EKS Pod Identity,
+    /// whose association takes `namespace` and `serviceAccount` as two
+    /// fields.
+    subject: Option<String>,
+    /// The placeholders in `subject` for values Kix does not know, such as
+    /// `<project-id>` and `<project-number>` of the Google Cloud project
+    /// that holds the cluster's workload identity pool. Replace each before
+    /// use.
+    subject_placeholders: Vec<String>,
     /// `system:serviceaccount:<namespace>:<name>`, the subject of the
-    /// ServiceAccount's token. An AWS role's trust policy and an Azure
-    /// federated credential name it. Google Cloud names the same pair as
-    /// `ns/<namespace>/sa/<name>` in its own member strings.
-    subject: String,
+    /// ServiceAccount's Kubernetes token, on every cloud.
+    kubernetes_subject: String,
+}
+
+/// Placeholders for the Google Cloud project that holds the cluster's
+/// workload identity pool, which the cluster definition does not name.
+const PROJECT_ID: &str = "<project-id>";
+const PROJECT_NUMBER: &str = "<project-number>";
+
+/// Return the subject in the form `cloud` and `mechanism` accept for
+/// `identity`, and the placeholders it holds.
+fn cloud_subject(
+    cloud: &str,
+    mechanism: &str,
+    identity: &serde_json::Map<String, serde_json::Value>,
+    namespace: &str,
+    name: &str,
+) -> (Option<String>, Vec<String>) {
+    match (cloud, mechanism) {
+        ("aws", "eks-pod-identity") => (None, Vec::new()),
+        ("gcp", _) if identity.contains_key("serviceAccount") => (
+            Some(format!(
+                "serviceAccount:{PROJECT_ID}.svc.id.goog[{namespace}/{name}]"
+            )),
+            vec![PROJECT_ID.to_string()],
+        ),
+        ("gcp", _) => (
+            Some(format!(
+                "principal://iam.googleapis.com/projects/{PROJECT_NUMBER}/locations/global/workloadIdentityPools/{PROJECT_ID}.svc.id.goog/subject/ns/{namespace}/sa/{name}"
+            )),
+            vec![PROJECT_NUMBER.to_string(), PROJECT_ID.to_string()],
+        ),
+        _ => (
+            Some(format!("system:serviceaccount:{namespace}:{name}")),
+            Vec::new(),
+        ),
+    }
 }
 
 /// Return the cloud identity a ServiceAccount manifest records, or `None`.
@@ -64,8 +112,12 @@ fn cloud_identity_of(manifest: &serde_json::Value, rid: &ResourceId) -> Option<C
     let (cloud, identity) = record.as_object()?.iter().find_map(|(k, v)| {
         (k != "mechanism").then(|| Some((k.clone(), v.as_object()?.clone())))
     })??;
+    let (subject, subject_placeholders) =
+        cloud_subject(&cloud, &mechanism, &identity, &rid.namespace, &rid.name);
     Some(CloudIdentity {
-        subject: format!("system:serviceaccount:{}:{}", rid.namespace, rid.name),
+        subject,
+        subject_placeholders,
+        kubernetes_subject: format!("system:serviceaccount:{}:{}", rid.namespace, rid.name),
         namespace: rid.namespace.clone(),
         service_account: rid.name.clone(),
         cloud,
@@ -173,7 +225,10 @@ impl CommandResponse for InspectResponse {
                         .collect::<Vec<_>>()
                         .join(" ")
                 };
-                table.add_row([id.subject.as_str(), id.mechanism.as_str(), &identity]);
+                let subject = id.subject.clone().unwrap_or_else(|| {
+                    format!("association for {}/{}", id.namespace, id.service_account)
+                });
+                table.add_row([subject.as_str(), id.mechanism.as_str(), &identity]);
             }
             out.push_str(&table.to_string());
         }
@@ -244,7 +299,15 @@ mod tests {
             })),
         );
         let id = cloud_identity_of(&m, &ResourceId::from_value(&m)).expect("bound");
-        assert_eq!(id.subject, "system:serviceaccount:external-dns:route53");
+        assert_eq!(
+            id.subject.as_deref(),
+            Some("system:serviceaccount:external-dns:route53")
+        );
+        assert!(id.subject_placeholders.is_empty());
+        assert_eq!(
+            id.kubernetes_subject,
+            "system:serviceaccount:external-dns:route53"
+        );
         assert_eq!(id.cloud, "aws");
         assert_eq!(id.mechanism, "irsa");
         assert_eq!(
@@ -276,9 +339,61 @@ mod tests {
         };
         let text = response.text();
         assert!(
-            text.contains("system:serviceaccount:external-dns:dns"),
+            text.contains("principal://iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/<project-id>.svc.id.goog/subject/ns/external-dns/sa/dns"),
             "{text}"
         );
         assert!(text.contains("Kubernetes ServiceAccount"), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod subject_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn fields(v: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+        v.as_object().unwrap().clone()
+    }
+
+    // Each cloud gets the form it accepts, with placeholders only for the
+    // Google project, which Kix does not know.
+    #[test]
+    fn each_cloud_gets_its_own_form() {
+        let linked = cloud_subject(
+            "gcp",
+            "gke",
+            &fields(json!({ "serviceAccount": "dns@p.iam.gserviceaccount.com" })),
+            "ns",
+            "sa",
+        );
+        assert_eq!(
+            linked,
+            (
+                Some("serviceAccount:<project-id>.svc.id.goog[ns/sa]".to_string()),
+                vec!["<project-id>".to_string()]
+            )
+        );
+        let direct = cloud_subject("gcp", "gke", &fields(json!({})), "ns", "sa");
+        assert_eq!(direct.1, vec!["<project-number>", "<project-id>"]);
+        assert!(direct.0.unwrap().ends_with("/subject/ns/ns/sa/sa"));
+        let azure = cloud_subject(
+            "azure",
+            "azure-workload-id",
+            &fields(json!({ "clientId": "x" })),
+            "ns",
+            "sa",
+        );
+        assert_eq!(
+            azure,
+            (Some("system:serviceaccount:ns:sa".to_string()), vec![])
+        );
+        let pod_identity = cloud_subject(
+            "aws",
+            "eks-pod-identity",
+            &fields(json!({ "roleArn": "r" })),
+            "ns",
+            "sa",
+        );
+        assert_eq!(pod_identity, (None, vec![]));
     }
 }

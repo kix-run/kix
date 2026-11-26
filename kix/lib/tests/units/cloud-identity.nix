@@ -404,6 +404,7 @@ let
           creds = kixlib.cloudIdentity.use {
             inherit scope cloud;
             dep = credentials;
+            arg = "credentials";
           };
           podSpec = {
             serviceAccount = self.serviceAccount;

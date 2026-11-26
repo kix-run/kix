@@ -230,7 +230,16 @@ let
     else
       null;
 
-  bindTo = dep: args: args // { _cloudIdentity = dep; };
+  # Put identity `dep` on ServiceAccount arguments, with `arg`, the name of
+  # the dependency that holds it, so a later refusal can name it.
+  bindTo =
+    dep: arg: args:
+    args
+    // {
+      _cloudIdentity = dep // {
+        dependency = arg;
+      };
+    };
 
   # Return how a message names the dependency `arg` of the instance, or the
   # dependency in general when `arg` is null, as `this` inside a sentence
@@ -318,7 +327,7 @@ let
       {
         secret = null;
         identity = dep;
-        bind = bindTo dep;
+        bind = bindTo dep arg;
       };
 
   # Read a dependency that holds a cloud identity or nothing, on a package
@@ -384,7 +393,7 @@ let
       {
         identity = dep;
         inherit (dep) cloud;
-        bind = bindTo dep;
+        bind = bindTo dep arg;
       };
 
   # Compare `cloud`, the cloud that an object reaches with the pod's own

@@ -145,6 +145,8 @@ in
                           null
                         else
                           {
+                            # The dependency that holds the identity, or null.
+                            inherit (identity) dependency;
                             inherit (rendered)
                               podLabels
                               stamp
@@ -242,7 +244,9 @@ in
           fail {
             id = "K2669";
             instance = builtBy;
-            message = "${workload} sets `hostNetwork: true` and uses ServiceAccount `${sa.out.name}`, which has a cloud identity. ${identity.description} does not grant cloud identities to host-network pods, so they would run with the node's credentials. Kix rejected ${workload}.";
+            message = "${workload} sets `hostNetwork: true` and uses ServiceAccount `${sa.out.name}`, which has a cloud identity${
+              lib.optionalString (identity.dependency != null) " from `deps.${identity.dependency}`"
+            }. ${identity.description} does not grant cloud identities to host-network pods, so they would run with the node's credentials. Kix rejected ${workload}.";
             fix = "Use a separate ServiceAccount without a cloud identity, or remove `hostNetwork: true`.";
           }
         else

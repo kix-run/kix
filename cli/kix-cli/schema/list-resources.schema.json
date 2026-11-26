@@ -12,6 +12,10 @@
           "description": "The identity's fields as the definition gives them, such as\n`roleArn` for AWS, `serviceAccount` for Google Cloud (absent when\nroles are granted to the Kubernetes ServiceAccount itself), or\n`clientId` and `tenantId` for Azure.",
           "type": "object"
         },
+        "kubernetesSubject": {
+          "description": "`system:serviceaccount:<namespace>:<name>`, the subject of the\nServiceAccount's Kubernetes token, on every cloud.",
+          "type": "string"
+        },
         "mechanism": {
           "description": "How the cluster delivers the identity: `irsa`, `eks-pod-identity`,\n`gke`, or `azure-workload-id`.",
           "type": "string"
@@ -23,8 +27,18 @@
           "type": "string"
         },
         "subject": {
-          "description": "`system:serviceaccount:<namespace>:<name>`, the subject of the\nServiceAccount's token. An AWS role's trust policy and an Azure\nfederated credential name it. Google Cloud names the same pair as\n`ns/<namespace>/sa/<name>` in its own member strings.",
-          "type": "string"
+          "description": "The ServiceAccount in the form its cloud accepts for this identity:\nthe `sub` of an IRSA trust policy or the subject of an Azure federated\ncredential (`system:serviceaccount:<namespace>:<name>`), the member\nof a `roles/iam.workloadIdentityUser` binding for a Google service\naccount (`serviceAccount:<project-id>.svc.id.goog[<namespace>/<name>]`),\nor the principal of a direct Google grant\n(`principal://iam.googleapis.com/...`). Null for EKS Pod Identity,\nwhose association takes `namespace` and `serviceAccount` as two\nfields.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subjectPlaceholders": {
+          "description": "The placeholders in `subject` for values Kix does not know, such as\n`<project-id>` and `<project-number>` of the Google Cloud project\nthat holds the cluster's workload identity pool. Replace each before\nuse.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -33,7 +47,9 @@
         "cloud",
         "mechanism",
         "identity",
-        "subject"
+        "subject",
+        "subjectPlaceholders",
+        "kubernetesSubject"
       ],
       "type": "object"
     },
