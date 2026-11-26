@@ -66,9 +66,12 @@ themselves.
 
 ## 2. Decision 4: the DNS provider publishes its peers
 
-**Decision.** The instance claiming the `dns` role exports its DNS endpoints as
-`out.dnsPeers`, and both renderers build `dnsEgressRule` from that list instead
-of hard-coding `k8s-app: kube-dns`.
+**Decision.** The provider for the `dns` role declares its DNS endpoints in
+package metadata as `meta.dnsPeers`, which Kix reads without evaluating the
+provider instance. Both renderers build `dnsEgressRule` from that list instead
+of hard-coding `k8s-app: kube-dns`. The standard renderer accepts both pod and
+`cidr` peers, and the Cilium renderer refuses `cidr` peers until a platform
+that runs Cilium needs one.
 
 ```nix
 # kix/lib/flavors/gke.nix
@@ -85,9 +88,13 @@ platform-dns = platformDns {
 ```
 
 `peers` defaults to `k8s-app: kube-dns` in `kube-system`, so existing clusters
-produce identical manifests. The `coredns` package exports its own pod
-selector, and the `cilium` package's cluster-wide DNS policy reads the same
-`out.dnsPeers` value.
+produce identical manifests. A pod peer with no `namespace` means the provider
+instance's own namespace. The `coredns` package publishes its own pods this way
+in `meta.dnsPeers`, and the `cilium` package's cluster-wide DNS policy reads
+the same `meta.dnsPeers` value. For a platform import (`platform-dns` in the
+flavors), this design assumes the same `dnsPeers` key in the import's metadata.
+Whether an import uses `meta.dnsPeers` or keeps `dnsPeers` on `out` is still
+open.
 
 The GKE flavors list all four documented GKE DNS destinations. Any single GKE
 cluster uses only one or two of them, and rules for absent peers open nothing
@@ -106,7 +113,14 @@ match them.
 | `169.254.169.254` (Cloud DNS without NodeLocal DNSCache) | D [g-clouddns]; untested (**A**) |
 | EKS CoreDNS pods | D [a-bp] |
 
-**Cost.** One additional field (`out.dnsPeers`) on the `dns` role's `out`.
+**Cost.** One additional metadata field (`meta.dnsPeers`) on providers of the
+`dns` role.
 
-**Rejected.** *Allow outbound port 53 to any IP address.* Unrestricted DNS
-egress is a well-known data exfiltration channel.
+**Rejected.**
+
+- *Publish DNS peers through `out`.* Policy generation cannot read a managed
+  provider's `out` because evaluating the instance forces its parts, and the
+  policies for those parts need the DNS peers. On a cluster that deploys the
+  `coredns` package, that cycle causes infinite recursion.
+- *Allow outbound port 53 to any IP address.* Unrestricted DNS egress is a
+  well-known data exfiltration channel.

@@ -115,7 +115,7 @@ inbound traffic to pods covered by an egress-only policy (D [k-np]).
 |---|---|---|---|
 | Pods by label (in one namespace or all namespaces) | `toEndpoints`, `fromEndpoints` | `podSelector` with `namespaceSelector` | Same |
 | Default deny for a namespace | Empty rule per direction | `podSelector: {}` with `policyTypes` | Same |
-| DNS egress | Pods from the DNS provider | Peers from `out.dnsPeers` (decision 4) | Same |
+| DNS egress | Pod peers from `meta.dnsPeers` (`cidr` peers refused) | Pod and `cidr` peers from `meta.dnsPeers` (decision 4) | Same |
 | API server egress | `kube-apiserver`, `host`, and `remote-node` | `ipBlock` from `cluster.network.apiServer` (decision 6) | Same when set; refused when unset |
 | API server ingress (webhooks) | `kube-apiserver`, `host`, and `remote-node` | Peers from `cluster.network.apiServer.sources` | Same when set; refused when unset |
 | `world` egress | `world` entity | `0.0.0.0/0` and `::/0`, always excluding `169.254.0.0/16` and `fe80::/10`, and excluding `cluster.network.podCidr` (where `ipBlockSelectsPods` is `true`), `nodeCidrs` (where `ipBlockSelectsNodes` is `true`), and `serviceCidr` (where `ipBlockSeesServiceAddress` is `true`) when set | Wider where `0.0.0.0/0` matches pods, nodes, or Services and the matching CIDRs are unset; same once excluded. On GKE, `0.0.0.0/0` reaches nodes (V, N2, N4), an `except` entry for the node range removes them (V, N4), and the rule needs no pod range entry because `0.0.0.0/0` never reaches pods (V, N4). `0.0.0.0/0` also reaches the metadata server (V, N4), which would give a pod with a `world` rule on port 80 a path to credentials. To close that path, the standard renderer always excludes the link-local ranges `169.254.0.0/16` and `fe80::/10` from `world` rules, with no setting. A workload that needs a link-local address gets it from its cloud identity mechanism or its DNS peers. On GKE, a `world` egress rule is the same as Cilium's once `cluster.network.nodeCidrs` is set, and wider (nodes admitted) while it is unset. On EKS, `0.0.0.0/0` admits pods and nodes (V, AWS Q3). Where `ipBlockSeesServiceAddress` is `true`, it also admits every Service on that Service port, including the API server on 443 (V, AWS Q1), so the excluded ranges there are `cluster.network.podCidr`, `nodeCidrs`, and `serviceCidr`. On EKS, pods and nodes take addresses from the VPC subnets, so excluding them also blocks other endpoints in the VPC; most EKS clusters will therefore keep the wider rule and see the report |
@@ -268,19 +268,24 @@ cost, and the rejected alternatives.
 
 ## 6. Decision 4: the DNS provider publishes its peers
 
-The instance that claims the `dns` role publishes the destinations for DNS
-queries as `out.dnsPeers`. Both renderers build the DNS rule from that list.
-See `181c_network_policy_identity_egress_and_dns.md` (section 2) for how this
+The provider for the `dns` role declares the destinations for DNS queries in
+metadata as `meta.dnsPeers`. Both renderers build the DNS rule from that list:
+the standard renderer accepts pod and `cidr` peers, and the Cilium renderer
+refuses `cidr` peers until a platform that runs Cilium needs one. See
+`181c_network_policy_identity_egress_and_dns.md` (section 2) for how this
 works, the peers listed in the GKE flavors and the evidence for each, the cost,
-and the rejected alternative.
+and the rejected alternatives.
 
 ## 7. Decision 5: generate default-deny only for Kix-managed namespaces
 
-**Decision.** Kix writes `<namespace>-default-deny` only when a namespace holds
-at least one active instance that Kix deploys, or when the cluster definition
-explicitly declares that namespace under `namespaces`. Imports (`kix.mkImport`)
-and inactive optional instances do not count. In addition, Kix never writes a
-default-deny policy in any namespace listed in
+**Decision.** Kix writes network policy only over pods it deploys. One fact,
+computed once per target, records whether Kix deploys that target, and default
+deny, scrape ingress policies, and caller ingress policies all read that one
+fact. Kix therefore writes `<namespace>-default-deny` only when a namespace
+holds at least one active instance that Kix deploys, or when the cluster
+definition explicitly declares that namespace under `namespaces`. Imports
+(`kix.mkImport`) and inactive optional instances do not count. In addition, Kix
+never writes a default-deny policy in any namespace listed in
 `networkPolicy.platformNamespaces`.
 
 Cloud flavors default `networkPolicy.platformNamespaces` to
@@ -292,9 +297,12 @@ so their behavior does not change. `kind` and `rke2` continue describing their
 `kube-system` pods with `networkPolicy.platformIntents`, while `k3s` and
 `talos` declare none.
 
-Inside a `platformNamespaces` namespace, Kix also writes no policy selecting
-pods that Kix does not deploy, unless configured in
-`networkPolicy.platformIntents`.
+Because scrape ingress and caller ingress policies read that per-target fact in
+every namespace, a workload's connection to a platform import (for example,
+`kube-dns` in `kube-system` on a cloud flavor) gets no caller-ingress policy
+over the platform's pods. Kix still writes the caller's own egress rule.
+Explicit `networkPolicy.platformIntents` entries remain the one way to write
+policy over pods that Kix does not deploy.
 
 **Cost.** On upgrade, a namespace containing only imports loses its
 default-deny policy without a build error. That requires a `silent`
