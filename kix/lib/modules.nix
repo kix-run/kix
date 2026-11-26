@@ -547,7 +547,7 @@ in
         default = null;
         description = ''
           Whether pods can run privileged, use hostNetwork, hostPID, etc.
-          False on GKE Autopilot (hard platform restriction) and effectively
+          False on GKE Autopilot (GKE's admission webhook blocks privileged pods) and effectively
           false on OpenShift (SCC restricted by default). null = unknown:
           relying workloads warn instead of failing.
         '';
@@ -565,7 +565,7 @@ in
         description = ''
           Pod Security Admission enforcement level, if any.
           null = no cluster-wide enforcement (individual namespaces may still set labels).
-          "baseline" = GKE Autopilot default.
+          "baseline" = GKE Autopilot default (enforced by GKE's admission webhook).
           "restricted" = OpenShift SCC default.
         '';
       };
@@ -574,8 +574,7 @@ in
         type = lib.types.nullOr lib.types.bool;
         default = null;
         description = ''
-          Whether DaemonSets can be deployed. False on GKE Autopilot where
-          the platform manages all node-level daemons. null = unknown.
+          Whether DaemonSets can be deployed. null = unknown.
         '';
       };
 

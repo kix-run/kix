@@ -31,6 +31,11 @@ rec {
       out ? { },
       kind ? null,
       apiVersion ? null,
+      # Namespace of the object this import stands for, when it is not the
+      # namespace of the import instance. A platform can refuse writes to the
+      # object's namespace, so the instance can live elsewhere and still name
+      # it. null means the instance's own namespace.
+      namespace ? null,
       # Roles that this environment-provided service fulfills. A managed
       # instance declaring the same role takes precedence over the import. Each
       # role name also acts as a dependency-resolution alias.
@@ -58,6 +63,7 @@ rec {
         out
         kind
         apiVersion
+        namespace
         crds
         ;
       meta = {
@@ -698,7 +704,12 @@ rec {
         }
         // lib.optionalAttrs (derived.hints ? apiVersion) {
           ${kixKeys.importApiVersion} = derived.hints.apiVersion;
-        };
+        }
+        //
+          lib.optionalAttrs ((importDef.namespace or null) != null && importDef.namespace != namespaceName)
+            {
+              ${kixKeys.importNamespace} = importDef.namespace;
+            };
         labels = clusterLabels // {
           "app.kubernetes.io/instance" = instanceName;
           "app.kubernetes.io/managed-by" = "kix";

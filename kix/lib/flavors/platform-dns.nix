@@ -2,8 +2,10 @@
 #
 # A flavour names the Service once, by `name` and `namespace`, and the import
 # derives `out.name` and `out.fqdn` from them. The import marker names the
-# Service, so `kix deploy` checks that it exists in the namespace of the
-# import instance before it applies the workloads that depend on DNS.
+# Service and its namespace, so `kix deploy` checks that it exists before it
+# applies the workloads that depend on DNS. The instance can live in another
+# namespace, which matters where the platform refuses writes to the
+# Service's namespace.
 
 {
   lib,
@@ -20,6 +22,7 @@
     kind = "Service";
     apiVersion = "v1";
     roles = [ "dns" ];
+    inherit namespace;
     out = {
       inherit name;
       fqdn = "${name}.${namespace}.svc.${clusterDomain}";
