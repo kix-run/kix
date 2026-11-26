@@ -14,10 +14,12 @@ installs them.
 | `vendor-crds.py` | CRD vendoring workflow, crd-vendoring skill | Refreshes the CRDs and operator roles packages vendor, or checks them with `--check`. |
 | `vendor-clickhouse-crd-schemas.py` | By hand, when bumping clickhouse-operator | Vendors the Altinity operator's CRD schemas into the package. |
 | `sign-release.sh` | Release job in `cli-tests.yml` | Signs a release's `SHA256SUMS`. |
+| `sign-index.sh` | `pages.yml`, release rehearsal in `cli-tests.yml` | Signs the release index that kix.run serves. |
+| `check-bump.sh` | Bump agent workflow, package-authoring skill | Reports whether a package version bump is complete. |
 | `kix-manifests.sh` | Other scripts, by hand | Writes a cluster's manifests to a directory through `kix build`, so it works for clusters that use Helm. |
 | `cluster-checks.sh` | By hand | Runs the schema check and the alert rule tests of one cluster on those manifests. |
 | `kix-rollback-check.sh` | By hand | Builds one cluster, a variant of it, and the first again, and checks the first and last builds are identical. |
-| `kind-gateway.sh`, `kind-mayastor.sh`, `kind-operators.sh`, `kind-spread.sh`, `kind-velero.sh`, `kind-virtualization.sh` | By hand | Each creates a kind cluster, deploys the test cluster its header names, and checks the result. |
+| `kind-gateway.sh`, `kind-mayastor.sh`, `kind-operators.sh`, `kind-spread.sh`, `kind-velero.sh`, `kind-virtualization.sh` | By hand | Each creates a kind cluster, deploys the test cluster its header names, and checks the result. `kind-spread-config.yaml` is the kind config `kind-spread.sh` uses. |
 | `test-monitoring-integration.sh` | By hand | Deploys `clusters/test-monitoring-native.nix` to a new kind cluster and checks that Prometheus, Alertmanager, and Grafana work. |
 | `kix-dump.py` | By hand | Dumps live cluster resources into a directory of normalized YAML. |
 | `compare-cluster-dump.py` | By hand | Compares a Kix build with a dump from `kix-dump.py` and reports the differences. |
