@@ -109,10 +109,10 @@ version" rather than "the same release" when two parts must agree.
 
 ## Messaging constraints (kix startup positioning)
 
-- kix the CLI/service is proprietary and closed source, and will remain so.
-  Do not write "no lock-in" as a blanket claim or imply the tool is or will
-  become open source.
-- The defensible claim instead: kix's *output* is standard Kubernetes;
+- Kix (the CLI, the library, and the packages in this repository) is open
+  source under the Apache License 2.0. Kix Enterprise is a separate product
+  and is not open source. Do not write "no lock-in" as a blanket claim.
+- The defensible claim: kix's *output* is standard Kubernetes;
   "leaving kix means losing the tooling, not your infrastructure";
   "no proprietary runtime" is acceptable only when clearly about what runs in
   the cluster.

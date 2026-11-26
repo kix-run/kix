@@ -67,9 +67,7 @@
           meta = {
             description = "Kubernetes manifest generator CLI";
             homepage = "https://github.com/kix-run/kix";
-            # Kix is proprietary, but nixpkgs refuses to evaluate a package
-            # whose license is unfree unless allowUnfree is set, so the
-            # license is left unset.
+            license = pkgs.lib.licenses.asl20;
             mainProgram = "kix";
           };
         }
