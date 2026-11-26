@@ -32,8 +32,9 @@
 # keys. Without `backupIdentity`, the pods use the node's credentials. An
 # identity is refused without `backups`, when the storage reads a Secret,
 # and for another cloud. Kix does not build the pods, so a changed identity
-# reaches running pods only when they restart: create an SGDbOps with
-# `op: restart`. The role must trust
+# reaches running pods only when they are created again: delete them one
+# at a time. An SGDbOps `restart` leaves the pod, and its old role, in place.
+# The role must trust
 # `system:serviceaccount:<namespace>:<instance>-patroni`.
 #
 #   instances.data.postgres = {

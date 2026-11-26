@@ -122,7 +122,7 @@ kix.buildCluster {
           deps.issuerCredentials = ref.cert-manager.cloudflare-api-token;
           config.spec.acme = {
             server = "https://acme-v02.api.letsencrypt.org/directory";
-            email = "platform@example.com";
+            email = "<your-email>";
             solvers = [
               {
                 dns01.cloudflare.apiTokenSecretRef.key = "api-token";
@@ -142,7 +142,7 @@ kix.buildCluster {
           deps.issuerCredentials = ref.cert-manager.cloudflare-api-token;
           config.spec.acme = {
             server = "https://acme-staging-v02.api.letsencrypt.org/directory";
-            email = "platform@example.com";
+            email = "<your-email>";
             solvers = [
               {
                 dns01.cloudflare.apiTokenSecretRef.key = "api-token";

@@ -167,6 +167,7 @@ let
       withStore ? false,
       netpol ? false,
       withPrometheus ? false,
+      identity ? null,
     }:
     mkCluster (
       [
@@ -175,16 +176,19 @@ let
           { ref, ... }:
           {
             instances.velero = {
+              velero = {
+                package = import ../../../packages/experimental/velero;
+                config = lib.recursiveUpdate { backupStorageLocation.objectStorage.bucket = "b"; } config;
+              }
+              // lib.optionalAttrs withStore { deps.objectStorage = ref.dbns.db; }
+              // lib.optionalAttrs (identity != null) { deps.cloudCredentials = identity; };
+            }
+            // lib.optionalAttrs (identity == null) {
               cloud = {
                 package = import ../../../packages/stable/secret;
                 aliases = [ "cloudCredentials" ];
                 config.stringData = cloud;
               };
-              velero = {
-                package = import ../../../packages/experimental/velero;
-                config = lib.recursiveUpdate { backupStorageLocation.objectStorage.bucket = "b"; } config;
-              }
-              // lib.optionalAttrs withStore { deps.objectStorage = ref.dbns.db; };
             }
             // lib.optionalAttrs (repository != null) {
               ${repository} = {
@@ -196,6 +200,7 @@ let
           }
         )
       ]
+      ++ lib.optional (identity != null) (import ../../flavors/eks.nix)
       ++ lib.optional netpol netpolOn
       ++ lib.optional withPrometheus { instances.monitoring.prometheus.package = prometheusStub; }
     );
@@ -522,6 +527,19 @@ in
     in
     (builds cluster && !(builtins.any (w: lib.hasInfix "already references" w.message) warnings))
     || throw "velero schedule warnings: ${builtins.toJSON warnings}";
+
+  # The BackupStorageLocation requires the server through its CRD's
+  # controller, so the package lists no second `requires` entry for it.
+  velero-no-duplicate-requires-with-identity =
+    let
+      cluster = mkVelero {
+        identity = kixlib.cloudIdentity.aws { roleArn = "arn:aws:iam::111122223333:role/velero"; };
+        config.backupStorageLocation.config.region = "eu-central-1";
+      };
+      warnings = cluster.instances.velero.velero._diagnostics.warnings;
+    in
+    (builds cluster && !(builtins.any (w: lib.hasInfix "more than once" w.message) warnings))
+    || throw "velero requires warnings: ${builtins.toJSON warnings}";
 
   # Under network policy, a store outside the cluster gets the
   # velero-external-store policy over every pod of the instance; an

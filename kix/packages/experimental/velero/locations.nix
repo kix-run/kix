@@ -159,7 +159,6 @@ in
         default = true;
       }
       // credentialSpec;
-    requires = [ self.deployment ];
   };
 
   volumeSnapshotLocation =

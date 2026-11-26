@@ -159,6 +159,24 @@ it; restart the Deployment after a rotation:
 
 <Command commands={["kubectl -n <namespace> rollout restart deployment/<instance>"]} />
 
+## Annotate Services and Ingresses
+
+external-dns v0.24.0 reads annotations with the prefix
+`external-dns.kubernetes.io/`, such as `external-dns.kubernetes.io/hostname`.
+It ignores the older `external-dns.alpha.kubernetes.io/` prefix (which many
+guides and charts still show) without logging a warning. With `policy = "sync"`,
+external-dns deletes existing DNS records for any resource that carries only the
+old prefix. Rename your annotations to `external-dns.kubernetes.io/` before
+upgrading.
+
+To read both prefixes while you migrate, pass the upstream flag in `extraArgs`:
+
+```nix
+config.extraArgs = [ "--enable-legacy-annotation-prefix" ];
+```
+
+Upstream provides this flag only for migration and plans to remove it.
+
 ## Use a cloud identity
 
 On AWS, Google Cloud, or Azure, external-dns can authenticate with its Kubernetes
@@ -187,6 +205,14 @@ whenever the identity changes. On EKS, Kix uses IAM roles for service accounts
 (IRSA) by default; set `cluster.flavor.eks.cloudIdentity = "pod-identity"` to
 use EKS Pod Identity instead. For self-managed clusters, see
 [Cloud identities](/docs/reference/instances-and-composition/#cloud-identities).
+
+When `config.provider` is `"aws"` or `"aws-sd"` and `deps.providerCredentials`
+points to a Secret instead of a cloud identity, you must also configure an AWS
+region (`[K0734]`). Set `config.env.AWS_REGION` (or `AWS_DEFAULT_REGION`), or
+include `AWS_REGION` in the Secret. Without a region, Kix fails the build
+because external-dns would exit at startup with `Missing Region` (cloud
+identities do not need this setting because the platform injects the region into
+the pod automatically).
 
 The `aws`, `aws-sd`, `google`, `azure`, `azure-dns`, and `azure-private-dns`
 providers require `deps.providerCredentials`, set to either a matching cloud
