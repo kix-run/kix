@@ -1980,8 +1980,9 @@ async fn finalize_learns_whether_orphans_were_left() {
     );
 }
 
-/// A prune that found nothing to delete says why on its ready event, while
-/// one that deleted the object carries no such detail.
+/// A prune that found nothing to delete says why on its ready event and is
+/// not counted as pruned, while one that deleted the object carries no such
+/// detail and is.
 #[tokio::test(start_paused = true)]
 async fn a_prune_with_nothing_to_delete_says_so() {
     for (answer, said) in [
@@ -2009,7 +2010,8 @@ async fn a_prune_with_nothing_to_delete_says_so() {
         )
         .await
         .unwrap();
-        assert_eq!(result.pruned, 1);
+        let deleted = usize::from(said.is_none());
+        assert_eq!((result.pruned, result.already_gone), (deleted, 1 - deleted));
         let events = recorder.0.lock().unwrap().clone();
         let ready = events.iter().find_map(|e| match e {
             DeployEvent::NodeStateChanged {
@@ -2410,6 +2412,46 @@ async fn a_stuck_prune_names_the_controller() {
     assert!(!ops.calls().contains(&Call::Delete(operator_rid)));
 }
 
+/// An orphan written between the read and the delete on every attempt
+/// fails the prune, and an orphan it depends on is counted as left on the
+/// cluster.
+#[tokio::test(start_paused = true)]
+async fn an_orphan_that_keeps_changing_fails_and_holds_back_what_it_needs() {
+    let manifests = vec![m("ConfigMap", "keep", &[])];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.delete_behaviour(Behaviour::Now(Ok(Pruned::Changed(rid(
+        "ConfigMap",
+        "dependent",
+    )))));
+    let orphans = [rid("ConfigMap", "dependent"), rid("ConfigMap", "needed")];
+    let old = [
+        m("ConfigMap", "dependent", &["needed"]),
+        m("ConfigMap", "needed", &[]),
+    ];
+
+    let result = run_with_orphans(
+        &ops,
+        plan_of(&manifests),
+        &orphans,
+        &old,
+        PrunePolicy::Delete,
+        &config(quiet_watchdog()),
+        Arc::new(Recorder::default()),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        (result.pruned, result.failed, result.kept),
+        (0, 1, 1),
+        "{result:?}"
+    );
+    assert_eq!(
+        result.failures[0].node,
+        NodeId::Resource(rid("ConfigMap", "dependent"))
+    );
+}
+
 /// Orphans whose recorded dependencies form a cycle are kept and reported,
 /// since no order deletes each after everything that needs it.
 #[tokio::test(start_paused = true)]
@@ -2433,7 +2475,7 @@ async fn orphans_in_a_dependency_cycle_are_kept_and_reported() {
     .await
     .unwrap();
 
-    assert_eq!(result.pruned, 0);
+    assert_eq!((result.pruned, result.kept), (0, 2));
     assert!(!ops.calls().iter().any(|c| matches!(c, Call::Delete(_))));
     let reasons: Vec<String> = rec
         .0

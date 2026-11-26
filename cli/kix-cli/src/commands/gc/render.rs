@@ -262,6 +262,7 @@ pub(super) fn finish(
     cluster: &str,
     deleted: usize,
     failed: usize,
+    left: usize,
     records: Option<(usize, usize)>,
 ) -> Result<()> {
     crate::say!();
@@ -272,16 +273,21 @@ pub(super) fn finish(
         _ => String::new(),
     };
     let deleted = output::green(&deleted.to_string()).into_owned();
-    if failed == 0 {
+    if failed == 0 && left == 0 {
         crate::say!("GC complete for '{cluster}': {deleted} deleted, 0 failed{records_note}");
         return Ok(());
     }
+    let left_note = match left {
+        0 => String::new(),
+        n => format!(", {} left on the cluster", output::yellow(&n.to_string())),
+    };
     // A failure is printed even under `-q`, since the command exits 1.
     println!(
-        "GC failed for '{cluster}': {deleted} deleted, {} failed{records_note}",
+        "{}GC failed for '{cluster}': {deleted} deleted, {} failed{left_note}{records_note}",
+        if left > 0 { "[K6315] " } else { "" },
         output::red(&failed.to_string())
     );
-    println!("  Resolve the deletion failure(s) listed above and run `kix gc {cluster}` again.");
+    println!("  Resolve the problems listed above and run `kix gc {cluster}` again.");
     Err(Stopped(Exit::Failure).into())
 }
 

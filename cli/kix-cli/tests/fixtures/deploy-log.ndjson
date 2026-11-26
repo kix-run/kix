@@ -29,4 +29,4 @@
 {"budget_ms":180000,"elapsed_ms":7,"holds":[],"holds_total":0,"node":"ScaledObject/worker@app","phase":"deletion","schema_version":"2026-11-25","since_ms":60000,"status":"being deleted, waiting for finalizer.keda.sh","type":"waiting"}
 {"elapsed_ms":7,"message":"conflict","schema_version":"2026-11-25","type":"best_effort_failed","what":"checkpoint"}
 {"elapsed_ms":7,"fields":[{"change":"dropped","path":"$.spec.colour","sent":"red"},{"change":"changed","path":"$.spec.size","sent":2,"stored":5}],"resource":"Widget/w@app","schema_version":"2026-11-25","type":"fields_not_kept"}
-{"cancelled":5,"configured":2,"created":1,"dry_run":true,"elapsed_ms":7,"failed":4,"failed_after_apply":2,"nothing_to_apply":false,"pruned":6,"schema_version":"2026-11-25","succeeded":false,"type":"summary","unchanged":3}
+{"cancelled":5,"configured":2,"created":1,"dry_run":true,"elapsed_ms":7,"failed":4,"failed_after_apply":2,"kept":0,"nothing_to_apply":false,"pruned":6,"schema_version":"2026-11-25","succeeded":false,"type":"summary","unchanged":3}

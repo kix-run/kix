@@ -8,8 +8,10 @@
 //! and finalizer) deletes through [`PruneGuard::delete`], which reads the
 //! object, then the Activation records, and deletes only an object no other Kix
 //! cluster's current record names. The delete carries the read's uid and
-//! resourceVersion as preconditions, so an object that changed after the read
-//! is left in place.
+//! resourceVersion as preconditions, so Kubernetes refuses it when the object
+//! changed after the read. The guard then reads and judges the object again,
+//! because the write may have been one the judgment does not depend on, such
+//! as a controller updating its status.
 //!
 //! `kix gc` and the operator's finalizer delete a whole ordered list, and both
 //! go through [`delete_in_order`]. It owns which objects are never deleted
@@ -70,8 +72,9 @@ pub enum Pruned {
     NotServed,
     /// Another Kix cluster's current build contains it, so it stays.
     Kept(SharedOrphan),
-    /// It changed between the read and the delete, so it stays. The next
-    /// prune judges it again.
+    /// It changed between the read and the delete on each of
+    /// [`DELETE_ATTEMPTS`] attempts, so it stays. The next prune judges it
+    /// again.
     Changed(ResourceId),
 }
 
@@ -81,7 +84,7 @@ impl Pruned {
         match self {
             Pruned::Kept(shared) => Some(shared.describe()),
             Pruned::Changed(rid) => Some(format!(
-                "kept {rid}, changed since it was read; the next prune checks it again"
+                "[K6315] could not delete {rid}: something modified it during all {DELETE_ATTEMPTS} delete attempts, so Kix left it on the cluster; stop what keeps updating {rid} (or wait for updates to settle), then run `kix gc` or `--prune` again"
             )),
             Pruned::Deleted { .. }
             | Pruned::AlreadyDeleting { .. }
@@ -127,6 +130,13 @@ pub enum PruneError {
     Discovery(#[from] FetchError),
 }
 
+/// How many times [`PruneGuard::delete`] reads, judges, and deletes an object
+/// that changes between its read and its delete before it leaves the object
+/// in place. Each refused delete means the object was written in the moment
+/// between the two requests, so a controller that writes the object now and
+/// then does not use them up.
+pub const DELETE_ATTEMPTS: usize = 5;
+
 /// Deletes orphans of one Kix cluster. See the module docs.
 pub struct PruneGuard {
     client: Client,
@@ -155,8 +165,10 @@ impl PruneGuard {
 
     /// Read `rid`, and delete it with `params` plus preconditions on the
     /// object read, unless another Kix cluster's current record names it or
-    /// it is already being deleted. The caller waits for a deleted object to
-    /// be gone.
+    /// it is already being deleted. When the object changed after the read,
+    /// Kubernetes refuses the delete, and the guard reads and judges it
+    /// again, up to [`DELETE_ATTEMPTS`] times. The caller waits for a
+    /// deleted object to be gone.
     pub async fn delete(
         &self,
         ar: &ApiResource,
@@ -165,29 +177,46 @@ impl PruneGuard {
         params: &DeleteParams,
     ) -> Result<Pruned, PruneError> {
         let api = discovery::api_for(&self.client, ar, scope, rid);
+        for _ in 0..DELETE_ATTEMPTS {
+            if let Some(pruned) = self.delete_once(&api, rid, params).await? {
+                return Ok(pruned);
+            }
+        }
+        Ok(Pruned::Changed(rid.clone()))
+    }
+
+    /// Read `rid` and judge it, then delete it with the read's uid and
+    /// resourceVersion as preconditions. Return `None` when Kubernetes
+    /// refused the delete because the object changed after the read.
+    async fn delete_once(
+        &self,
+        api: &kube::Api<DynamicObject>,
+        rid: &ResourceId,
+        params: &DeleteParams,
+    ) -> Result<Option<Pruned>, PruneError> {
         let Some(obj) = api.get_opt(&rid.name).await? else {
-            return Ok(Pruned::Gone);
+            return Ok(Some(Pruned::Gone));
         };
         let clusters = self
             .tenancy_naming(&obj)
             .await?
             .still_deployed_by_others(&obj);
         if !clusters.is_empty() {
-            return Ok(Pruned::Kept(SharedOrphan {
+            return Ok(Some(Pruned::Kept(SharedOrphan {
                 rid: rid.clone(),
                 clusters,
-            }));
+            })));
         }
         let uid = obj.metadata.uid.clone();
         let finalizers = finalizers_of(&obj);
         if let Some(since) = &obj.metadata.deletion_timestamp {
-            return Ok(Pruned::AlreadyDeleting {
+            return Ok(Some(Pruned::AlreadyDeleting {
                 uid,
                 finalizers,
                 since: serde_json::to_value(since)
                     .ok()
                     .and_then(|t| t.as_str().map(str::to_string)),
-            });
+            }));
         }
         let params = DeleteParams {
             preconditions: Some(Preconditions {
@@ -197,9 +226,9 @@ impl PruneGuard {
             ..params.clone()
         };
         match api.delete(&rid.name, &params).await {
-            Ok(_) => Ok(Pruned::Deleted { uid, finalizers }),
-            Err(kube::Error::Api(ae)) if ae.code == 404 => Ok(Pruned::Gone),
-            Err(kube::Error::Api(ae)) if ae.code == 409 => Ok(Pruned::Changed(rid.clone())),
+            Ok(_) => Ok(Some(Pruned::Deleted { uid, finalizers })),
+            Err(kube::Error::Api(ae)) if ae.code == 404 => Ok(Some(Pruned::Gone)),
+            Err(kube::Error::Api(ae)) if ae.code == 409 => Ok(None),
             Err(e) => Err(e.into()),
         }
     }
@@ -542,25 +571,74 @@ mod tests {
         assert_eq!(delete(&g, &d, &once).await, Pruned::Gone);
     }
 
-    /// Another cluster's deploy stamps the object between the guard's read
-    /// and its delete: the precondition refuses the delete.
+    fn mine() -> ResourceId {
+        ResourceId::new(
+            "rbac.authorization.k8s.io",
+            "ClusterRole",
+            CLUSTER_SCOPED,
+            "mine",
+        )
+    }
+
+    /// A controller writes the object's status between the guard's read and
+    /// its delete. The judgment does not depend on status, so the guard reads
+    /// it again and deletes it.
     #[tokio::test]
-    async fn an_object_changed_after_the_read_is_left_in_place() {
+    async fn an_object_whose_status_changes_after_the_read_is_deleted() {
         let api = FakeApi::new([
             record("a", "a1", lifecycle::PHASE_ACTIVE),
+            role("mine", "a1"),
+        ]);
+        api.after_get("mine", |o| {
+            o["status"] = json!({ "observedGeneration": 2 });
+        });
+        let (g, d) = guard(&api, "a").await;
+        assert!(matches!(
+            delete(&g, &d, &mine()).await,
+            Pruned::Deleted { .. }
+        ));
+        assert!(api.names("ClusterRole").is_empty());
+    }
+
+    /// Another cluster's deploy stamps the object between the guard's read
+    /// and its delete. The precondition refuses the delete, and the guard's
+    /// second read finds that the other cluster deploys it, so it stays.
+    #[tokio::test]
+    async fn an_object_another_cluster_stamps_after_the_read_is_kept() {
+        let api = FakeApi::new([
+            record("a", "a1", lifecycle::PHASE_ACTIVE),
+            record("b", "b1", lifecycle::PHASE_ACTIVE),
             role("mine", "a1"),
         ]);
         api.after_get("mine", |o| {
             o["metadata"]["annotations"][keys::ACTIVATIONS] = json!("a1,b1");
         });
         let (g, d) = guard(&api, "a").await;
-        let mine = ResourceId::new(
-            "rbac.authorization.k8s.io",
-            "ClusterRole",
-            CLUSTER_SCOPED,
-            "mine",
+        assert_eq!(
+            delete(&g, &d, &mine()).await,
+            Pruned::Kept(SharedOrphan {
+                rid: mine(),
+                clusters: vec!["b".into()],
+            })
         );
-        assert_eq!(delete(&g, &d, &mine).await, Pruned::Changed(mine.clone()));
+        assert_eq!(api.names("ClusterRole"), vec!["mine"]);
+    }
+
+    /// An object written between every read and delete stays after
+    /// `DELETE_ATTEMPTS` attempts, for the next prune to judge.
+    #[tokio::test]
+    async fn an_object_written_on_every_attempt_is_left_in_place() {
+        let api = FakeApi::new([
+            record("a", "a1", lifecycle::PHASE_ACTIVE),
+            role("mine", "a1"),
+        ]);
+        for n in 0..DELETE_ATTEMPTS {
+            api.after_get("mine", move |o| {
+                o["status"] = json!({ "observedGeneration": n });
+            });
+        }
+        let (g, d) = guard(&api, "a").await;
+        assert_eq!(delete(&g, &d, &mine()).await, Pruned::Changed(mine()));
         assert_eq!(api.names("ClusterRole"), vec!["mine"]);
     }
 
@@ -1112,15 +1190,17 @@ mod tests {
         assert_eq!(api.names("Secret"), vec!["needed"]);
     }
 
-    /// A dependent that changed between the read and the delete is still on
-    /// the cluster: it holds back what it depends on, and the teardown is not
+    /// A dependent written between every read and delete is still on the
+    /// cluster: it holds back what it depends on, and the teardown is not
     /// done.
     #[tokio::test(start_paused = true)]
     async fn a_changed_dependent_holds_back_what_it_needs() {
         let (api, order) = pair(&[]);
-        api.after_get("cm", |o| {
-            o["data"] = json!({ "touched": "by its controller" });
-        });
+        for n in 0..DELETE_ATTEMPTS {
+            api.after_get("cm", move |o| {
+                o["data"] = json!({ "touched": n.to_string() });
+            });
+        }
         let removals = walk(&api, order, &CancelToken::new()).await;
         let cm = removal(&removals, "cm");
         assert!(

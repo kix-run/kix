@@ -223,7 +223,8 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     finish(
         &args.cluster,
         done.deleted,
-        done.failed + records_failed,
+        done.failed + done.changed + records_failed,
+        done.left(),
         Some((retired, retirement.plan.kept.len())),
     )
 }
@@ -634,7 +635,8 @@ async fn run_hard_async(
     finish(
         &args.cluster,
         done.deleted,
-        done.failed + records_failed,
+        done.failed + done.changed + records_failed,
+        done.left(),
         Some((retired, retirement.plan.kept.len())),
     )
 }
@@ -747,8 +749,11 @@ pub(super) struct Deletions {
     /// read; their presence prevents `clear_kept` from clearing `orphansKeptFrom`.
     pub(super) changed: usize,
     /// Resources kept because an object whose delete did not finish depends
-    /// on them.
+    /// on them, or because they form a dependency cycle.
     pub(super) held: usize,
+    /// The resources in `held` that stay because an object another Kix
+    /// cluster deploys depends on them.
+    pub(super) held_shared: usize,
 }
 
 impl Deletions {
@@ -756,6 +761,13 @@ impl Deletions {
     /// `clear_kept` may forget the builds they came from.
     pub(super) fn all_gone(&self) -> bool {
         self.failed == 0 && self.changed == 0 && self.held == 0
+    }
+
+    /// Return how many of this cluster's resources gc left on the cluster
+    /// without a failure of their own. Resources another Kix cluster keeps
+    /// are not counted.
+    pub(super) fn left(&self) -> usize {
+        self.held - self.held_shared
     }
 }
 
@@ -803,12 +815,14 @@ pub(super) async fn delete_resources(
                     gone.already_gone().unwrap_or_default()
                 );
             }
-            Removal::Pruned(outcome @ (Pruned::Kept(_) | Pruned::Changed(_))) => {
-                if matches!(outcome, Pruned::Changed(_)) {
-                    done.changed += 1;
-                }
-                let reason = outcome.kept_reason().unwrap_or_default();
+            Removal::Pruned(shared @ Pruned::Kept(_)) => {
+                let reason = shared.kept_reason().unwrap_or_default();
                 println!("  {} prune: {reason}", output::yellow("="));
+            }
+            Removal::Pruned(changed @ Pruned::Changed(_)) => {
+                let reason = changed.kept_reason().unwrap_or_default();
+                eprintln!("  {} prune: {reason}", output::red("!"));
+                done.changed += 1;
             }
             Removal::Stuck(stuck) => {
                 eprintln!(
@@ -826,6 +840,9 @@ pub(super) async fn delete_resources(
                     readiness::held_back_reason(rid, by, DeletePath::Gc, *shared)
                 );
                 done.held += 1;
+                if *shared {
+                    done.held_shared += 1;
+                }
             }
             Removal::Cycle => {
                 eprintln!("  {} {}", output::yellow("!"), readiness::cycle_reason(rid));

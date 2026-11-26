@@ -454,7 +454,8 @@ pub(crate) async fn run_plan(
 pub(crate) struct RunEnd {
     /// Whether the command should exit 0. `run_deploy` returns `Ok` with
     /// non-zero failure counts under `--on-error continue` or when a prune
-    /// delete fails.
+    /// delete fails. A prune that leaves this cluster's orphans on the
+    /// cluster (`kept`) did not do what was asked, so it fails too.
     pub succeeded: bool,
     /// Whether the run's Activation record became current. An `Err` or any
     /// cancelled node marks the record Failed and leaves the previous
@@ -466,7 +467,7 @@ impl RunEnd {
     pub(crate) fn of(result: &Result<DeployResult, scheduler::DeployError>) -> Self {
         match result {
             Ok(r) => RunEnd {
-                succeeded: r.failed == 0 && r.cancelled == 0,
+                succeeded: r.failed == 0 && r.cancelled == 0 && r.kept == 0,
                 current: r.cancelled == 0,
             },
             Err(_) => RunEnd {
