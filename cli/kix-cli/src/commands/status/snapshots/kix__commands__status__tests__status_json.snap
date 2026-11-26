@@ -6,6 +6,7 @@ expression: "serde_json::to_string_pretty(&doc).unwrap()"
   "schema_version": "2026-11-15",
   "kubernetes": {
     "context": "prod",
+    "server": "https://prod.example:6443",
     "uid": "4d7b1c2e",
     "version": "v1.33.1"
   },
@@ -40,7 +41,8 @@ expression: "serde_json::to_string_pretty(&doc).unwrap()"
             "not_ready": 1,
             "deleting": 0,
             "leaving": 0,
-            "not_checked": 2
+            "not_checked": 2,
+            "failed_deploys": 0
           },
           "resources": [
             {
@@ -117,6 +119,7 @@ expression: "serde_json::to_string_pretty(&doc).unwrap()"
         }
       ],
       "leaving": [],
+      "failed_deploy": null,
       "summary": {
         "resources": 4,
         "ok": 0,
@@ -125,7 +128,8 @@ expression: "serde_json::to_string_pretty(&doc).unwrap()"
         "not_ready": 1,
         "deleting": 0,
         "leaving": 0,
-        "not_checked": 2
+        "not_checked": 2,
+        "failed_deploys": 0
       }
     }
   ],
@@ -137,6 +141,7 @@ expression: "serde_json::to_string_pretty(&doc).unwrap()"
     "not_ready": 1,
     "deleting": 0,
     "leaving": 0,
-    "not_checked": 2
+    "not_checked": 2,
+    "failed_deploys": 0
   }
 }

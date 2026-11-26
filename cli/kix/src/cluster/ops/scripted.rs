@@ -233,6 +233,8 @@ pub struct ScriptedOps {
     abort: Mutex<Behaviour<Result<(), String>>>,
     end_partial: Mutex<Behaviour<Result<(), String>>>,
     log: Mutex<Vec<Logged>>,
+    /// The propagation policy of each [`ResourceIo::prune`] call, in order.
+    propagations: Mutex<Vec<(ResourceId, kube::api::PropagationPolicy)>>,
     applies_now: AtomicUsize,
     applies_peak: AtomicUsize,
     dry_run: std::sync::atomic::AtomicBool,
@@ -264,6 +266,7 @@ impl ScriptedOps {
             abort: Mutex::new(Behaviour::Now(Ok(()))),
             end_partial: Mutex::new(Behaviour::Now(Ok(()))),
             log: Mutex::new(Vec::new()),
+            propagations: Mutex::new(Vec::new()),
             applies_now: AtomicUsize::new(0),
             applies_peak: AtomicUsize::new(0),
             dry_run: std::sync::atomic::AtomicBool::new(false),
@@ -361,6 +364,11 @@ impl ScriptedOps {
     }
 
     /// Return all recorded calls without timestamps.
+    /// Return the propagation policy each prune used, in call order.
+    pub fn propagations(&self) -> Vec<(ResourceId, kube::api::PropagationPolicy)> {
+        self.propagations.lock().unwrap().clone()
+    }
+
     pub fn calls(&self) -> Vec<Call> {
         self.log
             .lock()
@@ -571,8 +579,16 @@ impl ResourceIo for ScriptedOps {
         })
     }
 
-    async fn prune(&self, rid: &ResourceId) -> Result<Pruned, DeleteError> {
+    async fn prune(
+        &self,
+        rid: &ResourceId,
+        propagation: kube::api::PropagationPolicy,
+    ) -> Result<Pruned, DeleteError> {
         self.record(Call::Delete(rid.clone()));
+        self.propagations
+            .lock()
+            .unwrap()
+            .push((rid.clone(), propagation));
         let b = self.delete.lock().unwrap().clone();
         b.run().await.map_err(DeleteError::Scripted)
     }
@@ -590,13 +606,26 @@ impl ResourceIo for ScriptedOps {
         let Some((status, b)) = scripted else {
             return Ok(Deletion::Gone);
         };
-        if let Some(status) = status {
-            on_status(&status);
+        // The real wait reads the object every few seconds and reports its
+        // status after each read, and so does this. It ends when the cancel
+        // token fires.
+        if let Some(status) = &status {
+            on_status(status);
         }
-        // The real wait ends when the cancel token fires, and so does this.
-        tokio::select! {
-            out = b.run() => out.map_err(ReadError::Scripted),
-            _ = cancel.cancelled() => Ok(Deletion::Cancelled),
+        let run = b.run();
+        tokio::pin!(run);
+        let every = Duration::from_secs(5);
+        let mut reads = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
+        loop {
+            tokio::select! {
+                out = &mut run => return out.map_err(ReadError::Scripted),
+                _ = cancel.cancelled() => return Ok(Deletion::Cancelled),
+                _ = reads.tick() => {
+                    if let Some(status) = &status {
+                        on_status(status);
+                    }
+                }
+            }
         }
     }
 }

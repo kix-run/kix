@@ -22,7 +22,7 @@ use crate::manifest::types::ResourceId;
 use super::super::activation::{OpenedRecords, Records};
 use super::super::apply::{self, ApplyError, ApplyResult};
 use super::super::cancel::CancelToken;
-use super::super::discovery;
+use super::super::discovery::{self, KindLookup};
 use super::super::errors::FetchError;
 use super::super::prune_guard::{PruneGuard, Pruned};
 use super::super::readiness::{self, Deletion, ImportTarget, ReadinessError, ReadinessResult};
@@ -190,6 +190,23 @@ impl KubeResources {
         discovery::find(&d, &rid.group, &rid.kind).cloned()
     }
 
+    /// Look up `rid`'s group and kind in the discovery cache, and on a miss
+    /// ask the cluster afresh whether it serves the kind. A kind found afresh
+    /// joins the cache, so the wait for a deleted object finds it.
+    async fn served(&self, rid: &ResourceId) -> Result<KindLookup, FetchError> {
+        if let Some((ar, scope)) = self.cached(rid).await {
+            return Ok(KindLookup::Served(ar, scope));
+        }
+        let found = discovery::lookup_kind(&self.client, &[], &rid.group, &rid.kind).await?;
+        if let KindLookup::Served(ar, scope) = &found {
+            let mut d = self.discovery.write().await;
+            if discovery::find(&d, &rid.group, &rid.kind).is_none() {
+                d.push((ar.clone(), scope.clone()));
+            }
+        }
+        Ok(found)
+    }
+
     /// Look up `manifest`'s group and kind in discovery, refreshing on a
     /// cache miss.
     ///
@@ -316,8 +333,15 @@ impl KubeResources {
 
 #[async_trait]
 impl ResourceIo for KubeResources {
-    async fn prune(&self, rid: &ResourceId) -> Result<Pruned, DeleteError> {
-        let (ar, scope) = self.cached(rid).await.ok_or_else(|| not_discovered(rid))?;
+    async fn prune(
+        &self,
+        rid: &ResourceId,
+        propagation: kube::api::PropagationPolicy,
+    ) -> Result<Pruned, DeleteError> {
+        let (ar, scope) = match self.served(rid).await.map_err(DeleteError::Discovery)? {
+            KindLookup::Served(ar, scope) => (ar, scope),
+            KindLookup::NotServed => return Ok(Pruned::NotServed),
+        };
         // The guard reads the other clusters' records, so a cluster the
         // domain gate refuses has no guard and nothing is deleted.
         let guard = self
@@ -328,7 +352,7 @@ impl ResourceIo for KubeResources {
             })
             .await?;
         let dp = DeleteParams {
-            propagation_policy: Some(kube::api::PropagationPolicy::Background),
+            propagation_policy: Some(propagation),
             dry_run: self.dry(),
             ..Default::default()
         };
@@ -550,14 +574,72 @@ mod prune_tests {
             name: name.into(),
         };
         assert!(matches!(
-            ops.prune(&rid("mine")).await.unwrap(),
+            ops.prune(&rid("mine"), kube::api::PropagationPolicy::Background)
+                .await
+                .unwrap(),
             Pruned::Deleted { .. }
         ));
         assert!(matches!(
-            ops.prune(&rid("shared")).await,
+            ops.prune(&rid("shared"), kube::api::PropagationPolicy::Background)
+                .await,
             Ok(Pruned::Kept(_))
         ));
         assert_eq!(api.names("ClusterRole"), vec!["shared"]);
+    }
+
+    /// An orphan of a kind the cluster does not serve is reported as not
+    /// served rather than failing, while a kind the cached discovery lacks
+    /// but the cluster now serves is found afresh and deleted.
+    #[tokio::test]
+    async fn a_prune_asks_the_cluster_about_a_kind_the_cache_lacks() {
+        let api = FakeApi::new([json!({
+            "apiVersion": "rbac.authorization.k8s.io/v1",
+            "kind": "ClusterRole",
+            "metadata": { "name": "mine" },
+        })]);
+        let client = api.client();
+        let discovery: Vec<_> = discovery::discover_resources(&client)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|(ar, _)| ar.kind != "ClusterRole")
+            .collect();
+        let ops = KubeResources::new(client, discovery, "a".into(), None, false);
+        let rid = |group: &str, kind: &str| ResourceId {
+            group: group.into(),
+            kind: kind.into(),
+            namespace: CLUSTER_SCOPED.into(),
+            name: "mine".into(),
+        };
+
+        assert_eq!(
+            ops.prune(
+                &rid("cilium.io", "CiliumNetworkPolicy"),
+                kube::api::PropagationPolicy::Background
+            )
+            .await
+            .unwrap(),
+            Pruned::NotServed
+        );
+        assert_eq!(
+            ops.prune(
+                &rid("rbac.authorization.k8s.io", "Widget"),
+                kube::api::PropagationPolicy::Background
+            )
+            .await
+            .unwrap(),
+            Pruned::NotServed
+        );
+        assert!(matches!(
+            ops.prune(
+                &rid("rbac.authorization.k8s.io", "ClusterRole"),
+                kube::api::PropagationPolicy::Background
+            )
+            .await
+            .unwrap(),
+            Pruned::Deleted { .. }
+        ));
+        assert!(api.names("ClusterRole").is_empty());
     }
 
     /// On a cluster whose records sit under a retired group the guard
@@ -580,7 +662,11 @@ mod prune_tests {
             namespace: CLUSTER_SCOPED.into(),
             name: "mine".into(),
         };
-        let err = ops.prune(&rid).await.unwrap_err().to_string();
+        let err = ops
+            .prune(&rid, kube::api::PropagationPolicy::Background)
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("kix migrate domain"), "{err}");
         assert_eq!(api.names("ClusterRole"), vec!["mine"]);
     }
@@ -706,7 +792,9 @@ mod group_tests {
         assert_eq!(note(other), json!("other"));
 
         assert!(matches!(
-            ops.prune(&rid("batch/v1")).await.unwrap(),
+            ops.prune(&rid("batch/v1"), kube::api::PropagationPolicy::Background)
+                .await
+                .unwrap(),
             Pruned::Deleted { .. }
         ));
         assert!(api.names_of("batch/v1", "Job").is_empty());

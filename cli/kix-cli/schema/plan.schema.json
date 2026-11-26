@@ -682,6 +682,58 @@
       ],
       "type": "object"
     },
+    "LeftBehind": {
+      "description": "The objects of a kind that stay on the cluster after the definition of\nthe kind leaves the build. Kix did not create them, or keeps them for\nanother reason, so the prune does not delete them. Once the package\nthat handled the kind is gone, nothing removes their finalizers or\ncleans up what they made outside the cluster.",
+      "properties": {
+        "count": {
+          "description": "How many objects of the kind stay.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "description": "The kind, as `Kind.group`.",
+          "type": "string"
+        },
+        "objects": {
+          "description": "The first [`LEFT_BEHIND_LISTED`] of them, objects with finalizers\nfirst.",
+          "items": {
+            "$ref": "#/$defs/LeftObject"
+          },
+          "type": "array"
+        },
+        "with_finalizers": {
+          "default": 0,
+          "description": "How many of them have finalizers.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "count",
+        "objects"
+      ],
+      "type": "object"
+    },
+    "LeftObject": {
+      "properties": {
+        "finalizers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "resource": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource"
+      ],
+      "type": "object"
+    },
     "LibraryObject": {
       "description": "A Kubernetes object a record is about.",
       "properties": {
@@ -1201,6 +1253,17 @@
           },
           "type": "array"
         },
+        "left_behind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LeftBehind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "For a CustomResourceDefinition, or a reference to one, that leaves the\nbuild with nothing else in the build declaring its kind: the objects\nof that kind on the cluster that this prune does not delete."
+        },
         "resource": {
           "type": "string"
         }
@@ -1360,6 +1423,26 @@
       ],
       "type": "object"
     },
+    "Target": {
+      "description": "The Kubernetes cluster a command connected to, as its JSON output names\nit.",
+      "properties": {
+        "context": {
+          "description": "The kubeconfig context. `null` when the kubeconfig names none, or\nfor the operator, which uses the API server it runs on.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "server": {
+          "description": "The URL of the context's API server in the kubeconfig. `null` when\nthe kubeconfig does not give it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "UncheckedObject": {
       "properties": {
         "because": {
@@ -1391,6 +1474,11 @@
         {
           "const": "crd_created_by_this_deploy",
           "description": "Its kind comes from a CRD this deploy creates.",
+          "type": "string"
+        },
+        {
+          "const": "crd_installed_outside_kix",
+          "description": "Its kind comes from a CRD that is not on the cluster, and the build\ndeclares it installed outside Kix with an import marker. Kix does\nnot create it, and the deploy waits for something else to install\nit, such as an operator in the build or another tool.",
           "type": "string"
         },
         {
@@ -1519,6 +1607,18 @@
     "kix": {
       "$ref": "#/$defs/KixBuild",
       "description": "The Kix that made the plan."
+    },
+    "kubernetes": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Target"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The Kubernetes cluster the plan read: the context and API server\nthat `kix plan` and `kix deploy` connected to. `null` when the plan\ndid not connect, as with `--offline` and `kix diff`."
     },
     "left_alone": {
       "anyOf": [

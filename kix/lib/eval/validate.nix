@@ -141,7 +141,7 @@ rec {
           [
             {
               inherit kind iname anns;
-              ns = r.metadata.namespace or "cluster-scoped";
+              ns = anns.${kixKeys.importNamespace} or r.metadata.namespace or "cluster-scoped";
             }
           ]
         else
@@ -623,20 +623,37 @@ rec {
 
       # --- 12. NetworkPolicy podSelector matching ---
       # A NetworkPolicy's podSelector should match at least one workload's pod
-      # template labels. An unmatched NetworkPolicy is dead config.
+      # template labels, a ServiceRef selector, or the operand pods of the
+      # custom resource its `kix.run/operand-of` names, as check 14 accepts
+      # for a PodDisruptionBudget. An unmatched NetworkPolicy is dead config.
 
       networkPolicyFailures = builtins.concatMap (
         np:
         let
           selector = np.spec.podSelector or { };
           ns = np.metadata.namespace or "cluster-scoped";
+          decl = operandOf np;
         in
         # An empty selector matches all pods in the namespace. Check 25
         # reports a malformed one.
         if labelSelector.isEmpty selector || labelSelector.problems selector != [ ] then
           [ ]
-        else if selectsPodsIn ns selector || selectsRefPods ns selector then
+        else if selectsPodsIn ns selector || selectsRefPods ns selector || operandCrPresent np then
           [ ]
+        else if decl != null && builtins.length (lib.splitString "/" decl) != 3 then
+          [
+            {
+              message = "NetworkPolicy ${ns}/${np.metadata.name} sets ${operandOfAnnotation}=${decl}, which is not in the form <group>/<Kind>/<name>, so Kix stopped the build.";
+              fix = "Set ${operandOfAnnotation} to \"<group>/<Kind>/<name>\", for example \"postgresql.cnpg.io/Cluster/db\".";
+            }
+          ]
+        else if decl != null then
+          [
+            {
+              message = "NetworkPolicy ${ns}/${np.metadata.name} sets ${operandOfAnnotation}=${decl}, but that custom resource is not in namespace '${ns}' in this build, so Kix stopped the build.";
+              fix = "Check ${operandOfAnnotation} for a typo in the API group, kind, or name, or add the custom resource in namespace '${ns}'.";
+            }
+          ]
         else
           [
             "NetworkPolicy ${ns}/${np.metadata.name} podSelector ${builtins.toJSON selector} matches no workload pod template in namespace ${ns}. Check the selector against the intended workload's pod labels"

@@ -297,22 +297,21 @@ in
               scope = scope.forService dbOperator;
               # The DbInstance's name is unique in the cluster.
               name = "${name}-db-operator-egress";
-              spec = netpol.mkEndpointSelector dbOperator.out.podSelector // {
-                egress =
-                  (netpol.translateIntentRules {
-                    intents.server.egress = [
-                      {
-                        to = "world";
-                        ports = [
-                          {
-                            port = portNumber;
-                            protocol = "TCP";
-                          }
-                        ];
-                      }
-                    ];
-                  }).egressRules;
-              };
+              selector = dbOperator.out.podSelector;
+              egress =
+                (netpol.translateIntentRules {
+                  intents.server.egress = [
+                    {
+                      to = "world";
+                      ports = [
+                        {
+                          port = portNumber;
+                          protocol = "TCP";
+                        }
+                      ];
+                    }
+                  ];
+                }).egressRules;
             }
           else
             null;

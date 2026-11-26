@@ -958,9 +958,7 @@ in
         kubevirt.config.extraSpec.configuration.virtTemplateDeployment.enabled = false;
         modules = [ netpolOn ];
       };
-      # The test enforcer's mkEndpointSelector writes `matchLabels` at the
-      # top of the spec.
-      selectorOf = c: n: (find c "CiliumNetworkPolicy" n).spec.matchLabels or null;
+      selectorOf = c: n: (find c "CiliumNetworkPolicy" n).spec.endpointSelector.matchLabels or null;
       missing = builtins.filter (n: find on "CiliumNetworkPolicy" n == null) names;
       present = builtins.filter (n: find off "CiliumNetworkPolicy" n != null) names;
     in

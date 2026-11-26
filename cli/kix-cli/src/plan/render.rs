@@ -12,8 +12,9 @@ use std::fmt::{self, Write};
 use crate::output;
 
 use kix::plan::document::{
-    AdmissionRefusal, BeingDeleted, Checked, FieldNotKept, MadeBy, NotCheckedReason, NotKept, Plan,
-    PruneControllerState, PruneEntry, PruneFate, RefusalReason, UncheckedReason, WriteChange,
+    AdmissionRefusal, BeingDeleted, Checked, FieldNotKept, LeftBehind, LeftObject, MadeBy,
+    NotCheckedReason, NotKept, Plan, PruneControllerState, PruneEntry, PruneFate, RefusalReason,
+    UncheckedReason, WriteChange,
 };
 use kix::plan::origin::ChangeLabel;
 use kix::plan::saved::{Comparison, Rule};
@@ -42,6 +43,7 @@ pub fn render_text(plan: &Plan) -> String {
         write_earlier_deploys(out, plan, false)?;
         write_prune(out, plan)?;
         write_prune_waits(out, plan)?;
+        write_left_behind(out, plan)?;
         write_not_checked(out, plan)?;
         write_objects(out, plan)?;
         write_left_alone(out, plan, false)
@@ -147,7 +149,7 @@ fn write_objects(out: &mut String, plan: &Plan) -> fmt::Result {
     if reapplied > 0 {
         writeln!(
             out,
-            "  {} {reapplied} written again unchanged from an earlier deploy (changes nothing unless edited on the cluster)",
+            "  {} {reapplied} unchanged object(s) reapplied (restores them if they were changed or deleted on the cluster, including by a stopped deploy)",
             output::yellow("↻"),
         )?;
     }
@@ -781,6 +783,124 @@ fn write_prune_waits(out: &mut String, plan: &Plan) -> fmt::Result {
     Ok(())
 }
 
+/// Return the prune entries whose kind leaves the build while objects of it
+/// stay on the cluster.
+fn left_behind(plan: &Plan) -> Vec<(&PruneEntry, &LeftBehind)> {
+    plan.prune
+        .items()
+        .iter()
+        .filter_map(|p| Some((p, p.left_behind.as_ref()?)))
+        .collect()
+}
+
+/// Return the warning for objects of a kind that stay on the cluster after
+/// the kind's definition leaves the build.
+fn left_behind_warning(plan: &Plan, p: &PruneEntry, left: &LeftBehind) -> String {
+    let resource = &p.resource;
+    let kind = &left.kind;
+    let n = left.count;
+    let (objects, those, they_manage, them) = if n == 1 {
+        ("object", "that object", "it manages", "it")
+    } else {
+        ("objects", "those objects", "they manage", "them")
+    };
+    // A read-only plan deletes nothing and has no prune policy, so it says
+    // what a prune would do.
+    let pruning = plan
+        .flags
+        .as_ref()
+        .is_some_and(|f| f.prune == kix::cluster::scheduler::PrunePolicy::Delete);
+    let (leaves, removes) = if pruning {
+        ("this prune leaves", "this prune removes")
+    } else {
+        ("`kix deploy --prune` would leave", "pruning removes")
+    };
+    format!(
+        "{resource} is no longer in the build, and {leaves} {n} {kind} {objects} \
+         on the cluster. If {removes} the controller for {kind}, nothing will clear \
+         finalizers on {those} or clean up external resources {they_manage}. Kix still \
+         allows the deploy. If you no longer need {them}, delete {them} while the \
+         controller is still running, before running `--prune`."
+    )
+}
+
+/// Return the text a deploy prints after its prune for the objects it left
+/// behind, by the orphan that declared each kind, or `None` when it left
+/// none.
+pub fn left_behind_after_prune(left: &[(String, LeftBehind)]) -> Option<String> {
+    if left.is_empty() {
+        return None;
+    }
+    let text = written(|out| {
+        for (declarer, l) in left {
+            let kind = &l.kind;
+            let n = l.count;
+            let held = l.with_finalizers;
+            let (objects, those, they_manage, them) = if n == 1 {
+                ("object", "that object", "it manages", "it")
+            } else {
+                ("objects", "those objects", "they manage", "them")
+            };
+            writeln!(
+                out,
+                "{} {declarer} is no longer in the build, and this prune left {n} {kind} \
+                 {objects} on the cluster ({held} with finalizers). If this prune removed the \
+                 controller for {kind}, nothing will clear finalizers on {those} or clean up \
+                 external resources {they_manage}. If you no longer need {them}, make sure the \
+                 controller is running (deploy it again if needed) and delete {them} with \
+                 `kubectl`.",
+                output::yellow("!"),
+            )?;
+            for o in &l.objects {
+                writeln!(out, "    {}", left_object_detail(o))?;
+            }
+            if l.count > l.objects.len() {
+                writeln!(
+                    out,
+                    "    {}",
+                    output::dim(&format!("and {} more", l.count - l.objects.len()))
+                )?;
+            }
+        }
+        Ok(())
+    });
+    Some(text)
+}
+
+/// Describe one object a [`LeftBehind`] names.
+fn left_object_detail(o: &LeftObject) -> String {
+    if o.finalizers.is_empty() {
+        o.resource.clone()
+    } else {
+        format!("{} (finalizers: {})", o.resource, o.finalizers.join(", "))
+    }
+}
+
+/// Write a warning for each kind that leaves the build while objects of it
+/// stay on the cluster, with the objects it names.
+fn write_left_behind(out: &mut String, plan: &Plan) -> fmt::Result {
+    for (p, left) in left_behind(plan) {
+        writeln!(out)?;
+        writeln!(
+            out,
+            "{} {}",
+            output::yellow("!"),
+            output::yellow(&left_behind_warning(plan, p, left))
+        )?;
+        for o in &left.objects {
+            writeln!(out, "    {}", left_object_detail(o))?;
+        }
+        if left.count > left.objects.len() {
+            writeln!(
+                out,
+                "    {}",
+                output::dim(&format!("and {} more", left.count - left.objects.len()))
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn write_not_checked(out: &mut String, plan: &Plan) -> fmt::Result {
     if plan.made_by == MadeBy::DryRun && !plan.not_checked.is_empty() {
         writeln!(out)?;
@@ -803,6 +923,9 @@ fn write_not_checked(out: &mut String, plan: &Plan) -> fmt::Result {
             let why = match reason {
                 UncheckedReason::CrdCreatedByThisDeploy => {
                     "uses a CustomResourceDefinition created by this deploy"
+                }
+                UncheckedReason::CrdInstalledOutsideKix => {
+                    "uses a CustomResourceDefinition not yet on the cluster (Kix does not create it, and the deploy waits for an operator or external tool to install it)"
                 }
                 UncheckedReason::CrdChangedByThisDeploy => {
                     "uses a CustomResourceDefinition changed by this deploy, so it was checked against the definition currently on the cluster"
@@ -992,6 +1115,17 @@ fn write_markdown(out: &mut String, plan: &Plan) -> fmt::Result {
             writeln!(out, ":warning: {warning}")?;
             writeln!(out)?;
         }
+    }
+    for (p, left) in left_behind(plan) {
+        writeln!(out, ":warning: {}", left_behind_warning(plan, p, left))?;
+        writeln!(out)?;
+        for o in &left.objects {
+            writeln!(out, "- `{}`", left_object_detail(o))?;
+        }
+        if left.count > left.objects.len() {
+            writeln!(out, "- and {} more", left.count - left.objects.len())?;
+        }
+        writeln!(out)?;
     }
     if !plan.not_kept.is_empty() {
         writeln!(out, "#### :warning: Kubernetes would not keep these fields")?;
@@ -1262,6 +1396,125 @@ mod tests {
         quiet.prune = Checked::found(vec![prune_entry("ConfigMap/plain@app", &[])]);
         assert!(!render_text(&quiet).contains("will wait"));
         assert!(!render_markdown(&quiet).contains("will wait"));
+    }
+
+    /// A kind whose definition leaves the build while objects of it stay
+    /// gets a warning that names them, finalizers included. A kind with no
+    /// objects left adds nothing. The plan does not stop.
+    #[test]
+    fn objects_left_behind_by_a_kind_are_named() {
+        let mut plan = plan_with(Vec::new());
+        let mut crd = PruneEntry::new(
+            "CustomResourceDefinition.apiextensions.k8s.io/challenges.acme.cert-manager.io".into(),
+            PruneFate::KeptNeverPruned,
+            None,
+        );
+        crd.left_behind = Some(LeftBehind {
+            kind: "Challenge.acme.cert-manager.io".into(),
+            count: 22,
+            with_finalizers: 1,
+            objects: vec![LeftObject {
+                resource: "Challenge.acme.cert-manager.io/dns01-1@dnstest".into(),
+                finalizers: vec!["acme.cert-manager.io/finalizer".into()],
+            }],
+        });
+        let plain = PruneEntry::new(
+            "CustomResourceDefinition.apiextensions.k8s.io/orders.acme.cert-manager.io".into(),
+            PruneFate::KeptNeverPruned,
+            None,
+        );
+        plan.prune = Checked::found(vec![crd, plain]);
+        plan.flags = Some(kix::plan::document::PlanFlags {
+            prune: kix::cluster::scheduler::PrunePolicy::Delete,
+            reconcile: false,
+            force_conflicts: false,
+            accept_migrations: false,
+            only: Vec::new(),
+        });
+        let text = render_text(&plan);
+        assert!(
+            text.contains(
+                "! CustomResourceDefinition.apiextensions.k8s.io/challenges.acme.cert-manager.io \
+                 is no longer in the build, and this prune leaves 22 \
+                 Challenge.acme.cert-manager.io objects on the cluster. If this prune removes \
+                 the controller for Challenge.acme.cert-manager.io, nothing will clear \
+                 finalizers on \
+                 those objects or clean up external resources they manage. Kix still allows the \
+                 deploy. If you no longer need them, delete them while the controller is still \
+                 running, before running `--prune`."
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "    Challenge.acme.cert-manager.io/dns01-1@dnstest (finalizers: \
+                 acme.cert-manager.io/finalizer)"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("and 21 more"), "{text}");
+        assert!(!text.contains("orders.acme"), "{text}");
+        assert!(!plan.stops());
+        let markdown = render_markdown(&plan);
+        assert!(
+            markdown.contains(":warning: CustomResourceDefinition.apiextensions.k8s.io/challenges"),
+            "{markdown}"
+        );
+        assert!(
+            markdown.contains("- `Challenge.acme.cert-manager.io/dns01-1@dnstest (finalizers:"),
+            "{markdown}"
+        );
+
+        // A read-only plan has no prune policy and says what a prune would do.
+        plan.flags = None;
+        let text = render_text(&plan);
+        assert!(
+            text.contains(
+                "is no longer in the build, and `kix deploy --prune` would leave 22 \
+                 Challenge.acme.cert-manager.io objects on the cluster. If pruning removes"
+            ),
+            "{text}"
+        );
+    }
+
+    /// After a prune, each kind with objects left on the cluster is named
+    /// with its objects and how many have finalizers. Nothing left prints
+    /// nothing.
+    #[test]
+    fn a_deploy_says_what_its_prune_left_behind() {
+        let left = vec![(
+            "CustomResourceDefinition.apiextensions.k8s.io/challenges.acme.cert-manager.io"
+                .to_string(),
+            LeftBehind {
+                kind: "Challenge.acme.cert-manager.io".into(),
+                count: 1,
+                with_finalizers: 1,
+                objects: vec![LeftObject {
+                    resource: "Challenge.acme.cert-manager.io/c@app".into(),
+                    finalizers: vec!["acme.cert-manager.io/finalizer".into()],
+                }],
+            },
+        )];
+        let text = left_behind_after_prune(&left).unwrap();
+        assert!(
+            text.contains(
+                "! CustomResourceDefinition.apiextensions.k8s.io/challenges.acme.cert-manager.io \
+                 is no longer in the build, and this prune left 1 \
+                 Challenge.acme.cert-manager.io object on the cluster (1 with finalizers). If \
+                 this prune removed the controller for Challenge.acme.cert-manager.io, nothing \
+                 will clear finalizers on that object or clean up external resources it \
+                 manages. If you no longer need it, make sure the controller is running \
+                 (deploy it again if needed) and delete it with `kubectl`."
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "    Challenge.acme.cert-manager.io/c@app (finalizers: acme.cert-manager.io/finalizer)"
+            ),
+            "{text}"
+        );
+        assert!(left_behind_after_prune(&[]).is_none());
     }
 
     /// A warning that holds a code fence stays inside the warnings block,

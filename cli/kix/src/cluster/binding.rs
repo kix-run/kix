@@ -27,6 +27,8 @@ use k8s_openapi::api::core::v1::Namespace;
 use kube::api::Api;
 use kube::client::Client;
 use kube::config::Kubeconfig;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::activation::{self, RecordsError};
@@ -115,6 +117,57 @@ impl Connection {
             Connection::InCluster => "the API server the operator runs on".to_string(),
         }
     }
+
+    /// Return the line a command prints before it connects, so the reader
+    /// sees which Kubernetes cluster it is about to read or change.
+    pub fn connecting(&self) -> String {
+        format!("Connecting to {}...", self.describe())
+    }
+}
+
+/// The Kubernetes cluster a command connected to, as its JSON output names
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Target {
+    /// The kubeconfig context. `null` when the kubeconfig names none, or
+    /// for the operator, which uses the API server it runs on.
+    pub context: Option<String>,
+    /// The URL of the context's API server in the kubeconfig. `null` when
+    /// the kubeconfig does not give it.
+    pub server: Option<String>,
+}
+
+impl From<&Connection> for Target {
+    fn from(connection: &Connection) -> Target {
+        match connection {
+            Connection::Context { name, server } => Target {
+                context: name.clone(),
+                server: server.clone(),
+            },
+            Connection::InCluster => Target {
+                context: None,
+                server: None,
+            },
+        }
+    }
+}
+
+/// Return the note for the first deploy of `cluster`, whose definition
+/// names no Kubernetes cluster, through `connection`. `uid` is the live
+/// `kube-system` UID, or `None` when it could not be read.
+pub fn unbound_note(cluster: &str, connection: &Connection, uid: Option<&str>) -> String {
+    let set = match uid {
+        Some(uid) => format!(
+            "If this is the right cluster, set `cluster.kubernetes.uid = \"{uid}\";` in the '{cluster}' cluster definition."
+        ),
+        None => format!(
+            "If this is the right cluster, run `kubectl get namespace {NAMESPACE} -o jsonpath='{{.metadata.uid}}'` and set `cluster.kubernetes.uid` to that UID in the '{cluster}' cluster definition."
+        ),
+    };
+    format!(
+        "Cluster '{cluster}' does not set `cluster.kubernetes.uid`, so Kix continues without checking that {} is the right Kubernetes cluster.\n  {set} Once set, Kix refuses to deploy '{cluster}' to any other cluster. See {DOCS_URL}{HOW_TO_PATH}.",
+        connection.describe()
+    )
 }
 
 /// What a failed read of the `kube-system` Namespace was going to confirm.
@@ -216,6 +269,20 @@ pub enum BindingError {
     },
 }
 
+/// Return `label  value` lines, one per pair, indented by two spaces, with
+/// the values in one column whatever the labels' lengths.
+fn uid_lines(pairs: &[(String, &String)]) -> String {
+    let width = pairs
+        .iter()
+        .map(|(label, _)| label.len())
+        .max()
+        .unwrap_or(0);
+    pairs
+        .iter()
+        .map(|(label, value)| format!("  {label:<width$}  {value}\n"))
+        .collect()
+}
+
 impl BindingError {
     /// Return the message: what Kix refused, that nothing changed, why, and
     /// what to do next.
@@ -227,31 +294,50 @@ impl BindingError {
                 declared,
                 live,
                 connection,
-            } => match connection {
-                Connection::InCluster => format!(
-                    "cluster '{cluster}' does not match this Kubernetes cluster\n  \
-                     {}\n\n  \
-                     `cluster.kubernetes.uid` in '{cluster}':  {declared}\n  \
-                     `kube-system` UID on this cluster:        {live}\n\n  \
+            } => {
+                let (target, live_label, why, wrong_cluster, recreated_tail) = match connection {
+                    Connection::InCluster => (
+                        "this Kubernetes cluster".to_string(),
+                        "`kube-system` UID on this cluster:",
+                        format!(
+                            "'{cluster}' is bound to a different `kube-system` namespace UID. Either this Kix operator runs on a different Kubernetes cluster, or this cluster was deleted and recreated."
+                        ),
+                        format!(
+                            "- If '{cluster}' belongs on another Kubernetes cluster, deploy it to the cluster whose `kube-system` UID is {declared} instead of this one."
+                        ),
+                        "this cluster's UID shown above, build, and deploy again",
+                    ),
+                    Connection::Context { .. } => (
+                        connection.describe(),
+                        "`kube-system` UID on connected cluster:",
+                        format!(
+                            "'{cluster}' is bound to a different `kube-system` namespace UID. Either Kix is connected to the wrong Kubernetes cluster, or the cluster for '{cluster}' was deleted and recreated."
+                        ),
+                        format!(
+                            "- If Kix is connected to the wrong cluster (the most common cause), pass `--context` for the cluster whose `kube-system` UID is {declared} and run the command again."
+                        ),
+                        "the connected cluster's UID shown above, build, and run the command again",
+                    ),
+                };
+                let uids = uid_lines(&[
+                    (
+                        format!("`cluster.kubernetes.uid` in '{cluster}':"),
+                        declared,
+                    ),
+                    (live_label.to_string(), live),
+                ]);
+                format!(
+                    "cluster '{cluster}' does not match {target}\n  \
+                     {}\n\n\
+                     {uids}\n  \
+                     Why:\n    \
+                     {why}\n\n  \
                      Next:\n    \
-                     If this Kubernetes cluster was recreated and '{cluster}' belongs here, update '{cluster}'s definition to `cluster.kubernetes.uid = \"{live}\";`, build, and deploy again.",
+                     {wrong_cluster}\n    \
+                     - Only if this Kubernetes cluster was deleted and recreated for '{cluster}', update `cluster.kubernetes.uid` in the '{cluster}' cluster definition to {recreated_tail}.",
                     action.nothing(),
-                ),
-                Connection::Context { .. } => {
-                    let connection = connection.describe();
-                    format!(
-                        "cluster '{cluster}' does not match {connection}\n  \
-                         {}\n\n  \
-                         `cluster.kubernetes.uid` in '{cluster}':  {declared}\n  \
-                         `kube-system` UID on {connection}:        {live}\n\n  \
-                         Next:\n    \
-                         - If Kix is connected to the wrong cluster, pass the right `--context` for '{cluster}' and run the command again.\n    \
-                         - If this Kubernetes cluster was recreated and '{cluster}' belongs here, update '{cluster}'s definition and build again:\n        \
-                         cluster.kubernetes.uid = \"{live}\";",
-                        action.nothing(),
-                    )
-                }
-            },
+                )
+            }
             BindingError::Unbound {
                 action,
                 cluster,
@@ -649,6 +735,71 @@ pub async fn check_name(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn prod() -> Connection {
+        Connection::Context {
+            name: Some("prod".into()),
+            server: Some("https://prod.example:6443".into()),
+        }
+    }
+
+    /// The line a command prints before it connects names the context and
+    /// its API server, and says so when the kubeconfig names neither.
+    #[test]
+    fn the_connecting_line_names_the_context_and_server() {
+        assert_eq!(
+            prod().connecting(),
+            "Connecting to context prod (https://prod.example:6443)..."
+        );
+        let unknown = Connection::Context {
+            name: None,
+            server: None,
+        };
+        assert_eq!(unknown.connecting(), "Connecting to the current context...");
+    }
+
+    /// JSON output names the context and server, and leaves both `null`
+    /// for the operator's own API server.
+    #[test]
+    fn the_target_carries_the_context_and_server() {
+        assert_eq!(
+            Target::from(&prod()),
+            Target {
+                context: Some("prod".into()),
+                server: Some("https://prod.example:6443".into()),
+            }
+        );
+        assert_eq!(
+            Target::from(&Connection::InCluster),
+            Target {
+                context: None,
+                server: None,
+            }
+        );
+    }
+
+    /// The note on an unbound first deploy gives the line to add when the
+    /// UID was read, and the command that reads it when it was not.
+    #[test]
+    fn the_unbound_note_says_how_to_bind() {
+        let note = unbound_note("shop", &prod(), Some("4d7b1c2e"));
+        assert!(note.contains("'shop'"), "{note}");
+        assert!(
+            note.contains("context prod (https://prod.example:6443)"),
+            "{note}"
+        );
+        assert!(
+            note.contains("cluster.kubernetes.uid = \"4d7b1c2e\";"),
+            "{note}"
+        );
+        assert!(note.contains(&format!("{DOCS_URL}{HOW_TO_PATH}")), "{note}");
+
+        let note = unbound_note("shop", &prod(), None);
+        assert!(
+            note.contains("kubectl get namespace kube-system -o jsonpath='{.metadata.uid}'"),
+            "{note}"
+        );
+    }
     use crate::cluster::fake_api::{FakeApi, kube_system};
     use crate::manifest::keys;
     use crate::manifest::lifecycle::{PHASE_ACTIVE, RECORD_KIND};
@@ -741,24 +892,20 @@ mod tests {
             ),
             "{text}"
         );
+        // The two UIDs line up, whatever the cluster name.
         assert!(
             text.contains(&format!(
-                "`cluster.kubernetes.uid` in 'cluster-a':  {ELSEWHERE}"
+                "\n  `cluster.kubernetes.uid` in 'cluster-a':  {ELSEWHERE}\n  `kube-system` UID on connected cluster:   {HERE}\n"
             )),
             "{text}"
         );
+        // The likelier cause comes first, and no line binds the definition
+        // to the cluster it was refused on.
+        let wrong = text.find("If Kix is connected to the wrong cluster");
+        let recreated = text.find("Only if this Kubernetes cluster was deleted and recreated");
+        assert!(wrong.is_some() && wrong < recreated, "{text}");
         assert!(
-            text.contains(&format!(
-                "`kube-system` UID on context cluster-b (https://b.example:6443):        {HERE}"
-            )),
-            "{text}"
-        );
-        assert!(
-            text.contains("pass the right `--context` for 'cluster-a'"),
-            "{text}"
-        );
-        assert!(
-            text.contains(&format!("cluster.kubernetes.uid = \"{HERE}\";")),
+            !text.contains(&format!("cluster.kubernetes.uid = \"{HERE}\"")),
             "{text}"
         );
         assert_eq!(

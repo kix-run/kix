@@ -32,7 +32,55 @@ let
   kixKeys = (import ../core/annotations.nix).keys;
   errors = import ../core/error.nix { inherit lib; };
 
-  inherit (import ./cloud-identity-mechanisms.nix { inherit lib; }) mechanismType;
+  mechanisms = import ./cloud-identity-mechanisms.nix { inherit lib; };
+  inherit (mechanisms) mechanismType;
+
+  # Every built-in mechanism, so a pod check can name the one the platform
+  # applied instead. The prefix of IRSA does not change its variables.
+  allMechanisms = [
+    (mechanisms.irsa { })
+    (mechanisms.eksPodIdentity { })
+    (mechanisms.gke { })
+    (mechanisms.azureWorkloadId { })
+  ];
+  # A value of every cloud's fields, for reading a mechanism's variable
+  # names without an identity.
+  anyValue = {
+    roleArn = "";
+    clientId = "";
+    tenantId = null;
+    serviceAccount = null;
+  };
+
+  # Return what the deploy checks on the pods of a workload bound to
+  # `mechanism` with `rendered` as its output, or null when the platform
+  # adds no variables. `alternatives` are the other mechanisms of the same
+  # cloud, by their variable names, so a pod that got one of them is named.
+  podCheckOf =
+    mechanism: rendered:
+    let
+      env = rendered.podEnv or { };
+      alternatives = lib.concatMap (
+        m:
+        let
+          r = m.render anyValue;
+        in
+        lib.optional (m.cloud == mechanism.cloud && m.name != mechanism.name && (r.podEnv or { }) != { }) {
+          inherit (m) description;
+          env = builtins.attrNames r.podEnv;
+          fix = m.podEnvOverrideFix;
+        }
+      ) allMechanisms;
+    in
+    if env == { } then
+      null
+    else
+      {
+        inherit (mechanism) description;
+        inherit env alternatives;
+        fix = mechanism.podEnvFix;
+        skip = mechanism.podEnvSkip;
+      };
   identityType = "kix-cloud-identity";
 
   # How a message names each cloud.
@@ -143,7 +191,9 @@ let
   # provider (`{ ns; inst; out; }`, or null). Return `{ problem; }` with a
   # `{ message; fix; }` when the cluster cannot deliver it, or the
   # ServiceAccount annotations (with `kix.run/cloud-identity`), the pod
-  # labels, and the restart stamp.
+  # labels, the restart stamp, the mechanism's credential `egress`, and its
+  # facts about pods: `podCheck` (what the deploy checks, or null),
+  # `servesHostNetwork`, and its `description`.
   render =
     { identity, provider }:
     let
@@ -196,7 +246,11 @@ let
           ${kixKeys.cloudIdentity} = recordJson;
         };
         inherit (rendered) podLabels;
+        inherit (mechanism) egress;
         stamp = builtins.hashString "sha256" recordJson;
+        podCheck = podCheckOf mechanism rendered;
+        inherit (mechanism) servesHostNetwork;
+        inherit (mechanism) description;
       };
 
   # Return what is wrong with cloud identity `dep` for software that calls
@@ -225,7 +279,16 @@ let
     else
       null;
 
-  bindTo = dep: args: args // { _cloudIdentity = dep; };
+  # Put identity `dep` on ServiceAccount arguments, with `arg`, the name of
+  # the dependency that holds it, so a later refusal can name it.
+  bindTo =
+    dep: arg: args:
+    args
+    // {
+      _cloudIdentity = dep // {
+        dependency = arg;
+      };
+    };
 
   # Return how a message names the dependency `arg` of the instance, or the
   # dependency in general when `arg` is null, as `this` inside a sentence
@@ -247,7 +310,11 @@ let
   # (`"aws"`, `"gcp"`, `"azure"`), or null when it takes no cloud identity.
   # `identityGoesTo` names where this cluster takes the identity instead,
   # such as the dependency of another instance that owns the
-  # ServiceAccount, for the fix when `cloud` is null.
+  # ServiceAccount, for the fix when `cloud` is null. `supportedClouds`
+  # lists every cloud the package can call in any configuration, or is null
+  # when its `config` can choose any of them. An identity for a cloud
+  # outside that list is refused with a message that says the package does
+  # not support that cloud, and suggests no change of `config`.
   # Return `{ secret; identity; bind; }`: one of `secret` and `identity` is
   # the dependency and the other is null, and `bind` adds the identity to
   # ServiceAccount arguments. The scope's `sealResource` renders it through
@@ -262,6 +329,7 @@ let
       dep,
       cloud,
       identityGoesTo ? null,
+      supportedClouds ? null,
       arg ? null,
     }:
     let
@@ -280,10 +348,20 @@ let
               identityGoesTo != null
             ) " To authenticate with this cloud identity, move it to ${identityGoesTo}.";
         };
-        mismatch = m: {
-          message = "${words.This} is set to `${m.given} { ... }` (${m.givenCloud}), but this instance is configured to call ${m.wantedCloud}. Kix rejected the cloud identity.";
-          fix = "Set ${words.this} to `${m.wanted} { ... }` or a Secret instance (`ref.<namespace>.<instance>`) with ${m.wantedCloud} credentials, or change this instance's `config` to use ${m.givenCloud}.";
-        };
+        mismatch =
+          m:
+          if supportedClouds != null && !(builtins.elem dep.cloud supportedClouds) then
+            {
+              message = "${words.This} is set to `${m.given} { ... }` (${m.givenCloud}), but this package works only with ${
+                lib.concatMapStringsSep " and " (c: clouds.${c}) supportedClouds
+              } (${m.givenCloud} is not supported yet). Kix rejected the cloud identity.";
+              fix = "Set ${words.this} to `${m.wanted} { ... }` or a Secret instance (`ref.<namespace>.<instance>`) with ${m.wantedCloud} credentials.";
+            }
+          else
+            {
+              message = "${words.This} is set to `${m.given} { ... }` (${m.givenCloud}), but this instance is configured to call ${m.wantedCloud}. Kix rejected the cloud identity.";
+              fix = "Set ${words.this} to `${m.wanted} { ... }` or a Secret instance (`ref.<namespace>.<instance>`) with ${m.wantedCloud} credentials, or change this instance's `config` to use ${m.givenCloud}.";
+            };
       };
     in
     if !(isIdentity dep) then
@@ -298,7 +376,7 @@ let
       {
         secret = null;
         identity = dep;
-        bind = bindTo dep;
+        bind = bindTo dep arg;
       };
 
   # Read a dependency that holds a cloud identity or nothing, on a package
@@ -364,7 +442,7 @@ let
       {
         identity = dep;
         inherit (dep) cloud;
-        bind = bindTo dep;
+        bind = bindTo dep arg;
       };
 
   # Compare `cloud`, the cloud that an object reaches with the pod's own
@@ -421,9 +499,13 @@ let
 
   # Return the ServiceAccount annotations and pod labels of `identity` for a
   # ServiceAccount that an operator creates from a custom resource, which
-  # `bind` cannot reach. `provider` is the package's `cloudIdentity`
-  # dependency, the instance that holds the role. With `identity` null,
-  # return empty sets.
+  # `bind` cannot reach, and `networkIntents`, the credential egress of the
+  # cluster's mechanism as `meta.network.intents` rules
+  # (`{ egress = [ ... ]; }`). Pass it to `translateIntentRules` for the
+  # operand pods' `kix.operandPolicy`, because the netpol plugin does not
+  # see those pods. `provider` is the package's `cloudIdentity` dependency,
+  # the instance that holds the role. With `identity` null, return empty
+  # sets.
   annotationsFor =
     {
       scope,
@@ -452,11 +534,15 @@ let
       {
         serviceAccountAnnotations = { };
         podLabels = { };
+        networkIntents.egress = [ ];
       }
     else if r.problem != null then
       fail r.problem
     else
-      { inherit (r) serviceAccountAnnotations podLabels; };
+      {
+        inherit (r) serviceAccountAnnotations podLabels;
+        networkIntents.egress = r.egress;
+      };
 in
 {
   inherit

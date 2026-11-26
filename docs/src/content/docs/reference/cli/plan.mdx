@@ -67,13 +67,20 @@ permissions of the deploy it previews. A user who may only `get` and `list`
 gets `forbidden` refusals. Use `kix plan --read-only` for a comparison that
 needs only `get` and `list`.
 
+`kix plan` also needs cluster-wide `list` permission for each resource kind in
+the build. It sends one cluster-wide `list` request per kind to find resources
+that have not changed in the build but are missing from the cluster or being
+deleted, and includes them in the plan so the deploy recreates them. If the
+account cannot list a kind across the cluster, `kix plan` prints a warning and
+skips unchanged resources of that kind unless `--reconcile` is set.
+
 ## What it reports
 
 | Section | Content |
 | --- | --- |
 | Field changes | For each object the dry run answered, the live object compared with the object the apiserver says the apply would produce. Server-maintained metadata and `status` are left out, and Secret values are not shown. A package the build comparison called unchanged becomes changed when the apiserver says it would change. |
 | Writes the deploy would stop on | Field ownership conflicts, with the manager that owns each field; admission webhook denials; ValidatingAdmissionPolicy denials; validation errors; changes to immutable fields; RBAC refusals; missing namespaces and unknown kinds the build does not create; SOPS Secrets that do not decrypt; and refused prune deletes. |
-| Objects being deleted | Objects this deploy applies that are already being deleted on the cluster, showing when deletion started and any finalizers holding them. The deploy waits for each old object to be removed and then creates a new one from the build. Any object that may hold data, such as a PersistentVolumeClaim, carries a warning that the new object starts empty and keeps none of the old object's data. Shown as a warning; does not stop the deploy. |
+| Objects being deleted | Objects this deploy applies that are already being deleted on the cluster (including objects that did not change in the build), showing when deletion started and any finalizers holding them. The deploy waits for each old object to be removed and then creates a new one from the build. Any object that may hold data, such as a PersistentVolumeClaim, carries a warning that the new object starts empty and keeps none of the old object's data. Shown as a warning; does not stop the deploy. |
 | Prune | Each orphan and what the deploy does with it. See [Prune fates](#prune-fates). |
 | Stateful migrations | Objects that hold data that the change removes from a stateful package and adds in their place. A deploy stops on them unless run with `--accept-migrations`. |
 | Drift | Fields where the live object differs from the deployed build, the managers that own them live, and whether the deploy puts the deployed value back. |
@@ -91,7 +98,10 @@ probes, so `readiness` is always `not_checked`.
 
 ### Text
 
-The package-grouped plan `kix deploy` prints, with every field change shown.
+Before connecting, `kix plan` prints the kubeconfig context and API server URL
+(for example, `Connecting to context prod (https://prod.example:6443)...`).
+It then prints the same package-grouped plan as `kix deploy`, with every field
+change shown.
 A change that puts back a drifted field is tagged `(reverts drift)`.
 After the packages come these sections, each only when it has something to
 say:
@@ -114,6 +124,16 @@ say:
   not ready, missing from the cluster, or unreadable, a `!` warning explains
   why cleanup may stall and how to fix it before deploying. Warnings do not
   change the exit code.
+- With `--prune`, a `!` warning when the new build no longer declares a
+  CustomResourceDefinition (through `scope.mkCRD`, `scope.mkCRDRef`, or
+  `kix.mkImport`), while custom resources of that kind remain on the cluster and
+  will not be deleted by the prune (such as a Certificate created with
+  `kubectl`). Kix excludes objects owned through `ownerReferences` by an object
+  that the prune deletes, because Kubernetes deletes them with their owner. Once
+  the kind's controller is removed, nothing clears finalizers
+  on those objects or cleans up external resources they manage. The warning
+  lists up to 20 objects, those with finalizers first. Kix still allows the
+  deploy, and the warning does not change the exit code.
 - `Not checked by the dry run (N)`, grouped by reason, five names per group.
 - A closing note that no preview checks whether Pods start, pull their
   images, and pass their readiness probes.
@@ -171,6 +191,7 @@ Its JSON Schema is `cli/kix-cli/schema/plan.schema.json`.
 | `made_by` | `dry_run` from `kix plan`; `builds` from `kix plan --offline` or `kix diff --from <build>`; `live_read` from `kix plan --read-only` or `kix diff --from <snapshot>`. |
 | `kix` | `{ version, store_path }` of the Kix that made the plan. `store_path` is the store path of the binary, or `null` for a binary built outside the store. |
 | `cluster` | The name the build gives the Kix cluster. |
+| `kubernetes` | `{ context, server }` for the Kubernetes cluster the plan read: the kubeconfig context and its API server URL, each `null` when not set in the kubeconfig. `null` when the command did not connect to a cluster (`kix plan --offline` and `kix diff`). |
 | `build` | The build the plan is for: `{ store_path, identity_hash }`. `store_path` is the build's result directory, the path a deploy records as `kix.run/built-via`; it locates the build. `identity_hash` is the Activation record's `kix.run/identity-hash`, a hash of every rendered manifest and what is upstream of it; two builds with the same identity hash deploy the same objects. Present whether or not anything changes. |
 | `deployed` | The build the plan compares against: `{ activation, identity_hash, store_path }` from the cluster's current Activation record (the cached record with `--offline`). `null` on a first deploy. |
 | `flags` | The planning flags: `{ prune, reconcile, force_conflicts, accept_migrations, only }`. `prune` says what the deploy does with orphans: `delete` with `--prune`, `skip` with `--skip-orphan-check`, and `warn_only` otherwise. `only` lists the instances `--only` names, sorted, and is left out without `--only`. `null` from `kix plan --read-only` and `kix diff`. |
@@ -183,7 +204,7 @@ Its JSON Schema is `cli/kix-cli/schema/plan.schema.json`.
 | `admission` | Checked section of `{ resource, reason, webhook, message }`. See [Refusal reasons](#refusal-reasons). |
 | `drift` | Checked section of `{ resource, path, live, deployed, managers, reverted }`. A plan lists the drift on the objects the deploy applies, so `reverted` is always true; `kix plan --read-only` also lists drift the deploy leaves alone, with `reverted` false. |
 | `being_deleted` | Array of `{ resource, since, finalizers, holds_data }` for each object this deploy applies that is currently being deleted on the cluster. `since` is `metadata.deletionTimestamp`, `finalizers` lists the finalizers still holding the object, and `holds_data` is `true` when the object may hold data (which the recreated object will not keep). Omitted when empty, and omitted by `kix plan --read-only` and `kix diff`. |
-| `prune` | Checked section of `{ resource, fate, detail, finalizers, deleting_since, controllers }`. See [Prune fates](#prune-fates). The last three fields appear only when `fate` is `delete` and are omitted when unset or empty. `finalizers` lists any finalizers on the object. `deleting_since` is `metadata.deletionTimestamp` when the object is already being deleted (the deploy waits for that deletion instead of sending a second delete). When `finalizers` is non-empty, `controllers` lists each controller declared for the object's kind (`controller` on `scope.mkCRD` or `scope.mkCRDRef`) as `{ resource, state, detail }`, where `state` is `ready`, `not_ready`, `missing`, or `unread`, and `detail` (when present) explains `not_ready` or `unread`. |
+| `prune` | Checked section of `{ resource, fate, detail, finalizers, deleting_since, controllers, left_behind }`. See [Prune fates](#prune-fates). `finalizers`, `deleting_since`, and `controllers` appear only when `fate` is `delete` and are omitted when unset or empty. `finalizers` lists any finalizers on the object. `deleting_since` is `metadata.deletionTimestamp` when the object is already being deleted (the deploy waits for that deletion instead of sending a second delete). When `finalizers` is non-empty, `controllers` lists each controller declared for the object's kind (`controller` on `scope.mkCRD` or `scope.mkCRDRef`) as `{ resource, state, detail }`, where `state` is `ready`, `not_ready`, `missing`, or `unread`, and `detail` (when present) explains `not_ready` or `unread`. With `--prune` or `--read-only`, `left_behind` (`{ kind, count, with_finalizers, objects: [{ resource, finalizers }] }`) is set on a CustomResourceDefinition or CRD reference marker (`scope.mkCRDRef` or `kix.mkImport`) when nothing in the new build declares that CRD and custom resources of `kind` will remain on the cluster after the prune. Kix excludes objects owned through `ownerReferences` (directly or indirectly) by an object that the prune deletes, because Kubernetes deletes them with their owner. `count` is the total number of remaining objects, `with_finalizers` is how many of them have finalizers, and `objects` lists up to 20 of them, those with finalizers first (`finalizers` is omitted when empty). |
 | `readiness` | Always `{ "status": "not_checked", "reason": "not_previewable" }`. |
 | `warnings` | The Kix library's warnings for the build, each with the fields [`kix check`](/docs/reference/cli/check/#library-warnings) gives a warning, without `severity`. Left out when there are none, and for a build read from a bundle. |
 | `not_checked` | Array of `{ resource, reason, because, detail }`. `because` names the Namespace, CustomResourceDefinition, or Service that this deploy changes and that the answer depends on, when Kix knows which. Empty unless `made_by` is `dry_run`. |
@@ -275,6 +296,7 @@ to restore what the build defines.
 | `reason` | Meaning |
 | --- | --- |
 | `crd_created_by_this_deploy` | Its kind comes from a CRD this deploy creates. |
+| `crd_installed_outside_kix` | Its kind comes from a CRD that is not on the cluster yet and is referenced externally (`scope.mkCRDRef` or `kix.mkImport`). Kix does not create the CRD. During deploy, Kix waits for an operator in the build or an external tool to install it, and fails if it never appears. `because` names the CRD when the build references only one external CRD in that API group. Otherwise, `because` is left out. |
 | `crd_changed_by_this_deploy` | Its kind's CRD is changed by this deploy, and the cluster refused the object when checking it against the CRD it has now. The deploy applies the CRD first, so the refusal may not happen. |
 | `namespace_created_by_this_deploy` | Its namespace is created by this deploy. |
 | `webhook_no_dry_run` | An admission webhook that would be called does not support dry run. |
@@ -352,7 +374,8 @@ every apply. A cluster that matches its build reports no differences.
 The live side holds only the named cluster's resources: those whose
 `kix.run/activations` annotation names one of its Activation records. When
 the Kubernetes cluster also runs other Kix clusters, their resources are not
-reported as removals, and stderr says how many were skipped per cluster. A
+reported as removals, and stderr says how many were skipped and which
+clusters they belong to. A
 resource the build drops that another Kix cluster's current build still
 contains is left out too, since `kix deploy --prune` keeps it.
 
@@ -368,8 +391,16 @@ reverts it. Without the deployed build nothing is labelled, and the drift
 section is not checked.
 
 In the `Plan` document, `made_by` is `live_read`, `flags` is `null`,
-`conflicts`, `admission`, and `prune` are `not_checked` with reason
-`read_only`, and `not_checked` is empty.
+`conflicts` and `admission` are `not_checked` with reason `read_only`, and
+`not_checked` is empty. `prune` lists each orphan as `kept_warn_only`, or
+`kept_never_pruned` for a Namespace or CustomResourceDefinition. Because
+previewing deletions requires dry-run `delete` requests, `kix plan --read-only`
+does not accept `--prune`. Checking what `kix deploy --prune` would leave on
+the cluster needs only `get` and `list`, so a removed
+CustomResourceDefinition or CRD reference still sets `left_behind` on its
+`prune` entry (see [The `Plan` document](#the-plan-document)), and text and
+Markdown output warn when the plan has changes. CI jobs with read-only
+cluster access can inspect `left_behind` in `kix plan --read-only -o json`.
 
 The exit status is `0` when nothing differs, `2` when something does or a
 stateful migration was detected, and `1` on an evaluation, build, or cluster
@@ -383,7 +414,7 @@ error.
 | Permissions | The deployer's | `get` and `list` | None |
 | Field changes | Live object against the dry-run result | Build against the Kix-owned view of the live object | Build against build |
 | Ownership conflicts, webhooks, admission policies, validation, RBAC | Checked | `not_checked` (`read_only`) | `not_checked` |
-| Prune fates | Checked | `not_checked` | `not_checked` |
+| Prune fates | Checked | Orphans listed as `kept_warn_only` or `kept_never_pruned`, with `left_behind` when custom resources remain | `not_checked` |
 | Drift | Fields the deploy touches | Every drifted field, with whether the deploy reverts it | Not checked |
 | `made_by` | `dry_run` (`builds` with `--offline`) | `live_read` | `builds`, or `live_read` with a snapshot |
 

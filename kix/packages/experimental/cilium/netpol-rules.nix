@@ -10,8 +10,13 @@
 
 let
   failWith = (import ../../../lib/core/error.nix { inherit lib; }).fail;
+  inherit (import ../../../lib/plugins/netpol/interface.nix { inherit lib; })
+    checkEntities
+    defaultDnsPeers
+    ;
 
-  rules = rec {
+  # Return the rule set with the DNS rule built for `dnsPeers`.
+  mkRules = dnsPeers: rec {
     # The kinds this enforcer emits. Rules that look for a policy in a
     # namespace accept these alongside the Kubernetes NetworkPolicy.
     policyKinds = [
@@ -42,13 +47,41 @@ let
 
     # Build a network-policy resource routed through the CNP CRD ref.
     # mkResource is the caller's scope.mkResource or k8s.mkResource.
+    # `selector` is the matchLabels of the pods the policy selects, and
+    # `ingress` and `egress` are rules from this contract's builders. An
+    # empty list writes no section for that direction. Without `selector`,
+    # `extraArgs.spec` is the whole Cilium spec, as `mkDefaultDenySpec`
+    # builds it.
     mkPolicy =
       {
         crdRef,
         mkResource,
         extraArgs,
+        selector ? null,
+        ingress ? [ ],
+        egress ? [ ],
       }:
-      mkResource (crdRef.out.cr extraArgs);
+      mkResource (
+        crdRef.out.cr (
+          if selector == null then
+            extraArgs
+          else if extraArgs ? spec then
+            failWith {
+              package = "cilium";
+              message = "CiliumNetworkPolicy '${extraArgs.name or "<unnamed>"}' sets both `selector` and `extraArgs.spec`, so Kix rejected it.";
+              fix = "Remove `extraArgs.spec` and pass rules in `ingress` and `egress` alongside `selector`.";
+            }
+          else
+            extraArgs
+            // {
+              spec = {
+                endpointSelector.matchLabels = selector;
+              }
+              // lib.optionalAttrs (ingress != [ ]) { inherit ingress; }
+              // lib.optionalAttrs (egress != [ ]) { inherit egress; };
+            }
+        )
+      );
 
     # Spec for a default-deny policy. One empty rule per direction: it
     # matches no peer, so the selected endpoints go into default deny for
@@ -66,31 +99,47 @@ let
       // lib.optionalAttrs denyIngress { ingress = [ { } ]; }
       // lib.optionalAttrs denyEgress { egress = [ { } ]; };
 
-    # DNS egress: allow UDP+TCP 53 to kube-dns in kube-system.
-    dnsEgressRule = {
-      toEndpoints = [
-        {
-          matchLabels = {
-            "k8s:io.kubernetes.pod.namespace" = "kube-system";
-            "k8s-app" = "kube-dns";
-          };
+    # DNS egress: allow UDP+TCP 53 to the DNS pods. Cilium refuses a rule
+    # that combines `toEndpoints` with `toCIDR`, and callers take this as
+    # one rule, so a peer given by address is refused here.
+    dnsEgressRule =
+      let
+        cidrPeers = builtins.filter (p: p ? cidr) dnsPeers;
+        podPeers = builtins.filter (p: p ? podSelector) dnsPeers;
+      in
+      if cidrPeers != [ ] then
+        failWith {
+          package = "cilium";
+          message = "The cluster's DNS peers (`dnsPeers` or `meta.dnsPeers` on the `dns` provider) include IP ranges (${
+            lib.concatMapStringsSep ", " (p: p.cidr) cidrPeers
+          }). The `cilium` enforcer supports only pod selectors for DNS peers because Cilium cannot combine pod selectors and IP ranges in one rule, so Kix stopped evaluation.";
+          fix = "In `dnsPeers` on `kix.mkImport` (or `meta.dnsPeers` in the `dns` package), replace `{ cidr = \"...\"; }` entries with pod selectors (`{ namespace = \"<namespace>\"; podSelector = { ... }; }`, where `namespace` is optional). Remove the setting (or set `dnsPeers = null`) to allow pods labeled `k8s-app = \"kube-dns\"` in `kube-system`.";
         }
-      ];
-      toPorts = [
+      else
         {
-          ports = [
-            {
-              port = "53";
-              protocol = "UDP";
+          toEndpoints = map (p: {
+            matchLabels = {
+              "k8s:io.kubernetes.pod.namespace" = p.namespace;
             }
-            {
-              port = "53";
-              protocol = "TCP";
-            }
-          ];
-        }
-      ];
-    };
+            // p.podSelector;
+          }) podPeers;
+          toPorts = dnsToPorts;
+        };
+
+    dnsToPorts = [
+      {
+        ports = [
+          {
+            port = "53";
+            protocol = "UDP";
+          }
+          {
+            port = "53";
+            protocol = "TCP";
+          }
+        ];
+      }
+    ];
 
     # API server egress: Cilium identity entity.
     # `host`/`remote-node` alongside `kube-apiserver`: when the apiserver is
@@ -107,13 +156,14 @@ let
       ];
     };
 
-    # External ingress (world / custom entities).
+    # External ingress (world / custom entities). Kix's entity names are
+    # Cilium's, so they pass through unchanged.
     mkExternalIngressRule =
       {
         entities ? [ "world" ],
       }:
       {
-        fromEntities = entities;
+        fromEntities = checkEntities "An external ingress rule" entities;
       };
 
     # External egress (world / custom entities).
@@ -122,7 +172,7 @@ let
         entities ? [ "world" ],
       }:
       {
-        toEntities = entities;
+        toEntities = checkEntities "An external egress rule" entities;
       };
 
     # Egress to a Service's backing pods.
@@ -312,20 +362,42 @@ let
                 failWith {
                   package = "cilium";
                   message = "unknown egress intent target '${toString target}'.";
-                  fix = "Set `to` to \"apiserver\", \"world\", \"dns\", \"pods\", or \"all-pods\".";
+                  fix = "Set `to` to \"apiserver\", \"world\", \"dns\", \"pods\", \"all-pods\", or \"node-local\".";
                 };
+            withPorts =
+              r:
+              r
+              // lib.optionalAttrs (rule ? ports) {
+                toPorts = [
+                  {
+                    ports = portsToCilium rule.ports;
+                  }
+                ];
+              };
           in
           if target == "dns" then
-            baseRule # DNS rule already includes ports
+            [ baseRule ] # DNS rule already includes ports
+          # An address on the pod's own node, such as a cloud metadata
+          # server. Cilium matched node-bound link-local addresses with
+          # `toCIDR` through 1.16 and gives them the `host` identity from
+          # 1.17, so both rules are written. Cilium refuses one rule that
+          # holds both.
+          else if target == "node-local" then
+            [
+              (withPorts {
+                toCIDR = [
+                  (rule.cidr or (failWith {
+                    package = "cilium";
+                    message = "Egress intent rule with `to = \"node-local\"` is missing `cidr`, so Kix could not build the rule.";
+                    fix = "Add `cidr` with the node-local IP range, such as `cidr = \"169.254.169.254/32\";`.";
+                  })
+                  )
+                ];
+              })
+              (withPorts { toEntities = [ "host" ]; })
+            ]
           else
-            baseRule
-            // lib.optionalAttrs (rule ? ports) {
-              toPorts = [
-                {
-                  ports = portsToCilium rule.ports;
-                }
-              ];
-            };
+            [ (withPorts baseRule) ];
 
         translateIngressRule =
           rule:
@@ -363,31 +435,38 @@ let
         allIntents = builtins.attrValues intents;
       in
       {
-        egressRules = builtins.concatMap (i: map translateEgressRule (i.egress or [ ])) allIntents;
+        egressRules = builtins.concatMap (
+          i: builtins.concatMap translateEgressRule (i.egress or [ ])
+        ) allIntents;
         ingressRules = builtins.concatMap (i: map translateIngressRule (i.ingress or [ ])) allIntents;
       };
   };
-in
-rules
-// {
-  # The enforcer contract, bound to the package's CRD references. `cnpCrd`
-  # and `ccnpCrd` are the CiliumNetworkPolicy and
-  # CiliumClusterwideNetworkPolicy handles from scope.mkCRDRef; `keys` is
-  # kix.keys.
-  mkNetpolOut =
+
+  rules = mkRules defaultDnsPeers;
+
+  # Return the enforcer contract for `dnsPeers`, bound to the CRD references.
+  mkBound =
     {
       cnpCrd,
       ccnpCrd,
       keys,
-    }:
+    }@crds:
+    dnsPeers:
+    let
+      rules = mkRules dnsPeers;
+    in
     rules
     // {
+      withDnsPeers = mkBound crds;
+
       mkPolicy =
-        { mkResource, extraArgs }:
-        rules.mkPolicy {
-          crdRef = cnpCrd;
-          inherit mkResource extraArgs;
-        };
+        args:
+        rules.mkPolicy (
+          args
+          // {
+            crdRef = cnpCrd;
+          }
+        );
 
       # A platform intent targets pods outside any Kix scope, so the caller
       # passes the namespace resource (or `clusterScoped`) explicitly. A
@@ -438,4 +517,15 @@ rules
           }
         );
     };
+in
+rules
+// {
+  inherit mkRules;
+
+  # The enforcer contract, bound to the package's CRD references and built
+  # for the default DNS peers. Kix rebuilds it for the cluster's peers
+  # through `withDnsPeers`. `cnpCrd` and `ccnpCrd` are the
+  # CiliumNetworkPolicy and CiliumClusterwideNetworkPolicy handles from
+  # scope.mkCRDRef; `keys` is kix.keys.
+  mkNetpolOut = crds: mkBound crds defaultDnsPeers;
 }

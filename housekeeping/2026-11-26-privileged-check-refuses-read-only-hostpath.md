@@ -1,0 +1,3 @@
+# 2026-11-26 · `kix/lib/scope/validators.nix` · `checkPrivileged` treats every `hostPath` volume as privileged, and GKE Autopilot admits a read-only one under `/var/log`.
+
+On `gke-autopilot` (`privilegedContainers = false`), a workload that only mounts `/var/log` read-only fails evaluation, while Autopilot's policy webhook would admit it. The live test saw the webhook refuse only a writable `hostPath` (`autogke-no-write-mode-hostpath`). No Kix package hits this today: `loki-logs` and `clickhouse-logs` also keep read positions in a writable host path. The capability cannot say "read-only host paths under a prefix are allowed".

@@ -791,6 +791,33 @@ in
     )
     || throw "defaultDeny = false: ${show (map (m: m.metadata.name) withPeers)}";
 
+  # A target in a namespace without its own default deny (here a platform
+  # namespace) is treated as default deny off: it gets scrape ingress only
+  # when another policy already isolates its pods.
+  prometheus-scrape-platform-namespace-only-isolated-targets =
+    let
+      withoutPeers = cnpsOf (clusterWith {
+        extra.networkPolicy.platformNamespaces = [ "apps" ];
+      });
+      withPeers = cnpsOf (clusterWith {
+        extra = {
+          networkPolicy.platformNamespaces = [ "apps" ];
+          instances.apps.operand-peers.package = operandPeers;
+        };
+      });
+      web = byPrefix "monitoring-prometheus-server-scrape-svc-web";
+      operand = byPrefix "monitoring-prometheus-server-scrape-pods-operand";
+    in
+    (
+      web withoutPeers == null
+      && operand withoutPeers == null
+      && web withPeers == null
+      && operand withPeers != null
+      && byName "apps-default-deny" withoutPeers == null
+      && byName "monitoring-default-deny" withoutPeers != null
+    )
+    || throw "platform namespace: ${show (map (m: m.metadata.name) withPeers)}";
+
   # Without default deny, isolation is read from the labels of the pods
   # behind the target, not from the Service selector. A policy selecting
   # `tier=api`, which only the pods carry, isolates them, so the target gets

@@ -377,6 +377,40 @@ Kix models cluster availability across four ordered levels: `"none"` < `"pod"` <
 
 ---
 
+## operandPolicy
+
+`kix.operandPolicy` builds a network policy for pods that an operator creates at runtime from a custom resource, such as database replicas or proxy pods (or for workload rules whose ports come from instance `config`). Because Kix does not build operator-created pods directly, the package that renders the custom resource declares their allowed traffic:
+
+```nix
+build = { self, scope, kix, ... }: {
+  replicasEgress = kix.operandPolicy {
+    inherit scope;
+    name = "pg-replicas-egress";
+    selector = { "cnpg.io/cluster" = "pg"; };
+    egress = [
+      scope.networkPolicyEnforcer.netpol.dnsEgressRule
+      scope.networkPolicyEnforcer.netpol.apiServerEgressRule
+    ];
+  };
+  root = {
+    resource = self.cluster;
+    requires = builtins.filter (p: p != null) [ self.replicasEgress ];
+  };
+};
+```
+
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `scope` | scope | required | The package's `scope`. Kix places the policy in `scope`'s namespace. |
+| `name` | string | required | Name of the generated policy resource. |
+| `selector` | attrset | required | Pod label selector (`matchLabels`) matching the target pods. |
+| `ingress` | list | `[ ]` | Ingress rules from `scope.networkPolicyEnforcer.netpol` builders (such as `mkCallerIngressRule` or `mkSelfRules`). |
+| `egress` | list | `[ ]` | Egress rules from `scope.networkPolicyEnforcer.netpol` builders (such as `dnsEgressRule`, `mkServiceEgressRule`, or `translateIntentRules`). |
+
+`kix.operandPolicy` returns `null` when the cluster has no network policy enforcer or when all rules are filtered out by `networkPolicy.directions`, so filter out `null` values before adding policies to `root.requires`. Because Kix evaluates `ingress` and `egress` lazily only when an enforcer is present, those lists can reference `scope.networkPolicyEnforcer.netpol` directly without a null check.
+
+Legacy calls may pass `spec` (a complete `CiliumNetworkPolicy` `spec` with `endpointSelector`) instead of `selector`, `ingress`, and `egress`. Passing both `spec` and `selector`, or omitting both, fails evaluation.
+
 ## cloudIdentity
 
 Packages that call AWS, Google Cloud, or Azure APIs can accept either a [cloud identity](/docs/reference/instances-and-composition/#cloud-identities) or a Secret instance on the same dependency and unpack it with `kix.cloudIdentity.use`:
@@ -409,6 +443,7 @@ build =
 | `cloud` | Which cloud API the software calls: `"aws"`, `"gcp"`, `"azure"`, or `null` when cloud identities are not accepted. Passing an identity for any other cloud fails evaluation. |
 | `arg` | Optional string (defaults to `null`). Name of the dependency argument in `build`, such as `"providerCredentials"`. When set, evaluation errors name `deps.<arg>` and set the error's `dependency` field. Always pass `arg` when a package has more than one credentials dependency, so users know which one to fix. |
 | `identityGoesTo` | Optional string (defaults to `null`). Where the cluster author should move the cloud identity, such as ``"`deps.controllerIdentity` of the cert-manager instance"``. Appended to the error's fix when `cloud` is `null` and `dep` is a cloud identity. |
+| `supportedClouds` | Optional list of strings (defaults to `null`), such as `[ "aws" ]` for a package that supports only S3 settings. Lists every cloud the package supports across all configurations. Passing an identity for an unlisted cloud fails evaluation, reports that the package does not support that cloud yet, and omits the suggestion to change `config`. When `null`, a cloud mismatch suggests changing `config` to match the identity's cloud. |
 
 `kix.cloudIdentity.use` returns an attribute set with three fields:
 
@@ -416,11 +451,22 @@ build =
 | --- | --- |
 | `secret` | `dep` when `dep` is not a cloud identity (such as a Secret instance or `null`); `null` when `dep` is a cloud identity. |
 | `identity` | `dep` when `dep` is a cloud identity; `null` otherwise. |
-| `bind` | Function that transforms ServiceAccount arguments before `scope.mkResource`. When `identity` is non-null, `scope.mkResource` writes the cloud's ServiceAccount annotations and `kix.run/cloud-identity`, and orders the ServiceAccount after the cluster's `cloudIdentity` provider. Workload builders (`scope.mkDeployment`, `mkStatefulSet`, `mkDaemonSet`, `mkJob`, and `mkCronJob`) then add `checksum/cloud-identity` and any required pod labels to every pod template with `serviceAccount = self.<part>`. When `identity` is `null`, `bind` returns its arguments unchanged. |
+| `bind` | Function that transforms ServiceAccount arguments before `scope.mkResource`. When `identity` is non-null, `scope.mkResource` writes the cloud's ServiceAccount annotations and `kix.run/cloud-identity`, and orders the ServiceAccount after the cluster's `cloudIdentity` provider. Workload builders (`scope.mkDeployment`, `mkStatefulSet`, `mkDaemonSet`, `mkJob`, and `mkCronJob`) then add `checksum/cloud-identity` and any required pod labels to every pod template with `serviceAccount = self.<part>`. When `networkPolicy.enable = true`, Kix also adds the credential egress rules for that cloud identity mechanism (see below) to each bound workload's egress policy. When `identity` is `null`, `bind` returns its arguments unchanged. |
 
 If a package builds two ServiceAccounts with separate identities, declare two dependencies and call `kix.cloudIdentity.use` once for each.
 
-When an operator creates the ServiceAccount from a custom resource, `credentials.bind` cannot modify it. Instead, take `cloudIdentity ? null` as a build argument and call `kix.cloudIdentity.annotationsFor { inherit scope; identity = credentials.identity; provider = cloudIdentity; }`. Pass the returned `{ serviceAccountAnnotations, podLabels }` into the custom resource (both sets are empty when `identity` is `null`). Because the operator creates those pods, Kix does not add `checksum/cloud-identity` to restart them automatically when the identity changes. Also call `kix.cloudIdentity.annotationsFor` when a workload launches its own pods at runtime under a bound ServiceAccount: merge the returned `podLabels` into the ConfigMap or setting that controls those pods' labels (as `velero` does for its node-agent and repository-maintenance ConfigMaps). For example, `cnpg-cluster` writes `serviceAccountAnnotations` to `spec.serviceAccountTemplate.metadata.annotations` and any `podLabels` to `spec.inheritedMetadata.labels` on the `Cluster`, and locks those keys in `kix.mergeGuarded`.
+Each cluster's cloud identity mechanism declares the outbound traffic a pod needs to fetch its credentials:
+
+| Mechanism | Credential egress |
+| --- | --- |
+| IRSA (`eks`, `irsa-webhook`) | TCP 443 to any address outside the cluster (AWS STS) |
+| EKS Pod Identity (`eks` with `cluster.flavor.eks.cloudIdentity = "pod-identity"`) | TCP 80 to `169.254.170.23/32` and `fd00:ec2::23/128` on the pod's own node |
+| GKE Workload Identity Federation (`gke`, `gke-autopilot`) | TCP 80 and 8080 to `169.254.169.254/32` on the pod's own node |
+| Microsoft Entra Workload ID (`aks`, `azure-workload-identity-webhook`) | TCP 443 to any address outside the cluster |
+
+Kix adds these rules only to workloads whose ServiceAccount has a bound cloud identity. On GKE, IAM roles can be granted directly to a Kubernetes ServiceAccount without an `iam.gke.io/gcp-service-account` annotation, but default-deny egress blocks the GKE metadata server unless an identity is bound; pass `kix.cloudIdentity.gcp { }` on the instance's credentials dependency to open that egress rule. For node-local addresses, the `cilium` enforcer emits both a `toCIDR` rule (used through Cilium 1.16) and a `host` entity rule (used from Cilium 1.17 onward) on those ports; the `host` rule also allows traffic to any other host-network listener on the same port on the pod's node.
+
+When an operator creates the ServiceAccount from a custom resource, `credentials.bind` cannot modify it. Instead, take `cloudIdentity ? null` as a build argument and call `kix.cloudIdentity.annotationsFor { inherit scope; identity = credentials.identity; provider = cloudIdentity; }`. Pass the returned `{ serviceAccountAnnotations, podLabels }` into the custom resource (both sets are empty when `identity` is `null`). `annotationsFor` also returns `networkIntents` (`{ egress = [ ... ]; }`, or `{ egress = [ ]; }` when `identity` is `null`): pass `{ intents.identity = rendered.networkIntents; }` to `scope.networkPolicyEnforcer.netpol.translateIntentRules` inside the operand pods' `kix.operandPolicy` (as `cnpg-cluster`, `stackgres-cluster`, and `velero` do) so default-deny egress does not block credential requests from operator-created pods. Because the operator creates those pods, Kix does not add `checksum/cloud-identity` to restart them automatically when the identity changes. Also call `kix.cloudIdentity.annotationsFor` when a workload launches its own pods at runtime under a bound ServiceAccount: merge the returned `podLabels` into the ConfigMap or setting that controls those pods' labels (as `velero` does for its node-agent and repository-maintenance ConfigMaps). For example, `cnpg-cluster` writes `serviceAccountAnnotations` to `spec.serviceAccountTemplate.metadata.annotations` and any `podLabels` to `spec.inheritedMetadata.labels` on the `Cluster`, and locks those keys in `kix.mergeGuarded`.
 
 ### When one package owns the ServiceAccount and another chooses the cloud
 
@@ -474,7 +520,7 @@ When the package that chooses the cloud depends on the ServiceAccount owner, cal
 - `cloud`: `"aws"`, `"gcp"`, `"azure"`, or `null` (when using a static Secret instead of pod credentials).
 - `holder`: the dependency instance whose pods make the cloud API calls (which publishes `out.identityCloud`).
 
-`ambientProblem` returns `{ message, fix }` when `cloud` and `holder.out.identityCloud` are both non-null and differ, or `null` otherwise (including when `holder` has no cloud identity, since pods may fall back to node credentials). Wrap a non-null result with `// { assertion = false; }` in the package's `assertions` list.
+`ambientProblem` returns `{ message, fix }` when `cloud` and `holder.out.identityCloud` are both non-null and differ, or `null` otherwise (including when `holder` has no cloud identity, since its pods may still receive default credentials from the cluster or node). Wrap a non-null result with `// { assertion = false; }` in the package's `assertions` list.
 
 When the ServiceAccount owner exposes a builder function in `out` that chooses the cloud (such as `out.mkSecretStore` in `external-secrets`), the package cannot pass itself as `holder`. Pass `holderName` and `identityCloud` instead:
 

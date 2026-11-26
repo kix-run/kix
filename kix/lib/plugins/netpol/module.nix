@@ -16,6 +16,42 @@ let
 
   inherit (cfg) enforced;
 
+  # Return the namespaces where Kix isolates every pod with
+  # `<namespace>-default-deny`: those that hold an active instance Kix
+  # deploys (`cluster.deployedNsNames`) or that the cluster definition
+  # declares, except `platformNamespaces`. Imports run on pods Kix does not
+  # deploy, and a platform namespace runs pods the platform changes, so a
+  # default deny there would cut traffic Kix cannot see. Default deny,
+  # scrape ingress, and caller ingress all read this list.
+  defaultDenyNamespacesOf =
+    cluster:
+    lib.optionals cfg.defaultDeny (
+      builtins.filter (
+        nsName:
+        (builtins.elem nsName cluster.deployedNsNames || config.namespaces ? ${nsName})
+        && !(builtins.elem nsName cfg.platformNamespaces)
+      ) cluster.realNsNames
+    );
+
+  # An exclusive `cni` binding means the environment owns the pod network, so
+  # a `cilium` instance would be refused. The missing-enforcer error must not
+  # recommend one there.
+  cniRole = config.cluster.roles.cni or { };
+  cniExclusive = (cniRole.binding or null) == "exclusive";
+  cniName =
+    if (cniRole.provider or null) != null then "`${cniRole.provider}`" else "managed by the platform";
+
+  ciliumFix =
+    "Declare a `cilium` instance (`instances.kube-system.cilium.package = packages.experimental.cilium;`), or set `networkPolicy.enable = false`. "
+    + "If the cluster already runs Cilium, set `cluster.flavor.rke2.cni = [ \"cilium\" ]` on RKE2, or set "
+    + "`cluster.roles.cni.binding = \"shadowable\"` and declare a `platform-cilium` import so the `cilium` instance uses the existing installation.";
+
+  exclusiveCniFix =
+    "Set `networkPolicy.enable = false`. This cluster's pod network is ${cniName} (`cluster.roles.cni.binding = \"exclusive\"`), "
+    + "so Kix cannot install Cilium here, and Kix only generates Cilium network policies today. "
+    + "If you disabled the built-in CNI so Kix can install Cilium, set `cluster.roles.cni.binding = \"absent\"` and add `packages.experimental.cilium` under `instances`. "
+    + "If the cluster already runs Cilium, set `cluster.roles.cni.binding = \"shadowable\"`, add a `platform-cilium` import, and add `packages.experimental.cilium` under `instances`.";
+
   resolveEnforcerOut =
     {
       cluster,
@@ -29,7 +65,7 @@ let
     if provider == null || (provider.ns == namespaceName && provider.inst == instanceName) then
       null
     else
-      provider.out;
+      interface.bindDnsPeers cluster.findRoleProvider provider.out;
 in
 {
   options.networkPolicy = lib.mkOption {
@@ -45,7 +81,13 @@ in
           defaultDeny = lib.mkOption {
             type = lib.types.bool;
             default = true;
-            description = "Generate deny-all CiliumNetworkPolicy per namespace.";
+            description = ''
+              Write a `<namespace>-default-deny` policy in every namespace that
+              contains an active deployed instance or is declared under
+              `namespaces`, except namespaces listed in `platformNamespaces`.
+              Namespaces that contain only `kix.mkImport` instances or inactive
+              `optional` instances do not get a default-deny policy.
+            '';
           };
           directions = lib.mkOption {
             type = lib.types.enum [
@@ -69,6 +111,21 @@ in
               deny and every derived policy cover. The netpol plugin's policy
               builders take it, and `kix.operandPolicy` reads it through
               `scope.networkPolicyEnforced`.
+            '';
+          };
+          platformNamespaces = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [ ];
+            example = [ "kube-system" ];
+            description = ''
+              Namespaces where the cluster platform manages its own pods, such
+              as `kube-system` on managed cloud providers. Kix omits
+              `<namespace>-default-deny` in these namespaces so platform pods
+              are not blocked. Any workload Kix deploys in these namespaces
+              still gets its own generated policies, which isolate only that
+              workload's pods. Defaults to `[ "kube-system" ]` on the `gke`,
+              `gke-autopilot`, `eks`, and `aks` flavors. Use `platformIntents`
+              to write policies for platform-managed pods.
             '';
           };
           platformIntents = lib.mkOption {
@@ -125,6 +182,8 @@ in
           inherit enforced;
           networkPolicyEnforcer = resolveEnforcerOut { inherit (ctx) cluster instanceName namespaceName; };
           packageIntents = ctx.packageMeta.network.intents or { };
+          defaultDenyNamespaces = defaultDenyNamespacesOf ctx.cluster;
+          cloudIdentityEgress = ctx.cloudIdentityEgress or [ ];
         };
       in
       {
@@ -144,6 +203,7 @@ in
             packageMeta
             ;
           inherit enforced;
+          defaultDenyNamespaces = defaultDenyNamespacesOf ctx.cluster;
           networkPolicyEnforcer = resolveEnforcerOut { inherit (ctx) cluster instanceName namespaceName; };
         };
       in
@@ -156,21 +216,20 @@ in
       ctx:
       let
         provider = ctx.cluster.findRoleProvider enforcerRole;
-        enforcerOut = if provider == null then null else provider.out;
 
-        defaultDenyPolicies =
-          if cfg.defaultDeny then
-            map (
-              nsName:
-              derive.generateDefaultDeny {
-                namespaceName = nsName;
-                nsResource = ctx.nsResources.${nsName};
-                inherit enforced;
-                networkPolicyEnforcer = enforcerOut;
-              }
-            ) ctx.realNsNames
-          else
-            [ ];
+        defaultDenyNamespaces = defaultDenyNamespacesOf ctx.cluster;
+        enforcerOut =
+          if provider == null then null else interface.bindDnsPeers ctx.cluster.findRoleProvider provider.out;
+
+        defaultDenyPolicies = map (
+          nsName:
+          derive.generateDefaultDeny {
+            namespaceName = nsName;
+            nsResource = ctx.nsResources.${nsName};
+            inherit enforced;
+            networkPolicyEnforcer = enforcerOut;
+          }
+        ) defaultDenyNamespaces;
 
         platformIntentPolicies = derive.materializePlatformIntents {
           networkConfig = cfg;
@@ -190,7 +249,7 @@ in
             scrape.derive {
               inherit (ctx) resources nsResources realNsNames;
               enforcerApi = enforcerOut.netpol;
-              inherit enforced;
+              inherit enforced defaultDenyNamespaces;
               inherit (cfg) defaultDeny;
               extraPolicies = platformIntentPolicies;
             };
@@ -210,12 +269,7 @@ in
               fail {
                 clusterOption = "networkPolicy.enable";
                 message = "`networkPolicy.enable = true` but no instance declares `meta.roles = [\"network-policy-enforcer\"]`.";
-                fix =
-                  "Declare a `cilium` instance. Where the environment installs Cilium, a flavour sets "
-                  + "cluster.roles.cni.binding = \"shadowable\" and declares a "
-                  + "platform-cilium import (on RKE2: "
-                  + "cluster.flavor.rke2.cni = [ \"cilium\" ]), and the instance "
-                  + "configures or uses that Cilium instead of installing one.";
+                fix = if cniExclusive then exclusiveCniFix else ciliumFix;
               }
             else
               null

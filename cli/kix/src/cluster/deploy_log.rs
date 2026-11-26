@@ -13,6 +13,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::apply::ApplyAction;
+use super::binding::{Connection, Target};
 use super::kept;
 use super::readiness::ControllerState;
 use super::stream::{
@@ -50,6 +51,16 @@ impl Line {
         })
     }
 
+    /// Build the line that names the Kubernetes cluster of `connection`.
+    pub fn kubernetes(connection: &Connection, elapsed_ms: u64) -> Line {
+        let Target { context, server } = connection.into();
+        Line {
+            schema_version: SCHEMA_VERSION.to_string(),
+            elapsed_ms,
+            event: Event::Kubernetes { context, server },
+        }
+    }
+
     /// Build the final summary line of the run. `succeeded` matches the process
     /// exit status. `only` is the instances a deploy with `--only` applied in
     /// full, empty for a deploy of the whole build.
@@ -70,9 +81,45 @@ impl Line {
                 configured: r.configured,
                 unchanged: r.unchanged,
                 failed: r.failed,
+                failed_after_apply: r.failed_after_apply,
                 cancelled: r.cancelled,
                 pruned: r.pruned,
                 only: only.to_vec(),
+                nothing_to_apply: false,
+                left_behind: Vec::new(),
+            },
+        }
+    }
+
+    /// Return the line with `left` as the objects the prune left behind, when
+    /// it is a summary line.
+    pub fn with_left_behind(mut self, left: Vec<crate::plan::document::LeftBehind>) -> Line {
+        if let Event::Summary { left_behind, .. } = &mut self.event {
+            *left_behind = left;
+        }
+        self
+    }
+
+    /// Build the summary line of a deploy that stopped before it ran because
+    /// the plan applies and prunes nothing. `unchanged` counts the objects a
+    /// run would have reported unchanged.
+    pub fn nothing_to_apply(unchanged: usize, elapsed_ms: u64) -> Line {
+        Line {
+            schema_version: SCHEMA_VERSION.to_string(),
+            elapsed_ms,
+            event: Event::Summary {
+                dry_run: false,
+                succeeded: true,
+                created: 0,
+                configured: 0,
+                unchanged,
+                failed: 0,
+                failed_after_apply: 0,
+                cancelled: 0,
+                pruned: 0,
+                only: Vec::new(),
+                nothing_to_apply: true,
+                left_behind: Vec::new(),
             },
         }
     }
@@ -82,6 +129,16 @@ impl Line {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
+    /// The Kubernetes cluster the deploy writes to. The first line of the
+    /// log. A deploy whose build is empty never connects, so its log has
+    /// only the `summary` line.
+    Kubernetes {
+        /// The kubeconfig context, or `null` when the kubeconfig names none.
+        context: Option<String>,
+        /// The URL of the context's API server in the kubeconfig, or `null`
+        /// when the kubeconfig does not give it.
+        server: Option<String>,
+    },
     /// The plan, before any node runs. `edges` say which node waits on which.
     Plan {
         nodes: Vec<PlannedNode>,
@@ -147,7 +204,7 @@ pub enum Event {
         resource: String,
         fields: Vec<FieldNotKept>,
     },
-    /// The counts the text summary line shows.
+    /// The counts the text summary line shows. The last line of the log.
     Summary {
         dry_run: bool,
         succeeded: bool,
@@ -155,6 +212,10 @@ pub enum Event {
         configured: usize,
         unchanged: usize,
         failed: usize,
+        /// The objects in `failed` that the run wrote to the cluster and
+        /// that then did not become ready. Older logs leave it out.
+        #[serde(default)]
+        failed_after_apply: usize,
         cancelled: usize,
         pruned: usize,
         /// The instances (`namespace/instance`) a deploy with `--only`
@@ -164,6 +225,17 @@ pub enum Event {
         /// the build. Left out for a deploy of the whole build.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         only: Vec<String>,
+        /// True when the plan had nothing to apply or prune, so the deploy
+        /// wrote nothing and the active deployment record stays current. The
+        /// log then holds no `plan` or `node` lines.
+        #[serde(default)]
+        nothing_to_apply: bool,
+        /// For each kind whose definition left the build, the objects of it
+        /// that are still on the cluster after the prune. Kix did not create
+        /// them, and nothing clears their finalizers once their controller
+        /// is gone. Left out when there are none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        left_behind: Vec<crate::plan::document::LeftBehind>,
     },
 }
 
@@ -270,6 +342,9 @@ pub enum Detail {
     AwaitingRestart {
         message: String,
     },
+    /// A prune found nothing to delete, and the text says why, such as
+    /// `already gone (Kubernetes does not recognize its kind)`.
+    AlreadyGone(String),
     /// A delete did not finish within the wait: after `elapsed_ms`, the
     /// object was still on the cluster, held by `finalizers`. `controllers`
     /// lists the workloads its kind names as its controller (`controller` on
@@ -524,6 +599,7 @@ impl Detail {
             NodeDetail::SecretHydrationFailed(msg) => Detail::SecretHydrationFailed(msg.clone()),
             NodeDetail::RecreatedInPlace { reason } => Detail::RecreatedInPlace(reason.clone()),
             NodeDetail::Rerun { reason } => Detail::Rerun(reason.clone()),
+            NodeDetail::AlreadyGone(why) => Detail::AlreadyGone(why.clone()),
             NodeDetail::PendingRestart {
                 stale: Some(stale),
                 message,

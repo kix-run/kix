@@ -557,24 +557,22 @@ in
               }) jgroupsPorts;
             in
             kix.operandPolicy {
-              inherit scope;
+              inherit scope selector;
               name = "${name}-jgroups";
-              spec = netpol.mkEndpointSelector selector // {
-                ingress = [
-                  (netpol.mkCallerIngressRule {
-                    callerSelector = selector;
-                    callerNamespace = scope.namespaceName;
-                    inherit ports;
-                  })
-                ];
-                egress = [
-                  (netpol.mkServiceEgressRule {
-                    inherit selector ports;
-                    namespace = scope.namespaceName;
-                    sourceNamespace = scope.namespaceName;
-                  })
-                ];
-              };
+              ingress = [
+                (netpol.mkCallerIngressRule {
+                  callerSelector = selector;
+                  callerNamespace = scope.namespaceName;
+                  inherit ports;
+                })
+              ];
+              egress = [
+                (netpol.mkServiceEgressRule {
+                  inherit selector ports;
+                  namespace = scope.namespaceName;
+                  sourceNamespace = scope.namespaceName;
+                })
+              ];
             }
           else
             null;

@@ -50,8 +50,13 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
 ## What a deploy does
 
 1. Builds the cluster.
-2. Reads the running activation from the cluster (or the local cache with
-   `--offline`). If that build is no longer in Kix's local store,
+2. Prints the kubeconfig context and API server URL before connecting, such as
+   `Connecting to context prod (https://prod.example:6443)...` (with
+   `--offline`, Kix connects only after confirmation). On a first deploy when
+   `cluster.kubernetes.uid` is unset, Kix also prints a note with the setting
+   to [bind the definition](/docs/how-to/operate-a-cluster/bind-a-cluster-definition-to-its-kubernetes-cluster/)
+   to this Kubernetes cluster. Kix reads the running activation from the
+   cluster, or from the local cache with `--offline`. If that build is no longer in Kix's local store,
    Kix rebuilds the previous state from the live resources whose
    `kix.run/activations` annotation names the running Activation record, a
    failed one of the same cluster, or a build listed under
@@ -79,7 +84,10 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
    or a refused prune delete stops the deploy here, before anything is
    applied. With `--offline` the plan is not sent to the cluster.
 5. Asks for confirmation, then creates the Activation record and applies.
-   Unchanged resources are skipped. A deploy with nothing to change exits
+   Unchanged resources are skipped unless they are missing from the cluster or
+   being deleted. During planning, Kix lists the Kix-managed resources of each
+   kind in the build across the cluster so the deploy recreates any that are
+   missing or being deleted. A deploy with nothing to change exits
    without applying. When a Secret carries `kix.run/sops-source`, the deploy
    decrypts the SOPS file and keeps any plain keys already in the Secret's
    `stringData` or `data`. Kix converts any `stringData` entries and sends all
@@ -101,9 +109,10 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
    `... being deleted on the cluster`. If the old object is still on the
    cluster after `--timeout` passes without a finalizer being removed, or
    after 5 minutes in total, the deploy fails with `[K2794]` without creating
-   the replacement. Because a normal deploy skips unchanged resources without
-   reading them on the cluster, it catches a deleting object only when that
-   resource changed in the build or when you pass `--reconcile`.
+   the replacement. This also applies to resources that did not change in the
+   build, as long as the account can list their kind. With `--offline`,
+   planning does not read the cluster, so the deploy catches a deleting object
+   only if that resource changed in the build or you pass `--reconcile`.
 6. Prunes orphans when asked. Namespaces and CustomResourceDefinitions are
    reported as kept and never deleted, with or without `--prune`. In
    `--log-format json`, the `prune_start` event lists them under `kept`,
@@ -439,14 +448,40 @@ deploys without this check.
 ]} />
 
 `--log-format json` writes one JSON event object per line (NDJSON) to stdout,
-while the plan, warnings, and confirmation text go to stderr. When the run
+while the plan, warnings, and confirmation text go to stderr. The first JSON
+line has `"type": "kubernetes"` and identifies the target cluster with
+`context` (the kubeconfig context) and `server` (its API server URL), each
+`null` when not set in the kubeconfig. When the run
 reaches the deploy engine, the last JSON line is the `summary` object, with
 `succeeded` (which matches the exit status), `dry_run`, and the `created`,
-`configured`, `unchanged`, `failed`, `cancelled`, and `pruned` counts. Every
+`configured`, `unchanged`, `failed`, `cancelled`, and `pruned` counts. Each
+object is counted once by its final state: if Kix applies an object and it
+does not become ready, Kix counts it in `failed` rather than `created` or
+`configured`. The `summary` object also includes `failed_after_apply`, the
+number of `failed` objects whose new manifest Kix applied before they failed
+readiness. Text output shows this count as `1 failed (1 applied but not ready)`.
+Runs that reach the deploy engine also set `"nothing_to_apply": false` on
+`summary`.
+With `--prune`, `summary` also includes `left_behind` when the new build no
+longer declares a CustomResourceDefinition and custom resources of that kind
+remain on the cluster after pruning (omitted when none remain). Each entry is
+`{ kind, count, with_finalizers, objects }`, matching `left_behind` in the
+[`Plan` document](/docs/reference/cli/plan/#the-plan-document). Other log
+formats print a warning listing those objects after the summary line.
+When the plan has nothing to apply or prune, Kix writes only the
+`kubernetes` line and a `summary` line with `"nothing_to_apply": true`,
+`"succeeded": true`, `unchanged` set to the number of unchanged objects, and
+all other counts set to `0`. If the build has no resources, Kix does not
+connect to the cluster and writes only that `summary` line, with
+`"unchanged": 0`. Every
 line includes `schema_version` (currently `"2026-11-25"`), the date of the
 latest breaking change to the log format. For a deleted object
 (`"kind": "delete"`), Kix emits the `ready` event only after the object is
-removed from the cluster. A run
+removed from the cluster. If an object being pruned is already absent, its
+`ready` event includes `"detail": {"already_gone": "already gone"}` (or
+`"already gone (Kubernetes does not recognize its kind)"` when the cluster has
+no API for that kind), and text output prints the same message instead of
+`deleted`. A run
 that stops before the engine starts, such as a refused plan or a failed
 connection, writes no `summary` line; its error goes to stderr and the exit
 status is non-zero.

@@ -1,0 +1,3 @@
+# 2026-11-26 · `cli/kix/src/cluster/graph.rs` · Prune does not wait for owned objects that set `blockOwnerDeletion: false`.
+
+`DeleteOrder::propagation` deletes a custom resource whose kind names a controller in the foreground, and Kubernetes then waits only for dependents with `blockOwnerDeletion: true`. An operator that makes a child with that field false or unset, and puts its own finalizer on it, can still lose its controller before the child is cleaned up, as cert-manager's Challenges did before. Objects whose kind names no controller are deleted in the background, so a Deployment's delete also does not wait for its pods, which may still use the Secrets and RBAC that prune deletes next.

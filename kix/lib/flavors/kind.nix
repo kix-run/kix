@@ -18,7 +18,7 @@
 }:
 let
   platformDns = import ./platform-dns.nix {
-    inherit kix;
+    inherit lib kix;
     inherit (config) clusterDomain;
   };
 in
@@ -96,6 +96,8 @@ in
             ];
           };
 
+          # Pods and node resolvers query CoreDNS. The `cluster` entity names
+          # the nodes as well as the pods.
           coredns-ingress = {
             namespace = "kube-system";
             podSelector = {
@@ -103,7 +105,8 @@ in
             };
             ingress = [
               {
-                from = "all-pods";
+                from = "world";
+                entities = [ "cluster" ];
                 ports = [
                   {
                     port = 53;

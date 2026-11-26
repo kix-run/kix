@@ -1,0 +1,3 @@
+# 2026-11-26 · `kix/packages/experimental/cilium/netpol-rules.nix` · The cilium enforcer refuses DNS peers given as an address range.
+
+Cilium refuses a rule that combines `toEndpoints` with `toCIDR`, and the enforcer contract hands every caller one `dnsEgressRule`, so a `dns` provider whose `meta.dnsPeers` holds a `{ cidr; }` entry fails evaluation on a Cilium cluster. No platform needs that today; AKS LocalDNS on Azure CNI Powered by Cilium (169.254.10.10) would. The fix is a contract change: `dnsEgressRules`, a list, which about 20 packages that write `[ netpol.dnsEgressRule ]` would move to.

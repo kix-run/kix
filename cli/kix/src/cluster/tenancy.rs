@@ -17,7 +17,7 @@ use kube::api::DynamicObject;
 
 use super::activation::{OpenedRecords, Record, RecordsError};
 use crate::manifest::keys;
-use crate::manifest::lifecycle::PHASE_SUPERSEDED;
+use crate::manifest::lifecycle::{PHASE_ACTIVE, PHASE_DEGRADED, PHASE_SUPERSEDED};
 
 /// Which Activation records on this Kubernetes cluster belong to which Kix
 /// cluster, keyed by identity hash.
@@ -29,14 +29,20 @@ use crate::manifest::lifecycle::PHASE_SUPERSEDED;
 pub struct Tenancy {
     /// The Kix cluster this tenancy is read for.
     pub(crate) cluster: String,
-    /// Identity hashes of this cluster's records, across every phase.
+    /// Identity hashes of this cluster's records, across every phase, and of
+    /// the builds they list under `status.orphansKeptFrom`.
     pub(crate) own: HashSet<String>,
-    /// Map from identity hash to owning cluster for every other record. A
-    /// record without a `kix.run/cluster` label is listed under `?`.
+    /// Map from identity hash to owning cluster for every other record and
+    /// the builds it lists under `status.orphansKeptFrom`. A record without a
+    /// `kix.run/cluster` label is listed under `?`.
     pub(crate) others: HashMap<String, String>,
     /// Hashes in `others` whose record is not Superseded (builds another
     /// cluster runs, is deploying, or left partially applied).
     pub(crate) others_current: HashSet<String>,
+    /// Map from identity hash to record name for each record of this
+    /// cluster whose deploy has neither become current nor been superseded:
+    /// one that is queued, deploying, failed, or partly deployed.
+    pub(crate) own_pending: HashMap<String, String>,
 }
 
 impl Tenancy {
@@ -47,6 +53,7 @@ impl Tenancy {
             own: HashSet::new(),
             others: HashMap::new(),
             others_current: HashSet::new(),
+            own_pending: HashMap::new(),
         }
     }
 
@@ -76,16 +83,39 @@ impl Tenancy {
                 .labels
                 .as_ref()
                 .and_then(|l| keys::get_meta(l, keys::CLUSTER_LABEL));
+            let parsed = Record::of(record);
+            // A record also owns the builds it lists under
+            // `status.orphansKeptFrom`: their objects stay on the cluster
+            // after those builds' own records are retired, and only this
+            // cluster's gc or prune deletes them. They are never current.
+            let kept = parsed
+                .orphans_kept_from
+                .iter()
+                .map(|source| source.identity_hash.as_str());
             if !cluster.is_empty() && owner == Some(cluster) {
                 tenancy.own.insert(hash.to_string());
+                tenancy.own.extend(kept.map(str::to_string));
+                if !matches!(
+                    parsed.phase.as_str(),
+                    PHASE_SUPERSEDED | PHASE_ACTIVE | PHASE_DEGRADED
+                ) {
+                    tenancy
+                        .own_pending
+                        .insert(hash.to_string(), parsed.name.clone());
+                }
                 continue;
             }
-            if Record::of(record).phase != PHASE_SUPERSEDED {
+            if parsed.phase != PHASE_SUPERSEDED {
                 tenancy.others_current.insert(hash.to_string());
             }
-            tenancy
-                .others
-                .insert(hash.to_string(), owner.unwrap_or("?").to_string());
+            let owner = owner.unwrap_or("?").to_string();
+            for kept in kept {
+                tenancy
+                    .others
+                    .entry(kept.to_string())
+                    .or_insert_with(|| owner.clone());
+            }
+            tenancy.others.insert(hash.to_string(), owner);
         }
         tenancy
     }
@@ -149,6 +179,22 @@ impl Tenancy {
     }
 }
 
+impl Tenancy {
+    /// Return the sorted names of this cluster's pending records that `obj`
+    /// names: records whose deploy is queued, deploying, failed, or partly
+    /// deployed. Such a deploy wrote the object, or is about to, so gc must
+    /// not judge it against the current record's build alone. The current
+    /// record is left out, because gc compares with its build.
+    pub fn pending_records_of(&self, obj: &DynamicObject) -> Vec<String> {
+        let mut records: Vec<String> = named_hashes(obj)
+            .filter_map(|h| self.own_pending.get(h).cloned())
+            .collect();
+        records.sort();
+        records.dedup();
+        records
+    }
+}
+
 /// Return an iterator over the record identity hashes `obj` names: every entry
 /// of `kix.run/activations` plus its own `kix.run/identity-hash`. A record in
 /// its first wave is not yet stamped with its own hash in `kix.run/activations`,
@@ -186,7 +232,7 @@ pub async fn read(records: &OpenedRecords, cluster: &str) -> Result<Tenancy, Rec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::lifecycle::{PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING};
+    use crate::manifest::lifecycle::{PHASE_DEPLOYING, PHASE_FAILED, PHASE_PARTIAL};
     use serde_json::json;
 
     fn record(cluster: Option<&str>, hash: Option<&str>, phase: &str) -> DynamicObject {
@@ -249,6 +295,73 @@ mod tests {
                 .is_ok()
         );
         assert!(Tenancy::from_records(&[], "new").require_records().is_ok());
+    }
+
+    /// A build that a record lists under `status.orphansKeptFrom` belongs
+    /// to that record's cluster after its own record is retired, so a full
+    /// scan and soft gc agree on whose its leftovers are. It is never
+    /// another cluster's current build.
+    #[test]
+    fn builds_a_record_kept_orphans_from_belong_to_its_cluster() {
+        let kept = |mut r: DynamicObject, hash: &str| {
+            r.data["status"]["orphansKeptFrom"] =
+                json!([{ "activation": "old", "identityHash": hash }]);
+            r
+        };
+        let records = [
+            kept(record(Some("a"), Some("a2"), PHASE_ACTIVE), "a1"),
+            kept(record(Some("b"), Some("b2"), PHASE_ACTIVE), "b1"),
+        ];
+        let t = Tenancy::from_records(&records, "a");
+        assert_eq!(t.own, HashSet::from(["a1".into(), "a2".into()]));
+        assert_eq!(t.others.get("b1").map(String::as_str), Some("b"));
+        assert!(!t.others_current.contains("b1"));
+
+        // Without the list, the retired build's objects name no record.
+        let t = Tenancy::from_records(&[record(Some("a"), Some("a2"), PHASE_ACTIVE)], "a");
+        assert!(!t.knows("a1"));
+    }
+
+    /// An object a failed, partly deployed, or deploying record of this
+    /// cluster names belongs to that pending record. The current record,
+    /// a Superseded one, and another cluster's failed record make no object
+    /// pending.
+    #[test]
+    fn objects_of_pending_records_name_those_records() {
+        let named = |name: &str, phase: &str, cluster: &str, hash: &str| {
+            let mut r = record(Some(cluster), Some(hash), phase);
+            r.metadata.name = Some(name.into());
+            r
+        };
+        let t = Tenancy::from_records(
+            &[
+                named("a-cur", PHASE_ACTIVE, "a", "cur"),
+                named("a-old", PHASE_SUPERSEDED, "a", "old"),
+                named("a-failed", PHASE_FAILED, "a", "fail"),
+                named("a-only", PHASE_PARTIAL, "a", "part"),
+                named("a-run", PHASE_DEPLOYING, "a", "run"),
+                named("b-failed", PHASE_FAILED, "b", "bfail"),
+            ],
+            "a",
+        );
+        let obj = |activations: &str| -> DynamicObject {
+            serde_json::from_value(json!({
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "name": "c",
+                    "namespace": "d",
+                    "annotations": { (keys::ACTIVATIONS): activations },
+                },
+            }))
+            .unwrap()
+        };
+        assert_eq!(t.pending_records_of(&obj("cur,fail")), ["a-failed"]);
+        assert_eq!(
+            t.pending_records_of(&obj("part,run,old")),
+            ["a-only", "a-run"]
+        );
+        assert!(t.pending_records_of(&obj("cur,old,bfail")).is_empty());
     }
 
     /// An empty cluster name, as the operator uses for a record that names

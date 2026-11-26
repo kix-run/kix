@@ -56,7 +56,11 @@ fn live_job_named(name: &str, failed: bool) -> Value {
     json!({
         "apiVersion": "batch/v1",
         "kind": "Job",
-        "metadata": { "name": name, "namespace": "default" },
+        "metadata": {
+            "name": name,
+            "namespace": "default",
+            "labels": { "app.kubernetes.io/managed-by": "kix" },
+        },
         "spec": { "backoffLimit": 0 },
         "status": if failed { json!({ "failed": 1 }) } else { json!({ "succeeded": 1 }) },
     })
@@ -1527,14 +1531,13 @@ async fn read_last_runs_reruns_failed_rerun_jobs_and_names_the_others() {
     );
 }
 
-/// A Job Kix cannot read leaves the answer unknown, so the plan does not
-/// say that nothing failed. A refused read and a Job of a group the cluster
-/// does not serve both count, and a Job read through another group's API
-/// never counts as failed.
+/// A Job whose kind Kix may not list leaves the answer unknown, so the plan
+/// does not say that nothing failed. A Job of a group the cluster does not
+/// serve is not on the cluster, so it never counts as failed.
 #[tokio::test]
 async fn read_last_runs_does_not_answer_for_a_job_it_cannot_read() {
     let api = crate::cluster::fake_api::FakeApi::new([live_job_named("done", false)]);
-    api.fail_next("/apis/batch/v1/namespaces/default/jobs/done", 1, 403);
+    api.fail_next("/apis/batch/v1/jobs", 1, 403);
     let client = api.client();
     let discovery = crate::cluster::discovery::discover_resources(&client)
         .await
@@ -2052,6 +2055,63 @@ async fn finalize_learns_whether_orphans_were_left() {
         clusters: vec!["b".into()],
     });
     assert!(!orphans_left(PrunePolicy::Delete, &cm, Behaviour::Now(Ok(shared))).await);
+    // An orphan of a kind the cluster does not serve cannot exist, so it
+    // is not left for the next prune.
+    assert!(
+        !orphans_left(
+            PrunePolicy::Delete,
+            &cm,
+            Behaviour::Now(Ok(Pruned::NotServed))
+        )
+        .await
+    );
+}
+
+/// A prune that found nothing to delete says why on its ready event, while
+/// one that deleted the object carries no such detail.
+#[tokio::test(start_paused = true)]
+async fn a_prune_with_nothing_to_delete_says_so() {
+    for (answer, said) in [
+        (Pruned::NotServed, Pruned::NotServed.already_gone()),
+        (
+            Pruned::Deleted {
+                uid: None,
+                finalizers: Vec::new(),
+            },
+            None,
+        ),
+    ] {
+        let ops = Arc::new(ScriptedOps::new());
+        ops.delete_behaviour(Behaviour::Now(Ok(answer)));
+        let recorder = Arc::new(Recorder::default());
+        let orphan = rid("ConfigMap", "old");
+        let result = run_with_orphans(
+            &ops,
+            plan_of(&[m("ConfigMap", "keep", &[])]),
+            std::slice::from_ref(&orphan),
+            &[],
+            PrunePolicy::Delete,
+            &config(quiet_watchdog()),
+            recorder.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.pruned, 1);
+        let events = recorder.0.lock().unwrap().clone();
+        let ready = events.iter().find_map(|e| match e {
+            DeployEvent::NodeStateChanged {
+                node: NodeId::Resource(r),
+                kind: TransitionKind::Delete,
+                verdict: Verdict::Ready,
+                detail,
+            } if *r == orphan => Some(match detail {
+                Some(NodeDetail::AlreadyGone(why)) => Some(why.clone()),
+                _ => None,
+            }),
+            _ => None,
+        });
+        assert_eq!(ready, Some(said.map(str::to_string)));
+    }
 }
 
 /// An orphan with no manifest among the old manifests is still pruned,
@@ -2344,9 +2404,10 @@ async fn stuck_prune_deletes_wait_together() {
     assert!(waited < secs(200), "waited {waited:?}");
 }
 
-/// A stuck orphan whose kind names a controller says whether the controller
-/// runs, and the controller is kept. A stuck orphan that depends on the same
-/// workload through `requires:` names no controller.
+/// A stuck orphan whose kind names a controller is deleted in the
+/// foreground, says whether the controller runs, and the controller is kept.
+/// A stuck orphan that depends on the same workload through `requires:` is
+/// deleted in the background and names no controller.
 #[tokio::test(start_paused = true)]
 async fn a_stuck_prune_names_the_controller() {
     use crate::cluster::readiness::{Deletion, Stuck};
@@ -2403,6 +2464,18 @@ async fn a_stuck_prune_names_the_controller() {
     .unwrap();
 
     assert_eq!((result.pruned, result.failed), (0, 2));
+    // Only the object whose kind names a controller waits for what the
+    // controller made for it.
+    let mut propagations = ops.propagations();
+    propagations.sort_by(|a, b| a.0.name.cmp(&b.0.name));
+    assert!(
+        matches!(
+            propagations.as_slice(),
+            [(cr, kube::api::PropagationPolicy::Foreground), (plain, kube::api::PropagationPolicy::Background)]
+                if cr.name == "cr" && plain.name == "plain"
+        ),
+        "{propagations:?}"
+    );
     let message_of = |name: &str| {
         result
             .failures
@@ -3798,6 +3871,15 @@ async fn a_slow_prune_delete_is_reported_while_it_waits() {
         })
         .collect();
     assert!(!waits.is_empty(), "no waiting line for the delete");
+    // The wait reads the object every few seconds, so it is never a stall.
+    assert!(
+        !rec.0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e, DeployEvent::Stalled { .. })),
+        "a delete wait that reads the object was reported as a stall"
+    );
     assert!(
         waits
             .iter()
@@ -3817,4 +3899,106 @@ async fn a_slow_prune_delete_is_reported_while_it_waits() {
         matches!(e, DeployEvent::NodeStateChanged { node: NodeId::Resource(r), verdict: Verdict::Ready, .. } if *r == rid("ConfigMap", "slow"))
     });
     assert!(last_wait < ready, "{last_wait:?} {ready:?}");
+}
+
+/// A node the run applied that then fails readiness counts as failed, and
+/// also as applied then not ready. An apply the API server refused and an
+/// unchanged node that is not ready count only as failed.
+#[tokio::test(start_paused = true)]
+async fn an_applied_node_that_is_not_ready_is_counted_as_written() {
+    let manifests = vec![
+        m("Deployment", "stuck", &[]),
+        m("Deployment", "refused", &[]),
+        m("Deployment", "old", &[]),
+        m("Deployment", "web", &["old"]),
+    ];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        rid("Deployment", "stuck"),
+        NodeScript::default().ready(Behaviour::Now(Ready::TimedOut)),
+    );
+    ops.script(
+        rid("Deployment", "refused"),
+        NodeScript::default().apply(Behaviour::Now(Err(ApplyFailure::Other("boom".into())))),
+    );
+    ops.script(
+        rid("Deployment", "old"),
+        NodeScript::default().ready(Behaviour::Now(Ready::Failed("CrashLoopBackOff".into()))),
+    );
+    let mut cfg = config(quiet_watchdog());
+    cfg.on_error = OnErrorPolicy::Continue;
+    let result = run(
+        &ops,
+        plan_with_skips(&manifests, &["old"]),
+        &cfg,
+        Arc::new(NullObserver),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.failed, 3, "{result:?}");
+    assert_eq!(result.failed_after_apply, 1, "{result:?}");
+}
+
+/// A fresh deploy of the rendered external-secrets build finishes. The
+/// webhook pods become ready only once the cert-controller runs, because the
+/// cert-controller writes their certificate, and the cert-controller requires
+/// the webhook configurations. An apply dependency from a configuration to the
+/// webhook's Service, which waits on the webhook pods, would close that loop
+/// through readiness, and the deploy would hang.
+#[tokio::test(start_paused = true)]
+async fn a_fresh_external_secrets_deploy_finishes() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/operator-graphs/external-secrets.json");
+    let manifests: Vec<Value> =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let webhook = ResourceId::new(
+        "apps",
+        "Deployment",
+        "external-secrets",
+        "external-secrets-webhook",
+    );
+    let cert_controller = ResourceId::new(
+        "apps",
+        "Deployment",
+        "external-secrets",
+        "external-secrets-cert-controller",
+    );
+    let certificate = Gate::new();
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        webhook.clone(),
+        NodeScript::default().ready(Behaviour::Gate(certificate.clone(), Ready::Ready)),
+    );
+    let watcher = {
+        let ops = ops.clone();
+        tokio::spawn(async move {
+            while !ops
+                .calls()
+                .contains(&Call::ApplyStart(cert_controller.clone()))
+            {
+                tokio::time::sleep(secs(1)).await;
+            }
+            certificate.open();
+        })
+    };
+    let cfg = config(StallPolicy {
+        warn_after: secs(30),
+        abort_after: Some(secs(600)),
+    });
+    let result = run(
+        &ops,
+        plan_of(&manifests),
+        &cfg,
+        Arc::new(Recorder::default()),
+    )
+    .await;
+    watcher.abort();
+    let result = result.expect("the deploy finishes");
+    assert_eq!(
+        (result.failed, result.cancelled),
+        (0, 0),
+        "{:?}",
+        result.failures
+    );
 }

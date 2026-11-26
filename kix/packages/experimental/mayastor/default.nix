@@ -100,7 +100,8 @@ in
     k8s.minVersion = "1.23";
     # Host-network peers (`io-engine`, `csi-node`, `agent-ha-node`, and
     # `csi-controller`) appear as node traffic to pod network policy, so
-    # cluster-wide pod rules open control-plane and node-agent ports.
+    # these rules name the `cluster` entity (every pod and every node) on
+    # the control-plane and node-agent ports.
     network.intents.hostNetworkPeers =
       let
         tcp = map (port: {
@@ -111,7 +112,8 @@ in
       {
         ingress = [
           {
-            from = "all-pods";
+            from = "world";
+            entities = [ "cluster" ];
             ports = tcp [
               2379
               8081
@@ -122,7 +124,8 @@ in
         ];
         egress = [
           {
-            to = "all-pods";
+            to = "world";
+            entities = [ "cluster" ];
             ports = tcp [
               10124
               10199

@@ -186,13 +186,18 @@ impl Baseline {
 
     /// Compute the change action for each object of `new_manifests` and each
     /// orphan. Compares `new_manifests` against the Active closure, folds in
-    /// failed and kept closures, and applies `reconcile`.
+    /// failed and kept closures, and applies again each object the comparison
+    /// leaves unchanged for which `write_again` is true.
     ///
     /// Only the Active closure is compared directly. Folding a failed closure
     /// into the old side would make an object that a failed deploy declared
     /// but never created appear already present; if the new build declared it
     /// at the same hash, the plan would skip it.
-    pub(crate) fn changes(&self, new_manifests: &[Value], reconcile: bool) -> Vec<ChangeAction> {
+    pub(crate) fn changes(
+        &self,
+        new_manifests: &[Value],
+        mut write_again: impl FnMut(&ResourceId) -> bool,
+    ) -> Vec<ChangeAction> {
         let actions = apply::fold_kept_closures(
             apply::fold_failed_closures(
                 apply::detect_changes(new_manifests, &self.active_manifests),
@@ -202,10 +207,6 @@ impl Baseline {
             new_manifests,
             &self.kept.closures,
         );
-        if !reconcile {
-            return actions;
-        }
-        // --reconcile applies every object again, changed or not.
         let by_id: std::collections::HashMap<ResourceId, &Value> = new_manifests
             .iter()
             .map(|m| (ResourceId::from_value(m), m))
@@ -213,7 +214,7 @@ impl Baseline {
         actions
             .into_iter()
             .map(|action| match &action {
-                ChangeAction::Skip(rid) => by_id
+                ChangeAction::Skip(rid) if write_again(rid) => by_id
                     .get(rid)
                     .map_or(action.clone(), |m| ChangeAction::Apply((*m).clone())),
                 _ => action,
@@ -1213,7 +1214,7 @@ mod tests {
         b.read_folded_leftovers(&api.client(), &new).await.unwrap();
 
         let orphans: Vec<String> = b
-            .changes(&new, false)
+            .changes(&new, |_| false)
             .into_iter()
             .filter_map(|a| match a {
                 ChangeAction::Orphan(rid) => Some(rid.name),

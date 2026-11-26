@@ -17,6 +17,7 @@ pub mod graph;
 pub mod inventory;
 pub mod kept;
 pub mod kubernetes_version;
+pub mod left_behind;
 pub mod migrate;
 pub mod observe;
 pub(crate) mod ops;

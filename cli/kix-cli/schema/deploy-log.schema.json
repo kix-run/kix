@@ -317,6 +317,19 @@
         },
         {
           "additionalProperties": false,
+          "description": "A prune found nothing to delete, and the text says why, such as\n`already gone (Kubernetes does not recognize its kind)`.",
+          "properties": {
+            "already_gone": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "already_gone"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "A delete did not finish within the wait: after `elapsed_ms`, the\nobject was still on the cluster, held by `finalizers`. `controllers`\nlists the workloads its kind names as its controller (`controller` on\n`scope.mkCRD`), with what Kix found when it read them. `message` is\nthe text the failure reports.",
           "properties": {
             "deletion_unfinished": {
@@ -420,6 +433,58 @@
         "kind",
         "name",
         "apiVersion"
+      ],
+      "type": "object"
+    },
+    "LeftBehind": {
+      "description": "The objects of a kind that stay on the cluster after the definition of\nthe kind leaves the build. Kix did not create them, or keeps them for\nanother reason, so the prune does not delete them. Once the package\nthat handled the kind is gone, nothing removes their finalizers or\ncleans up what they made outside the cluster.",
+      "properties": {
+        "count": {
+          "description": "How many objects of the kind stay.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "description": "The kind, as `Kind.group`.",
+          "type": "string"
+        },
+        "objects": {
+          "description": "The first [`LEFT_BEHIND_LISTED`] of them, objects with finalizers\nfirst.",
+          "items": {
+            "$ref": "#/$defs/LeftObject"
+          },
+          "type": "array"
+        },
+        "with_finalizers": {
+          "default": 0,
+          "description": "How many of them have finalizers.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "count",
+        "objects"
+      ],
+      "type": "object"
+    },
+    "LeftObject": {
+      "properties": {
+        "finalizers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "resource": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource"
       ],
       "type": "object"
     },
@@ -712,6 +777,33 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "One line of the log.\n\nLater versions of Kix may add fields and new types of line. Skip the ones\nyou do not know.",
   "oneOf": [
+    {
+      "description": "The Kubernetes cluster the deploy writes to. The first line of the\nlog. A deploy whose build is empty never connects, so its log has\nonly the `summary` line.",
+      "properties": {
+        "context": {
+          "description": "The kubeconfig context, or `null` when the kubeconfig names none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "server": {
+          "description": "The URL of the context's API server in the kubeconfig, or `null`\nwhen the kubeconfig does not give it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "kubernetes",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
     {
       "description": "The plan, before any node runs. `edges` say which node waits on which.",
       "properties": {
@@ -1015,7 +1107,7 @@
       "type": "object"
     },
     {
-      "description": "The counts the text summary line shows.",
+      "description": "The counts the text summary line shows. The last line of the log.",
       "properties": {
         "cancelled": {
           "format": "uint",
@@ -1039,6 +1131,25 @@
           "format": "uint",
           "minimum": 0,
           "type": "integer"
+        },
+        "failed_after_apply": {
+          "default": 0,
+          "description": "The objects in `failed` that the run wrote to the cluster and\nthat then did not become ready. Older logs leave it out.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "left_behind": {
+          "description": "For each kind whose definition left the build, the objects of it\nthat are still on the cluster after the prune. Kix did not create\nthem, and nothing clears their finalizers once their controller\nis gone. Left out when there are none.",
+          "items": {
+            "$ref": "#/$defs/LeftBehind"
+          },
+          "type": "array"
+        },
+        "nothing_to_apply": {
+          "default": false,
+          "description": "True when the plan had nothing to apply or prune, so the deploy\nwrote nothing and the active deployment record stays current. The\nlog then holds no `plan` or `node` lines.",
+          "type": "boolean"
         },
         "only": {
           "description": "The instances (`namespace/instance`) a deploy with `--only`\napplied in full: the named ones and the ones they need. Such a\ndeploy leaves the cluster's current deploy\nrecord as it was, and a later `kix deploy` applies the rest of\nthe build. Left out for a deploy of the whole build.",

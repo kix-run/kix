@@ -441,7 +441,7 @@ fn an_object_being_deleted_is_not_ready() {
 fn immediate_kinds() {
     assert!(is_immediate_kind(gk("ConfigMap")));
     assert!(is_immediate_kind(gk("Secret")));
-    assert!(is_immediate_kind(gk("Service")));
+    assert!(!is_immediate_kind(gk("Service")));
     assert!(is_immediate_kind(gk("Namespace")));
     assert!(is_immediate_kind(gk("ServiceAccount")));
     assert!(is_immediate_kind(gk("ClusterRole")));
@@ -452,6 +452,42 @@ fn immediate_kinds() {
     assert!(!is_immediate_kind(gk("Deployment")));
     assert!(!is_immediate_kind(gk("StatefulSet")));
     assert!(!is_immediate_kind(gk("Job")));
+}
+
+fn service(spec: Value, status: Value) -> DynamicObject {
+    make_obj(json!({ "spec": spec, "status": status }))
+}
+
+/// A ClusterIP or NodePort Service is ready as soon as it exists. A
+/// `LoadBalancer` Service is ready once its load balancer has given it an
+/// address, because until then nothing outside the cluster can reach it.
+#[test]
+fn a_load_balancer_service_is_ready_once_it_has_an_address() {
+    let cluster_ip = service(json!({"type": "ClusterIP"}), json!({}));
+    assert!(is_immediate(gk("Service"), &cluster_ip.data));
+    assert!(check_readiness(&cluster_ip, gk("Service")));
+    let untyped = service(json!({}), json!({}));
+    assert!(is_immediate(gk("Service"), &untyped.data));
+
+    let pending = service(json!({"type": "LoadBalancer"}), json!({"loadBalancer": {}}));
+    assert!(!is_immediate(gk("Service"), &pending.data));
+    assert!(!check_readiness(&pending, gk("Service")));
+    assert!(
+        not_ready_reason(&pending, gk("Service")).contains("status.loadBalancer.ingress"),
+        "{}",
+        not_ready_reason(&pending, gk("Service"))
+    );
+    let empty = service(
+        json!({"type": "LoadBalancer"}),
+        json!({"loadBalancer": {"ingress": []}}),
+    );
+    assert!(!check_readiness(&empty, gk("Service")));
+
+    let served = service(
+        json!({"type": "LoadBalancer"}),
+        json!({"loadBalancer": {"ingress": [{"ip": "203.0.113.7"}]}}),
+    );
+    assert!(check_readiness(&served, gk("Service")));
 }
 
 #[test]
@@ -540,6 +576,44 @@ fn deployment_with_a_stuck_rollout_is_not_ready() {
         }),
     );
     assert!(check_readiness(&done, gk("Deployment")));
+}
+
+/// While old pods run, a Deployment's `readyReplicas` counts them too, so
+/// the text does not present it as the ready count of the updated pods.
+#[test]
+fn a_rollout_with_old_pods_does_not_claim_the_updated_pods_are_ready() {
+    let stuck = make_obj_gen(
+        3,
+        json!({
+            "spec": {"replicas": 2},
+            "status": {
+                "observedGeneration": 3,
+                "replicas": 3,
+                "readyReplicas": 2,
+                "updatedReplicas": 2,
+            }
+        }),
+    );
+    assert_eq!(
+        not_ready_reason(&stuck, gk("Deployment")),
+        "2/2 updated, 1 old pod still running, 2 ready including the old pod"
+    );
+    let rolling = make_obj_gen(
+        3,
+        json!({
+            "spec": {"replicas": 2},
+            "status": {
+                "observedGeneration": 3,
+                "replicas": 2,
+                "readyReplicas": 1,
+                "updatedReplicas": 2,
+            }
+        }),
+    );
+    assert_eq!(
+        not_ready_reason(&rolling, gk("Deployment")),
+        "1/2 ready, 2/2 updated"
+    );
 }
 
 /// A StatefulSet counts a terminating pod in `status.replicas`, so a
@@ -809,8 +883,8 @@ fn import_marker_parsed() {
 
 #[test]
 fn secret_import_marker_inherits_marker_namespace() {
-    // Namespaced imports take their namespace from the marker's own
-    // metadata.namespace, not from any annotation.
+    // A namespaced import without kix.run/import-namespace takes its
+    // namespace from the marker's own metadata.namespace.
     let manifest = json!({
         "apiVersion": keys::API_VERSION,
         "kind": "PackageInstance",
@@ -833,6 +907,31 @@ fn secret_import_marker_inherits_marker_namespace() {
     assert_eq!(target.name, "db-creds");
     assert_eq!(target.namespace.as_deref(), Some("myapp"));
     assert_eq!(target.expected_keys, vec!["username", "password"]);
+}
+
+#[test]
+fn import_marker_names_target_in_another_namespace() {
+    // GKE Autopilot refuses writes to kube-system, so the platform-dns marker
+    // lives in gke-managed and names the Service's namespace.
+    let manifest = json!({
+        "kind": "PackageInstance",
+        "metadata": {
+            "name": "platform-dns",
+            "namespace": "gke-managed",
+            "annotations": {
+                keys::MODE: "import",
+                keys::IMPORT_KIND: "Service",
+                keys::IMPORT_API_VERSION: "v1",
+                keys::IMPORT_NAME: "kube-dns",
+                keys::IMPORT_NAMESPACE: "kube-system",
+            }
+        }
+    });
+    let target = import_target_from_manifest(&manifest)
+        .unwrap()
+        .expect("should parse");
+    assert_eq!(target.name, "kube-dns");
+    assert_eq!(target.namespace.as_deref(), Some("kube-system"));
 }
 
 #[test]
@@ -2730,4 +2829,514 @@ fn declared_pending_restart_without_generation_uses_the_transition_time() {
         }]),
     );
     assert!(declared_pending_restart(&known, at("2026-11-18T10:05:00Z")).is_some());
+}
+
+fn pod(name: &str, revision: &str, status: Value) -> Value {
+    json!({
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+            "name": name,
+            "namespace": "demo",
+            "labels": {"app": "hello", "controller-revision-hash": revision},
+        },
+        "status": status,
+    })
+}
+
+fn ready_pod_status() -> Value {
+    json!({
+        "phase": "Running",
+        "conditions": [
+            {"type": "PodScheduled", "status": "True"},
+            {"type": "Ready", "status": "True"},
+        ],
+        "containerStatuses": [{"name": "app", "ready": true, "state": {"running": {}}}],
+    })
+}
+
+fn unschedulable_pod_status() -> Value {
+    json!({
+        "phase": "Pending",
+        "conditions": [{
+            "type": "PodScheduled",
+            "status": "False",
+            "reason": "Unschedulable",
+            "message": "0/2 nodes are available: 1 Insufficient cpu.",
+        }],
+    })
+}
+
+fn rollout_pods(current: &[Value], held: Option<&str>) -> terminal::RolloutPods {
+    terminal::RolloutPods {
+        current: current.to_vec(),
+        held: held.map(str::to_string),
+        exact: true,
+    }
+}
+
+/// A rollout stuck on a pod the scheduler cannot place: the Deployment
+/// counts one new and one old pod as ready, and the description counts only
+/// the pods of the new revision and quotes the scheduler. Without its pods,
+/// the description falls back to the object's counts.
+#[test]
+fn a_rollout_description_counts_updated_pods_and_quotes_the_scheduler() {
+    let deployment = make_obj_gen(
+        3,
+        json!({
+            "spec": {"replicas": 2},
+            "status": {
+                "observedGeneration": 3,
+                "replicas": 3,
+                "readyReplicas": 2,
+                "updatedReplicas": 2,
+            }
+        }),
+    );
+    let pods = [
+        pod("hello-new-a", "new", ready_pod_status()),
+        pod("hello-new-b", "new", unschedulable_pod_status()),
+    ];
+    let describe = |pods: Option<&terminal::RolloutPods>, kind| {
+        terminal::rollout_not_ready_reason(&deployment, gk(kind), pods)
+    };
+    assert_eq!(
+        describe(Some(&rollout_pods(&pods, None)), "Deployment"),
+        "1/2 updated pods ready, 1 old pod still running; \
+         pod hello-new-b cannot be scheduled: 0/2 nodes are available: 1 Insufficient cpu."
+    );
+    let both_ready = [
+        pod("hello-new-a", "new", ready_pod_status()),
+        pod("hello-new-b", "new", ready_pod_status()),
+    ];
+    assert_eq!(
+        describe(Some(&rollout_pods(&both_ready, None)), "Deployment"),
+        "2/2 updated pods ready, 1 old pod still running"
+    );
+    assert_eq!(
+        describe(Some(&rollout_pods(&[], None)), "Deployment"),
+        "0/2 updated pods ready, 1 old pod still running"
+    );
+    assert_eq!(
+        describe(None, "Deployment"),
+        not_ready_reason(&deployment, gk("Deployment"))
+    );
+    assert_eq!(
+        describe(Some(&rollout_pods(&pods, None)), "Job"),
+        not_ready_reason(&deployment, gk("Job"))
+    );
+}
+
+/// A StatefulSet held back by a pod of another revision says so while the
+/// deploy still waits, beside its counts.
+#[test]
+fn a_held_statefulset_is_described_at_once() {
+    let sts = statefulset(json!({}), "hello-good");
+    let held = terminal::statefulset_held_pods(
+        &sts,
+        &[pod("hello-0", "hello-bad", crash_looping_pod_status())],
+    );
+    let described = terminal::rollout_not_ready_reason(
+        &sts,
+        gk("StatefulSet"),
+        Some(&rollout_pods(&[], held.as_deref())),
+    );
+    assert!(
+        described.starts_with("0/1 updated pods ready. Pod hello-0 is not ready"),
+        "{described}"
+    );
+}
+
+#[test]
+fn a_pod_that_is_not_ready_says_why() {
+    let waiting = pod(
+        "p",
+        "r",
+        json!({
+            "phase": "Pending",
+            "conditions": [{"type": "PodScheduled", "status": "True"}],
+            "containerStatuses": [{
+                "name": "app",
+                "ready": false,
+                "state": {"waiting": {"reason": "ContainerCreating"}},
+            }],
+        }),
+    );
+    assert_eq!(
+        terminal::pod_not_ready_reason(&waiting).as_deref(),
+        Some("pod p/app is waiting: ContainerCreating")
+    );
+    let probing = pod(
+        "p",
+        "r",
+        json!({
+            "phase": "Running",
+            "conditions": [{"type": "Ready", "status": "False"}],
+            "containerStatuses": [{"name": "app", "ready": false, "state": {"running": {}}}],
+        }),
+    );
+    assert_eq!(
+        terminal::pod_not_ready_reason(&probing).as_deref(),
+        Some("pod p/app is running, but its readiness probe has not passed")
+    );
+    assert_eq!(
+        terminal::pod_not_ready_reason(&pod("p", "r", ready_pod_status())),
+        None
+    );
+}
+
+fn statefulset(spec_extra: Value, update_revision: &str) -> DynamicObject {
+    let mut spec = json!({"replicas": 1, "selector": {"matchLabels": {"app": "hello"}}});
+    if let (Some(spec), Some(extra)) = (spec.as_object_mut(), spec_extra.as_object()) {
+        spec.extend(extra.clone());
+    }
+    let mut obj = make_obj_gen(
+        5,
+        json!({
+            "apiVersion": "apps/v1",
+            "kind": "StatefulSet",
+            "spec": spec,
+            "status": {
+                "observedGeneration": 5,
+                "replicas": 1,
+                "readyReplicas": 0,
+                "updatedReplicas": 0,
+                "currentRevision": update_revision,
+                "updateRevision": update_revision,
+            }
+        }),
+    );
+    obj.metadata.namespace = Some("demo".into());
+    obj
+}
+
+fn crash_looping_pod_status() -> Value {
+    json!({
+        "phase": "Running",
+        "conditions": [{"type": "Ready", "status": "False"}],
+        "containerStatuses": [{
+            "name": "app",
+            "ready": false,
+            "restartCount": 9,
+            "state": {"waiting": {"reason": "CrashLoopBackOff"}},
+        }],
+    })
+}
+
+/// A StatefulSet whose template was reverted to a good revision keeps its
+/// crash-looping pod on the bad one, because with OrderedReady the
+/// controller replaces no pod while one is not ready. The message names the
+/// pod and the command that frees it.
+#[test]
+fn a_statefulset_names_the_pod_that_holds_back_its_rollout() {
+    let sts = statefulset(json!({}), "hello-good");
+    let held = [pod("hello-0", "hello-bad", crash_looping_pod_status())];
+    let message = terminal::statefulset_held_pods(&sts, &held).expect("a held pod");
+    assert!(
+        message.starts_with(
+            "Pod hello-0 is not ready and is still on revision hello-bad (current revision: hello-good)."
+        ),
+        "{message}"
+    );
+    assert!(
+        message.ends_with("kubectl delete pod -n demo hello-0"),
+        "{message}"
+    );
+
+    // A pod of the old revision that is ready does not block the controller,
+    // which replaces it in turn.
+    let replaceable = [pod("hello-0", "hello-bad", ready_pod_status())];
+    assert_eq!(terminal::statefulset_held_pods(&sts, &replaceable), None);
+    // A pod of the current revision that is not ready is the rollout itself.
+    let current = [pod("hello-0", "hello-good", crash_looping_pod_status())];
+    assert_eq!(terminal::statefulset_held_pods(&sts, &current), None);
+    // With Parallel pod management or OnDelete the rule does not apply.
+    let parallel = statefulset(json!({"podManagementPolicy": "Parallel"}), "hello-good");
+    assert_eq!(terminal::statefulset_held_pods(&parallel, &held), None);
+    let on_delete = statefulset(
+        json!({"updateStrategy": {"type": "OnDelete"}}),
+        "hello-good",
+    );
+    assert_eq!(terminal::statefulset_held_pods(&on_delete, &held), None);
+}
+
+mod workload_waits {
+    use super::*;
+    use crate::cluster::fake_api::FakeApi;
+
+    async fn wait(
+        api: &FakeApi,
+        group: &str,
+        kind: &str,
+        plural: &str,
+        name: &str,
+    ) -> ReadinessResult {
+        let api_version = if group.is_empty() {
+            "v1".to_string()
+        } else {
+            format!("{group}/v1")
+        };
+        let ar = ApiResource {
+            group: group.into(),
+            version: "v1".into(),
+            api_version,
+            kind: kind.into(),
+            plural: plural.into(),
+        };
+        let rid = ResourceId {
+            group: group.into(),
+            kind: kind.into(),
+            namespace: "demo".into(),
+            name: name.into(),
+        };
+        wait_for_ready(
+            &api.client(),
+            &ar,
+            &Scope::Namespaced,
+            &rid,
+            None,
+            DEFAULT_TIMEOUT,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap()
+    }
+
+    fn lb_service(ingress: Value) -> Value {
+        json!({
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {"name": "hello", "namespace": "demo"},
+            "spec": {"type": "LoadBalancer"},
+            "status": {"loadBalancer": ingress},
+        })
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_load_balancer_service_waits_for_its_address() {
+        let api = FakeApi::new([lb_service(json!({}))]);
+        let result = wait(&api, "", "Service", "services", "hello").await;
+        let ReadinessResult::TimedOut { message, .. } = result else {
+            panic!("expected a timeout, got {result:?}");
+        };
+        assert!(message.starts_with("[K1243] "), "{message}");
+        assert!(message.contains("status.loadBalancer.ingress"), "{message}");
+        assert!(message.contains("loadBalancer.binding"), "{message}");
+
+        let mut classed = lb_service(json!({}));
+        classed["spec"]["loadBalancerClass"] = json!("example.com/none");
+        let api = FakeApi::new([classed]);
+        let result = wait(&api, "", "Service", "services", "hello").await;
+        let ReadinessResult::TimedOut { message, .. } = result else {
+            panic!("expected a timeout, got {result:?}");
+        };
+        assert!(message.starts_with("[K1243] "), "{message}");
+        assert!(
+            message.contains("spec.loadBalancerClass \"example.com/none\"")
+                && message.contains("remove spec.loadBalancerClass")
+                && !message.contains("loadBalancer.binding"),
+            "{message}"
+        );
+
+        let api = FakeApi::new([lb_service(json!({"ingress": [{"ip": "203.0.113.7"}]}))]);
+        let result = wait(&api, "", "Service", "services", "hello").await;
+        assert_eq!(result, ReadinessResult::Ready);
+    }
+
+    /// The first waiting line already names the pod that holds the
+    /// StatefulSet back.
+    #[tokio::test(start_paused = true)]
+    async fn a_held_statefulset_says_so_on_the_first_poll() {
+        let mut sts = serde_json::to_value(statefulset(json!({}), "hello-good")).unwrap();
+        sts["metadata"]["name"] = json!("hello");
+        sts["metadata"]["generation"] = json!(5);
+        sts["metadata"]["uid"] = json!("sts-uid");
+        let mut held = pod("hello-0", "hello-bad", crash_looping_pod_status());
+        held["metadata"]["ownerReferences"] = json!([{"uid": "sts-uid"}]);
+        let api = FakeApi::new([sts, held]);
+        let ar = ApiResource {
+            group: "apps".into(),
+            version: "v1".into(),
+            api_version: "apps/v1".into(),
+            kind: "StatefulSet".into(),
+            plural: "statefulsets".into(),
+        };
+        let rid = ResourceId {
+            group: "apps".into(),
+            kind: "StatefulSet".into(),
+            namespace: "demo".into(),
+            name: "hello".into(),
+        };
+        let seen = std::sync::Mutex::new(Vec::<String>::new());
+        let _ = wait_for_ready(
+            &api.client(),
+            &ar,
+            &Scope::Namespaced,
+            &rid,
+            None,
+            DEFAULT_TIMEOUT,
+            &CancelToken::new(),
+            |status| seen.lock().unwrap().push(status.to_string()),
+        )
+        .await
+        .unwrap();
+        let first = seen.lock().unwrap().first().cloned().unwrap_or_default();
+        assert!(
+            first
+                .starts_with("StatefulSet/hello: 0/1 updated pods ready. Pod hello-0 is not ready"),
+            "{first}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_held_statefulset_times_out_with_the_pod_to_delete() {
+        let mut sts = serde_json::to_value(statefulset(json!({}), "hello-good")).unwrap();
+        sts["metadata"]["name"] = json!("hello");
+        sts["metadata"]["generation"] = json!(5);
+        sts["metadata"]["uid"] = json!("sts-uid");
+        let owned = |mut pod: Value| {
+            pod["metadata"]["ownerReferences"] = json!([{"uid": "sts-uid"}]);
+            pod
+        };
+        let held = owned(pod("hello-0", "hello-bad", crash_looping_pod_status()));
+        let api = FakeApi::new([sts.clone(), held]);
+        let result = wait(&api, "apps", "StatefulSet", "statefulsets", "hello").await;
+        let ReadinessResult::TimedOut { message, .. } = result else {
+            panic!("expected a timeout, got {result:?}");
+        };
+        assert!(
+            message.contains("Pod hello-0 is not ready and is still on revision hello-bad")
+                && message.ends_with("kubectl delete pod -n demo hello-0"),
+            "{message}"
+        );
+
+        let fine = owned(pod("hello-0", "hello-good", crash_looping_pod_status()));
+        let mut fine_status = fine.clone();
+        fine_status["status"]["containerStatuses"][0]["restartCount"] = json!(0);
+        let api = FakeApi::new([sts, fine_status]);
+        let result = wait(&api, "apps", "StatefulSet", "statefulsets", "hello").await;
+        let ReadinessResult::TimedOut { message, .. } = result else {
+            panic!("expected a timeout, got {result:?}");
+        };
+        assert!(!message.contains("kubectl delete pod"), "{message}");
+    }
+}
+
+mod identity_rollout {
+    use super::*;
+    use crate::cluster::fake_api::FakeApi;
+
+    const ROLE: &str = "arn:aws:iam::111122223333:role/worker";
+
+    /// A StatefulSet whose current revision is `rev-2`, ready, with the
+    /// IRSA variables declared.
+    fn statefulset() -> Value {
+        json!({
+            "apiVersion": "apps/v1",
+            "kind": "StatefulSet",
+            "metadata": {
+                "name": "worker",
+                "namespace": "work",
+                "generation": 2,
+                "annotations": {
+                    keys::CLOUD_IDENTITY_ENV: json!({
+                        "description": "IAM roles for service accounts (IRSA)",
+                        "env": { "AWS_ROLE_ARN": ROLE, "AWS_WEB_IDENTITY_TOKEN_FILE": null },
+                        "fix": "Check the webhook."
+                    }).to_string()
+                }
+            },
+            "spec": { "replicas": 1, "selector": { "matchLabels": { "app": "worker" } } },
+            "status": {
+                "observedGeneration": 2,
+                "replicas": 2,
+                "readyReplicas": 1,
+                "updatedReplicas": 1,
+                "updateRevision": "rev-2",
+            }
+        })
+    }
+
+    fn pod(name: &str, revision: &str, env: Value) -> Value {
+        json!({
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {
+                "name": name,
+                "namespace": "work",
+                "labels": { "app": "worker", "controller-revision-hash": revision }
+            },
+            "spec": {
+                "serviceAccountName": "worker",
+                "containers": [{ "name": "worker", "env": env }]
+            },
+            "status": { "phase": "Running" }
+        })
+    }
+
+    fn with_identity() -> Value {
+        json!([
+            { "name": "AWS_ROLE_ARN", "value": ROLE },
+            { "name": "AWS_WEB_IDENTITY_TOKEN_FILE", "value": "/token" }
+        ])
+    }
+
+    async fn wait(api: &FakeApi) -> ReadinessResult {
+        let ar = ApiResource {
+            group: "apps".into(),
+            version: "v1".into(),
+            api_version: "apps/v1".into(),
+            kind: "StatefulSet".into(),
+            plural: "statefulsets".into(),
+        };
+        let rid = ResourceId {
+            group: "apps".into(),
+            kind: "StatefulSet".into(),
+            namespace: "work".into(),
+            name: "worker".into(),
+        };
+        wait_for_ready(
+            &api.client(),
+            &ar,
+            &Scope::Namespaced,
+            &rid,
+            None,
+            DEFAULT_TIMEOUT,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap()
+    }
+
+    // Mid-rollout, a pod of the previous revision without the variables is
+    // not judged. Only the current revision's pod is, and it has them.
+    #[tokio::test(start_paused = true)]
+    async fn an_old_revision_pod_is_not_judged() {
+        let api = FakeApi::new([
+            statefulset(),
+            pod("worker-1", "rev-1", json!([])),
+            pod("worker-0", "rev-2", with_identity()),
+        ]);
+        assert_eq!(wait(&api).await, ReadinessResult::Ready);
+    }
+
+    // A pod of the current revision without the variables fails the wait.
+    #[tokio::test(start_paused = true)]
+    async fn a_current_revision_pod_without_its_identity_fails() {
+        let api = FakeApi::new([
+            statefulset(),
+            pod("worker-1", "rev-1", with_identity()),
+            pod("worker-0", "rev-2", json!([])),
+        ]);
+        let result = wait(&api).await;
+        let ReadinessResult::Failed { message, .. } = result else {
+            panic!("expected a failure, got {result:?}");
+        };
+        assert!(
+            message.starts_with("CloudIdentityNotApplied: pod worker-0"),
+            "{message}"
+        );
+    }
 }

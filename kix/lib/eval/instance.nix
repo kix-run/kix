@@ -32,6 +32,7 @@ let
   inherit (import_) evaluateImportInstance;
   availabilityLib = import ../core/availability.nix { inherit lib; };
   packageLib = import ../core/package.nix { inherit lib; };
+  dnsPeersLib = import ../core/dns-peers.nix { inherit lib; };
 in
 
 {
@@ -163,11 +164,13 @@ in
         # the plugin default to false.
         _netpolEnabled = clusterConfig.networkPolicy.enable or false;
 
+        _findRoleProvider = clusterCtx.findRoleProvider or (_: null);
+
         _networkPolicyEnforcer =
           if !_netpolEnabled || _enforcerProvider == null || _isSelfEnforcer then
             null
           else
-            _enforcerProvider.out;
+            dnsPeersLib.bindDnsPeers _findRoleProvider _enforcerProvider.out;
 
         _edgeAnalysis = rec {
           serviceRegistry = edgeAnalysis.mkServiceRegistry _depResourcesForEdges;
@@ -198,6 +201,7 @@ in
             availability
             ;
           networkPolicyEnforcer = _networkPolicyEnforcer;
+          dnsPeers = dnsPeersLib.dnsPeersOf _findRoleProvider;
           packageId = packageLib.idOf instCfg.package;
           namespaces = nsResources;
           labelStyle = instCfg.labelStyle;

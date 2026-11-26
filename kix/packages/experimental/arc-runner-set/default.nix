@@ -284,21 +284,15 @@ in
       runnerEgress = kix.operandPolicy {
         inherit scope;
         name = "${name}-runner-egress";
-        spec =
-          let
-            netpol = scope.networkPolicyEnforcer.netpol;
-          in
-          netpol.mkEndpointSelector (arc.out.operandSelectors.runner name)
-          // {
-            egress =
-              (netpol.translateIntentRules {
-                intents.runner.egress = [
-                  { to = "dns"; }
-                  { to = "world"; }
-                ]
-                ++ lib.optional (config.rules != [ ]) { to = "apiserver"; };
-              }).egressRules;
-          };
+        selector = arc.out.operandSelectors.runner name;
+        egress =
+          (scope.networkPolicyEnforcer.netpol.translateIntentRules {
+            intents.runner.egress = [
+              { to = "dns"; }
+              { to = "world"; }
+            ]
+            ++ lib.optional (config.rules != [ ]) { to = "apiserver"; };
+          }).egressRules;
       };
 
       root = {

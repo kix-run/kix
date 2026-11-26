@@ -17,7 +17,7 @@ use crate::client;
 use crate::exit::Exit;
 use crate::output::{self, CommandResponse};
 use kix::cluster::activation::{PinnedInterface, Record, Records, RecordsError};
-use kix::cluster::binding::{self, Connection};
+use kix::cluster::binding::{self, Connection, Target};
 use kix::cluster::discovery;
 use kix::cluster::errors::{api_error, forbidden};
 use kix::cluster::kubernetes_version::{self, LiveVersion};
@@ -126,7 +126,8 @@ async fn read_cluster(
     if let Some(records) = opened.records() {
         for view in &observation.clusters {
             let mut cluster_notes = interface_notes(records, &view.cluster, &view.record).await?;
-            cluster_notes.extend(stopped_notes(records, &view.cluster, &view.record).await?);
+            let shown = view.failed.as_ref().map(|f| f.record.name.as_str());
+            cluster_notes.extend(stopped_notes(records, &view.cluster, &view.record, shown).await?);
             notes.insert(view.cluster.clone(), cluster_notes);
         }
     }
@@ -136,11 +137,10 @@ async fn read_cluster(
     for note in id.unread_notes() {
         crate::esay!("{note}");
     }
+    let target = Target::from(&connection);
     let kubernetes = document::Kubernetes {
-        context: match connection {
-            Connection::Context { name, .. } => name,
-            Connection::InCluster => None,
-        },
+        context: target.context,
+        server: target.server,
         uid: id.uid,
         version: id.version,
     };
@@ -181,12 +181,19 @@ fn age(at: &str) -> String {
     }
 }
 
-/// Return a line for each `Partial` or `Failed` deploy record of `cluster`.
+/// Return a line for each `Partial` or `Failed` deploy record of `cluster`
+/// except `shown`, the failed deploy the status reports in its own section.
 /// `active` is the record the cluster runs.
-async fn stopped_notes(records: &Records, cluster: &str, active: &Record) -> Result<Vec<String>> {
+async fn stopped_notes(
+    records: &Records,
+    cluster: &str,
+    active: &Record,
+    shown: Option<&str>,
+) -> Result<Vec<String>> {
     let stopped = records.stopped(cluster).await.map_err(|e| miette!("{e}"))?;
     Ok(stopped
         .iter()
+        .filter(|r| Some(r.name.as_str()) != shown)
         .map(|r| stopped_note(cluster, r, &active.name))
         .collect())
 }

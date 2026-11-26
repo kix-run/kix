@@ -350,9 +350,11 @@ fn controller_line(rid: &ResourceId, controller: &Controller) -> String {
     let id = &controller.id;
     let kind = &rid.kind;
     match &controller.state {
+        // Ready pods do not show that the controller can act: it may lack
+        // the rights, settings, or network access that cleanup needs.
         ControllerState::Ready => format!(
-            "{kind} controller {id} is ready. Check its logs to see why it has not removed \
-             the finalizers."
+            "{kind} controller {id} has ready pods but may be failing to remove the \
+             finalizers. Check its logs for errors such as missing permissions."
         ),
         ControllerState::NotReady(reason) => format!(
             "{kind} controller {id} is not ready ({reason}), so it cannot remove the finalizers. \
@@ -391,7 +393,7 @@ pub fn stuck_explanation(path: DeletePath) -> String {
         DeletePath::Prune(Runner::Cli) => (
             cli_retry.to_string(),
             format!(
-                "{recorded} the next `kix deploy --prune` or `kix gc` will delete them once \
+                "{recorded} the next `kix gc` will delete them once \
                  the objects above are gone."
             ),
         ),
@@ -470,14 +472,14 @@ pub fn held_back_reason(
         );
     }
     let next = match path {
-        DeletePath::Gc => "the next `kix gc`",
+        DeletePath::Gc
+        | DeletePath::Prune(Runner::Cli)
+        | DeletePath::Recreate(Runner::Cli)
+        | DeletePath::Apply(Runner::Cli) => "the next `kix gc`",
         DeletePath::Teardown
         | DeletePath::Prune(Runner::Operator)
         | DeletePath::Recreate(Runner::Operator)
         | DeletePath::Apply(Runner::Operator) => "the Kix operator",
-        DeletePath::Prune(Runner::Cli)
-        | DeletePath::Recreate(Runner::Cli)
-        | DeletePath::Apply(Runner::Cli) => "the next `kix deploy --prune` or `kix gc`",
     };
     format!(
         "kept {rid} because {holder} depends on it and is still on the cluster; {rid} stays \
@@ -784,10 +786,9 @@ mod tests {
             not_ready.find("ScaledObject controller").unwrap() < not_ready.find("kubectl").unwrap(),
             "{not_ready}"
         );
-        assert!(
-            with(ControllerState::Ready)
-                .contains("ScaledObject controller Deployment.apps/keda-operator@keda is ready.")
-        );
+        assert!(with(ControllerState::Ready).contains(
+            "ScaledObject controller Deployment.apps/keda-operator@keda has ready pods but"
+        ));
         assert!(with(ControllerState::Missing).contains("is not on the cluster"));
         assert!(
             with(ControllerState::Unread("forbidden".into())).contains(
@@ -921,7 +922,8 @@ mod tests {
             );
         }
         let cli = stuck_explanation(DeletePath::Prune(Runner::Cli));
-        assert!(cli.contains("`kix deploy --prune` or `kix gc`"), "{cli}");
+        assert!(cli.contains("the next `kix gc` will delete them"), "{cli}");
+        assert!(!cli.contains("kix deploy --prune"), "{cli}");
         assert!(cli.contains("`--timeout`"), "{cli}");
         assert!(
             cli.contains("Most packages do not link custom resources to their operator yet"),

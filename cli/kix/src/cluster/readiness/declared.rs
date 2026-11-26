@@ -10,9 +10,11 @@ use serde_json::Value;
 use crate::manifest::keys;
 use crate::manifest::kinds::{self, GroupKind};
 
-/// Check if a kind is immediately ready upon existence (no polling needed).
-/// Kix's own kinds count in any group, because records under a retired
-/// domain are Kix's too.
+/// Return true when every object of `kind` is ready as soon as it exists, so
+/// no readiness check needs to read it. Kix's own kinds count in any group,
+/// because records under a retired domain are Kix's too. A Service is not
+/// such a kind, because a `LoadBalancer` Service waits for its address; see
+/// [`is_immediate`].
 pub fn is_immediate_kind(kind: GroupKind<'_>) -> bool {
     matches!(
         kind,
@@ -20,7 +22,6 @@ pub fn is_immediate_kind(kind: GroupKind<'_>) -> bool {
             | kinds::SECRET
             | kinds::SERVICE_ACCOUNT
             | kinds::NAMESPACE
-            | kinds::SERVICE
             | kinds::CLUSTER_ROLE
             | kinds::CLUSTER_ROLE_BINDING
             | kinds::ROLE
@@ -35,6 +36,30 @@ pub fn is_immediate_kind(kind: GroupKind<'_>) -> bool {
             | kinds::PRIORITY_CLASS
             | kinds::STORAGE_CLASS
     ) || crate::manifest::lifecycle::is_kix_internal_kind(kind.kind)
+}
+
+/// Return true when the object of `kind` whose manifest or live state is
+/// `data` is ready as soon as it exists: an object of an immediate kind
+/// ([`is_immediate_kind`]), or a Service of any type but `LoadBalancer`.
+pub fn is_immediate(kind: GroupKind<'_>, data: &Value) -> bool {
+    is_immediate_kind(kind) || (kind == kinds::SERVICE && !is_load_balancer(data))
+}
+
+fn is_load_balancer(service: &Value) -> bool {
+    service.pointer("/spec/type").and_then(Value::as_str) == Some("LoadBalancer")
+}
+
+/// Return true when a Service is ready. A `LoadBalancer` Service is ready once
+/// its load balancer has given it an address in `status.loadBalancer.ingress`.
+/// Until then clients outside the cluster cannot reach it. A cluster whose
+/// definition says it has no load balancer refuses such a Service at build
+/// time, so a deploy waits only where one is expected.
+fn check_service_ready(data: &Value) -> bool {
+    !is_load_balancer(data)
+        || data
+            .pointer("/status/loadBalancer/ingress")
+            .and_then(Value::as_array)
+            .is_some_and(|ingress| !ingress.is_empty())
 }
 
 /// Readiness convention declared by the CRD-owning package and stamped on the
@@ -675,6 +700,7 @@ pub fn check_readiness(obj: &DynamicObject, kind: GroupKind<'_>) -> bool {
         kinds::JOB => check_job_ready(&obj.data),
         kinds::PERSISTENT_VOLUME_CLAIM => check_pvc_ready(&obj.data),
         kinds::CUSTOM_RESOURCE_DEFINITION => check_crd_ready(&obj.data),
+        kinds::SERVICE => check_service_ready(&obj.data),
         _ => check_generic_ready(&obj.data),
     }
 }
@@ -1048,13 +1074,18 @@ pub fn not_ready_reason(obj: &DynamicObject, kind: GroupKind<'_>) -> String {
                 .and_then(Value::as_i64)
                 .unwrap_or(0)
                 - updated;
-            let old = match old {
-                _ if kind != kinds::DEPLOYMENT => String::new(),
-                n if n <= 0 => String::new(),
-                1 => ", 1 old pod left".to_string(),
-                n => format!(", {n} old pods left"),
-            };
-            format!("{ready}/{desired} ready, {updated}/{desired} updated{old}")
+            // A Deployment's `readyReplicas` counts the pods of every
+            // revision, so while old pods run it says nothing about the
+            // updated ones.
+            match old {
+                1 if kind == kinds::DEPLOYMENT => format!(
+                    "{updated}/{desired} updated, 1 old pod still running, {ready} ready including the old pod"
+                ),
+                n if n > 1 && kind == kinds::DEPLOYMENT => format!(
+                    "{updated}/{desired} updated, {n} old pods still running, {ready} ready including the old pods"
+                ),
+                _ => format!("{ready}/{desired} ready, {updated}/{desired} updated"),
+            }
         }
         kinds::DAEMON_SET => {
             let desired = obj
@@ -1085,6 +1116,16 @@ pub fn not_ready_reason(obj: &DynamicObject, kind: GroupKind<'_>) -> String {
                 .unwrap_or("Unknown");
             format!("phase {phase}")
         }
+        kinds::SERVICE => match obj
+            .data
+            .pointer("/spec/loadBalancerClass")
+            .and_then(Value::as_str)
+        {
+            Some(class) => format!(
+                "no load balancer address in status.loadBalancer.ingress yet; requires a controller for spec.loadBalancerClass \"{class}\""
+            ),
+            None => "no load balancer address in status.loadBalancer.ingress yet".to_string(),
+        },
         _ => {
             // Show condition types when a generic custom resource has neither
             // Ready nor Available, so the missing readiness convention is visible.

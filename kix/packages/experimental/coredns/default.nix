@@ -32,6 +32,10 @@
 #                          three alerts scoped to the instance, with
 #                          `metrics.enabled`.
 #
+# `meta.dnsPeers` names the CoreDNS pods (`k8s-app: kube-dns` in the
+# instance's namespace), which the network policy enforcer builds every
+# workload's DNS egress rule from.
+#
 # `out`: root is the Service, so `out.name`, `out.fqdn`, `out.selector`, and
 # `out.port` (53) are the Service's. `out.scrapedByPrometheus` is true while
 # the instance's own ServiceMonitor scrapes it. `out.version` is the CoreDNS
@@ -53,10 +57,7 @@
 #
 # Known limits: the network intents allow DNS on port 53 only, in from every
 # pod and out to resolvers outside the cluster; the `servers` description
-# names the route for other traffic. Under `networkPolicy.enable` the
-# instance must run in `kube-system`, because the DNS egress rule every
-# workload gets selects kube-system pods labelled `k8s-app: kube-dns`;
-# evaluation refuses another namespace. Zones with a scheme (tls://,
+# names the route for other traffic. Zones with a scheme (tls://,
 # https://, grpc://, or quic://) are refused, so `servers` builds plain DNS
 # servers only.
 
@@ -184,12 +185,17 @@ in
     description = "CoreDNS as the cluster DNS: a Corefile built from typed server blocks, a Service at the kubelet's clusterDNS address, and the dns role";
     owner = "platform";
     roles = [ "dns" ];
+    # The pods carry this label, and a peer without `namespace` is in the
+    # instance's namespace.
+    dnsPeers = [ { podSelector."k8s-app" = "kube-dns"; } ];
     network.intents = {
       # Every pod resolves through it, and so do node resolvers that forward
-      # the cluster domain.
+      # the cluster domain. The `cluster` entity names the nodes as well as
+      # the pods.
       clients.ingress = [
         {
-          from = "all-pods";
+          from = "world";
+          entities = [ "cluster" ];
           ports = dns53;
         }
       ];
@@ -390,12 +396,7 @@ in
           }
           ++
             lib.optional (scrape && facts.metricsPort == null)
-              "metrics are enabled and a Prometheus is wired, but no server block enables the prometheus plugin, so the ServiceMonitor would scrape nothing. Set servers.default.plugins.prometheus.enabled = true or metrics.enabled = false."
-          # The enforcer's DNS egress rule reaches only kube-system pods
-          # labelled k8s-app=kube-dns, whichever instance provides dns.
-          ++
-            lib.optional ((clusterConfig.networkPolicy.enable or false) && scope.namespaceName != "kube-system")
-              "network policy is enabled and this instance is the cluster's dns provider, but it runs in namespace '${scope.namespaceName}'. The DNS egress rule every workload gets allows only kube-system pods labelled k8s-app=kube-dns, so no pod could reach it. Install it in kube-system.";
+              "metrics are enabled and a Prometheus is wired, but no server block enables the prometheus plugin, so the ServiceMonitor would scrape nothing. Set servers.default.plugins.prometheus.enabled = true or metrics.enabled = false.";
 
         # Every build renders this value (the Deployment's checksum hashes
         # the ConfigMap), so a refused Corefile fails evaluation.

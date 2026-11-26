@@ -351,35 +351,52 @@ in
         else
           [ ];
 
+      # Check pod settings that `cluster.capabilities.privilegedContainers`
+      # covers. The capability stands for several platform rules, so the
+      # refusal names the rule this pod breaks.
       checkPrivileged =
         templateSpec:
         let
           containers = lst (templateSpec.containers or [ ]);
           initContainers = lst (templateSpec.initContainers or [ ]);
           allContainers = containers ++ initContainers;
-          hasPrivileged = builtins.any (c: (c.securityContext.privileged or false) == true) allContainers;
-          hasHostNetwork = templateSpec.hostNetwork or false;
-          hasHostPID = templateSpec.hostPID or false;
+          privileged = builtins.filter (c: (c.securityContext.privileged or false) == true) allContainers;
+          hostNamespaces = builtins.filter (f: templateSpec.${f} or false) [
+            "hostNetwork"
+            "hostPID"
+          ];
           volumes = lst (templateSpec.volumes or [ ]);
           hostPathVols = builtins.filter (v: v ? hostPath) volumes;
-          hasHostPath = hostPathVols != [ ];
-          reason =
-            if hasHostNetwork then
-              "hostNetwork: true"
-            else if hasHostPID then
-              "hostPID: true"
-            else if hasHostPath then
-              "hostPath volume '${(builtins.head hostPathVols).name or "?"}' → ${
-                (builtins.head hostPathVols).hostPath.path or "?"
-              }"
+          broken =
+            if hostNamespaces != [ ] then
+              {
+                what = "set ${builtins.head hostNamespaces} = true";
+                rule = "pods to share a host namespace";
+                fix = "Remove ${builtins.head hostNamespaces} from the pod spec";
+              }
+            else if hostPathVols != [ ] then
+              let
+                v = builtins.head hostPathVols;
+              in
+              {
+                what = "mount hostPath volume '${v.name or "?"}' (${v.hostPath.path or "?"}) from the node";
+                rule = "hostPath volumes";
+                fix = "Replace the hostPath volume with another volume type (such as emptyDir or persistentVolumeClaim)";
+              }
             else
-              "securityContext.privileged: true";
+              {
+                what = "run container '${
+                  (builtins.head privileged).name or "?"
+                }' with securityContext.privileged = true";
+                rule = "privileged containers";
+                fix = "Remove securityContext.privileged (or replace it with specific Linux capabilities in securityContext.capabilities.add)";
+              };
         in
-        if hasPrivileged || hasHostNetwork || hasHostPID || hasHostPath then
+        if privileged != [ ] || hostNamespaces != [ ] || hostPathVols != [ ] then
           checkCapability {
             cap = "privilegedContainers";
-            message = "Workload uses ${reason} but cluster.capabilities.privilegedContainers is false.";
-            fix = "Remove the privileged settings or use a cluster that supports them.";
+            message = "Pods in this workload ${broken.what}. This cluster does not allow ${broken.rule} (cluster.capabilities.privilegedContainers = false), so Kix stopped the build.";
+            fix = "${broken.fix}, or deploy this workload to a cluster that allows host access and privileged containers. If your cluster does allow them, set cluster.capabilities.privilegedContainers = true in the cluster definition.";
           }
         else
           [ ];
@@ -394,6 +411,47 @@ in
           }
         else
           [ ];
+
+      # Check that a pod using a built-in critical PriorityClass runs in a
+      # namespace where the platform admits that class. The API server
+      # accepts the workload but refuses each of its pods, so the deploy would
+      # wait until it timed out.
+      checkCriticalPriority =
+        templateSpec:
+        let
+          allowed = capabilities.criticalPriorityNamespaces or null;
+          class = templateSpec.priorityClassName or null;
+          critical = builtins.elem class [
+            "system-node-critical"
+            "system-cluster-critical"
+          ];
+          where =
+            if allowed == [ ] then
+              "does not allow in any namespace"
+            else
+              "allows only in " + lib.concatMapStringsSep ", " (n: "\"${n}\"") allowed;
+          firstFix =
+            if allowed == [ ] then
+              "Remove priorityClassName or use a custom PriorityClass."
+            else
+              "Move the instance to ${
+                lib.concatMapStringsSep " or " (n: "\"${n}\"") allowed
+              }, remove priorityClassName, or use a custom PriorityClass.";
+        in
+        if allowed == null || !critical || builtins.elem namespaceName allowed then
+          [ ]
+        else
+          failHere {
+            id = "K7426";
+            clusterOption = "cluster.capabilities.criticalPriorityNamespaces";
+            message =
+              "Pods in namespace \"${namespaceName}\" set priorityClassName \"${class}\", "
+              + "which this cluster ${where} (cluster.capabilities.criticalPriorityNamespaces). "
+              + "Kubernetes would reject every pod this workload creates, so Kix stopped the build.";
+            fix =
+              firstFix
+              + "\nIf \"${namespaceName}\" has a ResourceQuota whose scopeSelector includes both \"system-node-critical\" and \"system-cluster-critical\", add \"${namespaceName}\" to cluster.capabilities.criticalPriorityNamespaces. Kix allows both classes in every listed namespace, so the quota must allow both too.";
+          };
 
       # Check that multi-replica workloads with required anti-affinity or
       # `DoNotSchedule` spread constraints do not target a single-node cluster,

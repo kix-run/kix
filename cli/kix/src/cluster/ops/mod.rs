@@ -133,8 +133,13 @@ pub(crate) trait ResourceIo: Send + Sync + 'static {
     /// Delete an orphan, unless another Kix cluster still deploys it, it
     /// changed since it was read, or it is already being deleted (see
     /// [`super::prune_guard`]). The object may still be on the cluster when
-    /// this returns; [`ResourceIo::wait_gone`] waits for it.
-    async fn prune(&self, rid: &ResourceId) -> Result<Pruned, DeleteError>;
+    /// this returns; [`ResourceIo::wait_gone`] waits for it. `propagation`
+    /// comes from [`super::graph::DeleteOrder::propagation`].
+    async fn prune(
+        &self,
+        rid: &ResourceId,
+        propagation: kube::api::PropagationPolicy,
+    ) -> Result<Pruned, DeleteError>;
 
     /// Wait for the object `rid` with uid `uid`, which [`ResourceIo::prune`]
     /// deleted, to be gone ([`super::readiness::wait_gone`]). A dry run
@@ -380,8 +385,11 @@ pub(crate) enum StampError {
 /// Why [`ResourceIo::prune`] did not delete an orphan.
 #[derive(Debug, Error)]
 pub(crate) enum DeleteError {
-    #[error(transparent)]
-    NotDiscovered(#[from] NotDiscovered),
+    /// Kix could not tell whether the cluster serves the object's kind.
+    #[error(
+        "Kix could not check whether Kubernetes recognizes this resource kind (not deleted): {0}"
+    )]
+    Discovery(FetchError),
     /// The records sit under a retired group, so no prune guard can tell
     /// what other Kix clusters deploy.
     #[error(transparent)]

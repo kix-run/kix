@@ -5,23 +5,20 @@ description: "Delete Kix-managed resources a cluster no longer declares, and ret
 
 import Command from '/src/components/Command.astro';
 
-`kix gc` removes what the deployed build no longer contains. It has three
-modes: the default deletes what earlier deploys kept, `--full-scan` scans
-every Kix-managed resource of the named cluster, and `--operator` deletes
-Activation records and lets the Kix operator clean up after them. Every mode
-also retires old Superseded Activation records.
+`kix gc` deletes Kix-managed resources that earlier deploys and rollbacks left
+behind on the cluster. It has three modes: the default mode deletes leftover
+resources recorded by deploys and rollbacks that ran without `--prune`,
+`--full-scan` scans all live Kix-managed resources for the named cluster, and
+`--operator` deletes retired Activation records so the Kix operator cleans up
+after them. Every mode also retires old `Superseded` Activation records.
 
-The default mode and `--full-scan` build the cluster from your files and
-first check that this is the build of the cluster's current deployment
-record, by identity hash. When it is not, `kix gc` stops with `[K6276]`,
-with or without `--dry-run`, before it lists or deletes anything and without
-retiring a record. The message names the build the cluster runs and the
-build the files make, and says when a record that `kix deploy --only` left
-partly deployed holds the files' build. Deploy the files with
-`kix deploy <cluster>` and run `kix gc` again, deploy and delete in one step
-with `kix deploy <cluster> --prune`, or check out the commit the cluster
-runs. A cluster with no current deployment record is not checked.
-`--operator` builds nothing and is not checked.
+`kix gc` keeps every resource in the cluster's active deployment (the build
+named on its `Active` Activation record from the last deploy or rollback).
+Unapplied edits in your local files do not affect `kix gc`. To delete resources
+you removed from your cluster definition, run `kix deploy --prune`, or run
+`kix deploy` and then `kix gc`. After `kix rollback`, `kix gc` keeps the
+restored build and deletes resources left behind by the build you rolled back
+from.
 
 This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 `cli/kix-cli/src/commands/gc/{mod,plan,render}.rs` when in doubt.
@@ -39,14 +36,14 @@ kix gc <CLUSTER> [-y] [--dry-run] [--full-scan [--include unstamped,unattributed
 | `<CLUSTER>` | Cluster name to build from the flake. |
 | `-y`, `--yes` | Skip the confirmation prompt. Required when stdin is not a terminal. |
 | `--dry-run` | Print what gc would delete, both resources and Activation records, and delete nothing. |
-| `--full-scan` | Scan the named cluster's resources carrying the Kix managed-by label and delete those whose identity hash is not in the fresh build. |
+| `--full-scan` | Scan the named cluster's resources carrying the Kix managed-by label and delete those whose identity hash is not in the active deployment's build (or the build from your local files if the cluster has no `Active` Activation record). |
 | `--include <KINDS>` | With `--full-scan` (required), also judge the kinds of resource a full scan only lists by default. A comma-separated list of the values below. |
 
 | `--include` value | Resources it adds |
 | --- | --- |
-| `unstamped` | Resources that carry the label but no `kix.run/identity-hash`. Kix never applied these, so by default they are only listed. |
-| `unattributed` | Resources that name no Activation record on the cluster. When another Kix cluster has records on the same Kubernetes cluster, Kix cannot tell whose these are, so by default they are only listed. |
-| `copies` | Copies. A copy carries Kix's labels and annotations, but Kix never wrote it: an operator copied them from an object Kix made, such as the data volumes it makes for a database. By default copies are only listed. |
+| `unstamped` | Resources written by Kix that carry the label without `kix.run/identity-hash`. Kix cannot match them to a build, so by default they are only listed. |
+| `unattributed` | Resources with no matching Activation record on the cluster. Kix cannot tell which Kix cluster they belong to, so by default they are only listed. |
+| `copies` | Resources with Kix's labels that Kix did not apply. Another controller or tool created or applied them, such as an operator copying a custom resource's labels onto a database volume claim or an Event. By default, copies are only listed. |
 | `--operator` | Delete the retired Activation records only; the operator's finalizer removes their resources. |
 | `--timeout <DURATION>` | How long to wait for a deleted resource while its finalizers do not change (`5m`, `300s`, or seconds). Default `3m`. Each removed finalizer resets the timer, up to 5 minutes in total per resource. Not with `--operator`. |
 | `--keep <N>` | Always keep at least the `N` newest Superseded records, whatever their age. Default `10`. `0` keeps none. |
@@ -56,34 +53,59 @@ kix gc <CLUSTER> [-y] [--dry-run] [--full-scan [--include unstamped,unattributed
 
 ## Modes
 
-| Mode | Old side | What is deleted |
+| Mode | What `kix gc` checks | What is deleted |
 | --- | --- | --- |
-| Default | The build the cluster's Active record names, from this machine's cache of the last `kix deploy` or `kix rollback` when that is the same build, else from Kix's local store; and the builds the Active record lists under `status.orphansKeptFrom` | Resources of the builds under `status.orphansKeptFrom` whose kind, namespace, and name are absent from the deployed build, which the files must make. Exits with a message if the cluster has no Active record or its build is not on this machine. A cached build of another context's cluster of the same name is set aside with a warning. |
-| `--full-scan` | Every Kix-managed resource of the named cluster | Resources whose identity hash is not in the deployed build, which the files must make |
+| Default | Builds listed in `status.orphansKeptFrom` on the `Active` Activation record | Resources in those builds whose kind, namespace, and name are absent from the active deployment's build. If the cluster has no `Active` Activation record, `kix gc` prints a message and exits without deleting anything. |
+| `--full-scan` | Every live Kix-managed resource for the named cluster | Resources whose identity hash is absent from the active deployment's build (or from the local files' build when the cluster has no `Active` Activation record). |
 | `--operator` | Activation records | Retired records; the operator deletes their resources |
 
-Default mode, `--full-scan`, and the Kix operator inspect only objects carrying the label `app.kubernetes.io/managed-by=kix`. `kix gc` never lists or deletes unlabelled objects, such as resources applied with `kubectl`. See [Objects Kix did not apply](/docs/reference/cli/diff/#objects-kix-did-not-apply).
+To load the active deployment's build, both the default mode and `--full-scan`
+first check this machine's cache from the last `kix deploy` or `kix rollback`.
+If the cached build does not match the `Active` record (for example, after
+deploying a cluster of the same name in another Kubernetes context), Kix warns,
+ignores the cache entry, and looks up the build in Kix's local store. If the
+deployed build is not on this machine at all, `kix gc` builds your local files
+and proceeds only when they produce that exact build; otherwise it stops,
+deletes nothing, and prints both build hashes.
 
-:::caution[The default mode can omit cluster-level garbage from its plan]
-The default mode currently deletes stale resources that belong to no package,
-but its confirmation plan does not list them. Use `--full-scan` when you need
-the plan to inventory those resources before deletion.
-:::
+Both the default mode and `--full-scan` keep any resource that a deploy of
+this cluster wrote and that has not finished or been replaced: a deploy that
+failed, a deploy with [`kix deploy --only`](/docs/reference/cli/deploy/#deploy-one-instance-at-a-time)
+that applied some instances, or a deploy that is queued or still running.
+`kix gc` finds these resources by the Activation records named in their
+`kix.run/activations` annotation, and lists them under **Kept for an
+unfinished deploy**, grouped by record. Run `kix deploy <cluster>` to finish
+or replace that deploy, then run `kix gc` again. If the active deployment's
+build is not on this machine and your local files produce a build that a
+`kix deploy --only` run left partly deployed, `kix gc` names that record in
+its refusal.
+
+Default mode, `--full-scan`, and the Kix operator inspect only objects carrying the label `app.kubernetes.io/managed-by=kix`. `kix gc` never lists or deletes unlabelled objects, such as resources applied with `kubectl`. See [Objects Kix did not apply](/docs/reference/cli/diff/#objects-kix-did-not-apply).
 
 `--full-scan` judges the resources of the cluster you name. Each resource Kix
 deploys lists, in its `kix.run/activations` annotation, the Activation records
 whose builds contain it, and each record carries a `kix.run/cluster` label.
-When one Kubernetes cluster hosts several Kix clusters, a full scan reads those
-records to decide whose each resource is:
+Each record also claims the earlier builds listed in `status.orphansKeptFrom`.
+That keeps leftover resources from a deploy or rollback without `--prune` tied
+to their Kix cluster after `kix gc` retires the record that deployed them, so
+`--full-scan` deletes them without `--include unattributed`, just like default
+`kix gc`. A full scan uses the cluster's Activation records to classify each
+resource:
 
-- A resource that names only another cluster's records is skipped, and the
-  run prints how many it skipped per cluster.
+- A resource that names only other Kix clusters' records is skipped, and
+  `kix gc` prints how many it skipped and which Kix clusters they belong to.
 - A resource that another cluster's current build also contains is kept and
   listed as `kept ..., still deployed by Kix cluster <name>`.
-- A resource that names no record on the cluster (its records were retired,
-  or it predates the annotation) is listed under "No deployment record on this cluster" and kept
-  unless you pass `--include unattributed`. With only one Kix cluster on the
-  Kubernetes cluster, such a resource is judged like any other.
+- A resource that does not match any Activation record on the cluster (either
+  the record's own build or a build listed in `status.orphansKeptFrom`) is
+  listed under "Objects with no matching deployment record" and kept by
+  default. Pass `--include
+  unattributed` to check these resources against the active deployment's build and delete any
+  that are not in it. A resource may have no matching record because `kix gc`
+  retired its records and no remaining record lists its build in `status.orphansKeptFrom`, because it predates `kix.run/activations`, or because it
+  belongs to another Kix cluster whose records were deleted. This rule applies
+  even when only one Kix cluster has records on the Kubernetes cluster, since
+  missing records may have belonged to another Kix cluster.
 
 The default mode, `kix deploy --prune`, and `kix rollback --prune` apply the same rule to
 a resource both clusters deploy: when the named cluster's build drops it and
@@ -98,8 +120,11 @@ Resources are deleted dependents first. Namespaces and
 CustomResourceDefinitions are skipped. A resource that is already gone when
 gc deletes it is reported, not counted as a failure.
 
-Like `kix deploy --prune`, `kix gc` deletes resources with `Background`
-propagation, runs independent deletes in parallel, and waits for each resource
+Like `kix deploy --prune`, `kix gc` deletes most resources with `Background`
+propagation. For custom resources whose CRD declaration sets `controller`,
+`kix gc` uses `Foreground` propagation instead. That keeps the custom resource
+on the cluster until Kubernetes deletes any owned child objects that block its
+deletion. `kix gc` runs independent deletes in parallel and waits for each resource
 to be removed from the cluster. If a resource is already being deleted (marked
 in a `--full-scan` plan), `kix gc` waits for that deletion instead of sending a
 second delete request. It stops waiting if no finalizer is removed within
@@ -115,11 +140,11 @@ removes the custom resource's finalizer. A
 slow cleanup may still finish on its own; run `kix gc` again later, or pass a
 longer `--timeout` (up to `5m`).
 
-A deploy without `--prune` keeps its orphans and lists the builds they came
-from on the new Activation, under `status.orphansKeptFrom`. The default
-mode deletes those orphans too, listed under "Orphans kept by earlier
-deploys". When gc deletes without failures in either mode and the fresh build
-is the one the Active record describes, it removes the list. The default mode
+A deploy or rollback without `--prune` keeps its orphans and records the builds
+they came from on the `Active` Activation record, under `status.orphansKeptFrom`.
+The default mode deletes those orphans, listed under "Objects that left the
+build in earlier deploys". When `kix gc` finishes without deletion failures in
+either mode, it clears that list. The default mode
 leaves the list if this machine could not read one of the builds, and a full
 scan leaves it if it was forbidden to list some kinds. Deploying with
 `--prune` every time keeps the list empty, so the default mode has no kept
@@ -145,7 +170,7 @@ since it was listed.
 | Code | Meaning |
 | --- | --- |
 | `0` | Nothing to collect, everything planned was deleted, `--dry-run` printed the plan, or the prompt was declined |
-| `1` | A deletion failed or timed out; confirmation was needed on a non-interactive terminal; the files make another build than the cluster runs (`[K6276]`); or a build or cluster error |
+| `1` | A deletion failed or timed out; confirmation was needed on a non-interactive terminal; or a build or cluster error |
 
 :::tip[Use it in a task]
 See [Garbage-collect stale resources](/docs/how-to/operate-a-cluster/garbage-collect-stale-resources/)

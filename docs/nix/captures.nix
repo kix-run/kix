@@ -3099,10 +3099,9 @@
   # deploy after these would get the broken cluster, not a fresh one.
 
   {
-    # Drop one instance from the cluster, deploy without --prune so the
-    # deploy keeps what the old name created, then let gc delete it. gc
-    # refuses files that make another build than the cluster runs, so the
-    # deploy comes first. The next group's deploy restores them.
+    # Rename one instance and deploy without `--prune`, then let gc find
+    # the resources the previous activation left behind. The next group's deploy
+    # restores them.
     group = "how-to/application-gc";
     page = "/docs/how-to/operate-a-cluster/garbage-collect-stale-resources/";
     cwd = "kix-examples/";
@@ -3135,6 +3134,8 @@
         };
       }
       {
+        # gc keeps everything the Active build contains, so the rename is
+        # deployed first. The deploy keeps the old objects and records them.
         prepare = [
           "kix"
           "deploy"

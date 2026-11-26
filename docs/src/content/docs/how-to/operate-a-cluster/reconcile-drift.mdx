@@ -7,7 +7,10 @@ import Command from '/src/components/Command.astro';
 import reconcileApplication from '/src/command-output/how-to/application-reconcile/reconcile.json';
 
 Use `kix deploy --reconcile` to reapply every desired resource, including
-resources whose activation identity has not changed. Add `--force-conflicts`
+resources whose activation identity has not changed. A normal `kix deploy`
+already recreates any resource in the build that is missing from the cluster
+or being deleted. `--reconcile` also restores fields that were changed on
+existing resources. Add `--force-conflicts`
 only when you have reviewed fields owned by another manager and intend Kix to
 take them back.
 

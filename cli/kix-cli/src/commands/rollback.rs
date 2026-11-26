@@ -53,6 +53,7 @@ async fn run_list_async(cluster: &str, ctx: &CommandContext) -> Result<()> {
     let client = client::make_client(ctx.global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
+    let connection = binding::Connection::of_context(ctx.global.context.as_deref());
 
     let discovery = discovery::discover_resources(&client)
         .await
@@ -72,6 +73,8 @@ async fn run_list_async(cluster: &str, ctx: &CommandContext) -> Result<()> {
 
     output::result(&HistoryResponse {
         cluster: cluster.to_string(),
+        kubernetes: (&connection).into(),
+        connection,
         current: current.map(|c| CurrentDeploy {
             name: c.name,
             identity_hash: c.identity_hash,
@@ -130,6 +133,11 @@ enum BuildState {
 #[derive(serde::Serialize, schemars::JsonSchema)]
 pub(crate) struct HistoryResponse {
     cluster: String,
+    /// The Kubernetes cluster whose deploy records these are.
+    kubernetes: binding::Target,
+    #[serde(skip)]
+    #[schemars(skip)]
+    connection: binding::Connection,
     /// The deploy live on the cluster, or null when there is none.
     current: Option<CurrentDeploy>,
     /// Earlier deploys that ran to completion, most recent first.
@@ -214,7 +222,11 @@ fn hash_preview(hash: Option<&str>) -> String {
 impl CommandResponse for HistoryResponse {
     fn text(&self) -> String {
         let cluster = &self.cluster;
-        let mut out = format!("Deployment history for '{}'\n\n", output::bold(cluster));
+        let mut out = format!(
+            "Deployment history for '{}' on {}\n\n",
+            output::bold(cluster),
+            self.connection.describe()
+        );
 
         if let Some(c) = &self.current {
             let _ = writeln!(
@@ -272,8 +284,7 @@ fn run_direct(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Resul
         super::deploy::withdrawn::check(cluster, super::deploy::stops::Writer::Rollback)?
     };
     let (current, target, mut p, downgrade) = ctx.runtime()?.block_on(async {
-        crate::say!("Connecting to cluster...");
-        let client = client::make_client(ctx.global.context.as_deref())
+        let (client, connection) = client::connect(ctx.global.context.as_deref())
             .await
             .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
         let discovery = discovery::discover_resources(&client)
@@ -315,7 +326,7 @@ fn run_direct(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Resul
         );
         let p = plan_rollback(
             &client,
-            ctx.global.context.as_deref(),
+            connection,
             &records,
             cluster,
             &current,
@@ -353,11 +364,14 @@ fn run_direct(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Resul
     }
 
     if let Some(connected) = &p.connected
-        && !ctx.runtime()?.block_on(super::deploy::start(
-            &connected.client,
-            &p.checked,
-            &connected.last_runs,
-        ))
+        && ctx
+            .runtime()?
+            .block_on(super::deploy::start(
+                &connected.client,
+                &p.checked,
+                &connected.last_runs,
+            ))
+            .is_some()
     {
         crate::say!(
             "Nothing to change. The cluster already matches the target deployment. Nothing was applied to the cluster."
@@ -461,7 +475,7 @@ async fn run_operator_async(
     cluster: &str,
     ctx: &CommandContext,
 ) -> Result<Exit> {
-    let (client, records) =
+    let (client, records, connection) =
         super::operator::connect_and_verify(ctx.global.context.as_deref()).await?;
     super::operator::require_requests(&client).await?;
 
@@ -498,7 +512,7 @@ async fn run_operator_async(
     // operator plans again against the live objects and always prunes.
     let planned = plan_rollback(
         &client,
-        ctx.global.context.as_deref(),
+        connection,
         &records,
         cluster,
         &current,
@@ -641,8 +655,8 @@ fn flags(prune: bool, force_conflicts: bool, accept_migrations: bool) -> PlanFla
     }
 }
 
-/// Plan a rollback of `cluster` from `current` to `selected`, through the
-/// kube context `context`.
+/// Plan a rollback of `cluster` from `current` to `selected`, through
+/// `client`, which talks to the Kubernetes cluster of `connection`.
 ///
 /// The target build is known only once the records have been read, so the
 /// binding check runs after that read and before anything is planned or
@@ -654,7 +668,7 @@ fn flags(prune: bool, force_conflicts: bool, accept_migrations: bool) -> PlanFla
 /// during an incident.
 async fn plan_rollback(
     client: &kube::Client,
-    context: Option<&str>,
+    connection: binding::Connection,
     records: &Records,
     cluster: &str,
     current: &Record,
@@ -673,7 +687,7 @@ async fn plan_rollback(
     if let Some(declared) = graph.kubernetes_uid.as_deref() {
         binding::check_declared(
             client,
-            &binding::Connection::of_context(context),
+            &connection,
             binding::Action::Deploy,
             cluster,
             declared,
@@ -683,7 +697,7 @@ async fn plan_rollback(
     }
     if let Some(line) = kix::cluster::kubernetes_version::note(
         client,
-        &binding::Connection::of_context(context),
+        &connection,
         cluster,
         graph.kubernetes_version.as_deref(),
     )
@@ -694,7 +708,7 @@ async fn plan_rollback(
 
     let report = |event: PlanEvent<'_>| plan::progress::print(event);
     Planner::new(flags, &report)
-        .rollback(build, records, current, client.clone())
+        .rollback(build, records, current, client.clone(), connection)
         .await
         .map_err(|e| miette!("{e}"))
 }

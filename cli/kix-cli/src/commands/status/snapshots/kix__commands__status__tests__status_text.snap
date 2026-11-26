@@ -2,7 +2,7 @@
 source: kix-cli/src/commands/status/tests.rs
 expression: "text::render(&doc, text::Detail::Packages, &two_days_ago)"
 ---
-Cluster shop on Kubernetes v1.33.1 (context prod)
+Cluster shop on Kubernetes v1.33.1 (context prod, https://prod.example:6443)
 Last deploy: shop-7f3a2b1c0d9e  Active  2d0h ago
 
   db/postgres              2 resources  1 changed

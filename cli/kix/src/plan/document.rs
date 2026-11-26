@@ -47,6 +47,11 @@ pub struct Plan {
     pub kix: KixBuild,
     /// The name the build gives the Kix cluster, which its records carry.
     pub cluster: String,
+    /// The Kubernetes cluster the plan read: the context and API server
+    /// that `kix plan` and `kix deploy` connected to. `null` when the plan
+    /// did not connect, as with `--offline` and `kix diff`.
+    #[serde(default)]
+    pub kubernetes: Option<crate::cluster::binding::Target>,
     /// The build the plan is for: the new side.
     pub build: Build,
     /// The build the plan compares against: the cluster's current
@@ -752,6 +757,40 @@ pub struct PruneEntry {
     /// only when the delete waits for a finalizer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub controllers: Vec<PruneController>,
+    /// For a CustomResourceDefinition, or a reference to one, that leaves the
+    /// build with nothing else in the build declaring its kind: the objects
+    /// of that kind on the cluster that this prune does not delete.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left_behind: Option<LeftBehind>,
+}
+
+/// The objects of a kind that stay on the cluster after the definition of
+/// the kind leaves the build. Kix did not create them, or keeps them for
+/// another reason, so the prune does not delete them. Once the package
+/// that handled the kind is gone, nothing removes their finalizers or
+/// cleans up what they made outside the cluster.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LeftBehind {
+    /// The kind, as `Kind.group`.
+    pub kind: String,
+    /// How many objects of the kind stay.
+    pub count: usize,
+    /// How many of them have finalizers.
+    #[serde(default)]
+    pub with_finalizers: usize,
+    /// The first [`LEFT_BEHIND_LISTED`] of them, objects with finalizers
+    /// first.
+    pub objects: Vec<LeftObject>,
+}
+
+/// How many objects a [`LeftBehind`] names.
+pub const LEFT_BEHIND_LISTED: usize = 20;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LeftObject {
+    pub resource: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub finalizers: Vec<String>,
 }
 
 impl PruneEntry {
@@ -764,6 +803,7 @@ impl PruneEntry {
             finalizers: Vec::new(),
             deleting_since: None,
             controllers: Vec::new(),
+            left_behind: None,
         }
     }
 }
@@ -828,6 +868,11 @@ pub struct UncheckedObject {
 pub enum UncheckedReason {
     /// Its kind comes from a CRD this deploy creates.
     CrdCreatedByThisDeploy,
+    /// Its kind comes from a CRD that is not on the cluster, and the build
+    /// declares it installed outside Kix with an import marker. Kix does
+    /// not create it, and the deploy waits for something else to install
+    /// it, such as an operator in the build or another tool.
+    CrdInstalledOutsideKix,
     /// Its kind's CRD is changed by this deploy, and the dry run checked
     /// the object against the CRD on the cluster now.
     CrdChangedByThisDeploy,
@@ -875,6 +920,7 @@ impl Plan {
             made_by,
             kix,
             cluster: cluster.to_string(),
+            kubernetes: None,
             build,
             deployed: None,
             flags: None,
@@ -1273,6 +1319,42 @@ mod tests {
         plan.prune = Checked::found(vec![entry(PruneFate::Delete)]);
         assert!(plan.has_changes());
         assert!(!plan.stops());
+    }
+
+    /// A plan names the Kubernetes cluster it read, and a plan file written
+    /// before the field existed reads as one that names none.
+    #[test]
+    fn a_plan_names_its_kubernetes_cluster() {
+        let empty = super::super::diff_graphs(
+            &crate::eval::store_graph::StoreGraph::empty("c"),
+            &crate::eval::store_graph::StoreGraph::empty("c"),
+        );
+        let mut plan = Plan::new(
+            KixBuild::current(&crate::version::running().to_string()),
+            MadeBy::DryRun,
+            "c",
+            Build::of(&crate::eval::store_graph::StoreGraph::empty("c")),
+            &empty,
+            Detail::Plain,
+            &[],
+            NotCheckedReason::BuildsOnly,
+        );
+        plan.kubernetes = Some(crate::cluster::binding::Target {
+            context: Some("prod".into()),
+            server: Some("https://prod.example:6443".into()),
+        });
+        let mut value = serde_json::to_value(&plan).unwrap();
+        assert_eq!(
+            value["kubernetes"],
+            serde_json::json!({"context": "prod", "server": "https://prod.example:6443"})
+        );
+        assert_eq!(serde_json::from_value::<Plan>(value.clone()).unwrap(), plan);
+
+        value.as_object_mut().unwrap().remove("kubernetes");
+        assert_eq!(
+            serde_json::from_value::<Plan>(value).unwrap().kubernetes,
+            None
+        );
     }
 
     #[test]

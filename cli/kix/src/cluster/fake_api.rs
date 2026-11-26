@@ -1,7 +1,8 @@
 //! An in-memory apiserver for tests of code that takes a `kube::Client`.
 //!
 //! It serves discovery for a fixed set of kinds (ConfigMap, Secret, Namespace,
-//! CustomResourceDefinition, Deployment,
+//! Service, Pod, Event in two groups, CustomResourceDefinition, Deployment,
+//! StatefulSet,
 //! Job, ClusterRole, Kix's Activation, and two kinds of a group served at two
 //! versions), and GET, LIST (with an equality or existence label
 //! selector), PATCH (as a JSON merge patch, on the object or its `status`),
@@ -9,7 +10,11 @@
 //! server-side apply on the objects it holds. A DELETE of an object with
 //! finalizers sets its `deletionTimestamp` and keeps it, and a PATCH that
 //! leaves such an object without finalizers removes it, as Kubernetes does. An apply stores the manifest sent as it is, and a dry-run apply
-//! (`dryRun=All`) answers without storing.
+//! (`dryRun=All`) answers without storing. A DELETE also deletes the
+//! objects that name the deleted one in `ownerReferences`, as the garbage
+//! collector does. With `propagationPolicy: Foreground`, the deleted object
+//! keeps the `foregroundDeletion` finalizer until every dependent with
+//! `blockOwnerDeletion: true` is gone.
 //! Every object gets a uid and a resourceVersion when it is added, and a new
 //! resourceVersion on every change. `/version` answers once
 //! [`FakeApi::serve_version`] has set what it says. Anything else answers
@@ -39,6 +44,11 @@ const KINDS: &[(&str, &str, &str, &str, bool)] = &[
     ("", "v1", "ConfigMap", "configmaps", true),
     ("", "v1", "Secret", "secrets", true),
     ("", "v1", "Namespace", "namespaces", false),
+    ("", "v1", "Service", "services", true),
+    ("", "v1", "Pod", "pods", true),
+    // Kubernetes serves Events under the core group and `events.k8s.io`.
+    // Add an Event under both with one uid to model that.
+    ("", "v1", "Event", "events", true),
     (
         "apiextensions.k8s.io",
         "v1",
@@ -52,6 +62,7 @@ const KINDS: &[(&str, &str, &str, &str, bool)] = &[
     (OTHER_JOB_GROUP, "v1alpha1", "Job", "jobs", false),
     ("batch", "v1", "Job", "jobs", true),
     ("apps", "v1", "Deployment", "deployments", true),
+    ("apps", "v1", "StatefulSet", "statefulsets", true),
     (
         "rbac.authorization.k8s.io",
         "v1",
@@ -112,14 +123,108 @@ impl State {
     }
 
     /// Remove the object at `i` when it is being deleted and has no
-    /// finalizers left.
+    /// finalizers left, then let the owners waiting for it finish.
     fn finish_deletion(&mut self, i: usize) {
         let o = &self.objects[i];
         if !o["metadata"]["deletionTimestamp"].is_null() && !has_finalizers(o) {
             self.objects.remove(i);
+            self.settle();
         }
     }
+
+    /// Delete the object with uid `uid` as the garbage collector does. In the
+    /// foreground, an object that has dependents blocking its deletion keeps
+    /// the `foregroundDeletion` finalizer until they are gone. Its dependents
+    /// are deleted too, in the foreground when they have dependents of their
+    /// own.
+    fn delete_uid(&mut self, uid: &str, foreground: bool) {
+        let Some(i) = self.index_of_uid(uid) else {
+            return;
+        };
+        let dependents = self.dependents_of(uid);
+        let blocked = dependents.iter().any(|(_, blocks)| *blocks);
+        let meta = &mut self.objects[i]["metadata"];
+        if meta["deletionTimestamp"].is_null() {
+            meta["deletionTimestamp"] = json!("2026-11-24T15:54:00Z");
+        }
+        if foreground && blocked {
+            let finalizers = meta["finalizers"].as_array().cloned().unwrap_or_default();
+            if !finalizers.contains(&json!(FOREGROUND)) {
+                let mut finalizers = finalizers;
+                finalizers.push(json!(FOREGROUND));
+                meta["finalizers"] = json!(finalizers);
+            }
+        }
+        for (dependent, _) in dependents {
+            let nested = !self.dependents_of(&dependent).is_empty();
+            self.delete_uid(&dependent, foreground && nested);
+        }
+        if let Some(i) = self.index_of_uid(uid)
+            && !has_finalizers(&self.objects[i])
+        {
+            self.objects.remove(i);
+        }
+        self.settle();
+    }
+
+    /// Remove the `foregroundDeletion` finalizer from each object whose
+    /// blocking dependents are gone, and remove the objects that leaves with
+    /// no finalizers.
+    fn settle(&mut self) {
+        loop {
+            let ready = self.objects.iter().position(|o| {
+                let waiting = o["metadata"]["finalizers"]
+                    .as_array()
+                    .is_some_and(|f| f.contains(&json!(FOREGROUND)));
+                let uid = o["metadata"]["uid"].as_str().unwrap_or_default();
+                waiting && !self.dependents_of(uid).iter().any(|(_, blocks)| *blocks)
+            });
+            let Some(i) = ready else {
+                return;
+            };
+            let meta = &mut self.objects[i]["metadata"];
+            let left: Vec<Value> = meta["finalizers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|f| **f != json!(FOREGROUND))
+                .cloned()
+                .collect();
+            meta["finalizers"] = json!(left);
+            if !has_finalizers(&self.objects[i]) {
+                self.objects.remove(i);
+            }
+        }
+    }
+
+    fn index_of_uid(&self, uid: &str) -> Option<usize> {
+        self.objects
+            .iter()
+            .position(|o| o["metadata"]["uid"].as_str() == Some(uid))
+    }
+
+    /// Return the uid of each object that names `uid` as an owner, and
+    /// whether it blocks its owner's deletion.
+    fn dependents_of(&self, uid: &str) -> Vec<(String, bool)> {
+        self.objects
+            .iter()
+            .filter_map(|o| {
+                let owner = o["metadata"]["ownerReferences"]
+                    .as_array()?
+                    .iter()
+                    .find(|r| r["uid"].as_str() == Some(uid))?;
+                Some((
+                    o["metadata"]["uid"].as_str()?.to_string(),
+                    owner["blockOwnerDeletion"] == json!(true),
+                ))
+            })
+            .collect()
+    }
 }
+
+/// The finalizer that holds an object deleted in the foreground until its
+/// blocking dependents are gone.
+const FOREGROUND: &str = "foregroundDeletion";
 
 fn has_finalizers(o: &Value) -> bool {
     o["metadata"]["finalizers"]
@@ -416,17 +521,19 @@ impl FakeApi {
                 if stale {
                     return status(409, "Conflict", "Precondition failed");
                 }
-                if has_finalizers(&st.objects[i]) {
-                    let rv = st.bump();
-                    let meta = &mut st.objects[i]["metadata"];
-                    if meta["deletionTimestamp"].is_null() {
-                        meta["deletionTimestamp"] = json!("2026-11-24T15:54:00Z");
-                    }
-                    meta["resourceVersion"] = json!(rv);
-                    return (200, st.objects[i].clone());
+                let foreground = options["propagationPolicy"] == json!("Foreground");
+                let rv = st.bump();
+                st.objects[i]["metadata"]["resourceVersion"] = json!(rv);
+                let answer = st.objects[i].clone();
+                let uid = answer["metadata"]["uid"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                st.delete_uid(&uid, foreground);
+                match st.index_of_uid(&uid) {
+                    Some(i) => (200, st.objects[i].clone()),
+                    None => (200, answer),
                 }
-                let gone = st.objects.remove(i);
-                (200, gone)
             }
             ("POST", None) => {
                 let Ok(mut obj) = serde_json::from_slice::<Value>(body) else {

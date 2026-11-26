@@ -730,16 +730,28 @@ in
             kix.operandPolicy {
               inherit scope;
               name = "${name}-proxy-ingress";
-              spec = {
-                endpointSelector.matchLabels = proxySelector;
-                ingress =
-                  (netpol.translateIntentRules {
-                    intents.front-door.ingress = map (from: {
-                      inherit from;
+              selector = proxySelector;
+              ingress =
+                (netpol.translateIntentRules {
+                  # `"all-pods"` in clientSources admits the nodes too (NodePort
+                  # and load balancer traffic SNATed from a node), so it maps
+                  # to the `cluster` entity.
+                  intents.front-door.ingress = map (
+                    source:
+                    {
                       ports = frontDoorPorts;
-                    }) config.clientSources;
-                  }).ingressRules;
-              };
+                    }
+                    // (
+                      if source == "all-pods" then
+                        {
+                          from = "world";
+                          entities = [ "cluster" ];
+                        }
+                      else
+                        { from = source; }
+                    )
+                  ) config.clientSources;
+                }).ingressRules;
             };
 
         # HTTPRoutes name their backends at runtime, on any port, so the
@@ -749,15 +761,13 @@ in
         proxyEgress = kix.operandPolicy {
           inherit scope;
           name = "${name}-proxy-egress";
-          spec = {
-            endpointSelector.matchLabels = proxySelector;
-            egress = [
-              netpol.dnsEgressRule
-            ]
-            ++ (netpol.translateIntentRules {
-              intents.backends.egress = [ { to = "pods"; } ];
-            }).egressRules;
-          };
+          selector = proxySelector;
+          egress = [
+            netpol.dnsEgressRule
+          ]
+          ++ (netpol.translateIntentRules {
+            intents.backends.egress = [ { to = "pods"; } ];
+          }).egressRules;
         };
 
         # One Certificate per HTTPS listener that names no Secret of its own.

@@ -1,0 +1,5 @@
++++
+kind = "silent"
+state = true
++++
+To inspect resources from a failing Kix operator deploy, check them while the operator is still retrying or increase `KIX_DEPLOY_RETRIES`. Once a deploy reaches `Failed`, the Kix operator now restores the cluster to the current Activation record (`Active` or `Degraded`), deleting resources the failed deploy added and re-applying resources it changed. Previously, the operator marked the current record `Superseded` before applying a new build, so a failed deploy left partial changes on the cluster with no active record. As a result, `kix status` reported no current deploy, and `kix rollback --operator` required choosing the old record by name. Now the current record stays `Active` or `Degraded` until a new deploy finishes, matching `kix deploy`, and drift repair pauses while another operator-managed Activation for that cluster is `Queued` or `Deploying`. When an operator deploy finishes, it also writes `status.previousActivation` and the `kix.run/previous` annotation, so `kix history` shows which deployment a superseded record replaced.

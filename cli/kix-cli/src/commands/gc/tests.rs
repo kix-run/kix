@@ -1,48 +1,9 @@
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::collections::HashSet;
 
 use kix::cluster::activation::{Record, RetentionPolicy, RetireReason, retire_plan};
 use kix::manifest::types::CLUSTER_SCOPED;
 
 use super::*;
-
-mod soft_garbage_tests {
-    use super::*;
-    use serde_json::json;
-
-    fn path(hash32: &str, name: &str) -> PathBuf {
-        PathBuf::from(format!("/nix/store/{hash32}-{name}"))
-    }
-
-    #[test]
-    fn only_resources_absent_by_identity_are_garbage() {
-        let record = json!({"kind": lifecycle::RECORD_KIND, "metadata": {"name": "stage1-aaaa"}});
-        let removed = json!({"kind": "ConfigMap", "metadata": {"name": "old", "namespace": "d"}});
-        let changed = json!({"kind": "Deployment", "metadata": {"name": "web", "namespace": "d"}});
-        let old_record_path = path("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "activation");
-        let old_cm_path = path("cccccccccccccccccccccccccccccccc", "configmap");
-        let old_dep_path = path("dddddddddddddddddddddddddddddddd", "deployment");
-        let old = vec![
-            (&old_record_path, &record),
-            (&old_cm_path, &removed),
-            (&old_dep_path, &changed),
-        ];
-        // The new build: a different record hash, the Deployment with new
-        // content (new hash, same name), and no ConfigMap.
-        let new_hashes: HashSet<String> = [
-            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
-            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string(),
-        ]
-        .into();
-        let new_ids: HashSet<String> = ["Deployment/d/web".to_string()].into();
-        let garbage = soft_garbage(old, &new_hashes, &new_ids);
-        assert_eq!(
-            garbage.keys().collect::<Vec<_>>(),
-            vec!["cccccccccccccccccccccccccccccccc"],
-            "the changed Deployment and the rebuilt record are not garbage: {garbage:?}"
-        );
-    }
-}
 
 mod kept_garbage_tests {
     use super::*;
@@ -71,16 +32,127 @@ mod kept_garbage_tests {
             ],
             vec![m("ConfigMap", "old", "h1"), m("Secret", "listed", "h3")],
         ];
-        let new_hashes: HashSet<String> = ["h9".to_string()].into();
-        let new_ids: HashSet<String> = ["Deployment/d/web".to_string()].into();
-        let mut already = HashMap::new();
-        already.insert("h3".to_string(), m("Secret", "listed", "h3"));
+        let active_hashes: HashSet<String> = ["h3".to_string()].into();
+        let active_ids: HashSet<String> = ["Deployment/d/web".to_string()].into();
 
-        let got: Vec<String> = kept_garbage(&kept, &already, &new_hashes, &new_ids)
+        let got: Vec<String> = kept_garbage(&kept, &active_hashes, &active_ids)
             .iter()
             .map(k8s_identity)
             .collect();
         assert_eq!(got, vec!["ConfigMap/d/old"]);
+    }
+
+    /// Verify that after a rollback gc deletes what the build rolled back
+    /// from left behind, and keeps the workload of the restored build.
+    ///
+    /// `web` was renamed to `web2` and deployed (build B), then the cluster
+    /// rolled back to build A without `--prune`. A is Active and lists B under
+    /// `orphansKeptFrom`; the files still make B.
+    #[test]
+    fn after_a_rollback_gc_deletes_the_newer_build_s_leftovers() {
+        let build_a = [
+            m("Deployment", "web", "a-web"),
+            m("Service", "web", "a-svc"),
+        ];
+        let build_b = [
+            m("Deployment", "web2", "b-web2"),
+            m("Service", "web2", "b-svc"),
+        ];
+        let kept = [build_b.to_vec()];
+        let hashes = |b: &[Value]| -> HashSet<String> {
+            b.iter()
+                .filter_map(|m| keys::get(m, keys::IDENTITY_HASH).map(str::to_string))
+                .collect()
+        };
+        let ids = |b: &[Value]| -> HashSet<String> { b.iter().map(k8s_identity).collect() };
+
+        let got: Vec<String> = kept_garbage(&kept, &hashes(&build_a), &ids(&build_a))
+            .iter()
+            .map(k8s_identity)
+            .collect();
+        assert_eq!(got, vec!["Deployment/d/web2", "Service/d/web2"]);
+
+        // The same kept build compared with the build from the files (B)
+        // finds nothing, and the files build is refused below, so `web` is
+        // never planned for deletion.
+        assert!(kept_garbage(&kept, &hashes(&build_b), &ids(&build_b)).is_empty());
+    }
+
+    /// Verify that a full scan's reason names the build this run compared
+    /// with, never a choice of two.
+    #[test]
+    fn the_reason_names_the_build_compared_with() {
+        let label = GarbageReason::HashNotExpected.label("the build of active deployment c-v2");
+        assert_eq!(label, "not in the build of active deployment c-v2");
+    }
+
+    /// Verify that gc uses the build from the current files only when it is
+    /// the build the Active record names.
+    #[test]
+    fn a_files_build_other_than_the_active_build_is_refused() {
+        let active = Record {
+            name: "c-a".into(),
+            identity_hash: Some("aaaaaaaa1111".into()),
+            ..Default::default()
+        };
+        assert!(check_files_build("c", &active, Some("aaaaaaaa1111"), &[]).is_ok());
+
+        let err = check_files_build("c", &active, Some("bbbbbbbb2222"), &[])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Nothing was deleted"), "{err}");
+        assert!(err.contains("c-a (build aaaaaaaa)"), "{err}");
+        assert!(err.contains("build bbbbbbbb"), "{err}");
+        assert!(!err.contains("--only"), "{err}");
+        assert!(check_files_build("c", &active, None, &[]).is_err());
+
+        let unhashed = Record {
+            identity_hash: None,
+            ..active
+        };
+        assert!(check_files_build("c", &unhashed, None, &[]).is_err());
+    }
+
+    /// When a deploy with `--only` left the files' build partly deployed,
+    /// the refusal names that record and what it applied.
+    #[test]
+    fn the_refusal_names_a_partial_deploy_of_the_files_build() {
+        let active = Record {
+            name: "c-a".into(),
+            identity_hash: Some("aaaaaaaa1111".into()),
+            ..Default::default()
+        };
+        let partial: Record = Record::of(
+            &serde_json::from_value(serde_json::json!({
+                "apiVersion": kix::manifest::keys::API_VERSION,
+                "kind": "Activation",
+                "metadata": {
+                    "name": "c-b",
+                    "annotations": { (kix::manifest::keys::IDENTITY_HASH): "bbbbbbbb2222" },
+                },
+                "status": {
+                    "phase": "Partial",
+                    "partial": { "only": ["app/api", "web/shop"], "at": "2026-11-25T10:00:00Z" },
+                },
+            }))
+            .unwrap(),
+        );
+        let err = check_files_build(
+            "c",
+            &active,
+            Some("bbbbbbbb2222"),
+            std::slice::from_ref(&partial),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("Deployment record c-b holds the build from your local files, partly deployed: `kix deploy --only` applied app/api, web/shop. Run `kix deploy c` to deploy the rest of it."),
+            "{err}"
+        );
+        let err = check_files_build("c", &active, Some("cccccccc3333"), &[partial])
+            .unwrap_err()
+            .to_string();
+        assert!(!err.contains("c-b"), "{err}");
     }
 
     /// Verify that `may_clear_kept` permits clearing only when the build hash
@@ -479,6 +551,61 @@ mod hard_scope_tests {
         .unwrap()
     }
 
+    fn record_in(cluster: &str, name: &str, hash: &str, phase: &str) -> DynamicObject {
+        let mut r = record(cluster, hash);
+        r.metadata.name = Some(name.into());
+        r.data["status"]["phase"] = json!(phase);
+        r
+    }
+
+    /// A full scan compares with the current record's build, but an object
+    /// that a failed deploy or a deploy with `--only` wrote carries that
+    /// record's hash, not the current build's. It is kept and listed under
+    /// the record, not deleted, while an object only a Superseded record
+    /// names is still garbage.
+    #[test]
+    fn hard_gc_keeps_what_failed_and_partial_deploys_wrote() {
+        use kix::manifest::lifecycle::{PHASE_FAILED, PHASE_PARTIAL, PHASE_SUPERSEDED};
+        let tenancy = Tenancy::fixture(
+            &[
+                record_in("a", "a-cur", "cur", PHASE_ACTIVE),
+                record_in("a", "a-old", "old", PHASE_SUPERSEDED),
+                record_in("a", "a-failed", "fail", PHASE_FAILED),
+                record_in("a", "a-only", "part", PHASE_PARTIAL),
+            ],
+            "a",
+        );
+        let objects = [
+            live("ConfigMap", "current", Some("h-cur"), "old,cur"),
+            live("ConfigMap", "stale", Some("h-old"), "old"),
+            live("ConfigMap", "from-failed", Some("h-f"), "cur,fail"),
+            live("ConfigMap", "from-only", Some("h-p"), "part"),
+            live("ConfigMap", "both", Some("h-b"), "fail,part"),
+        ];
+        let expected: HashSet<String> = ["h-cur".to_string()].into();
+        let judged = judge_hard(&objects, &expected, &HashSet::new(), &tenancy);
+        assert_eq!(names(&judged.garbage), vec!["stale"]);
+        let held: Vec<(&str, Vec<&str>)> = judged
+            .held
+            .iter()
+            .map(|h| {
+                (
+                    h.rid.name.as_str(),
+                    h.records.iter().map(String::as_str).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            held,
+            vec![
+                ("from-failed", vec!["a-failed"]),
+                ("from-only", vec!["a-only"]),
+                ("both", vec!["a-failed", "a-only"]),
+            ]
+        );
+        assert!(judged.shared.is_empty());
+    }
+
     fn names(entries: &[GarbageEntry]) -> Vec<&str> {
         let mut v: Vec<&str> = entries.iter().map(|g| g.id.name.as_str()).collect();
         v.sort();
@@ -500,11 +627,14 @@ mod hard_scope_tests {
         ]);
         let sweep =
             inventory::scope_sweep(sweep, inventory::SweepScope::Cluster("a"), tenancy.clone());
-        assert_eq!(sweep.foreign.get("b"), Some(&1));
+        assert_eq!(sweep.foreign.objects, 1);
+        assert_eq!(sweep.foreign.clusters, ["b".to_string()].into());
         assert_eq!(sweep.unattributed.len(), 1);
 
         let expected: HashSet<String> = ["h-cur".to_string()].into();
-        let (garbage, shared) = judge_hard(&sweep.managed, &expected, &HashSet::new(), &tenancy);
+        let plan::Judged {
+            garbage, shared, ..
+        } = judge_hard(&sweep.managed, &expected, &HashSet::new(), &tenancy);
         assert_eq!(names(&garbage), vec!["a-stale"]);
         assert_eq!(shared.len(), 1);
         assert_eq!(shared[0].rid.name, "shared");
@@ -512,7 +642,7 @@ mod hard_scope_tests {
 
         let mut with_flag = sweep.managed.clone();
         with_flag.extend(sweep.unattributed);
-        let (garbage, _) = judge_hard(&with_flag, &expected, &HashSet::new(), &tenancy);
+        let garbage = judge_hard(&with_flag, &expected, &HashSet::new(), &tenancy).garbage;
         assert_eq!(names(&garbage), vec!["a-stale", "leftover"]);
     }
 
@@ -553,30 +683,141 @@ mod hard_scope_tests {
         let scoped = sweep();
         assert_eq!(scoped.copies.len(), 1);
         let judged = judged_objects(scoped, false, false);
-        let (garbage, _) = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
+        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
         assert!(garbage.is_empty());
 
         let judged = judged_objects(sweep(), false, true);
-        let (garbage, _) = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
+        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
         assert_eq!(names(&garbage), vec!["web-x-guest"]);
     }
 
-    /// Verify that on a single-cluster target, objects referencing only retired
-    /// Activation records are judged as garbage without extra flags.
+    /// An operator's Event carries Kix's labels but no Kix annotation and no
+    /// `kix` field-manager entry. `--include copies` alone judges it, while an
+    /// object Kix wrote without a hash still waits for `--include unstamped`.
     #[test]
-    fn hard_gc_on_a_single_cluster_is_unchanged() {
+    fn include_copies_judges_a_copy_without_a_hash() {
         let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");
-        let sweep = inventory::partition_sweep(vec![
-            live("ConfigMap", "a-current", Some("h-cur"), "a2"),
-            live("ConfigMap", "leftover", Some("h-left"), "retired"),
+        let mut event = live("Event", "db.1a2b", None, "");
+        event.metadata.managed_fields = Some(vec![
+            k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry {
+                manager: Some("stackgres-operator".into()),
+                operation: Some("Update".into()),
+                ..Default::default()
+            },
         ]);
-        let sweep =
-            inventory::scope_sweep(sweep, inventory::SweepScope::Cluster("a"), tenancy.clone());
-        assert!(sweep.unattributed.is_empty());
+        let sweep = inventory::scope_sweep(
+            inventory::partition_sweep(vec![
+                live("ConfigMap", "a-current", Some("h-cur"), "a2"),
+                event,
+                live("ConfigMap", "unannotated", None, ""),
+            ]),
+            inventory::SweepScope::Cluster("a"),
+            tenancy.clone(),
+        );
+        let object_names = |objs: &[DynamicObject]| -> Vec<String> {
+            objs.iter()
+                .filter_map(|o| o.metadata.name.clone())
+                .collect()
+        };
+        assert_eq!(object_names(&sweep.copies), ["db.1a2b"]);
+        assert_eq!(object_names(&sweep.unattributed), ["unannotated"]);
+        let copies: HashSet<ResourceId> = sweep
+            .copies
+            .iter()
+            .map(kix::cluster::drift::resource_id)
+            .collect();
         let expected: HashSet<String> = ["h-cur".to_string()].into();
-        let (garbage, shared) = judge_hard(&sweep.managed, &expected, &HashSet::new(), &tenancy);
-        assert_eq!(names(&garbage), vec!["leftover"]);
+        let judged = judged_objects(sweep, true, true);
+        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
+
+        let (held, rest) = hold_back_unstamped(garbage, &copies, false);
+        assert_eq!(names(&rest), vec!["db.1a2b"]);
+        assert_eq!(names(&held), vec!["unannotated"]);
+
+        let judged = judged_objects(
+            inventory::scope_sweep(
+                inventory::partition_sweep(vec![live("ConfigMap", "unannotated", None, "")]),
+                inventory::SweepScope::Cluster("a"),
+                tenancy.clone(),
+            ),
+            true,
+            true,
+        );
+        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
+        let (held, rest) = hold_back_unstamped(garbage, &copies, true);
+        assert!(held.is_empty());
+        assert_eq!(names(&rest), vec!["unannotated"]);
+    }
+
+    /// Verify that hard GC does not delete another Kix cluster's objects
+    /// after that cluster's records are gone. They name no record, so they are
+    /// judged only with `--include unattributed`, like a leftover of this
+    /// cluster whose records were retired.
+    #[test]
+    fn hard_gc_judges_objects_without_a_record_only_with_the_flag() {
+        let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");
+        let sweep = || {
+            inventory::scope_sweep(
+                inventory::partition_sweep(vec![
+                    live("ConfigMap", "a-current", Some("h-cur"), "a2"),
+                    live("Service", "b-web", Some("h-b"), "b1"),
+                    live("ConfigMap", "leftover", Some("h-left"), "retired"),
+                ]),
+                inventory::SweepScope::Cluster("a"),
+                tenancy.clone(),
+            )
+        };
+        let expected: HashSet<String> = ["h-cur".to_string()].into();
+
+        let scoped = sweep();
+        assert_eq!(scoped.unattributed.len(), 2);
+        let judged = judged_objects(scoped, false, false);
+        let plan::Judged {
+            garbage, shared, ..
+        } = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
+        assert!(garbage.is_empty());
         assert!(shared.is_empty());
+
+        let judged = judged_objects(sweep(), true, false);
+        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
+        assert_eq!(names(&garbage), vec!["b-web", "leftover"]);
+    }
+
+    /// Verify that a full scan lists a package instance record under the
+    /// instance its spec names, like the objects of that instance, even
+    /// though the build stamps every record `kix.run/package: _cluster`.
+    #[test]
+    fn a_package_instance_record_is_listed_under_its_instance() {
+        let stamped = |kind: &str, pkg: &str, pkg_ns: &str| -> DynamicObject {
+            let mut obj = live(kind, "web2", Some("h-old"), "");
+            let anns = obj.metadata.annotations.get_or_insert_default();
+            anns.insert(keys::PACKAGE.into(), pkg.into());
+            anns.insert(keys::PACKAGE_NAMESPACE.into(), pkg_ns.into());
+            obj
+        };
+        let mut record = stamped("PackageInstance", "_cluster", "_cluster");
+        record.data["spec"] = json!({ "instanceName": "web2", "namespaceName": "baseline" });
+        let deployment = stamped("Deployment", "web2", "baseline");
+        let tenancy = kix::cluster::tenancy::Tenancy::fixture(&[], "a");
+
+        let garbage = judge_hard(
+            &[record, deployment],
+            &HashSet::new(),
+            &HashSet::new(),
+            &tenancy,
+        )
+        .garbage;
+        let packages: Vec<(Option<&str>, Option<&str>)> = garbage
+            .iter()
+            .map(|g| (g.package_namespace.as_deref(), g.package.as_deref()))
+            .collect();
+        assert_eq!(
+            packages,
+            vec![
+                (Some("baseline"), Some("web2")),
+                (Some("baseline"), Some("web2"))
+            ]
+        );
     }
 }
 
@@ -651,107 +892,5 @@ mod live_order_tests {
             ResourceId::from_value(&stub),
             ResourceId::new("", "Secret", "app", "s")
         );
-    }
-}
-
-/// Default mode and `--full-scan` call `files::refuse_other_build` before
-/// they list or delete anything, and before `--dry-run` decides what to
-/// print, so the same check covers all three.
-mod other_build_tests {
-    use super::super::files::refuse_other_build;
-    use kix::cluster::activation::Records;
-    use kix::cluster::fake_api::FakeApi;
-    use kix::manifest::keys;
-    use serde_json::{Value, json};
-
-    fn record(name: &str, hash: &str, status: Value) -> Value {
-        json!({
-            "apiVersion": keys::API_VERSION,
-            "kind": "Activation",
-            "metadata": {
-                "name": name,
-                "labels": {
-                    "app.kubernetes.io/managed-by": "kix",
-                    (keys::CLUSTER_LABEL): "lab",
-                },
-                "annotations": { (keys::IDENTITY_HASH): hash },
-            },
-            "status": status,
-        })
-    }
-
-    async fn check(api: &FakeApi, files: Option<&str>) -> Result<(), String> {
-        let client = api.client();
-        let discovery = kix::cluster::discovery::discover_resources(&client)
-            .await
-            .unwrap();
-        let opened = Records::open(&client, &discovery).unwrap();
-        refuse_other_build(opened.records(), "lab", files)
-            .await
-            .map_err(|e| e.to_string())
-    }
-
-    const RUNS: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const FILES: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-
-    /// Files that make another build than the current record's are refused,
-    /// naming both builds and the next steps.
-    #[tokio::test]
-    async fn files_of_another_build_are_refused() {
-        let api = FakeApi::new([record("lab-old", RUNS, json!({ "phase": "Active" }))]);
-        let err = check(&api, Some(FILES)).await.unwrap_err();
-        assert!(err.starts_with("[K6276] "), "{err}");
-        assert!(
-            err.contains("Nothing was deleted and no deployment record was retired."),
-            "{err}"
-        );
-        assert!(
-            err.contains("deployment record lab-old (build aaaaaaaaaaaa)"),
-            "{err}"
-        );
-        assert!(
-            err.contains("The files make:    build bbbbbbbbbbbb"),
-            "{err}"
-        );
-        assert!(
-            err.contains("`kix deploy lab`, then run `kix gc lab`"),
-            "{err}"
-        );
-        assert!(err.contains("`kix deploy lab --prune`"), "{err}");
-        assert!(
-            err.contains("Check out the commit the cluster runs"),
-            "{err}"
-        );
-        assert!(!err.contains("partly deployed"), "{err}");
-    }
-
-    /// A record `kix deploy --only` left partly deployed with the files'
-    /// build is named, with the command that applies the rest.
-    #[tokio::test]
-    async fn a_partly_deployed_build_of_the_files_is_named() {
-        let api = FakeApi::new([
-            record("lab-old", RUNS, json!({ "phase": "Active" })),
-            record(
-                "lab-new",
-                FILES,
-                json!({ "phase": "Partial", "partial": { "only": ["lab/mid"], "at": "2026-11-25T10:00:00Z" } }),
-            ),
-        ]);
-        let err = check(&api, Some(FILES)).await.unwrap_err();
-        assert!(
-            err.contains("Deployment record lab-new holds the files' build partly deployed: `kix deploy --only` applied lab/mid. `kix deploy lab` applies the rest of it."),
-            "{err}"
-        );
-    }
-
-    /// Files that make the current build pass, so gc deletes what earlier
-    /// deploys kept. A cluster with no current record passes too: the
-    /// default mode stops on it by itself.
-    #[tokio::test]
-    async fn the_running_build_and_no_record_pass() {
-        let api = FakeApi::new([record("lab-old", RUNS, json!({ "phase": "Active" }))]);
-        assert_eq!(check(&api, Some(RUNS)).await, Ok(()));
-        let empty = FakeApi::new([]);
-        assert_eq!(check(&empty, Some(FILES)).await, Ok(()));
     }
 }

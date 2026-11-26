@@ -73,6 +73,11 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
         .as_ref()
         .map_or_else(|| flags_of(&args.plan), |s| s.flags.clone());
     let Some(mut p) = prepare(&args.plan, flags, ctx)? else {
+        // The build is empty, so Kix never connects and the log has no
+        // `kubernetes` line.
+        if args.log_format == LogFormat::Json {
+            super::deploy_log::JsonObserver::new().nothing_to_apply(0);
+        }
         return Ok(Exit::Success);
     };
     // A cluster that has never run a required stop must deploy it first,
@@ -127,11 +132,17 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     // A plan made from the local cache (`--offline`) has not read its Jobs,
     // so it decides once the run connects.
     if let Some(connected) = &p.connected
-        && !ctx
-            .runtime()?
-            .block_on(start(&connected.client, &p.checked, &connected.last_runs))
+        && let Some(unchanged) =
+            ctx.runtime()?
+                .block_on(start(&connected.client, &p.checked, &connected.last_runs))
     {
-        say_nothing_to_apply(&p.checked, active_hash.as_deref());
+        say_nothing_to_apply(
+            &p.checked,
+            unchanged,
+            active_hash.as_deref(),
+            args.log_format,
+            &connected.connection,
+        );
         return Ok(Exit::Success);
     }
 
@@ -363,31 +374,35 @@ pub(crate) fn run_planned(
     Ok(end)
 }
 
-/// Decide whether a deploy or a rollback of `checked` starts its run, and
-/// return true when it does ([`CheckedPlan::start`]). With nothing to do,
-/// say how many failed deploy records were marked Superseded; the caller
-/// says that nothing was applied. When only Jobs remain, say why the run
-/// still starts.
+/// Decide whether a deploy or a rollback of `checked` starts its run
+/// ([`CheckedPlan::start`]). Return `None` when it does, or the number of
+/// unchanged objects when there is nothing to do. With nothing to do, say
+/// how many failed deploy records were marked Superseded; the caller says
+/// that nothing was applied. When only Jobs remain, say why the run still
+/// starts.
 pub(crate) async fn start(
     client: &kube::Client,
     checked: &CheckedPlan,
     last_runs: &LastRuns,
-) -> bool {
+) -> Option<usize> {
     match checked.start(client, last_runs).await {
-        Start::Nothing { superseded } => {
+        Start::Nothing {
+            superseded,
+            unchanged,
+        } => {
             if superseded > 0 {
                 crate::say!(
                     "  {} Marked {superseded} earlier failed deployment record(s) Superseded (nothing left to change).",
                     output::dim("="),
                 );
             }
-            false
+            Some(unchanged)
         }
         Start::Run => {
             if checked.work(last_runs) == Work::JobsOnly {
                 say_failed_jobs(last_runs);
             }
-            true
+            None
         }
     }
 }
@@ -627,16 +642,30 @@ pub(super) fn refuse_namespaceless(
     ))
 }
 
-/// Say that the deploy has nothing to apply, and whether its build is the
-/// one the record `active_hash` names.
-fn say_nothing_to_apply(checked: &CheckedPlan, active_hash: Option<&str>) {
+/// Say that the deploy has nothing to apply, how many objects are
+/// unchanged, and whether its build is the one the record `active_hash`
+/// names. Under `--log-format json` the log still names the Kubernetes
+/// cluster and ends with a summary line, so a program reading it can tell
+/// this run from one that died before it printed anything.
+fn say_nothing_to_apply(
+    checked: &CheckedPlan,
+    unchanged: usize,
+    active_hash: Option<&str>,
+    log_format: LogFormat,
+    connection: &binding::Connection,
+) {
+    if log_format == LogFormat::Json {
+        let json = super::deploy_log::JsonObserver::new();
+        json.kubernetes(connection);
+        json.nothing_to_apply(unchanged);
+    }
     match (checked.activation_identity_hash(), active_hash) {
         (Some(new), Some(old)) if new == old => crate::say!(
-            "{} activation identical to active ({}...). Nothing to apply.",
+            "{} This build ({}...) matches the active deployment. Nothing to apply ({unchanged} unchanged).",
             output::dim("="),
             &new[..8.min(new.len())],
         ),
-        _ => crate::say!("Nothing to apply."),
+        _ => crate::say!("Nothing to apply ({unchanged} unchanged)."),
     }
 }
 
@@ -717,13 +746,12 @@ async fn run_deploy_async(
     // Reuse the pre-confirm client, which the plan ran the target checks
     // through and read the Jobs with, or connect now, run the checks, filter
     // orphans shared with other Kix clusters, and read the Jobs.
-    let (client, offline_runs) = match connected {
-        Some(c) => (c.client, None),
+    let (client, connection, offline_runs) = match connected {
+        Some(c) => (c.client, c.connection, None),
         None => {
-            let client = client::make_client(global.context.as_deref())
+            let (client, connection) = client::connect(global.context.as_deref())
                 .await
                 .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
-            let connection = binding::Connection::of_context(global.context.as_deref());
             checked
                 .target_checks()
                 .run(&client, &connection)
@@ -742,7 +770,7 @@ async fn run_deploy_async(
                 .await
                 .map_err(|e| miette!("{e}"))?;
             plan::print_reruns(checked.plan(), &[RerunReason::LastRunFailed]);
-            (client, Some(last_runs))
+            (client, connection, Some(last_runs))
         }
     };
 
@@ -760,8 +788,7 @@ async fn run_deploy_async(
         .into_records();
 
     if let Some(hash) = cached_baseline {
-        let context = binding::Connection::of_context(global.context.as_deref());
-        let context = match &context {
+        let context = match &connection {
             binding::Connection::Context { name, .. } => name.as_deref(),
             binding::Connection::InCluster => None,
         };
@@ -782,9 +809,15 @@ async fn run_deploy_async(
     // it has anything to do: it had not read its Jobs, and orphans another
     // Kix cluster deploys were still in its prune.
     if let Some(last_runs) = &offline_runs
-        && !start(target.client(), &checked, last_runs).await
+        && let Some(unchanged) = start(target.client(), &checked, last_runs).await
     {
-        say_nothing_to_apply(&checked, cached_baseline);
+        say_nothing_to_apply(
+            &checked,
+            unchanged,
+            cached_baseline,
+            options.log_format,
+            &connection,
+        );
         return Ok(RunEnd {
             succeeded: true,
             current: false,
@@ -831,6 +864,9 @@ async fn run_deploy_async(
     // summary line.
     let json_log = (tui_driver.is_none() && options.log_format == LogFormat::Json)
         .then(|| Arc::new(super::deploy_log::JsonObserver::new()));
+    if let Some(json) = &json_log {
+        json.kubernetes(&connection);
+    }
     let observer: Arc<dyn DeployObserver> = match (&tui_driver, &json_log) {
         (Some(d), _) => d.observer(),
         (None, Some(json)) => json.clone(),
@@ -839,10 +875,12 @@ async fn run_deploy_async(
         {
             Arc::new(StreamCliObserver {
                 verbose: global.verbose > 0,
+                cluster: cluster_name.to_string(),
             })
         }
         (None, None) => Arc::new(super::deploy_log::LineObserver {
             verbose: global.verbose > 0,
+            cluster: cluster_name.to_string(),
         }),
     };
 
@@ -851,6 +889,12 @@ async fn run_deploy_async(
     let needed = checked.needed().to_vec();
     let applied = checked.applied_instances();
     let left_alone = checked.left_alone();
+    // What the prune will delete, read before the run takes the plan, so the
+    // summary can say which objects of a kind that left the build it left.
+    let leaving = (checked.flags().prune == PrunePolicy::Delete)
+        .then(|| (checked.kinds_leaving(), checked.orphans().to_vec()))
+        .filter(|(kinds, _)| !kinds.is_empty());
+    let left_client = target.client().clone();
     let (result, end) = run_plan(checked, target, receipt, config, observer, cluster_name).await;
 
     // Drop the TUI before printing the summary so it lands in normal scrollback.
@@ -860,8 +904,25 @@ async fn run_deploy_async(
         Ok(r) => r,
         Err(e) => e.partial(),
     };
+    let left: Vec<(String, kix::plan::document::LeftBehind)> = match leaving {
+        Some((kinds, orphans)) => {
+            let deleting = orphans.into_iter().collect();
+            let mut found = super::plan::left_behind(&left_client, &kinds, &deleting).await;
+            kinds
+                .iter()
+                .filter_map(|(declarer, _)| Some((declarer.display_id(), found.remove(declarer)?)))
+                .collect()
+        }
+        None => Vec::new(),
+    };
     match &json_log {
-        Some(json) => json.summary(counts, false, end.succeeded, &applied),
+        Some(json) => json.summary(
+            counts,
+            false,
+            end.succeeded,
+            &applied,
+            left.iter().map(|(_, l)| l.clone()).collect(),
+        ),
         None if end.succeeded && !only.is_empty() => {
             println!();
             println!(
@@ -901,6 +962,12 @@ async fn run_deploy_async(
             println!();
             println!("{}", observer::closing(counts, &closing));
         }
+    }
+    if json_log.is_none()
+        && let Some(text) = plan::render::left_behind_after_prune(&left)
+    {
+        println!();
+        print!("{text}");
     }
     // The event stream already reports failed nodes and cancellation.
     if let Err(e) = &result
@@ -1152,11 +1219,10 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let source_path = result_path.display().to_string();
 
     let reconciled = ctx.runtime()?.block_on(async {
-        let (client, records) =
+        let (client, records, connection) =
             super::operator::connect_and_verify(global.context.as_deref()).await?;
         super::operator::require_requests(&client).await?;
         if let Some(checks) = &target_checks {
-            let connection = binding::Connection::of_context(global.context.as_deref());
             checks
                 .run(&client, &connection)
                 .await

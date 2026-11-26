@@ -29,8 +29,8 @@ use kix::eval::store_graph::StoreGraph;
 use kix::manifest::lifecycle;
 use kix::manifest::types::ResourceId;
 use kix::plan::document::{
-    AdmissionRefusal, Build, Checked, Conflict, ConflictOwner, DeployedBuild, Detail, MadeBy,
-    NotCheckedReason, ObjectWrite, Plan, PlanFlags, PruneController, PruneControllerState,
+    AdmissionRefusal, Build, Checked, Conflict, ConflictOwner, DeployedBuild, Detail, LeftBehind,
+    MadeBy, NotCheckedReason, ObjectWrite, Plan, PlanFlags, PruneController, PruneControllerState,
     PruneEntry, PruneFate, RefusalReason, UncheckedObject, UncheckedReason,
 };
 use kix::plan::server::comparable;
@@ -234,6 +234,50 @@ pub(crate) struct DryRunReport {
     pub cancelled: HashMap<ResourceId, Option<ResourceId>>,
     /// The APIs the apiserver serves, as discovery lists them.
     pub served: Vec<(kube::discovery::ApiResource, kube::discovery::Scope)>,
+    /// For each orphan that declares a kind no object of the new build
+    /// declares, the objects of that kind the prune leaves on the cluster.
+    pub left_behind: HashMap<ResourceId, LeftBehind>,
+}
+
+/// Return, for each orphan that declares a kind no object of the new build
+/// declares, the objects of that kind that the prune leaves on the cluster.
+/// Only a prune that deletes removes the controller that handles them, so a
+/// plan with another prune policy lists none.
+async fn left_behind_of(
+    checked: &CheckedPlan,
+    client: &kube::Client,
+) -> HashMap<ResourceId, LeftBehind> {
+    if checked.flags().prune != PrunePolicy::Delete {
+        return HashMap::new();
+    }
+    let deleting: HashSet<ResourceId> = checked.orphans().iter().cloned().collect();
+    left_behind(client, &checked.kinds_leaving(), &deleting).await
+}
+
+/// Return, for each `(declarer, crd)` of `leaving`, the objects of the kind
+/// `crd` defines that stay on the cluster when a prune deletes `deleting`
+/// ([`kix::cluster::left_behind::left_behind`]). A kind Kix cannot list is
+/// left out, with a warning.
+pub(crate) async fn left_behind(
+    client: &kube::Client,
+    leaving: &[(ResourceId, String)],
+    deleting: &HashSet<ResourceId>,
+) -> HashMap<ResourceId, LeftBehind> {
+    let mut listed = Vec::new();
+    for (_, crd) in leaving {
+        match kix::cluster::left_behind::list(client, crd).await {
+            Ok(Some(kind)) => listed.push(kind),
+            Ok(None) => {}
+            Err(e) => eprintln!(
+                "warning: could not check CustomResourceDefinition {crd} for custom resources left on the cluster: {e}\n  Kix skipped this check and continued, so the plan will not warn if custom resources for {crd} remain after `--prune`.\n  Grant this account `get` permission on CustomResourceDefinition {crd} and cluster-wide `list` permission on its custom resources (or fix the error above), then run the command again."
+            ),
+        }
+    }
+    let mut by_crd = kix::cluster::left_behind::left_behind(&listed, deleting);
+    leaving
+        .iter()
+        .filter_map(|(declarer, crd)| Some((declarer.clone(), by_crd.remove(crd)?)))
+        .collect()
 }
 
 /// Run the deploy's engine plan with every write sent as a dry run
@@ -267,6 +311,7 @@ pub(crate) async fn dry_run_of(
     sops: SopsSources,
     names_flags: bool,
 ) -> Result<DryRunReport> {
+    let left_behind = left_behind_of(checked, &client).await;
     let target = Target::connect(client, sops)
         .await
         .map_err(|e| miette!("{e}"))?;
@@ -322,6 +367,7 @@ pub(crate) async fn dry_run_of(
         failed,
         cancelled: seen.cancelled,
         served,
+        left_behind,
     })
 }
 
@@ -485,6 +531,7 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
         NotCheckedReason::BuildsOnly,
     );
     doc.warnings = p.build.warnings().to_vec();
+    doc.kubernetes = p.connected.as_ref().map(|c| (&c.connection).into());
     doc.deployed = p.baseline.active().map(|a| DeployedBuild {
         activation: a.name.clone(),
         identity_hash: a.identity_hash.clone(),
@@ -632,7 +679,8 @@ pub(crate) fn fill_checks(
     doc.being_deleted = kix::plan::server::being_deleted(answers, |rid| {
         build.iter().find(|m| ResourceId::from_value(m) == *rid)
     });
-    doc.prune = Checked::found(prune_entries(checked, &prune_answers));
+    let left_behind = report.map(|r| &r.left_behind);
+    doc.prune = Checked::found(prune_entries(checked, &prune_answers, left_behind));
 }
 
 /// Return the reason the plan document gives for a refused write, and the
@@ -665,13 +713,14 @@ pub(crate) fn admission_reason(refusal: &Refusal) -> (RefusalReason, Option<Stri
 fn prune_entries(
     checked: &CheckedPlan,
     answers: &HashMap<ResourceId, PruneAnswer>,
+    left_behind: Option<&HashMap<ResourceId, LeftBehind>>,
 ) -> Vec<PruneEntry> {
-    let policy = checked.flags().prune;
-    let mut entries: Vec<PruneEntry> = checked
-        .orphans()
-        .iter()
-        .map(|rid| prune_entry(rid, policy, answers.get(rid)))
-        .collect();
+    let mut entries = orphan_entries(
+        checked.orphans(),
+        checked.flags().prune,
+        answers,
+        left_behind,
+    );
     entries.extend(checked.shared_orphans().iter().map(|s| {
         PruneEntry::new(
             s.rid.display_id(),
@@ -681,6 +730,25 @@ fn prune_entries(
     }));
     entries.sort_by(|a, b| a.resource.cmp(&b.resource));
     entries
+}
+
+/// Return the [`PruneEntry`] of each of `orphans` under prune policy
+/// `policy`, with the dry run's `answers` and the objects `left_behind` that
+/// each orphan's kind leaves on the cluster.
+fn orphan_entries(
+    orphans: &[ResourceId],
+    policy: PrunePolicy,
+    answers: &HashMap<ResourceId, PruneAnswer>,
+    left_behind: Option<&HashMap<ResourceId, LeftBehind>>,
+) -> Vec<PruneEntry> {
+    orphans
+        .iter()
+        .map(|rid| {
+            let mut entry = prune_entry(rid, policy, answers.get(rid));
+            entry.left_behind = left_behind.and_then(|l| l.get(rid)).cloned();
+            entry
+        })
+        .collect()
 }
 
 /// Return what a deploy with prune policy `policy` does with orphan `rid`,
@@ -756,12 +824,10 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
         p.client().is_some(),
         &p.build.graph().cluster_name,
     );
-    // Shared orphans are listed with the prune section of `render::render_text`.
-    plan::print_checked(&p.checked, &fate, verbose);
 
-    // Where the extra work in this plan came from. Without this the reader
-    // sees a deploy of an unchanged config proposing changes, and has no way
-    // to tell why.
+    // Say where the extra work in this plan came from before the changes and
+    // orphans it explains. Without this the reader sees a deploy of an
+    // unchanged config proposing changes, and has no way to tell why.
     let failed = p.baseline.failed();
     if !failed.is_empty() {
         let (partial, stopped): (Vec<&str>, Vec<&str>) = failed
@@ -782,6 +848,9 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
             failed.consumed.join(", "),
         );
     }
+
+    // Shared orphans are listed with the prune section of `render::render_text`.
+    plan::print_checked(&p.checked, &fate, verbose);
 
     output::progress_text(&render::render_text(doc));
 }
@@ -817,6 +886,73 @@ fn markdown(p: &Planned, doc: &Plan) -> String {
 mod tests {
     use super::*;
     use kix::cluster::preview::DeleteWait;
+
+    /// What a deploy prints before it asks to go on (`deploy::preview`,
+    /// then `deploy::confirm`) is the text of the plan document, and the
+    /// document's prune entries carry what the dry run found a prune leaves
+    /// behind, so the warning comes before the prompt.
+    #[test]
+    fn the_plan_before_the_prompt_names_objects_left_behind() {
+        let crd = ResourceId::new(
+            "apiextensions.k8s.io",
+            "CustomResourceDefinition",
+            kix::manifest::types::CLUSTER_SCOPED,
+            "challenges.acme.cert-manager.io",
+        );
+        let left = LeftBehind {
+            kind: "Challenge.acme.cert-manager.io".into(),
+            count: 1,
+            with_finalizers: 1,
+            objects: vec![kix::plan::document::LeftObject {
+                resource: "Challenge.acme.cert-manager.io/c@app".into(),
+                finalizers: vec!["acme.cert-manager.io/finalizer".into()],
+            }],
+        };
+        let found = HashMap::from([(crd.clone(), left)]);
+        let entries = orphan_entries(
+            std::slice::from_ref(&crd),
+            PrunePolicy::Delete,
+            &HashMap::new(),
+            Some(&found),
+        );
+        let graph = kix::eval::store_graph::StoreGraph::empty("c");
+        let mut doc = Plan::new(
+            crate::plan::kix_build(),
+            MadeBy::DryRun,
+            "c",
+            Build::of(&graph),
+            &kix::plan::diff_graphs(&graph, &graph),
+            Detail::Plain,
+            &[],
+            NotCheckedReason::ReadOnly,
+        );
+        doc.flags = Some(PlanFlags {
+            prune: PrunePolicy::Delete,
+            reconcile: false,
+            force_conflicts: false,
+            accept_migrations: false,
+            only: Vec::new(),
+        });
+        doc.prune = Checked::found(entries);
+        let text = plan::render::render_text(&doc);
+        assert!(
+            text.contains("this prune leaves 1 Challenge.acme.cert-manager.io object"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "Challenge.acme.cert-manager.io/c@app (finalizers: acme.cert-manager.io/finalizer)"
+            ),
+            "{text}"
+        );
+        let none = orphan_entries(
+            std::slice::from_ref(&crd),
+            PrunePolicy::Delete,
+            &HashMap::new(),
+            None,
+        );
+        assert!(none[0].left_behind.is_none());
+    }
 
     /// A delete's entry carries what the dry run found it will wait for. An
     /// orphan that the deploy keeps carries none of it.

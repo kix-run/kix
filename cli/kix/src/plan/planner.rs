@@ -31,12 +31,14 @@
 //! which plans from a sweep of the live objects it makes itself without
 //! holding the plan to a package diff.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use kube::client::Client;
 use kube::discovery::{ApiResource, Scope};
 use serde_json::Value;
+
+use crate::manifest::kinds::{self, GroupKind};
 
 use super::baseline::Baseline;
 use super::document::{DriftChange, LeftAlone, Objects, PlanFlags, WriteChange};
@@ -56,6 +58,7 @@ use crate::cluster::graph::DeleteOrder;
 use crate::cluster::graph::ResourceGraph;
 use crate::cluster::inventory;
 use crate::cluster::inventory::SharedOrphan;
+use crate::cluster::inventory::{Live, LiveObjects};
 use crate::cluster::kubernetes_version;
 use crate::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use crate::cluster::ops::ResourceIo;
@@ -185,9 +188,11 @@ pub enum Work {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Start {
     /// No run starts. `superseded` counts the failed records the plan
-    /// folded in that are now marked Superseded.
+    /// folded in that are now marked Superseded. `unchanged` counts the
+    /// plan's nodes, which a run would have reported unchanged.
     Nothing {
         superseded: usize,
+        unchanged: usize,
     },
     Run,
 }
@@ -331,9 +336,39 @@ impl CheckedPlan {
         &self.shared_orphans
     }
 
+    /// Return each CustomResourceDefinition that the build no longer
+    /// declares, by name, with the orphan that declared it: the definition
+    /// itself, or else a reference to it (`scope.mkCRDRef`). A definition
+    /// that an object staying in the build, or an object the new build adds,
+    /// still declares is not listed.
+    pub fn kinds_leaving(&self) -> Vec<(ResourceId, String)> {
+        let added = self.plan.nodes().iter().filter_map(|n| n.action.written());
+        kinds_leaving(&self.old_manifests, &self.orphans, added)
+    }
+
     /// Return the package-grouped comparison of the old side with the new build.
     pub fn pkg_diff(&self) -> &PackageDiff {
         &self.pkg_diff
+    }
+
+    /// Mark as modified each write of an unchanged file that the package
+    /// diff now lists as changed. A dry run finds such a change when the
+    /// live object differs from the build, as after a stopped deploy, so the
+    /// write changes the object and the objects list says what the package
+    /// view says.
+    fn relabel_reverted_writes(&mut self) {
+        let changed: HashSet<&ResourceId> = self
+            .pkg_diff
+            .changed
+            .iter()
+            .chain(&self.pkg_diff.cluster_level)
+            .flat_map(|c| c.resource_diffs.iter().map(|(id, _)| id))
+            .collect();
+        for write in &mut self.objects.writes {
+            if write.change == WriteChange::Reapplied && changed.contains(&write.resource_id()) {
+                write.change = WriteChange::Modified;
+            }
+        }
     }
 
     /// Return every object the plan writes and the prune deletes; see
@@ -398,6 +433,7 @@ impl CheckedPlan {
         match self.work(last_runs) {
             Work::Nothing => Start::Nothing {
                 superseded: supersede(client, &self.consumed_failed).await,
+                unchanged: self.plan.nodes().len(),
             },
             Work::JobsOnly | Work::Changes => Start::Run,
         }
@@ -417,9 +453,22 @@ impl CheckedPlan {
         } else {
             LastRuns::Read { failed: Vec::new() }
         };
-        // A Job whose failed last run makes it run again is now a certain
-        // write. The digest leaves out how a write is shown, so it stays the
-        // same.
+        self.count_reruns();
+        Ok(last_runs)
+    }
+
+    /// Read the last runs of the plan's Jobs in `live`, the objects a plan
+    /// made while connected listed.
+    fn last_runs_from(&mut self, live: &LiveObjects) -> LastRuns {
+        let last_runs = self.plan.last_runs_from(live);
+        self.count_reruns();
+        last_runs
+    }
+
+    /// Count as a certain write each Job that its failed last run makes run
+    /// again. The digest leaves out how a write is shown, so it stays the
+    /// same.
+    fn count_reruns(&mut self) {
         let recreated: HashSet<&ResourceId> = self
             .plan
             .nodes()
@@ -435,7 +484,6 @@ impl CheckedPlan {
                 w.change = WriteChange::Reapplied;
             }
         }
-        Ok(last_runs)
     }
 
     /// Return the failed Activation records whose leftovers the plan folded
@@ -592,6 +640,8 @@ pub struct Planned {
 /// What a plan made while connected to the cluster read there.
 pub struct Connected {
     pub client: Client,
+    /// Which Kubernetes cluster `client` talks to, as the kubeconfig names it.
+    pub connection: binding::Connection,
     pub last_runs: LastRuns,
 }
 
@@ -718,6 +768,7 @@ impl Planned {
             folded,
         }
         .apply(&mut self.checked.pkg_diff, answers);
+        self.checked.relabel_reverted_writes();
         known.then_some(Differences {
             drift: found.drift,
             earlier: found.earlier,
@@ -758,26 +809,53 @@ impl<'a> Planner<'a> {
         let client = match old {
             OldSide::LocalCache => None,
             OldSide::Cluster { context, policy } => {
-                (self.report)(PlanEvent::Connecting);
+                let connection = binding::Connection::of_context(context.as_deref());
+                (self.report)(PlanEvent::Connecting(&connection));
                 let client = client::make_client(context.as_deref(), policy.clone())
                     .await
                     .map_err(|e| PlanError::Connect(Box::new(e)))?;
-                let connection = binding::Connection::of_context(context.as_deref());
                 TargetChecks::of(new_graph)
                     .run(&client, &connection)
                     .await?;
-                Some(client)
+                Some((client, connection))
             }
         };
         let baseline = match &client {
-            Some(client) => Baseline::of_cluster(client, &build, self.report).await?,
+            Some((client, connection)) => {
+                let baseline = Baseline::of_cluster(client, &build, self.report).await?;
+                self.note_unbound(client, connection, new_graph, &baseline)
+                    .await;
+                baseline
+            }
             None => Baseline::of_cache(&new_graph.cluster_name, self.report),
         };
         self.planned(build, baseline, client).await
     }
 
+    /// Report [`PlanEvent::Unbound`] on the first deploy of a build whose
+    /// definition names no Kubernetes cluster. A cluster with an Active
+    /// record was deployed here before, so the note would only repeat.
+    async fn note_unbound(
+        &self,
+        client: &Client,
+        connection: &binding::Connection,
+        graph: &StoreGraph,
+        baseline: &Baseline,
+    ) {
+        if graph.kubernetes_uid.is_some() || baseline.active().is_some() {
+            return;
+        }
+        let uid = binding::live_uid(client).await.ok();
+        (self.report)(PlanEvent::Unbound {
+            cluster: &graph.cluster_name,
+            connection,
+            uid: uid.as_deref(),
+        });
+    }
+
     /// Plan a rollback of Kix cluster `cluster` from its current record
-    /// `current` to `build`, the build of an earlier record, through `client`.
+    /// `current` to `build`, the build of an earlier record, through `client`,
+    /// which talks to the Kubernetes cluster of `connection`.
     /// The baseline is [`Baseline::of_record`]. The rollback command makes
     /// its own target checks before this, because a rollback must not be
     /// refused for a Kubernetes upgrade during an incident.
@@ -787,23 +865,27 @@ impl<'a> Planner<'a> {
         records: &Records,
         current: &Record,
         client: Client,
+        connection: binding::Connection,
     ) -> Result<Planned, PlanError> {
         let cluster = build.graph().cluster_name.clone();
         let baseline = Baseline::of_record(records, &cluster, current, self.report).await;
-        self.planned(build, baseline, Some(client)).await
+        self.planned(build, baseline, Some((client, connection)))
+            .await
     }
 
-    /// Plan `build` against `baseline`, and with a client read the last runs
-    /// of the plan's Jobs.
+    /// Plan `build` against `baseline`. With a client, first list the
+    /// build's objects on the cluster ([`read_live`]), so the plan writes
+    /// again each unchanged object the cluster no longer holds and reads
+    /// the last runs of its Jobs.
     async fn planned(
         &self,
         build: InstallableBuild,
         mut baseline: Baseline,
-        client: Option<Client>,
+        client: Option<(Client, binding::Connection)>,
     ) -> Result<Planned, PlanError> {
         let new_graph = build.graph();
         let new_manifests = manifests_of(new_graph);
-        if let Some(client) = &client {
+        if let Some((client, _)) = &client {
             baseline
                 .read_folded_leftovers(client, &new_manifests)
                 .await?;
@@ -812,13 +894,20 @@ impl<'a> Planner<'a> {
         // pairing against it would invent migrations nobody declared.
         let mut migration_pairs =
             detect_migration_pairs(&new_manifests, &baseline.active_manifests);
+        let read = match client {
+            Some((client, connection)) => {
+                let live = read_live(&client, &new_manifests).await?;
+                Some((client, connection, live))
+            }
+            None => None,
+        };
         let mut checked = self
             .check(
                 new_graph,
                 &new_manifests,
                 &new_graph.cluster_name,
                 &baseline,
-                client.as_ref(),
+                read.as_ref().map(|(client, _, live)| (client, live)),
             )
             .await?;
         // A deploy with `--only` makes only the migrations whose new object
@@ -835,13 +924,11 @@ impl<'a> Planner<'a> {
                 .collect();
             migration_pairs.retain(|pair| written.contains(&pair.target));
         }
-        let connected = match client {
-            Some(client) => Some(Connected {
-                last_runs: checked.read_last_runs(&client).await?,
-                client,
-            }),
-            None => None,
-        };
+        let connected = read.map(|(client, connection, live)| Connected {
+            last_runs: checked.last_runs_from(&live),
+            client,
+            connection,
+        });
         Ok(Planned {
             build,
             new_manifests,
@@ -858,8 +945,10 @@ impl<'a> Planner<'a> {
     /// the Kix cluster whose records the baseline came from. With a `client`,
     /// orphans that another Kix cluster still deploys are kept and the plan's
     /// prune section lists every other orphan; without one, `kix deploy`
-    /// checks the orphans once it connects. The caller reads the last runs
-    /// of the plan's Jobs ([`CheckedPlan::read_last_runs`]).
+    /// checks the orphans once it connects. With a `client`, the plan also
+    /// writes again each unchanged object the cluster no longer holds. The
+    /// caller reads the last runs of the plan's Jobs
+    /// ([`CheckedPlan::read_last_runs`]).
     pub async fn plan(
         &self,
         new_graph: &StoreGraph,
@@ -868,14 +957,58 @@ impl<'a> Planner<'a> {
         client: Option<&Client>,
     ) -> Result<CheckedPlan, PlanError> {
         let new_manifests = manifests_of(new_graph);
-        self.check(new_graph, &new_manifests, cluster, baseline, client)
-            .await
+        let live = match client {
+            Some(client) => Some(read_live(client, &new_manifests).await?),
+            None => None,
+        };
+        self.check(
+            new_graph,
+            &new_manifests,
+            cluster,
+            baseline,
+            client.zip(live.as_ref()),
+        )
+        .await
     }
 
     /// Compute what `new_manifests` change against `baseline`
     /// ([`Baseline::changes`]) and the kept-orphan sources for the new record.
-    fn changes(&self, new_manifests: &[Value], baseline: &Baseline, read_records: bool) -> Changes {
-        let actions = baseline.changes(new_manifests, self.flags.reconcile);
+    ///
+    /// An object the build leaves unchanged is written again under
+    /// `--reconcile`, and when `live`, the build's objects as the cluster
+    /// holds them, shows it absent or being deleted. Without `live` the plan
+    /// did not read the cluster.
+    fn changes(
+        &self,
+        new_manifests: &[Value],
+        baseline: &Baseline,
+        live: Option<&LiveObjects>,
+    ) -> Changes {
+        let mut lost = Vec::new();
+        let mut unread = BTreeSet::new();
+        let actions = baseline.changes(new_manifests, |rid| {
+            match live.map(|live| live.get(rid)) {
+                Some(Live::Unread) => {
+                    unread.insert(match rid.group.as_str() {
+                        "" => rid.kind.clone(),
+                        group => format!("{}.{group}", rid.kind),
+                    });
+                }
+                Some(seen) if seen.lost() => {
+                    lost.push(rid.clone());
+                    return true;
+                }
+                _ => {}
+            }
+            self.flags.reconcile
+        });
+        if !lost.is_empty() {
+            (self.report)(PlanEvent::NotHeld(&lost));
+        }
+        if !unread.is_empty() {
+            let unread: Vec<String> = unread.into_iter().collect();
+            (self.report)(PlanEvent::KindsUnread(&unread));
+        }
         let orphans = actions
             .iter()
             .filter_map(|action| match action {
@@ -886,7 +1019,7 @@ impl<'a> Planner<'a> {
         let mut kept_orphans = baseline.orphans_kept_from(new_manifests);
         // A plan that did not read the Active record carries its list
         // forward unexamined.
-        kept_orphans.carry_current = !read_records;
+        kept_orphans.carry_current = live.is_none();
         Changes {
             actions,
             orphans,
@@ -894,14 +1027,16 @@ impl<'a> Planner<'a> {
         }
     }
 
-    /// Run [`Planner::plan`] over the manifests of `new_graph`.
+    /// Run [`Planner::plan`] over the manifests of `new_graph`. `read` is
+    /// the client of a plan made while connected and the build's objects it
+    /// listed.
     async fn check(
         &self,
         new_graph: &StoreGraph,
         new_manifests: &[Value],
         cluster: &str,
         baseline: &Baseline,
-        client: Option<&Client>,
+        read: Option<(&Client, &LiveObjects)>,
     ) -> Result<CheckedPlan, PlanError> {
         let partial = !self.flags.only.is_empty();
         if partial {
@@ -919,7 +1054,8 @@ impl<'a> Planner<'a> {
                 Some(_) => {}
             }
         }
-        let changes = self.changes(new_manifests, baseline, client.is_some());
+        let client = read.map(|(client, _)| client);
+        let changes = self.changes(new_manifests, baseline, read.map(|(_, live)| live));
         // A deploy with `--only` leaves every orphan alone, so it does not
         // ask which ones another Kix cluster deploys.
         let (orphans, shared_orphans) = match client {
@@ -1120,6 +1256,17 @@ fn select_only(
     })
 }
 
+/// List each kind of `manifests` on the cluster behind `client`, once.
+async fn read_live(client: &Client, manifests: &[Value]) -> Result<LiveObjects, PlanError> {
+    let discovery = discovery::discover_resources(client)
+        .await
+        .map_err(|e| PlanError::Discovery(Box::new(e)))?;
+    let ids: Vec<ResourceId> = manifests.iter().map(ResourceId::from_value).collect();
+    LiveObjects::list(client, &discovery, &ids)
+        .await
+        .map_err(|e| PlanError::ReadLive(Box::new(e)))
+}
+
 fn manifests_of(graph: &StoreGraph) -> Vec<Value> {
     graph
         .resources
@@ -1167,6 +1314,81 @@ pub async fn keep_shared(
     inventory::split_shared_orphans_live(client, &discovery, &records, orphans, cluster)
         .await
         .map_err(|e| PlanError::SharedOrphans(Box::new(e)))
+}
+
+/// Split `candidates` into the ones `kix gc` may delete and the ones a
+/// pending record of Kix cluster `cluster` names: a deploy that is queued,
+/// deploying, failed, or partly deployed
+/// ([`crate::cluster::tenancy::Tenancy::pending_records_of`]). Reads each
+/// candidate, then the records.
+pub async fn keep_held(
+    client: &Client,
+    cluster: &str,
+    candidates: Vec<ResourceId>,
+) -> Result<(Vec<ResourceId>, Vec<inventory::HeldObject>), PlanError> {
+    if candidates.is_empty() {
+        return Ok((candidates, Vec::new()));
+    }
+    let discovery = discovery::discover_resources(client)
+        .await
+        .map_err(|e| PlanError::Discovery(Box::new(e)))?;
+    let records = Records::open(client, &discovery).map_err(PlanError::Domain)?;
+    inventory::split_held_live(client, &discovery, &records, candidates, cluster)
+        .await
+        .map_err(|e| PlanError::HeldObjects(Box::new(e)))
+}
+
+/// Return each CustomResourceDefinition that an orphan of `old_manifests`
+/// declares and that no other object of `old_manifests` and none of `added`
+/// declares, with the orphan: the definition itself when it is an orphan,
+/// else the first reference to it.
+pub fn kinds_leaving<'a>(
+    old_manifests: &[Value],
+    orphans: &[ResourceId],
+    added: impl Iterator<Item = &'a Value>,
+) -> Vec<(ResourceId, String)> {
+    let orphans: HashSet<&ResourceId> = orphans.iter().collect();
+    let mut kept: HashSet<String> = added.filter_map(declared_crd).collect();
+    let mut leaving: BTreeMap<String, ResourceId> = BTreeMap::new();
+    for m in old_manifests {
+        let Some(crd) = declared_crd(m) else {
+            continue;
+        };
+        let rid = ResourceId::from_value(m);
+        if !orphans.contains(&rid) {
+            kept.insert(crd);
+            continue;
+        }
+        let is_definition = rid.group_kind() == kinds::CUSTOM_RESOURCE_DEFINITION;
+        let replace = match leaving.get(&crd) {
+            None => true,
+            Some(by) => is_definition && by.group_kind() != kinds::CUSTOM_RESOURCE_DEFINITION,
+        };
+        if replace {
+            leaving.insert(crd, rid);
+        }
+    }
+    leaving
+        .into_iter()
+        .filter(|(crd, _)| !kept.contains(crd))
+        .map(|(crd, rid)| (rid, crd))
+        .collect()
+}
+
+/// Return the name of the CustomResourceDefinition that `manifest` declares:
+/// its own name when it is one, or its target when it is an import marker
+/// for one.
+fn declared_crd(manifest: &Value) -> Option<String> {
+    if GroupKind::of_manifest(manifest) == kinds::CUSTOM_RESOURCE_DEFINITION {
+        return manifest
+            .pointer("/metadata/name")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+    }
+    match crate::cluster::readiness::import_target_from_manifest(manifest) {
+        Ok(Some(target)) if target.kind == "CustomResourceDefinition" => Some(target.name),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -1299,6 +1521,91 @@ mod tests {
         assert_eq!(kept, vec!["shared", "shared-cm"]);
     }
 
+    /// A plan made while connected writes again each object the build leaves
+    /// unchanged that the cluster no longer holds: one that is gone and one
+    /// that is being deleted. It leaves unchanged an object the cluster holds
+    /// and one of a kind this account may not list. A plan made without
+    /// connecting writes none of them.
+    #[tokio::test]
+    async fn an_unchanged_object_the_cluster_no_longer_holds_is_written_again() {
+        use crate::eval::store_graph::StoreGraph;
+        let object = |kind: &str, name: &str| {
+            json!({
+                "apiVersion": "v1",
+                "kind": kind,
+                "metadata": {
+                    "name": name,
+                    "namespace": "app",
+                    "labels": { "app.kubernetes.io/managed-by": "kix" },
+                },
+            })
+        };
+        let mut going = object("ConfigMap", "going");
+        going["metadata"]["deletionTimestamp"] = json!("2026-11-24T15:54:00Z");
+        going["metadata"]["finalizers"] = json!(["example.com/hold"]);
+        let api = FakeApi::new([object("ConfigMap", "held"), going]);
+        api.fail_next("/api/v1/secrets", 1, 403);
+        let client = api.client();
+
+        let build = StoreGraph::synthesize(
+            &[
+                object("ConfigMap", "held"),
+                object("ConfigMap", "going"),
+                object("ConfigMap", "gone"),
+                object("Secret", "hidden"),
+            ],
+            &StoreGraph::empty("a"),
+        );
+        let (graph, _) = crate::plan::fixtures::stamp(&build);
+        let baseline = crate::plan::fixtures::deployed(Some(&build));
+        let events = std::sync::Mutex::new(Vec::new());
+        let report = |event: PlanEvent<'_>| match event {
+            PlanEvent::NotHeld(ids) => events
+                .lock()
+                .unwrap()
+                .extend(ids.iter().map(|rid| format!("not held: {}", rid.name))),
+            PlanEvent::KindsUnread(kinds) => events
+                .lock()
+                .unwrap()
+                .extend(kinds.iter().map(|kind| format!("unread: {kind}"))),
+            _ => {}
+        };
+        let written = |checked: &CheckedPlan| {
+            let mut names: Vec<String> = checked
+                .plan()
+                .nodes()
+                .iter()
+                .filter_map(|n| n.action.written())
+                .map(|m| ResourceId::from_value(m).name)
+                .collect();
+            names.sort();
+            names
+        };
+        let planner = Planner::new(crate::plan::fixtures::flags(&[]), &report);
+
+        let connected = planner
+            .plan(&graph, "a", &baseline, Some(&client))
+            .await
+            .unwrap();
+        assert_eq!(written(&connected), ["going", "gone"]);
+        assert!(
+            connected
+                .objects()
+                .writes
+                .iter()
+                .all(|w| w.change == WriteChange::Reapplied)
+        );
+        let mut events = std::mem::take(&mut *events.lock().unwrap());
+        events.sort();
+        assert_eq!(
+            events,
+            ["not held: going", "not held: gone", "unread: Secret"]
+        );
+
+        let offline = planner.plan(&graph, "a", &baseline, None).await.unwrap();
+        assert!(written(&offline).is_empty());
+    }
+
     fn failed_record(name: &str) -> Value {
         json!({
             "apiVersion": keys::API_VERSION,
@@ -1338,6 +1645,88 @@ mod tests {
         crate::plan::fixtures::plan(&baseline, &build, crate::plan::fixtures::flags(&[])).unwrap()
     }
 
+    /// After a stopped deploy, the dry run finds that the live object differs
+    /// from the build, and the package view lists it as changed. The write
+    /// of that object is then a modification, not a re-apply of an
+    /// unchanged object, while a re-apply the view does not list stays one.
+    #[test]
+    fn a_write_the_dry_run_finds_changed_is_not_a_reapply() {
+        let mut checked = unchanged_plan();
+        let write = |name: &str| crate::plan::document::ObjectWrite {
+            kind: "ConfigMap".into(),
+            namespace: "web".into(),
+            name: name.into(),
+            store_hash: "h".into(),
+            package: "web/web".into(),
+            change: WriteChange::Reapplied,
+            group: String::new(),
+        };
+        checked.objects.writes = vec![write("reverted"), write("same")];
+        checked
+            .pkg_diff
+            .changed
+            .push(super::super::PackageChangeDiff {
+                key: "web/web".into(),
+                old_version: None,
+                new_version: None,
+                resource_diffs: vec![(write("reverted").resource_id(), Vec::new())],
+                dep_affected_resources: Vec::new(),
+                added_resources: Vec::new(),
+                removed_resources: Vec::new(),
+                shared_kept: Vec::new(),
+            });
+        checked.relabel_reverted_writes();
+        let changes: Vec<(&str, WriteChange)> = checked
+            .objects
+            .writes
+            .iter()
+            .map(|w| (w.name.as_str(), w.change))
+            .collect();
+        assert_eq!(
+            changes,
+            [
+                ("reverted", WriteChange::Modified),
+                ("same", WriteChange::Reapplied)
+            ]
+        );
+    }
+
+    /// The `unchanged` count of a plan with nothing to do is what a run of
+    /// the same plan reports.
+    #[tokio::test(start_paused = true)]
+    async fn nothing_to_do_counts_what_a_run_reports_unchanged() {
+        use crate::cluster::scheduler::{self, OnErrorPolicy, PrunePolicy, SchedulerConfig};
+        let checked = unchanged_plan();
+        let read = LastRuns::Read { failed: vec![] };
+        let api = FakeApi::new([failed_record("rec-failed")]);
+        let Start::Nothing { unchanged, .. } = checked.start(&api.client(), &read).await else {
+            panic!("the plan has nothing to do");
+        };
+        let config = SchedulerConfig {
+            timeout: std::time::Duration::from_secs(300),
+            on_error: OnErrorPolicy::Continue,
+            cancel: crate::cluster::cancel::CancelToken::new(),
+            concurrency: scheduler::CONCURRENCY,
+            stall: crate::cluster::watchdog::StallPolicy::off(),
+            check_unchanged: true,
+            names_flags: true,
+        };
+        let ran = scheduler::run_scripted(
+            std::sync::Arc::new(crate::cluster::ops::scripted::ScriptedOps::new()),
+            checked.plan().clone(),
+            &[],
+            &[],
+            scheduler::Ending::Finalize(PrunePolicy::WarnOnly),
+            &config,
+            std::sync::Arc::new(crate::cluster::stream::NullObserver),
+        )
+        .await
+        .unwrap();
+        assert!(unchanged > 0);
+        assert_eq!(ran.unchanged, unchanged);
+        assert_eq!(ran.created + ran.configured + ran.failed, 0);
+    }
+
     /// A plan with nothing to do starts no run, so no finalize supersedes
     /// the failed records it folded in. `start` supersedes them, as it does
     /// for `kix deploy` and `kix rollback` alike.
@@ -1351,7 +1740,10 @@ mod tests {
         let client = api.client();
         assert_eq!(
             checked.start(&client, &read).await,
-            Start::Nothing { superseded: 1 }
+            Start::Nothing {
+                superseded: 1,
+                unchanged: checked.plan().nodes().len(),
+            }
         );
         assert_eq!(phase(&client, "rec-failed").await, PHASE_SUPERSEDED);
     }
@@ -1375,6 +1767,51 @@ mod tests {
                 crate::manifest::lifecycle::PHASE_FAILED
             );
         }
+    }
+
+    /// Run [`Planner::note_unbound`] for the `kix-enterprise-test` build,
+    /// with `uid` as its `cluster.kubernetes.uid` and `active` as the
+    /// cluster's Active record, against a cluster whose `kube-system` UID is
+    /// `live-uid`. Return the events it reported.
+    async fn unbound_events(uid: Option<&str>, active: Option<Value>) -> Vec<String> {
+        let api = FakeApi::new([crate::cluster::fake_api::kube_system("live-uid")]);
+        let mut graph = crate::plan::fixtures::kix_enterprise_test();
+        graph.kubernetes_uid = uid.map(str::to_string);
+        let mut baseline = Baseline::empty();
+        baseline.active = active.map(|r| Record::of(&serde_json::from_value(r).unwrap()));
+        let connection = binding::Connection::Context {
+            name: Some("prod".into()),
+            server: Some("https://prod.example:6443".into()),
+        };
+        let events = std::sync::Mutex::new(Vec::new());
+        let report = |event: PlanEvent<'_>| events.lock().unwrap().push(format!("{event:?}"));
+        let flags = super::super::document::PlanFlags {
+            prune: PrunePolicy::WarnOnly,
+            reconcile: false,
+            force_conflicts: false,
+            accept_migrations: false,
+            only: Vec::new(),
+        };
+        Planner::new(flags, &report)
+            .note_unbound(&api.client(), &connection, &graph, &baseline)
+            .await;
+        events.into_inner().unwrap()
+    }
+
+    /// The first deploy of a definition that names no Kubernetes cluster
+    /// says so, with the UID that would bind it to this one. A bound
+    /// definition, and a cluster deployed here before, say nothing.
+    #[tokio::test]
+    async fn a_first_deploy_of_an_unbound_definition_says_how_to_bind_it() {
+        let events = unbound_events(None, None).await;
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert!(events[0].starts_with("Unbound"), "{events:?}");
+        assert!(events[0].contains("live-uid"), "{events:?}");
+        assert!(events[0].contains("prod.example"), "{events:?}");
+
+        assert!(unbound_events(Some("live-uid"), None).await.is_empty());
+        let active = record("kix-enterprise-test", "abc");
+        assert!(unbound_events(None, Some(active)).await.is_empty());
     }
 
     /// Build a [`Planned`] for the `kix-enterprise-test` fixture as a first
@@ -1493,5 +1930,78 @@ mod tests {
         p.note_withdrawn_kix(&"0.10.0+abc".parse().unwrap());
         let noted = record_annotation(&p, keys::WITHDRAWN_KIX);
         assert_eq!(noted, vec![Some("0.10.0".to_string()); 3]);
+    }
+
+    /// A definition leaves when every object declaring it is an orphan and
+    /// the new build adds none. The definition names the kind over a
+    /// reference to it. A definition a remaining object still declares, or a
+    /// new object declares, does not leave.
+    #[test]
+    fn kinds_leave_with_the_last_object_declaring_them() {
+        let crd = |name: &str| {
+            json!({
+                "apiVersion": "apiextensions.k8s.io/v1",
+                "kind": "CustomResourceDefinition",
+                "metadata": { "name": name },
+            })
+        };
+        let marker = |name: &str, crd: &str| {
+            json!({
+                "apiVersion": keys::API_VERSION,
+                "kind": "PackageInstance",
+                "metadata": {
+                    "name": name,
+                    "namespace": "app",
+                    "annotations": {
+                        (keys::MODE): "import",
+                        (keys::IMPORT_KIND): "CustomResourceDefinition",
+                        (keys::IMPORT_API_VERSION): "apiextensions.k8s.io/v1",
+                        (keys::IMPORT_NAME): crd,
+                        (keys::CRD_KIND): "Widget",
+                        (keys::CRD_SERVED_VERSIONS): "v1",
+                    },
+                },
+            })
+        };
+        let old = vec![
+            marker("ref-a", "a.example.com"),
+            crd("a.example.com"),
+            marker("ref-b", "b.example.com"),
+            crd("c.example.com"),
+            marker("ref-c", "c.example.com"),
+            crd("d.example.com"),
+        ];
+        let orphans: Vec<ResourceId> = ["ref-a", "ref-b", "ref-c"]
+            .iter()
+            .map(|n| ResourceId::from_value(&marker(n, "")))
+            .chain(
+                ["a.example.com", "c.example.com", "d.example.com"]
+                    .map(|n| ResourceId::from_value(&crd(n))),
+            )
+            .collect();
+        let added = [marker("ref-d", "d.example.com")];
+        let leaving = kinds_leaving(&old, &orphans, added.iter());
+        let names: Vec<(&str, &str)> = leaving
+            .iter()
+            .map(|(rid, crd)| (rid.name.as_str(), crd.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                ("a.example.com", "a.example.com"),
+                ("ref-b", "b.example.com"),
+                ("c.example.com", "c.example.com"),
+            ]
+        );
+        let kept_c: Vec<ResourceId> = orphans
+            .iter()
+            .filter(|r| r.name != "c.example.com")
+            .cloned()
+            .collect();
+        let leaving = kinds_leaving(&old, &kept_c, std::iter::empty());
+        assert!(
+            leaving.iter().all(|(_, crd)| crd != "c.example.com"),
+            "{leaving:?}"
+        );
     }
 }

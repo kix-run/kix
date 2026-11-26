@@ -198,8 +198,12 @@ impl ResourceIo for DryRun {
         Ok(())
     }
 
-    async fn prune(&self, rid: &ResourceId) -> Result<Pruned, DeleteError> {
-        let deleted = self.resources.prune(rid).await;
+    async fn prune(
+        &self,
+        rid: &ResourceId,
+        propagation: kube::api::PropagationPolicy,
+    ) -> Result<Pruned, DeleteError> {
+        let deleted = self.resources.prune(rid, propagation).await;
         let answer = match &deleted {
             Ok(Pruned::Deleted { finalizers, .. }) => PruneAnswer::Deleted(DeleteWait {
                 finalizers: finalizers.clone(),
@@ -212,12 +216,12 @@ impl ResourceIo for DryRun {
                 deleting_since: since.clone(),
                 ..DeleteWait::default()
             }),
-            Ok(Pruned::Gone) => PruneAnswer::Deleted(DeleteWait::default()),
+            Ok(Pruned::Gone | Pruned::NotServed) => PruneAnswer::Deleted(DeleteWait::default()),
             Ok(Pruned::Kept(shared)) => PruneAnswer::KeptShared(shared.describe()),
             Ok(Pruned::Changed(_)) => PruneAnswer::KeptChanged,
             // Skip recording an answer when the delete never reached the
             // apiserver. The engine reports the failed node with this error.
-            Err(DeleteError::NotDiscovered(_)) => return deleted,
+            Err(DeleteError::Discovery(_)) => return deleted,
             Err(e) => PruneAnswer::Refused(e.to_string()),
         };
         self.journal
@@ -347,11 +351,10 @@ mod tests {
         assert!(live["metadata"]["deletionTimestamp"].is_string());
     }
 
-    /// A prune of a kind discovery lacks fails without an answer: the engine
-    /// reports the failed node itself. One the guard lets through is
-    /// answered.
+    /// A prune of a kind the cluster does not serve is answered as a
+    /// delete with nothing to wait for, as is one the guard lets through.
     #[tokio::test]
-    async fn a_prune_is_answered_only_when_it_reaches_the_apiserver() {
+    async fn a_prune_of_a_kind_the_cluster_does_not_serve_is_answered() {
         let api = FakeApi::new([json!({
             "apiVersion": "rbac.authorization.k8s.io/v1",
             "kind": "ClusterRole",
@@ -365,11 +368,24 @@ mod tests {
             name: "old".into(),
         };
 
-        let err = dry.prune(&rid("Widget")).await.unwrap_err();
-        assert!(matches!(err, DeleteError::NotDiscovered(_)), "{err}");
-        assert!(dry.take_answers().is_empty());
+        assert_eq!(
+            dry.prune(&rid("Widget"), kube::api::PropagationPolicy::Background)
+                .await
+                .unwrap(),
+            Pruned::NotServed
+        );
+        let answers = dry.take_answers();
+        assert!(matches!(
+            &answers[..],
+            [a] if matches!(&a.outcome, DryRunOutcome::Pruned(PruneAnswer::Deleted(_)))
+        ));
 
-        dry.prune(&rid("ClusterRole")).await.unwrap();
+        dry.prune(
+            &rid("ClusterRole"),
+            kube::api::PropagationPolicy::Background,
+        )
+        .await
+        .unwrap();
         let answers = dry.take_answers();
         assert_eq!(answers.len(), 1);
         assert!(matches!(

@@ -56,7 +56,8 @@
 # `<cluster>-patroni` ServiceAccount that the operator creates for each
 # SGCluster, so the cloud identity goes on each stackgres-cluster instance
 # (`deps.backupIdentity`), never on this one. Without an identity there,
-# the pods use the node's credentials.
+# the pods get what the platform gives a pod without an identity, such as
+# the node's credentials.
 #
 #   backups = {
 #     package = packages.experimental.stackgres-object-storage;

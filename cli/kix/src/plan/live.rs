@@ -10,7 +10,6 @@
 //! plan made from live objects and writes the record it was made for. No
 //! check holds the plan to a package diff.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use kube::api::DynamicObject;
@@ -85,7 +84,7 @@ pub struct LivePlan {
     live: Vec<Value>,
     /// The number of desired and live objects the plan compared.
     compared: usize,
-    foreign: BTreeMap<String, usize>,
+    foreign: inventory::Foreign,
     unattributed: usize,
 }
 
@@ -189,9 +188,9 @@ impl LivePlan {
         &self.shared_orphans
     }
 
-    /// Return the count of live objects excluded from the sweep per other Kix
-    /// cluster.
-    pub fn foreign(&self) -> &BTreeMap<String, usize> {
+    /// Return the live objects the sweep left out because only other Kix
+    /// clusters' records name them.
+    pub fn foreign(&self) -> &inventory::Foreign {
         &self.foreign
     }
 
@@ -306,6 +305,7 @@ mod tests {
             "metadata": {
                 "name": name,
                 "namespace": "d",
+                "labels": { "app.kubernetes.io/managed-by": "kix" },
                 "annotations": {
                     (keys::IDENTITY_HASH): hash,
                     (keys::ACTIVATIONS): activations,
@@ -387,12 +387,16 @@ mod tests {
         assert!(shared.is_empty());
     }
 
-    /// On a single Kix cluster, every stale object is an orphan.
+    /// The operator prunes a stale object of its own cluster, and never an
+    /// object that names no record, even when no other Kix cluster has records
+    /// left: that object may belong to a cluster whose records were deleted.
     #[test]
-    fn reconcile_on_a_single_cluster_is_unchanged() {
+    fn reconcile_prunes_only_objects_that_name_its_records() {
         let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");
         let objects = vec![
             live("ConfigMap", "a-web", "h-web", "a2"),
+            live("ConfigMap", "a-stale", "h-stale", "a2"),
+            live("ConfigMap", "b-web", "h-b", "b1"),
             live("ConfigMap", "leftover", "h-left", "retired"),
         ];
         let sweep = inventory::scope_sweep(
@@ -401,8 +405,9 @@ mod tests {
             tenancy.clone(),
         );
         let desired = [annotated("ConfigMap", "a-web", "h-web", "")];
+        assert_eq!(sweep.unattributed.len(), 2);
         let (actions, _) = live_changes(&desired, &sweep.managed, &tenancy);
-        assert_eq!(orphans(&actions), vec!["leftover"]);
+        assert_eq!(orphans(&actions), vec!["a-stale"]);
     }
 
     fn rerun_job(hash: &str) -> Value {
@@ -455,7 +460,7 @@ mod tests {
             shared_orphans: Vec::new(),
             live: Vec::new(),
             compared: actions.len(),
-            foreign: BTreeMap::new(),
+            foreign: inventory::Foreign::default(),
             unattributed: 0,
         };
         assert_eq!(operator.applies(), 0);

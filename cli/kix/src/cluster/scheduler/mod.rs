@@ -765,6 +765,9 @@ impl<'a> Run<'a> {
         message: String,
     ) {
         self.result.failed += 1;
+        if wrote_then_not_ready(entry, &detail) {
+            self.result.failed_after_apply += 1;
+        }
         self.result.failures.push(NodeFailure {
             node: node_id.clone(),
             message: message.clone(),
@@ -1164,7 +1167,13 @@ impl<'a> Run<'a> {
         // one only, so many stuck objects make one explanation.
         let mut explained = false;
         let controllers = Arc::new(order.controllers().clone());
+        let propagations: HashMap<ResourceId, kube::api::PropagationPolicy> = order
+            .ids()
+            .iter()
+            .map(|rid| (rid.clone(), order.propagation(rid)))
+            .collect();
         let start = |rid: &ResourceId| {
+            let propagation = propagations[rid].clone();
             let (resources, observer, progress, cancel, controllers) = (
                 resources.clone(),
                 observer.clone(),
@@ -1174,16 +1183,18 @@ impl<'a> Run<'a> {
             );
             let rid = rid.clone();
             async move {
-                let deleted =
-                    match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, resources.prune(&rid))
-                        .await
-                    {
-                        Ok(outcome) => outcome.map_err(|e| e.to_string()),
-                        Err(_) => Err(format!(
-                            "no answer within {}s",
-                            INLINE_BEST_EFFORT_TIMEOUT.as_secs()
-                        )),
-                    };
+                let deleted = match tokio::time::timeout(
+                    INLINE_BEST_EFFORT_TIMEOUT,
+                    resources.prune(&rid, propagation),
+                )
+                .await
+                {
+                    Ok(outcome) => outcome.map_err(|e| e.to_string()),
+                    Err(_) => Err(format!(
+                        "no answer within {}s",
+                        INLINE_BEST_EFFORT_TIMEOUT.as_secs()
+                    )),
+                };
                 match deleted {
                     Ok(kept @ (Pruned::Kept(_) | Pruned::Changed(_))) => Pruning::Kept(kept),
                     Ok(pruned) => match pruned.deleting() {
@@ -1200,11 +1211,13 @@ impl<'a> Run<'a> {
                             )
                             .await;
                             match waited {
-                                Ok(()) => Pruning::Gone,
+                                Ok(()) => Pruning::Gone { already: None },
                                 Err(unfinished) => Pruning::Unfinished(unfinished),
                             }
                         }
-                        None => Pruning::Gone,
+                        None => Pruning::Gone {
+                            already: pruned.already_gone(),
+                        },
                     },
                     Err(message) => Pruning::Unfinished(Unfinished::Failed(message)),
                 }
@@ -1219,9 +1232,14 @@ impl<'a> Run<'a> {
                 // holds back what it depends on.
                 |p| matches!(p, Pruning::Unfinished(_) | Pruning::Kept(_)),
                 |rid, walked| match walked {
-                    Walked::Done(Pruning::Gone) => {
+                    Walked::Done(Pruning::Gone { already }) => {
                         result.pruned += 1;
-                        emit(state(rid, Verdict::Ready));
+                        emit(DeployEvent::NodeStateChanged {
+                            node: NodeId::Resource(rid.clone()),
+                            kind: TransitionKind::Delete,
+                            verdict: Verdict::Ready,
+                            detail: already.map(|why| NodeDetail::AlreadyGone(why.to_string())),
+                        });
                     }
                     Walked::Done(Pruning::Kept(outcome)) => {
                         // An object kept because its content drifted still
@@ -1398,8 +1416,9 @@ impl<'a> Run<'a> {
 
 /// How one prune delete ended.
 enum Pruning {
-    /// The object is gone.
-    Gone,
+    /// The object is gone. `already` says why when there was nothing to
+    /// delete ([`Pruned::already_gone`]).
+    Gone { already: Option<&'static str> },
     /// The prune guard kept the object.
     Kept(Pruned),
     /// The object may still be on the cluster.
@@ -1439,8 +1458,13 @@ async fn wait_gone(
     let node = NodeId::Resource(rid.clone());
     progress.set_phase(&node, Phase::Deletion);
     let last = std::sync::Mutex::new(String::new());
+    // Each read of the object counts as activity, as a readiness poll does.
+    // The wait has its own budget, so the watchdog's stall warning would only
+    // repeat a wait that the `Waiting` events already describe, such as a
+    // foreground delete whose owned objects Kubernetes is still removing.
     let on_status = |status: &str| {
         progress.set_status(&node, status);
+        progress.touch();
         let Ok(mut last) = last.lock() else {
             return;
         };
@@ -1448,7 +1472,6 @@ async fn wait_gone(
             return;
         }
         *last = status.to_string();
-        progress.touch();
         observer.on_event(&DeployEvent::NodeStateChanged {
             node: NodeId::Resource(rid.clone()),
             kind: TransitionKind::Delete,
@@ -1568,6 +1591,17 @@ impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         self.0.abort();
     }
+}
+
+/// Return true when a node that failed with `detail` had written its object
+/// first: an apply or a recreate whose object then failed readiness. A
+/// readiness failure on an unchanged node wrote nothing.
+fn wrote_then_not_ready(entry: &PlanNodeEntry, detail: &NodeDetail) -> bool {
+    matches!(entry.kind, TransitionKind::Apply | TransitionKind::Recreate)
+        && matches!(
+            detail,
+            NodeDetail::ReadinessTimeout { .. } | NodeDetail::ReadinessFailed { .. }
+        )
 }
 
 /// CRD barrier state.

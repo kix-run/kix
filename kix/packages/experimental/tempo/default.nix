@@ -404,6 +404,8 @@ in
           dep = storageCredentials;
           arg = "storageCredentials";
           cloud = if objectStorageOn && !inClusterStore then "aws" else null;
+          # The package writes only S3 storage settings.
+          supportedClouds = [ "aws" ];
         };
         identity = access.identity;
 
@@ -757,27 +759,26 @@ in
             kix.operandPolicy {
               inherit scope;
               name = "${name}-object-storage";
-              spec = scope.networkPolicyEnforcer.netpol.mkEndpointSelector scope.selectorLabels // {
-                egress =
-                  (scope.networkPolicyEnforcer.netpol.translateIntentRules {
-                    intents.store.egress = [
-                      {
-                        to = "world";
-                        ports = [
-                          {
-                            port = storeWorldPort;
-                            protocol = "TCP";
-                          }
-                        ]
-                        # IRSA exchanges the pod's token at AWS STS on 443.
-                        ++ lib.optional (identity != null && storeWorldPort != 443) {
-                          port = 443;
+              selector = scope.selectorLabels;
+              egress =
+                (scope.networkPolicyEnforcer.netpol.translateIntentRules {
+                  intents.store.egress = [
+                    {
+                      to = "world";
+                      ports = [
+                        {
+                          port = storeWorldPort;
                           protocol = "TCP";
-                        };
-                      }
-                    ];
-                  }).egressRules;
-              };
+                        }
+                      ]
+                      # IRSA exchanges the pod's token at AWS STS on 443.
+                      ++ lib.optional (identity != null && storeWorldPort != 443) {
+                        port = 443;
+                        protocol = "TCP";
+                      };
+                    }
+                  ];
+                }).egressRules;
             };
 
         root = {

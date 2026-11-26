@@ -18,6 +18,7 @@
   byName,
   evalFails,
   containerBase,
+  netpolOn,
   ...
 }:
 
@@ -387,7 +388,10 @@ let
   # `credentials` dependency holds a Secret instance or a cloud identity for
   # `cloud`.
   workerPackage =
-    { cloud }:
+    {
+      cloud,
+      hostNetwork ? false,
+    }:
     {
       meta.version = "test";
       build =
@@ -401,11 +405,13 @@ let
           creds = kixlib.cloudIdentity.use {
             inherit scope cloud;
             dep = credentials;
+            arg = "credentials";
           };
           podSpec = {
             serviceAccount = self.serviceAccount;
             containers = [ container ];
-          };
+          }
+          // lib.optionalAttrs hostNetwork { hostNetwork = true; };
         in
         {
           serviceAccount =
@@ -487,6 +493,7 @@ let
       flavorName,
       identity,
       cloud ? identity.cloud,
+      hostNetwork ? false,
       extra ? { },
     }:
     [
@@ -494,7 +501,7 @@ let
       extra
       {
         instances.work.worker = {
-          package = workerPackage { inherit cloud; };
+          package = workerPackage { inherit cloud hostNetwork; };
         }
         // lib.optionalAttrs (identity != null) { deps.credentials = identity; };
       }
@@ -517,6 +524,24 @@ let
 
   stampOf = r: r.deployment.annotations."checksum/cloud-identity" or null;
 
+  # The parsed `kix.run/cloud-identity-env` annotation on the worker's
+  # Deployment and Job objects, or null where there is none.
+  podEnvOf =
+    modules:
+    let
+      ms = manifests (mkCluster modules);
+      read =
+        m:
+        let
+          v = m.metadata.annotations.${kixKeys.cloudIdentityEnv} or null;
+        in
+        if v == null then null else builtins.fromJSON v;
+    in
+    {
+      deployment = read (byName "worker" (ofKind "Deployment" ms));
+      job = read (byName "worker-once" (ofKind "Job" ms));
+    };
+
   roleArn = "arn:aws:iam::111122223333:role/worker";
   irsa = {
     flavorName = "eks";
@@ -534,6 +559,7 @@ let
           config.keys = [
             "AWS_ACCESS_KEY_ID"
             "AWS_SECRET_ACCESS_KEY"
+            "AWS_REGION"
           ];
         };
         instances.dns.edns = lib.recursiveUpdate {
@@ -684,6 +710,99 @@ in
       && findings == [ ]
     )
     || throw "pod identity: ${builtins.toJSON r}; findings ${builtins.toJSON findings}";
+
+  # Each mechanism that adds environment variables to the pods names them
+  # on the workload, with the values it knows, so the deploy can check the
+  # new pods. GKE adds none, so its workload carries no annotation, and
+  # neither does a Job or a workload without an identity.
+  cloud-identity-pod-env-annotation =
+    let
+      clientId = "00000000-0000-0000-0000-000000000001";
+      irsaEnv = podEnvOf (workerOn irsa);
+      podIdentityEnv = podEnvOf (
+        workerOn (irsa // { extra.cluster.flavor.eks.cloudIdentity = "pod-identity"; })
+      );
+      gkeEnv = podEnvOf (workerOn {
+        flavorName = "gke";
+        identity = ci.gcp { };
+      });
+      aksEnv = podEnvOf (workerOn {
+        flavorName = "aks";
+        identity = ci.azure { inherit clientId; };
+      });
+      noneEnv = podEnvOf (workerOn {
+        flavorName = "eks";
+        identity = null;
+        cloud = "aws";
+      });
+    in
+    (
+      irsaEnv.deployment.env == {
+        AWS_ROLE_ARN = roleArn;
+        AWS_WEB_IDENTITY_TOKEN_FILE = null;
+      }
+      && lib.hasInfix "IRSA" irsaEnv.deployment.description
+      && lib.hasInfix "EKS Pod Identity association" irsaEnv.deployment.fix
+      &&
+        irsaEnv.deployment.skip == {
+          annotation = "eks.amazonaws.com/skip-containers";
+          separator = ",";
+        }
+      && map (a: a.description) irsaEnv.deployment.alternatives == [ "EKS Pod Identity" ]
+      &&
+        (builtins.head irsaEnv.deployment.alternatives).env == [
+          "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE"
+          "AWS_CONTAINER_CREDENTIALS_FULL_URI"
+        ]
+      &&
+        map (a: a.description) podIdentityEnv.deployment.alternatives == [
+          "IAM roles for service accounts (IRSA)"
+        ]
+      && irsaEnv.job == null
+      &&
+        podIdentityEnv.deployment.env == {
+          AWS_CONTAINER_CREDENTIALS_FULL_URI = null;
+          AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE = null;
+        }
+      && lib.hasInfix "Kix does not create it" podIdentityEnv.deployment.fix
+      && gkeEnv.deployment == null
+      &&
+        aksEnv.deployment.env == {
+          AZURE_CLIENT_ID = clientId;
+          AZURE_TENANT_ID = null;
+          AZURE_FEDERATED_TOKEN_FILE = null;
+        }
+      && aksEnv.deployment.skip.separator == ";"
+      && aksEnv.deployment.alternatives == [ ]
+      && noneEnv.deployment == null
+    )
+    || throw "pod env: irsa ${builtins.toJSON irsaEnv}, pod identity ${builtins.toJSON podIdentityEnv}, gke ${builtins.toJSON gkeEnv}, aks ${builtins.toJSON aksEnv}, none ${builtins.toJSON noneEnv}";
+
+  # GKE gives no identity to a pod on the host network, which would run as
+  # the node's service account, so such a pod template is refused. IRSA
+  # serves host-network pods, and a host-network pod without an identity
+  # is fine on GKE.
+  cloud-identity-host-network =
+    let
+      gkeHost = mkCluster (workerOn {
+        flavorName = "gke";
+        identity = ci.gcp { };
+        hostNetwork = true;
+      });
+      gkePod = mkCluster (workerOn {
+        flavorName = "gke";
+        identity = ci.gcp { };
+      });
+      eksHost = mkCluster (workerOn (irsa // { hostNetwork = true; }));
+      gkeHostNone = mkCluster (workerOn {
+        flavorName = "gke";
+        identity = null;
+        cloud = "gcp";
+        hostNetwork = true;
+      });
+    in
+    (evalFails gkeHost && !(evalFails gkePod) && !(evalFails eksHost) && !(evalFails gkeHostNone))
+    || throw "host network: gke ${builtins.toJSON (evalFails gkeHost)}, gke pod ${builtins.toJSON (evalFails gkePod)}, eks ${builtins.toJSON (evalFails eksHost)}, gke without identity ${builtins.toJSON (evalFails gkeHostNone)}";
 
   # The stamp follows the declared identity, so a changed role rolls the
   # pods and an unchanged one does not.
@@ -1022,10 +1141,31 @@ in
   cloud-identity-refuses-wrong-cloud-for-package =
     let
       other = useFailure (ci.gcp { }) "aws";
+      onlyAws =
+        let
+          r = ci.use {
+            scope = recordingScope;
+            dep = ci.gcp { };
+            cloud = "aws";
+            supportedClouds = [ "aws" ];
+          };
+        in
+        r.failed.message + " " + r.failed.fix;
+      supported = ci.use {
+        scope = recordingScope;
+        dep = ci.aws { inherit roleArn; };
+        cloud = "aws";
+        supportedClouds = [ "aws" ];
+      };
       none = useFailure (ci.aws { inherit roleArn; }) null;
     in
     (
       lib.hasInfix "configured to call AWS" other
+      && lib.hasInfix "change this instance's `config`" other
+      && lib.hasInfix "works only with AWS" onlyAws
+      && lib.hasInfix "Google Cloud is not supported yet" onlyAws
+      && !(lib.hasInfix "`config`" onlyAws)
+      && supported.identity != null
       && lib.hasInfix "does not authenticate with a cloud identity" none
       && useFailure (ci.aws { inherit roleArn; }) "aws" == ""
       && evalFails (
@@ -1036,7 +1176,7 @@ in
         })
       )
     )
-    || throw "wrong cloud for the package: ${other}; ${none}";
+    || throw "wrong cloud for the package: ${other}; ${onlyAws}; ${none}";
 
   # Malformed values and mistyped fields are refused, each naming the
   # field. A well-formed value of each cloud passes.
@@ -1398,6 +1538,7 @@ in
       empty == {
         serviceAccountAnnotations = { };
         podLabels = { };
+        networkIntents.egress = [ ];
       }
       && lib.hasInfix "not configured for cloud identities" refused.failed.message
     )
@@ -1550,4 +1691,170 @@ in
       && lib.hasInfix "Set this dependency to" unnamed
     )
     || throw "refusal names dependency: use ${builtins.toJSON use}, useIdentity ${builtins.toJSON useIdentity}";
+
+  # Binding a cloud identity adds the mechanism's credential egress to the
+  # egress policy of every workload that runs as the ServiceAccount, on
+  # each cloud: STS on 443 for IRSA, the Pod Identity agent's addresses on
+  # port 80, the GKE metadata server on 80 and 8080, and Entra ID on 443
+  # for AKS. Without an identity no such rule is added.
+  cloud-identity-credential-egress =
+    let
+      tcp = port: {
+        inherit port;
+        protocol = "TCP";
+      };
+      # The intent rules the test enforcer echoes on the worker's three
+      # egress policies.
+      intentRulesOf =
+        modules:
+        let
+          ms = manifests (mkCluster (modules ++ [ netpolOn ]));
+          rulesOf =
+            name:
+            map (r: removeAttrs r [ "stubRule" ]) (
+              builtins.filter (r: (r.stubRule or null) == "intent-egress") (byName name ms).spec.egress
+            );
+        in
+        {
+          deployment = rulesOf "worker-deployment-worker-egress";
+          job = rulesOf "worker-job-worker-once-egress";
+          cronJob = rulesOf "worker-cronjob-worker-nightly-egress";
+        };
+      onEvery = rules: {
+        deployment = rules;
+        job = rules;
+        cronJob = rules;
+      };
+      world443 = [
+        {
+          to = "world";
+          ports = [ (tcp 443) ];
+        }
+      ];
+      cases = {
+        irsa = {
+          got = intentRulesOf (workerOn irsa);
+          want = onEvery world443;
+        };
+        eksPodIdentity = {
+          got = intentRulesOf (
+            workerOn (irsa // { extra.cluster.flavor.eks.cloudIdentity = "pod-identity"; })
+          );
+          want = onEvery [
+            {
+              to = "node-local";
+              cidr = "169.254.170.23/32";
+              ports = [ (tcp 80) ];
+            }
+            {
+              to = "node-local";
+              cidr = "fd00:ec2::23/128";
+              ports = [ (tcp 80) ];
+            }
+          ];
+        };
+        gke = {
+          got = intentRulesOf (workerOn {
+            flavorName = "gke";
+            identity = ci.gcp { };
+          });
+          want = onEvery [
+            {
+              to = "node-local";
+              cidr = "169.254.169.254/32";
+              ports = [
+                (tcp 80)
+                (tcp 8080)
+              ];
+            }
+          ];
+        };
+        aks = {
+          got = intentRulesOf (workerOn {
+            flavorName = "aks";
+            identity = ci.azure { clientId = "00000000-0000-0000-0000-000000000000"; };
+          });
+          want = onEvery world443;
+        };
+        withoutIdentity = {
+          got = intentRulesOf (workerOn {
+            flavorName = "gke";
+            identity = null;
+            cloud = "gcp";
+          });
+          want = onEvery [ ];
+        };
+      };
+      wrong = lib.filterAttrs (_: c: c.got != c.want) cases;
+    in
+    wrong == { } || throw "credential egress: ${builtins.toJSON wrong}";
+
+  # The cilium enforcer writes a node-local rule twice: once as the address
+  # and once as the `host` entity, because Cilium 1.16 and 1.17 match a
+  # node-bound link-local address differently.
+  cloud-identity-cilium-node-local =
+    let
+      cilium = import ../../../packages/experimental/cilium/netpol-rules.nix { inherit lib; };
+      ports = [
+        {
+          ports = [
+            {
+              port = "80";
+              protocol = "TCP";
+            }
+          ];
+        }
+      ];
+      got =
+        (cilium.translateIntentRules {
+          intents.identity.egress = (mechanisms.eksPodIdentity { }).egress;
+        }).egressRules;
+    in
+    got == [
+      {
+        toCIDR = [ "169.254.170.23/32" ];
+        toPorts = ports;
+      }
+      {
+        toEntities = [ "host" ];
+        toPorts = ports;
+      }
+      {
+        toCIDR = [ "fd00:ec2::23/128" ];
+        toPorts = ports;
+      }
+      {
+        toEntities = [ "host" ];
+        toPorts = ports;
+      }
+    ]
+    || throw "cilium node-local: ${builtins.toJSON got}";
+
+  # For pods an operator creates, `annotationsFor` returns the credential
+  # egress as intent rules, and empty rules without an identity.
+  cloud-identity-annotations-for-network-intents =
+    let
+      provider = {
+        _meta = {
+          namespaceName = "kube-system";
+          instanceName = "cloud-identity";
+        };
+        out.cloudIdentity = mechanisms.gke { };
+      };
+      withIdentity = ci.annotationsFor {
+        scope = recordingScope;
+        identity = ci.gcp { };
+        inherit provider;
+      };
+      without = ci.annotationsFor {
+        scope = recordingScope;
+        identity = null;
+        inherit provider;
+      };
+    in
+    (
+      withIdentity.networkIntents.egress == (mechanisms.gke { }).egress
+      && without.networkIntents.egress == [ ]
+    )
+    || throw "annotationsFor networkIntents: ${builtins.toJSON withIdentity.networkIntents}";
 }

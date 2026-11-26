@@ -1,5 +1,6 @@
 //! Progress and warning output for cluster planning.
 
+use kix::cluster::binding;
 use kix::manifest::keys;
 use kix::plan::PlanEvent;
 
@@ -30,7 +31,8 @@ pub fn print(event: PlanEvent<'_>) {
             ));
             rollback_rewrites_everything();
             eprintln!(
-                "  Objects that exist only in {activation} are not deleted by this rollback; the new deployment record keeps {activation} listed for cleanup, so a later `kix deploy {cluster} --prune` or `kix gc {cluster}` on a machine that has {activation}'s build (or `kix gc --full-scan {cluster}` from any machine) will remove them."
+                "  This rollback leaves objects that exist only in {activation} on the cluster and records {activation} for cleanup. To delete them later, run {} on a machine that has {activation}'s build, or run `kix gc --full-scan {cluster}` from any machine.",
+                super::kept_orphans_cleanup(cluster)
             );
         }
         PlanEvent::ActiveWithoutHash {
@@ -54,7 +56,8 @@ pub fn print(event: PlanEvent<'_>) {
             ));
             rollback_rewrites_everything();
             eprintln!(
-                "  Objects that exist only in {current} are not deleted by this rollback; the new deployment record keeps {current} listed for cleanup, so a later `kix deploy {cluster} --prune` or `kix gc {cluster}` on a machine that has {current}'s build (or `kix gc --full-scan {cluster}` from any machine) will remove them."
+                "  This rollback leaves objects that exist only in {current} on the cluster and records {current} for cleanup. To delete them later, run {} on a machine that has {current}'s build, or run `kix gc --full-scan {cluster}` from any machine.",
+                super::kept_orphans_cleanup(cluster)
             );
         }
         PlanEvent::KeptBuildUnusable { activation, error } => {
@@ -66,7 +69,16 @@ pub fn print(event: PlanEvent<'_>) {
                 "  This plan cannot list or delete the orphaned objects kept from {activation}."
             );
         }
-        PlanEvent::Connecting => crate::say!("Connecting to cluster..."),
+        PlanEvent::Connecting(connection) => crate::say!("{}", connection.connecting()),
+        PlanEvent::Unbound {
+            cluster,
+            connection,
+            uid,
+        } => crate::say!(
+            "{} {}",
+            output::dim("Note:"),
+            binding::unbound_note(cluster, connection, uid),
+        ),
         PlanEvent::NoCachedBuild => {
             crate::say!("No previous deployment in local cache. First deploy.")
         }
@@ -168,6 +180,24 @@ pub fn print(event: PlanEvent<'_>) {
                 "  {} including orphans kept by earlier deploys, from {}",
                 output::yellow("!"),
                 some_names(sources.iter().map(|s| s.activation.as_str())),
+            );
+        }
+        PlanEvent::NotHeld(objects) => {
+            let names: Vec<String> = objects.iter().map(|rid| rid.display_id()).collect();
+            crate::say!(
+                "  {} {} object(s) unchanged from the current deployment are missing from the cluster or being deleted, so this plan reapplies them: {}",
+                output::yellow("!"),
+                objects.len(),
+                some_names(names.iter().map(String::as_str)),
+            );
+        }
+        PlanEvent::KindsUnread(kinds) => {
+            warning(&format!(
+                "this Kubernetes account cannot list {} across the cluster.",
+                some_names(kinds.iter().map(String::as_str))
+            ));
+            crate::esay!(
+                "  Without `--reconcile`, this plan skips objects of these kinds that are unchanged from the current deployment, even if they were deleted or are being deleted on the cluster.\n  To check them, grant this account cluster-wide `list` permission for these kinds, or pass `--reconcile` on `kix plan` or `kix deploy` to reapply every resource."
             );
         }
         PlanEvent::KeptUnresolved { sources, cluster } => {

@@ -31,6 +31,11 @@ rec {
       out ? { },
       kind ? null,
       apiVersion ? null,
+      # Namespace of the object this import stands for, when it is not the
+      # namespace of the import instance. A platform can refuse writes to the
+      # object's namespace, so the instance can live elsewhere and still name
+      # it. null means the instance's own namespace.
+      namespace ? null,
       # Roles that this environment-provided service fulfills. A managed
       # instance declaring the same role takes precedence over the import. Each
       # role name also acts as a dependency-resolution alias.
@@ -50,6 +55,10 @@ rec {
       # annotation-ownership rule accepts annotations under them on any
       # instance, with no dependency on this import.
       annotationDomains ? [ ],
+      # For an import that claims the `dns` role: where pods send DNS
+      # queries (`core/dns-peers.nix`), or null for the kube-dns pods in
+      # kube-system.
+      dnsPeers ? null,
     }:
     {
       _type = "kix-import";
@@ -58,11 +67,13 @@ rec {
         out
         kind
         apiVersion
+        namespace
         crds
         ;
       meta = {
         inherit roles scope annotationDomains;
-      };
+      }
+      // lib.optionalAttrs (dnsPeers != null) { inherit dnsPeers; };
     };
 
   mkImportScope =
@@ -111,9 +122,12 @@ rec {
           # Attach an endpoint fact token so import-mode service refs
           # participate in network dependency detection without a store
           # resource.
+          # `imported` tells the netpol plugin that Kix does not deploy the
+          # pods.
           endpointFactCtx = k8s.facts.mkFact "endpoint" {
             inherit name selector ports;
             namespace = namespaceName;
+            imported = true;
           };
           attachConnectCtx = value: builtins.appendContext (toString value) endpointFactCtx;
         in
@@ -698,7 +712,12 @@ rec {
         }
         // lib.optionalAttrs (derived.hints ? apiVersion) {
           ${kixKeys.importApiVersion} = derived.hints.apiVersion;
-        };
+        }
+        //
+          lib.optionalAttrs ((importDef.namespace or null) != null && importDef.namespace != namespaceName)
+            {
+              ${kixKeys.importNamespace} = importDef.namespace;
+            };
         labels = clusterLabels // {
           "app.kubernetes.io/instance" = instanceName;
           "app.kubernetes.io/managed-by" = "kix";

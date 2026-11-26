@@ -36,7 +36,7 @@ pub(crate) use diff::partition_propagation;
 pub use diff::{diff_garbage, diff_graphs};
 pub use planner::{
     CheckedPlan, Connected, Differences, OldSide, Planned, Planner, Start, Target, TargetChecks,
-    Work, keep_shared,
+    Work, keep_held, keep_shared, kinds_leaving,
 };
 #[cfg(test)]
 use redact::LAST_APPLIED;
@@ -66,8 +66,17 @@ use crate::manifest::types::ResourceId;
 /// Progress events emitted by the planner for the caller to display.
 #[derive(Debug, Clone, Copy)]
 pub enum PlanEvent<'a> {
-    /// Connecting to the cluster before reading state.
-    Connecting,
+    /// Connecting to the Kubernetes cluster of this connection before
+    /// reading state.
+    Connecting(&'a crate::cluster::binding::Connection),
+    /// The first deploy of Kix cluster `cluster`, whose definition names no
+    /// Kubernetes cluster, through `connection`. `uid` is the live
+    /// `kube-system` UID, or `None` when it could not be read.
+    Unbound {
+        cluster: &'a str,
+        connection: &'a crate::cluster::binding::Connection,
+        uid: Option<&'a str>,
+    },
     /// `--offline` found no cached build, so this is a first deploy.
     NoCachedBuild,
     /// `--offline` is loading the cached build.
@@ -130,6 +139,13 @@ pub enum PlanEvent<'a> {
         sources: &'a [KeptOrphanSource],
         cluster: &'a str,
     },
+    /// Objects the build leaves unchanged that are absent from the cluster
+    /// or being deleted. The plan writes them again.
+    NotHeld(&'a [ResourceId]),
+    /// Kinds of unchanged objects that this account may not list, as
+    /// `Kind` or `Kind.group`. The plan does not know whether the cluster
+    /// still holds those objects, and leaves them unchanged.
+    KindsUnread(&'a [String]),
 }
 
 /// Why a plan could not be made.
@@ -162,6 +178,18 @@ pub enum PlanError {
     FoldedLeftovers(Box<FetchError>),
     #[error("cannot check whether another Kix cluster deploys an orphan: {0}")]
     SharedOrphans(Box<FetchError>),
+    #[error(
+        "cannot check which objects an unfinished deploy of this cluster wrote: {0}. \
+         Nothing was deleted. Run the command again when the apiserver answers."
+    )]
+    HeldObjects(Box<FetchError>),
+    #[error(
+        "cannot read live resources on the cluster: {0}. \
+         Nothing was planned or applied to the cluster. \
+         Check your cluster connection and credentials, or wait for the Kubernetes API server \
+         to recover, then run the command again."
+    )]
+    ReadLive(Box<FetchError>),
     #[error("{0}")]
     Graph(GraphError),
     #[error("{0}")]

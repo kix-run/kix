@@ -159,6 +159,40 @@ The health-check Job's logs say whether the post-deploy probe passed:
 
 <Command {...jobLogs} />
 
+## When the last deploy failed
+
+When a deploy fails, the previous deploy stays active. `kix status` shows the
+failed deploy first, along with when and why it failed, followed by the current
+deploy. Any objects that belong only to the failed deploy appear under
+`Only in the failed deploy`, and `kix status` exits `2` until a new deploy
+succeeds. Fix the cause of the failure and run `kix deploy` again.
+
+## What readiness does not show
+
+Kix checks the status that Kubernetes and cluster controllers report for each
+object. A Deployment is ready when its pods are updated and pass their
+readiness probes. A `LoadBalancer` Service is ready once its load balancer
+gives it an address. A custom resource is ready when its controller sets the
+ready state its package declares. Because Kix does not test the external
+services your pods call, every object can report ready while part of a workload
+is failing:
+
+- **Rejected cloud identities.** A pod can start and pass its readiness probes
+  even if the cloud provider rejects its identity. Only its requests to cloud
+  APIs fail, for example when an IAM role is missing permissions or when a
+  trust policy or Workload Identity binding names the wrong ServiceAccount.
+  Check the pod logs for errors such as `AccessDenied` or `403`.
+- **Operator features reported in separate conditions.** An operator can mark a
+  custom resource ready while one of its features is failing. For example, a
+  CloudNativePG `Cluster` stays `Ready=True` when archiving to its backup store
+  fails, and reports the failure in its `ContinuousArchiving` condition
+  instead:
+
+  ```sh
+  kubectl get cluster.postgresql.cnpg.io <name> -n <namespace> \
+    -o jsonpath='{.status.conditions[?(@.type=="ContinuousArchiving")]}'
+  ```
+
 ## Use the check in a script
 
 `kix status` exits with a code a script or a cron job can branch on:

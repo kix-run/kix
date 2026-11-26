@@ -397,20 +397,18 @@ in
                 kix.operandPolicy {
                   scope = consumerScope;
                   name = "${name}-restic-egress";
-                  spec = {
-                    endpointSelector.matchLabels = moverSelector "src" name;
-                    egress = [
-                      netpol.dnsEgressRule
-                    ]
-                    ++ (netpol.translateIntentRules {
-                      intents.store.egress = [
-                        {
-                          to = "world";
-                          ports = [ (tcp (if storePort != null then storePort else 443)) ];
-                        }
-                      ];
-                    }).egressRules;
-                  };
+                  selector = moverSelector "src" name;
+                  egress = [
+                    netpol.dnsEgressRule
+                  ]
+                  ++ (netpol.translateIntentRules {
+                    intents.store.egress = [
+                      {
+                        to = "world";
+                        ports = [ (tcp (if storePort != null then storePort else 443)) ];
+                      }
+                    ];
+                  }).egressRules;
                 };
           in
           builtins.seq checks {

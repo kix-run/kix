@@ -1,5 +1,6 @@
 //! Render `kix gc` plans, record retirement summaries, and confirmation prompts.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 
 use miette::{IntoDiagnostic, Result};
@@ -8,6 +9,7 @@ use crate::cli::GcArgs;
 use crate::exit::{Exit, Stopped};
 use crate::output;
 use kix::cluster::activation::{Record, RetentionPolicy, RetireReason};
+use kix::cluster::inventory::HeldObject;
 use kix::manifest::types::{ResourceId, to_manifest_value};
 
 use super::plan::{GarbageEntry, RecordRetirement};
@@ -33,20 +35,61 @@ pub(super) fn print_unstamped(unstamped: &[GarbageEntry]) {
     println!(
         "  {}",
         output::dim(
-            "Kept running on the cluster, because Kix never applied them. \
-             Pass `--include unstamped` to delete them too."
+            "Kept on the cluster because Kix cannot match them to a build. \
+             Review these objects, then pass `--include unstamped` to delete them."
         ),
     );
 }
 
-/// Print objects that name no Activation record on a multi-cluster target, and
-/// state whether `--include unattributed` includes them.
-pub(super) fn print_unattributed(objects: &[kube::api::DynamicObject], included: bool) {
+/// Print the objects that a pending deploy record of `cluster` names, which
+/// gc keeps, grouped by those records.
+pub(super) fn print_held(held: &[HeldObject], cluster: &str) {
+    if held.is_empty() {
+        return;
+    }
+    let mut by_records: BTreeMap<String, Vec<&ResourceId>> = BTreeMap::new();
+    for h in held {
+        by_records
+            .entry(h.records.join(", "))
+            .or_default()
+            .push(&h.rid);
+    }
     println!();
     println!(
-        "{} {} Kix-labeled object(s) name no deployment record on this cluster, and \
-         another Kix cluster deploys here, so Kix cannot tell which cluster they belong to:",
-        output::bold("No deployment record on this cluster:"),
+        "{} {} object(s) belong to a deploy that has not finished or been replaced:",
+        output::bold("Kept for an unfinished deploy:"),
+        held.len(),
+    );
+    for (records, mut ids) in by_records {
+        ids.sort();
+        println!("  Deployment record {records}:");
+        for rid in ids {
+            println!("    {} {rid}", output::yellow("="));
+        }
+    }
+    println!(
+        "  {}",
+        output::dim(&format!(
+            "A deploy that failed, deployed only some instances with `--only`, or is still running wrote these objects, so Kix cannot tell yet whether the cluster needs them. \
+             Run `kix deploy {cluster}` to finish or replace that deploy, then run `kix gc {cluster}` again."
+        )),
+    );
+}
+
+/// Print objects that name no Activation record, and state whether
+/// `--include unattributed` judges them against `compared`.
+pub(super) fn print_unattributed(
+    objects: &[kube::api::DynamicObject],
+    included: bool,
+    compared: &str,
+) {
+    println!();
+    println!(
+        "{} {} Kix-labeled object(s) do not match any deployment record on this cluster, \
+         so Kix cannot tell which Kix cluster owns them. They may be left over from an \
+         earlier deploy whose records were retired, or belong to another Kix cluster \
+         whose records were deleted:",
+        output::bold("Objects with no matching deployment record:"),
         objects.len(),
     );
     let mut ids: Vec<ResourceId> = objects
@@ -58,16 +101,18 @@ pub(super) fn print_unattributed(objects: &[kube::api::DynamicObject], included:
         println!("    {} {rid}", output::dim("?"));
     }
     let note = if included {
-        "--include unattributed: objects that name no deployment record on this cluster are checked against this build like this cluster's own objects."
+        format!("--include unattributed: Kix checks these objects against {compared}.")
     } else {
-        "Kept running on the cluster. Review them and pass `--include unattributed` to check them against this build and delete any not in it."
+        format!(
+            "Kept on the cluster. Review these objects, then pass `--include unattributed` to delete any that are not in {compared}."
+        )
     };
-    println!("  {}", output::dim(note));
+    println!("  {}", output::dim(&note));
 }
 
 /// Print the copies of Kix objects that other programs made, and state
 /// whether `--include copies` includes them.
-pub(super) fn print_copies(objects: &[kube::api::DynamicObject], included: bool) {
+pub(super) fn print_copies(objects: &[kube::api::DynamicObject], included: bool, compared: &str) {
     println!();
     println!(
         "{} {} object(s) carry Kix's labels, but Kix never wrote them (another \
@@ -84,20 +129,25 @@ pub(super) fn print_copies(objects: &[kube::api::DynamicObject], included: bool)
         println!("    {} {rid}", output::dim("?"));
     }
     let note = if included {
-        "--include copies: objects whose labels were copied by another program are checked against this build like Kix's own objects."
+        format!("--include copies: Kix checks these objects against {compared}.")
     } else {
-        "Kept running on the cluster, because Kix did not make them. Pass `--include copies` to check them against this build and delete any not in it."
+        format!(
+            "Kept on the cluster because Kix did not create them. Review these objects, then pass `--include copies` to delete any that are not in {compared}."
+        )
     };
-    println!("  {}", output::dim(note));
+    println!("  {}", output::dim(&note));
 }
 
-/// Print the grouped per-resource garbage plan with reasons and owning activations.
-pub(super) fn print_garbage_plan(garbage: &[GarbageEntry]) {
+/// Print the grouped per-resource garbage plan with reasons and owning
+/// activations. `compared` names the build the live objects were compared
+/// with. Not every object was ever in one of this cluster's builds, so the
+/// heading does not say they left one.
+pub(super) fn print_garbage_plan(garbage: &[GarbageEntry], compared: &str) {
     use std::collections::BTreeMap;
 
     println!();
     println!(
-        "{} ({} left the build, still on the cluster):",
+        "{} ({} on the cluster):",
         output::bold("Objects to delete"),
         garbage.len(),
     );
@@ -130,7 +180,7 @@ pub(super) fn print_garbage_plan(garbage: &[GarbageEntry]) {
                     output::dim(&hash_short),
                 );
 
-                let reason_line = format!("reason: {}", entry.reason.label());
+                let reason_line = format!("reason: {}", entry.reason.label(compared));
                 println!("        {}", output::dim(&reason_line));
                 if let Some(deleting) = &entry.deleting {
                     println!("        {}", output::yellow(&format!("already {deleting}")));

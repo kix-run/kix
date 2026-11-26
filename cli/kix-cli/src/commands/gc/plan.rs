@@ -1,7 +1,6 @@
 //! Classify soft, hard, and Activation record garbage for `kix gc`.
 
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::collections::HashSet;
 
 use miette::{Result, miette};
 use serde_json::Value;
@@ -12,7 +11,6 @@ use crate::output;
 use kix::cluster::activation::{Record, Records, RetentionPolicy, Retirement, retire_plan};
 use kix::cluster::discovery;
 use kix::cluster::inventory;
-use kix::eval::store_graph::store_hash;
 use kix::manifest::keys;
 use kix::manifest::lifecycle;
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId, to_manifest_value};
@@ -20,7 +18,9 @@ use kix::manifest::types::{CLUSTER_SCOPED, ResourceId, to_manifest_value};
 /// Reason a live resource was classified as garbage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum GarbageReason {
-    /// Resource carries a `kix.run/identity-hash` that is absent from the expected set.
+    /// Resource carries a `kix.run/identity-hash` that is absent from the
+    /// build gc compares with: the Active build, or the build from the current
+    /// files when the cluster has no Active record.
     HashNotExpected,
     /// Resource carries the Kix label but no `kix.run/identity-hash` annotation.
     NoIdentityHash,
@@ -30,15 +30,17 @@ pub(super) enum GarbageReason {
 }
 
 impl GarbageReason {
-    pub(super) fn label(&self) -> &'static str {
+    /// Describe the reason, naming `compared`, the build this run compared
+    /// live objects with, such as `the build of active deployment c-v2`.
+    pub(super) fn label(&self, compared: &str) -> String {
         match self {
-            GarbageReason::HashNotExpected => {
-                "build hash is not in the build made from the current files"
-            }
+            GarbageReason::HashNotExpected => format!("not in {compared}"),
             GarbageReason::NoIdentityHash => {
-                "carries Kix's label but no Kix build annotation (`--include unstamped`)"
+                "no Kix build annotation, so Kix cannot match it to a build".to_string()
             }
-            GarbageReason::RetiredActivation => "activation record retired by retention",
+            GarbageReason::RetiredActivation => {
+                "activation record retired by retention".to_string()
+            }
         }
     }
 }
@@ -79,23 +81,23 @@ impl RecordRetirement {
     }
 }
 
-/// Return manifests from `closures` (`status.orphansKeptFrom`) that are absent
-/// from the new build and not already present in `garbage`.
+/// Return manifests from `closures` (`status.orphansKeptFrom`) that the
+/// Active build does not contain, once each. `active_hashes` and `active_ids`
+/// are the Active build's store hashes and Kubernetes identities.
 pub(super) fn kept_garbage(
     closures: &[Vec<Value>],
-    garbage: &HashMap<String, Value>,
-    new_hashes: &HashSet<String>,
-    new_ids: &HashSet<String>,
+    active_hashes: &HashSet<String>,
+    active_ids: &HashSet<String>,
 ) -> Vec<Value> {
-    let mut seen: HashSet<String> = garbage.values().map(k8s_identity).collect();
+    let mut seen: HashSet<String> = HashSet::new();
     let mut out = Vec::new();
     for manifest in closures.iter().flatten() {
         let Some(hash) = keys::get(manifest, keys::IDENTITY_HASH) else {
             continue;
         };
         if !lifecycle::lifecycle_of(manifest).prunable()
-            || new_hashes.contains(hash)
-            || new_ids.contains(&k8s_identity(manifest))
+            || active_hashes.contains(hash)
+            || active_ids.contains(&k8s_identity(manifest))
         {
             continue;
         }
@@ -122,18 +124,33 @@ pub(super) fn may_clear_kept(
         && active.identity_hash.as_deref() == build_hash
 }
 
+/// What [`judge_hard`] found.
+#[derive(Default)]
+pub(super) struct Judged {
+    pub garbage: Vec<GarbageEntry>,
+    /// Orphans another Kix cluster's current record still names.
+    pub shared: Vec<inventory::SharedOrphan>,
+    /// Objects a pending record of this Kix cluster names.
+    pub held: Vec<inventory::HeldObject>,
+}
+
 /// Classify `live` objects against `expected_hashes` and `expected_ids`,
-/// returning garbage entries and orphans shared with other Kix clusters.
+/// the objects of the build gc compares with.
 ///
-/// Activation records are skipped here and handled by the retention policy.
+/// An object outside that build is kept, not garbage, when a record of this
+/// Kix cluster names it, such as a failed or partly deployed deploy that
+/// wrote it, or when another Kix cluster's current
+/// record names it. Activation records are skipped here and handled by the
+/// retention policy.
 pub(super) fn judge_hard(
     live: &[kube::api::DynamicObject],
     expected_hashes: &HashSet<String>,
     expected_ids: &HashSet<String>,
     tenancy: &kix::cluster::tenancy::Tenancy,
-) -> (Vec<GarbageEntry>, Vec<inventory::SharedOrphan>) {
+) -> Judged {
     let mut garbage: Vec<GarbageEntry> = Vec::new();
     let mut shared: Vec<inventory::SharedOrphan> = Vec::new();
+    let mut held: Vec<inventory::HeldObject> = Vec::new();
     for obj in live {
         if kix::manifest::lifecycle::lifecycle_of_live(obj)
             == kix::manifest::lifecycle::Lifecycle::Record
@@ -176,6 +193,15 @@ pub(super) fn judge_hard(
             None => GarbageReason::NoIdentityHash,
         };
 
+        let records = tenancy.pending_records_of(obj);
+        if !records.is_empty() {
+            held.push(inventory::HeldObject {
+                rid: kix::cluster::drift::resource_id(obj),
+                records,
+            });
+            continue;
+        }
+
         let others = tenancy.still_deployed_by_others(obj);
         if !others.is_empty()
             && !lifecycle::never_pruned(kix::cluster::drift::resource_id(obj).group_kind())
@@ -187,17 +213,49 @@ pub(super) fn judge_hard(
             continue;
         }
 
+        // A package instance record names its instance in its spec, not in
+        // its `kix.run/package` stamp.
+        let (package, package_namespace) =
+            match kix::eval::store_graph::instance_of_record(&to_manifest_value(obj)) {
+                Some((ns, name)) => (Some(name), Some(ns)),
+                None => (ann_get(keys::PACKAGE), ann_get(keys::PACKAGE_NAMESPACE)),
+            };
         garbage.push(GarbageEntry {
             id: kix::cluster::drift::resource_id(obj),
             identity_hash,
-            package: ann_get(keys::PACKAGE),
-            package_namespace: ann_get(keys::PACKAGE_NAMESPACE),
+            package,
+            package_namespace,
             activations: ann_get(keys::ACTIVATIONS),
             reason,
             deleting: kix::cluster::readiness::deletion_reason(obj),
         });
     }
-    (garbage, shared)
+    Judged {
+        garbage,
+        shared,
+        held,
+    }
+}
+
+/// Split out the unstamped objects that `--include unstamped` covers, unless
+/// `include_unstamped` is set, and return them with the rest of `garbage`.
+///
+/// An unstamped object is one Kix wrote without `kix.run/identity-hash`. A
+/// copy has no hash either, but the sweep already set it apart and
+/// `--include copies` judges it, so `copies` (the ids of the sweep's copies)
+/// stay in the rest. Protected kinds stay in the rest too, so the plan lists
+/// them as kept.
+pub(super) fn hold_back_unstamped(
+    garbage: Vec<GarbageEntry>,
+    copies: &HashSet<ResourceId>,
+    include_unstamped: bool,
+) -> (Vec<GarbageEntry>, Vec<GarbageEntry>) {
+    garbage.into_iter().partition(|g| {
+        g.reason == GarbageReason::NoIdentityHash
+            && !include_unstamped
+            && !copies.contains(&g.id)
+            && !lifecycle::never_pruned(g.id.group_kind())
+    })
 }
 
 /// Return `true` if `obj` carries annotation `key` in its raw data or typed metadata.
@@ -301,14 +359,21 @@ pub(super) async fn plan_record_retirement(
     cluster: &str,
     policy: &RetentionPolicy,
 ) -> Result<RecordRetirement> {
-    let client = client::make_client(global.context.as_deref())
+    plan_records_with(open_records(global).await?, cluster, policy).await
+}
+
+/// Say which Kubernetes cluster gc targets, connect to it, and open its
+/// Activation records, or return `None` when the cluster has none.
+pub(super) async fn open_records(global: &crate::cli::GlobalArgs) -> Result<Option<Records>> {
+    let (client, _) = client::connect(global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
     let discovery = discovery::discover_resources(&client)
         .await
         .map_err(|e| miette!("{e}"))?;
-    let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
-    plan_records_with(records.into_records(), cluster, policy).await
+    Ok(Records::open(&client, &discovery)
+        .map_err(|e| miette!("{e}"))?
+        .into_records())
 }
 
 /// List Superseded records and compute the retirement plan for `cluster`.
@@ -379,30 +444,4 @@ fn live_identity(obj: &kube::api::DynamicObject) -> String {
 pub(super) fn k8s_identity(manifest: &Value) -> String {
     let rid = ResourceId::from_value(manifest);
     format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
-}
-
-/// Return manifests from `old` whose Kubernetes identity (`kind`, `namespace`,
-/// and `name`) is absent from the new build, keyed by store hash.
-///
-/// A changed store hash alone is not garbage when the resource still exists
-/// under the same Kubernetes identity, because soft GC deletes by name.
-/// Activation records are also excluded here and retired via the retention
-/// policy instead.
-pub(super) fn soft_garbage<'a>(
-    old: impl IntoIterator<Item = (&'a PathBuf, &'a Value)>,
-    new_hashes: &HashSet<String>,
-    new_ids: &HashSet<String>,
-) -> HashMap<String, Value> {
-    let mut garbage = HashMap::new();
-    for (path, manifest) in old {
-        if lifecycle::is_record(manifest) {
-            continue;
-        }
-        let hash = store_hash(path);
-        if new_hashes.contains(&hash) || new_ids.contains(&k8s_identity(manifest)) {
-            continue;
-        }
-        garbage.insert(hash, manifest.clone());
-    }
-    garbage
 }

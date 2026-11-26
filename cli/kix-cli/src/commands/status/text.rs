@@ -3,8 +3,8 @@
 use std::fmt::Write;
 
 use super::document::{
-    ClusterStatus, Drift, DriftState, LeavingStatus, ObjectsFrom, PackageStatus, Present, Problem,
-    ResourceStatus, StatusDocument, Summary,
+    ClusterStatus, Drift, DriftState, FailedDeployStatus, LeavingStatus, ObjectsFrom,
+    PackageStatus, Present, Problem, ResourceStatus, StatusDocument, Summary,
 };
 use crate::output;
 
@@ -30,7 +30,7 @@ pub fn render(doc: &StatusDocument, detail: Detail, age: &dyn Fn(&str) -> String
     }
     if detail != Detail::Problems {
         if doc.clusters.len() > 1 {
-            let _ = writeln!(out, "\nAll clusters: {}", summary_line(&doc.summary));
+            let _ = writeln!(out, "\nAll clusters: {}", summary_line(&doc.summary, true));
         }
         if !doc.unreadable.is_empty() {
             let _ = writeln!(
@@ -58,8 +58,17 @@ fn render_cluster(
         if let Some(version) = &doc.kubernetes.version {
             let _ = write!(header, " on Kubernetes {version}");
         }
-        if let Some(context) = &doc.kubernetes.context {
-            let _ = write!(header, " (context {context})");
+        match (&doc.kubernetes.context, &doc.kubernetes.server) {
+            (Some(context), Some(server)) => {
+                let _ = write!(header, " (context {context}, {server})");
+            }
+            (Some(context), None) => {
+                let _ = write!(header, " (context {context})");
+            }
+            (None, Some(server)) => {
+                let _ = write!(header, " ({server})");
+            }
+            (None, None) => {}
         }
         let _ = writeln!(out, "{header}");
         if detail == Detail::Everything
@@ -73,12 +82,38 @@ fn render_cluster(
             .as_deref()
             .map(|at| format!("  {}", age(at)))
             .unwrap_or_default();
-        let _ = writeln!(
-            out,
-            "Last deploy: {}  {}{when}",
-            c.deploy.name,
-            phase(&c.deploy.phase)
-        );
+        match &c.failed_deploy {
+            Some(failed) => {
+                let failed_when = failed
+                    .failed_at
+                    .as_deref()
+                    .map(|at| format!("  {}", age(at)))
+                    .unwrap_or_default();
+                let _ = writeln!(
+                    out,
+                    "Last deploy: {}  {}{failed_when}",
+                    failed.name,
+                    output::red("Failed")
+                );
+                if let Some(reason) = &failed.reason {
+                    let _ = writeln!(out, "  {reason}");
+                }
+                let _ = writeln!(
+                    out,
+                    "Current deploy: {}  {}{when}",
+                    c.deploy.name,
+                    phase(&c.deploy.phase)
+                );
+            }
+            None => {
+                let _ = writeln!(
+                    out,
+                    "Last deploy: {}  {}{when}",
+                    c.deploy.name,
+                    phase(&c.deploy.phase)
+                );
+            }
+        }
         if c.objects_from == ObjectsFrom::Unknown {
             let _ = writeln!(
                 out,
@@ -170,8 +205,19 @@ fn render_cluster(
         }
     }
 
+    if let Some(failed) = &c.failed_deploy {
+        render_failed(out, doc, c, failed, detail, age);
+    }
+
     if detail != Detail::Problems {
-        let _ = writeln!(out, "\n{}", summary_line(&c.summary));
+        let _ = writeln!(out, "\n{}", summary_line(&c.summary, false));
+        if c.failed_deploy.is_some() {
+            let cluster = &c.cluster;
+            let _ = writeln!(
+                out,
+                "Next: fix what caused the last deploy to fail and run `kix deploy {cluster}` again."
+            );
+        }
         let s = &c.summary;
         if s.missing + s.changed > 0 {
             let _ = writeln!(out, "{}", next_step(c));
@@ -186,6 +232,45 @@ fn render_cluster(
     }
     for note in &c.notes {
         let _ = writeln!(out, "{}", output::yellow(note));
+    }
+}
+
+/// Render the objects that only the failed deploy has. Outside `-q`, every
+/// one is listed, since they are what the failed deploy tried to add.
+fn render_failed(
+    out: &mut String,
+    doc: &StatusDocument,
+    c: &ClusterStatus,
+    failed: &FailedDeployStatus,
+    detail: Detail,
+    age: &dyn Fn(&str) -> String,
+) {
+    let rows: Vec<&ResourceStatus> = failed
+        .packages
+        .iter()
+        .flat_map(|p| &p.resources)
+        .filter(|r| detail != Detail::Problems || !r.problems.is_empty())
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    let width = rows
+        .iter()
+        .map(|r| resource_label(r).chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut title = format!("Only in the failed deploy {}", failed.name);
+    if detail == Detail::Problems && doc.clusters.len() > 1 {
+        title = format!("{} {title}", c.cluster);
+    }
+    let _ = writeln!(out, "\n{}", output::bold(&title));
+    for r in rows {
+        let _ = writeln!(
+            out,
+            "  {:<width$}  {}",
+            resource_label(r),
+            resource_state(r, age)
+        );
     }
 }
 
@@ -292,7 +377,7 @@ fn problem_counts(s: &Summary) -> Vec<String> {
 
 /// Return the closing line, such as `29 resources: 26 ok, 1 changed, 2 not
 /// checked.`
-fn summary_line(s: &Summary) -> String {
+fn summary_line(s: &Summary, all_clusters: bool) -> String {
     let mut parts = vec![format!("{} ok", s.ok)];
     parts.extend(problem_counts(s));
     if s.not_checked > 0 {
@@ -308,6 +393,12 @@ fn summary_line(s: &Summary) -> String {
         },
         parts.join(", ")
     );
+    match (all_clusters, s.failed_deploys) {
+        (_, 0) => {}
+        (false, _) => line.push_str(" Last deploy failed."),
+        (true, 1) => line.push_str(" Last deploy failed on 1 Kix cluster."),
+        (true, n) => line.push_str(&format!(" Last deploy failed on {n} Kix clusters.")),
+    }
     match s.leaving {
         0 => {}
         1 => line.push_str(" 1 object not in the current deploy is still being deleted."),

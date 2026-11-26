@@ -22,9 +22,9 @@ use super::CommandContext;
 pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
     let crds = kix_crds_from_build(args, ctx)?;
 
-    let client = ctx
+    let (client, _) = ctx
         .runtime()?
-        .block_on(client::make_client(ctx.global.context.as_deref()))
+        .block_on(client::connect(ctx.global.context.as_deref()))
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
     let ops = KubeMigrationOps::new(client);
 

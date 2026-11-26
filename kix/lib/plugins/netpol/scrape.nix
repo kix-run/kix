@@ -106,6 +106,10 @@ in
       enforcerApi,
       enforced,
       defaultDeny,
+      # The namespaces with a `<namespace>-default-deny` policy. A target in
+      # another namespace gets scrape ingress only when another policy
+      # already isolates all its pods, as when default deny is off.
+      defaultDenyNamespaces ? realNsNames,
       extraPolicies ? [ ],
     }:
     let
@@ -746,6 +750,8 @@ in
 
           egressPolicy = enforcerApi.mkPolicy {
             mkResource = core.mkResource;
+            selector = scraperSelector;
+            egress = egressRules;
             extraArgs = {
               name = "${stem}-scrape-egress";
               namespace = nsResources.${promNs};
@@ -753,10 +759,6 @@ in
                 ${kixKeys.derived} = "true";
                 ${kixKeys.policyType} = "scrape";
                 "app.kubernetes.io/managed-by" = "kix";
-              };
-              spec = {
-                endpointSelector.matchLabels = scraperSelector;
-                egress = egressRules;
               };
             };
           };
@@ -766,10 +768,11 @@ in
           ingressCandidates = builtins.filter (
             t: !t.hostNetwork && nsResources ? ${plain t.namespace}
           ) targets;
-          ingressTargets = builtins.filter (t: defaultDeny || isolationOf t == "all") ingressCandidates;
-          partlyIsolatedTargets = lib.optionals (!defaultDeny) (
-            builtins.filter (t: isolationOf t == "some") ingressCandidates
-          );
+          deniedIn = t: defaultDeny && builtins.elem (plain t.namespace) defaultDenyNamespaces;
+          ingressTargets = builtins.filter (t: deniedIn t || isolationOf t == "all") ingressCandidates;
+          partlyIsolatedTargets = builtins.filter (
+            t: !(deniedIn t) && isolationOf t == "some"
+          ) ingressCandidates;
 
           # Build a unique ingress policy name for a scrape target, appending a
           # hash to disambiguate colliding namespace, Prometheus, and monitor
@@ -787,6 +790,14 @@ in
             t:
             enforcerApi.mkPolicy {
               mkResource = core.mkResource;
+              selector = t.podSelector;
+              ingress = [
+                (enforcerApi.mkCallerIngressRule {
+                  callerSelector = scraperSelector;
+                  callerNamespace = promNs;
+                  inherit (t) ports;
+                })
+              ];
               extraArgs = {
                 name = ingressPolicyName t;
                 namespace = nsResources.${plain t.namespace};
@@ -794,16 +805,6 @@ in
                   ${kixKeys.derived} = "true";
                   ${kixKeys.policyType} = "scrape";
                   "app.kubernetes.io/managed-by" = "kix";
-                };
-                spec = {
-                  endpointSelector.matchLabels = t.podSelector;
-                  ingress = [
-                    (enforcerApi.mkCallerIngressRule {
-                      callerSelector = scraperSelector;
-                      callerNamespace = promNs;
-                      inherit (t) ports;
-                    })
-                  ];
                 };
               };
             };
@@ -819,7 +820,12 @@ in
                   "may isolate only some of the target's pods, because that policy matches labels outside the target's selector and Kix does not know the full labels of pods it did not build"
                 else
                   "isolates only some of the target's pods"
-              }. Without default deny Kix adds scrape ingress only where it can show that every pod is already isolated, so the server cannot reach the isolated pods. Select all of the target's pods in that policy, or turn on networkPolicy.defaultDeny."
+              }. ${
+                if defaultDeny then
+                  "Namespace ${plain t.namespace} has no default-deny policy because it contains no deployed instances or is listed in `networkPolicy.platformNamespaces`. Kix skipped generating a scrape ingress policy to avoid isolating the remaining pods, so the monitoring server cannot scrape the isolated pods. Select all of the target's pods in that ingress policy, or add a default-deny policy to ${plain t.namespace} (declare `namespaces.${plain t.namespace} = { };` and remove `${plain t.namespace}` from `networkPolicy.platformNamespaces` if present)"
+                else
+                  "With `networkPolicy.defaultDeny = false`, Kix skipped generating a scrape ingress policy to avoid isolating the remaining pods, so the monitoring server cannot scrape the isolated pods. Select all of the target's pods in that ingress policy, or set `networkPolicy.defaultDeny = true`"
+              }."
             ) partlyIsolatedTargets
           );
           inherit unreadWarnings;
