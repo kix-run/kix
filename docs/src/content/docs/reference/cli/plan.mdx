@@ -122,14 +122,14 @@ say:
   not ready, missing from the cluster, or unreadable, a `!` warning explains
   why cleanup may stall and how to fix it before deploying. Warnings do not
   change the exit code.
-- With `--prune`, a `!` warning for each CustomResourceDefinition that leaves
-  the build while objects of its kind that the prune does not delete are still
-  on the cluster (objects Kix did not create, such as a Certificate made with
-  `kubectl`). Nothing else in the build may declare the definition, through
-  `scope.mkCRD` or `scope.mkCRDRef`. The warning names up to 20 of the objects,
-  those with finalizers first, because once the kind's controller is removed,
-  nothing removes their finalizers or cleans up what they made outside the
-  cluster. Kix still allows the deploy.
+- With `--prune`, a `!` warning when the new build no longer declares a
+  CustomResourceDefinition (through `scope.mkCRD`, `scope.mkCRDRef`, or
+  `kix.mkImport`), while custom resources of that kind remain on the cluster and
+  will not be deleted by the prune (such as a Certificate created with
+  `kubectl`). Once the kind's controller is removed, nothing clears finalizers
+  on those objects or cleans up external resources they manage. The warning
+  lists up to 20 objects, those with finalizers first. Kix still allows the
+  deploy, and the warning does not change the exit code.
 - `Not checked by the dry run (N)`, grouped by reason, five names per group.
 - A closing note that no preview checks whether Pods start, pull their
   images, and pass their readiness probes.
@@ -197,7 +197,7 @@ Its JSON Schema is `cli/kix-cli/schema/plan.schema.json`.
 | `admission` | Checked section of `{ resource, reason, webhook, message }`. See [Refusal reasons](#refusal-reasons). |
 | `drift` | Checked section of `{ resource, path, live, deployed, managers, reverted }`. A plan lists the drift on the objects the deploy applies, so `reverted` is always true; `kix plan --read-only` also lists drift the deploy leaves alone, with `reverted` false. |
 | `being_deleted` | Array of `{ resource, since, finalizers, holds_data }` for each object this deploy applies that is currently being deleted on the cluster. `since` is `metadata.deletionTimestamp`, `finalizers` lists the finalizers still holding the object, and `holds_data` is `true` when the object may hold data (which the recreated object will not keep). Omitted when empty, and omitted by `kix plan --read-only` and `kix diff`. |
-| `prune` | Checked section of `{ resource, fate, detail, finalizers, deleting_since, controllers, left_behind }`. See [Prune fates](#prune-fates). The last three fields appear only when `fate` is `delete` and are omitted when unset or empty. `finalizers` lists any finalizers on the object. `deleting_since` is `metadata.deletionTimestamp` when the object is already being deleted (the deploy waits for that deletion instead of sending a second delete). When `finalizers` is non-empty, `controllers` lists each controller declared for the object's kind (`controller` on `scope.mkCRD` or `scope.mkCRDRef`) as `{ resource, state, detail }`, where `state` is `ready`, `not_ready`, `missing`, or `unread`, and `detail` (when present) explains `not_ready` or `unread`. `left_behind` appears on a CustomResourceDefinition, or a `scope.mkCRDRef` marker, whose kind nothing in the new build declares, when `--prune` is set and objects of that kind that the prune does not delete are on the cluster: `{ kind, count, objects: [{ resource, finalizers }] }`, with at most 20 objects, those with finalizers first. |
+| `prune` | Checked section of `{ resource, fate, detail, finalizers, deleting_since, controllers, left_behind }`. See [Prune fates](#prune-fates). `finalizers`, `deleting_since`, and `controllers` appear only when `fate` is `delete` and are omitted when unset or empty. `finalizers` lists any finalizers on the object. `deleting_since` is `metadata.deletionTimestamp` when the object is already being deleted (the deploy waits for that deletion instead of sending a second delete). When `finalizers` is non-empty, `controllers` lists each controller declared for the object's kind (`controller` on `scope.mkCRD` or `scope.mkCRDRef`) as `{ resource, state, detail }`, where `state` is `ready`, `not_ready`, `missing`, or `unread`, and `detail` (when present) explains `not_ready` or `unread`. With `--prune`, `left_behind` (`{ kind, count, objects: [{ resource, finalizers }] }`) is set on a CustomResourceDefinition or CRD reference marker (`scope.mkCRDRef` or `kix.mkImport`) when nothing in the new build declares that CRD and custom resources of `kind` will remain on the cluster after the prune. `count` is the total number of remaining objects, and `objects` lists up to 20 of them, those with finalizers first (`finalizers` is omitted when empty). |
 | `readiness` | Always `{ "status": "not_checked", "reason": "not_previewable" }`. |
 | `warnings` | The Kix library's warnings for the build, each with the fields [`kix check`](/docs/reference/cli/check/#library-warnings) gives a warning, without `severity`. Left out when there are none, and for a build read from a bundle. |
 | `not_checked` | Array of `{ resource, reason, because, detail }`. `because` names the Namespace, CustomResourceDefinition, or Service that this deploy changes and that the answer depends on, when Kix knows which. Empty unless `made_by` is `dry_run`. |

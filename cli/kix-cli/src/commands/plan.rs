@@ -243,7 +243,7 @@ async fn left_behind_of(
             }
             Ok(_) => {}
             Err(e) => eprintln!(
-                "warning: could not list the objects of {crd} that the prune leaves on the cluster: {e}"
+                "warning: could not check CustomResourceDefinition {crd} for custom resources left on the cluster: {e}\n  Kix skipped this check and continued, so the plan will not warn if custom resources for {crd} remain after `--prune`.\n  Grant this account `get` permission on CustomResourceDefinition {crd} and cluster-wide `list` permission on its custom resources (or fix the error above), then run the command again."
             ),
         }
     }

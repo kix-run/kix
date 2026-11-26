@@ -684,15 +684,20 @@ fn left_behind(plan: &Plan) -> Vec<(&PruneEntry, &LeftBehind)> {
 /// Return the warning for objects of a kind that stay on the cluster after
 /// the kind's definition leaves the build.
 fn left_behind_warning(p: &PruneEntry, left: &LeftBehind) -> String {
+    let resource = &p.resource;
+    let kind = &left.kind;
     let n = left.count;
-    let (objects, stay) = if n == 1 {
-        ("object", "stays")
+    let (objects, those, they_manage, them) = if n == 1 {
+        ("object", "that object", "it manages", "it")
     } else {
-        ("objects", "stay")
+        ("objects", "those objects", "they manage", "them")
     };
     format!(
-        "{} leaves the build, but {n} {} {objects} that this prune does not delete {stay} on          the cluster. Kix did not create them, so it leaves them there. If the controller          for this kind is removed, nothing will remove their finalizers or clean up what they          made outside the cluster. Delete them before the prune if that is intended.",
-        p.resource, left.kind
+        "{resource} is no longer in the build, and this prune leaves {n} {kind} {objects} \
+         on the cluster. If this prune removes the {kind} controller, nothing will clear \
+         finalizers on {those} or clean up external resources {they_manage}. Kix still \
+         allows the deploy. If you no longer need {them}, delete {them} while the \
+         controller is still running, before running `--prune`."
     )
 }
 
@@ -1254,7 +1259,12 @@ mod tests {
         assert!(
             text.contains(
                 "! CustomResourceDefinition.apiextensions.k8s.io/challenges.acme.cert-manager.io \
-                 leaves the build, but 22 Challenge.acme.cert-manager.io objects"
+                 is no longer in the build, and this prune leaves 22 \
+                 Challenge.acme.cert-manager.io objects on the cluster. If this prune removes \
+                 the Challenge.acme.cert-manager.io controller, nothing will clear finalizers on \
+                 those objects or clean up external resources they manage. Kix still allows the \
+                 deploy. If you no longer need them, delete them while the controller is still \
+                 running, before running `--prune`."
             ),
             "{text}"
         );
