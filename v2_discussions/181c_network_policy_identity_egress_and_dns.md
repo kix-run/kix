@@ -92,13 +92,18 @@ selector, and the `cilium` package's cluster-wide DNS policy reads the same
 The GKE flavors list all four documented GKE DNS destinations. Any single GKE
 cluster uses only one or two of them, and rules for absent peers open nothing
 beyond port 53 on `169.254.169.254/32`, avoiding a separate per-cluster DNS
-mode setting.
+mode setting. The list must hold both the `node-local-dns` pod selector (GKE
+Standard: V, F20) and `169.254.20.10/32` (GKE Autopilot: V, N5), because
+neither works on the other: on Autopilot, pods send DNS to `169.254.20.10` and
+the `node-local-dns` pods run on the host network, where pod selectors do not
+match them.
 
 | DNS peer | Evidence |
 |---|---|
 | `kube-dns` pods (without NodeLocal DNSCache) | **A:** the `kube-dns` Service uses these labels (F20), though this path was not tested live |
-| `node-local-dns` pods | V (F20) |
-| `169.254.169.254` and `169.254.20.10` (Cloud DNS) | D [g-clouddns]. **A** that `ipBlock` rules reach them; requires testing on GKE Autopilot |
+| `node-local-dns` pods | V (F20) on GKE Standard; fails on GKE Autopilot (0 of 3; V, N5) |
+| `169.254.20.10` (NodeLocal DNSCache link-local address) | V (N5) on GKE Autopilot: under default-deny egress, only an `ipBlock` for `169.254.20.10/32` on UDP and TCP 53 lets DNS through (3 of 3); the `kube-dns` pod selector, the `node-local-dns` pod selector, an `ipBlock` for the node range, and an `ipBlock` for the `kube-dns` Service address each fail (0 of 3) |
+| `169.254.169.254` (Cloud DNS without NodeLocal DNSCache) | D [g-clouddns]; untested (**A**) |
 | EKS CoreDNS pods | D [a-bp] |
 
 **Cost.** One additional field (`out.dnsPeers`) on the `dns` role's `out`.

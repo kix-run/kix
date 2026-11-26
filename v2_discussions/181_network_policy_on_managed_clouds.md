@@ -16,11 +16,11 @@ the cluster installs.
 Every platform claim below is marked with its evidence:
 
 - **V (Fn):** verified on a live cluster. `Fn` cites a finding in the
-  2026-11-25 GKE test report, and `N1`, `N2`, `N3`, and `N4` cite the "Network
-  policy facts for the design" section of that report. `AWS Fn` cites a finding
-  in the EKS test report from the same day, and `AWS Q1` to `AWS Q8` cite the
-  numbered answers in the "Network policy facts for the design" section of the
-  EKS test report.
+  2026-11-25 GKE test report, and `N1`, `N2`, `N3`, `N4`, and `N5` cite the
+  "Network policy facts for the design" section of that report. `AWS Fn` cites a
+  finding in the EKS test report from the same day, and `AWS Q1` to `AWS Q8`
+  cite the numbered answers in the "Network policy facts for the design" section
+  of the EKS test report.
 - **D [ref]:** documented by the vendor as of 2026-11-25 (links in `181b_network_policy_platform_facts.md`).
 - **A:** unverified assumption.
 
