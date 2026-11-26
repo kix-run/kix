@@ -688,8 +688,8 @@ jobs:
           cli/runtime/nix-builder.sh "$RUNNER_TEMP/kix-$VERSION-${{ matrix.system }}" .
 
   # Publishes the archives the release job built, once they ran without Nix.
-  # This repository is private and so are its releases, so the binaries go
-  # to the public kix-run/kix-releases instead. KIX_RELEASES_TOKEN is a
+  # The binaries go to kix-run/kix-releases, which was the public home for
+  # releases while this repository was private. KIX_RELEASES_TOKEN is a
   # fine-grained token with Contents read/write on that repository only.
   # A rehearsal (a manual run with the `rehearse` input) signs the archives
   # with the real release key, builds a copy of the release site the way
