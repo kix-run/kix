@@ -63,7 +63,7 @@ Kix is below 1.0 and uses semantic versioning. Minor releases may include breaki
 - [`kix/packages/`](kix/packages/): `stable/` and `experimental/` package definitions
 - [`docs/`](docs/): documentation site
 
-Kix is developed largely by AI coding agents, directed and reviewed by its two maintainers. [`v2_discussions/`](v2_discussions/) holds design documents, and [`housekeeping/`](housekeeping/) tracks known problems to fix later.
+Kix is developed largely by AI coding agents, directed and reviewed by its two maintainers. [`discussions/`](discussions/) holds design documents, and [`housekeeping/`](housekeeping/) tracks known problems to fix later.
 
 ## Feedback and bugs
 

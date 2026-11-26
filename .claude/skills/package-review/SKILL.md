@@ -344,7 +344,7 @@ when a check fails or the path is not evaluated by default.
 
 ### Comments and prose (Pr)
 
-These items also apply to text the change adds under `docs/`, `housekeeping/`, and `v2_discussions/`.
+These items also apply to text the change adds under `docs/`, `housekeeping/`, and `discussions/`.
 
 - Pr1. Does the header describe things the code does not do? Read it against the code. Fix: correct it.
 - Pr2. Does the header miss the template or its section labels: `# <package directory name>: <what it runs>`, what it installs, `Dependencies:` (required and optional deps and required config), a minimal instance, `` `out`: `` (the `out` contract), then `Escape hatches:` and `Limits:` when the package has any (ceilings, untested paths, host prerequisites)? Fix: add what is missing.
@@ -369,7 +369,7 @@ These items also apply to text the change adds under `docs/`, `housekeeping/`, a
 - T4. Does a new package or setting miss its `kix/package-eval.nix` entry (`settings`), or carry an unjustified `knownFailures` or other exception? Fix: add settings; grant or fix.
 - T5. Are header examples and docs snippets unevaluated? Fix: evaluate the exact snippet; a header example with a SOPS `source` is evaluated through its `stringData` twin in the test cluster, which the header names.
 - T6. Does a new public API miss `docs/src/content/docs/reference/`, the kix-migration skill, or this skill? Fix: add rows.
-- T7. Do docs, skills, examples, or lib test file names still name removed options, packages, or paths? `git grep -n -i` every spelling (`foo-bar`, `foo_bar`, `fooBar`, `foo bar`). Hits in `v2_discussions/archive/` and housekeeping history are acceptable. Fix: update them in the same change.
+- T7. Do docs, skills, examples, or lib test file names still name removed options, packages, or paths? `git grep -n -i` every spelling (`foo-bar`, `foo_bar`, `fooBar`, `foo bar`). Hits in `discussions/archive/` and housekeeping history are acceptable. Fix: update them in the same change.
 - T8. Are noticed, unfixed problems missing from `housekeeping/`? Is an entry kept whose problem the change resolves, deleted while the problem holds, or written as a near-duplicate of an existing entry? Fix: one entry per problem; append to the existing entry; delete resolved ones in the same change.
 - T9. Are host prerequisites (kernel modules, `/dev/kvm`, architecture) undocumented? Fix: header line.
 - T10. Does a how-to tell readers to deploy a test fixture, depend on test-only resources, or assert another page's Secret names or keys? Fix: self-contained steps.
@@ -414,7 +414,7 @@ checklist above:
 
 - `git grep -n -i` every spelling of the package name and of its option names
   over tracked files (a recursive grep walks gitignored trees such as
-  `docs/dist/`). Report each hit outside `v2_discussions/archive/` and
+  `docs/dist/`). Report each hit outside `discussions/archive/` and
   housekeeping history.
 - Its consumers in `clusters/` and the docs examples are removed or
   moved to a replacement; optional `<name> ? null` args in other packages are

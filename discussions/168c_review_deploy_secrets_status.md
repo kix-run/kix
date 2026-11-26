@@ -95,7 +95,7 @@ Medium. A and B are a refactor with tests that already exist to move. C, D, and 
 
 ### Why it exists, and why it is no longer needed
 
-The first design (`v2_discussions/archive/76_secrets_design.md:51-55`) copied the "download with a checksum" pattern. In that design the build never saw the encrypted file. The hash in the definition was the only thing that made a changed secret change the build, and so restart the pods that read it.
+The first design (`discussions/archive/76_secrets_design.md:51-55`) copied the "download with a checksum" pattern. In that design the build never saw the encrypted file. The hash in the definition was the only thing that made a changed secret change the build, and so restart the pods that read it.
 
 That is no longer true. The library now copies the encrypted file into the build (`builders.nix:920-927`) and writes its content-addressed path to `kix.run/sops-source` (`builders.nix:945`). So:
 

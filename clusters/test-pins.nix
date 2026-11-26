@@ -1,7 +1,7 @@
 # clusters/test-pins.nix: a deployable cluster whose image reference comes
 # from a committed pin file rather than from a literal in this file.
 #
-# This is the worked example for `v2_discussions/archive/138`. Three things are shown
+# This is the worked example for `discussions/archive/138`. Three things are shown
 # here that are hard to see from the code alone:
 #
 #   1. The reference is resolved. `pins.get "web"` returns a repository, a tag

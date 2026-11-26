@@ -70,7 +70,7 @@ everything in the directory.
   `CLAUDE.prose.md`.
 - A group that turns out to be a feature request belongs in
   `ROADMAP.md`, and one that needs a design belongs in
-  `v2_discussions/` via the `structured-thinking` skill. Say so in the
+  `discussions/` via the `structured-thinking` skill. Say so in the
   review rather than designing it there.
 
 ## Review template

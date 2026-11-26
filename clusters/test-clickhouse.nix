@@ -1,5 +1,5 @@
 # clusters/test-clickhouse.nix: the bare ClickHouse package on kind
-# (v2_discussions/148, phase 1).
+# (discussions/148, phase 1).
 #
 # One server with its volume and its credentials, embedded Keeper included,
 # so replicated DDL works. The probe is on by default, so a deploy proves

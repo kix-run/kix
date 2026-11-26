@@ -4,7 +4,7 @@ packages.
 `scripts/vendor-crds.py` is the driver. A package's `crds/update.py` (the
 escape hatch for an upstream that is not a public URL) imports from here so
 there is one copy of fetch, parse and render. See
-v2_discussions/146_crd_vendoring_and_upgrades.md.
+discussions/146_crd_vendoring_and_upgrades.md.
 """
 
 from __future__ import annotations
@@ -89,7 +89,7 @@ def crds_in(text: bytes | str, *, source: str = "<input>") -> list[dict]:
             # to create under its own naming. Refused until that is designed.
             raise VendorError(
                 f"{source}: {name} carries a conversion webhook, which kix does not "
-                "vendor yet (v2_discussions/146 §8)"
+                "vendor yet (discussions/146 §8)"
             )
     return found
 
