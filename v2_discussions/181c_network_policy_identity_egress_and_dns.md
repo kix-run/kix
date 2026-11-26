@@ -66,12 +66,12 @@ themselves.
 
 ## 2. Decision 4: the DNS provider publishes its peers
 
-**Decision.** The provider for the `dns` role declares its DNS endpoints in
-package metadata as `meta.dnsPeers`, which Kix reads without evaluating the
-provider instance. Both renderers build `dnsEgressRule` from that list instead
-of hard-coding `k8s-app: kube-dns`. The standard renderer accepts both pod and
-`cidr` peers, and the Cilium renderer refuses `cidr` peers until a platform
-that runs Cilium needs one.
+**Decision.** The package that claims the `dns` role declares its DNS endpoints
+under one key, `meta.dnsPeers`, and Kix reads the provider's metadata without
+evaluating the instance. Both renderers build `dnsEgressRule` from that list
+instead of hard-coding `k8s-app: kube-dns`. The standard renderer accepts both
+pod and `cidr` peers, and the Cilium renderer refuses `cidr` peers until a
+platform that runs Cilium needs one.
 
 ```nix
 # kix/lib/flavors/gke.nix
@@ -87,14 +87,15 @@ platform-dns = platformDns {
 };
 ```
 
-`peers` defaults to `k8s-app: kube-dns` in `kube-system`, so existing clusters
-produce identical manifests. A pod peer with no `namespace` means the provider
-instance's own namespace. The `coredns` package publishes its own pods this way
-in `meta.dnsPeers`, and the `cilium` package's cluster-wide DNS policy reads
-the same `meta.dnsPeers` value. For a platform import (`platform-dns` in the
-flavors), this design assumes the same `dnsPeers` key in the import's metadata.
-Whether an import uses `meta.dnsPeers` or keeps `dnsPeers` on `out` is still
-open.
+A platform import uses the same `meta.dnsPeers` key: `kix.mkImport` takes a
+`dnsPeers` argument and stores it in the import's metadata, and the flavors'
+`platform-dns` helper passes its `peers` argument to `dnsPeers`. `peers`
+defaults to `k8s-app: kube-dns` in `kube-system`, so existing clusters produce
+identical manifests. A pod peer without `namespace` means the provider
+instance's own namespace. The `coredns` package declares
+`meta.dnsPeers = [ { podSelector."k8s-app" = "kube-dns"; } ]` and therefore no
+longer has to run in `kube-system`. The `cilium` package's cluster-wide DNS
+policy reads the same `meta.dnsPeers` value.
 
 The GKE flavors list all four documented GKE DNS destinations. Any single GKE
 cluster uses only one or two of them, and rules for absent peers open nothing

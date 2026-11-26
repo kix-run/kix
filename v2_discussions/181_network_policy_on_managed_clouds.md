@@ -276,17 +276,21 @@ refuses `cidr` peers until a platform that runs Cilium needs one. See
 works, the peers listed in the GKE flavors and the evidence for each, the cost,
 and the rejected alternatives.
 
-## 7. Decision 5: generate default-deny only for Kix-managed namespaces
+## 7. Decision 5: Kix writes policy only over pods it deploys
 
-**Decision.** Kix writes network policy only over pods it deploys. One fact,
-computed once per target, records whether Kix deploys that target, and default
-deny, scrape ingress policies, and caller ingress policies all read that one
-fact. Kix therefore writes `<namespace>-default-deny` only when a namespace
-holds at least one active instance that Kix deploys, or when the cluster
-definition explicitly declares that namespace under `namespaces`. Imports
-(`kix.mkImport`) and inactive optional instances do not count. In addition, Kix
-never writes a default-deny policy in any namespace listed in
-`networkPolicy.platformNamespaces`.
+**Decision.** Kix writes policy only over pods it deploys (and over targets in
+namespaces isolated by default deny), with default deny, scrape ingress, and
+caller ingress all reading one fact per target: whether Kix deploys it. The
+netpol module computes the list of default-deny namespaces once: the namespaces
+that hold an active instance Kix deploys, plus the namespaces declared under
+`namespaces`, minus `networkPolicy.platformNamespaces`. Imports
+(`kix.mkImport`) and inactive optional instances do not count as active
+instances Kix deploys. A connection target that comes from an import is marked
+as imported, so each connection knows whether Kix deploys its target. Default
+deny, scrape ingress, and caller ingress read the same list and mark. Kix
+writes `<namespace>-default-deny` for each default-deny namespace, and writes a
+caller-ingress or scrape-ingress policy over a target only when Kix deploys the
+target or the target is in a default-deny namespace.
 
 Cloud flavors default `networkPolicy.platformNamespaces` to
 `[ "kube-system" ]`. Any workload Kix deploys into `kube-system` still gets its
@@ -297,12 +301,17 @@ so their behavior does not change. `kind` and `rke2` continue describing their
 `kube-system` pods with `networkPolicy.platformIntents`, while `k3s` and
 `talos` declare none.
 
-Because scrape ingress and caller ingress policies read that per-target fact in
-every namespace, a workload's connection to a platform import (for example,
-`kube-dns` in `kube-system` on a cloud flavor) gets no caller-ingress policy
-over the platform's pods. Kix still writes the caller's own egress rule.
-Explicit `networkPolicy.platformIntents` entries remain the one way to write
-policy over pods that Kix does not deploy.
+Because caller ingress and scrape ingress check both the imported mark and the
+default-deny namespace list, a workload's connection to an import outside the
+default-deny namespaces (for example, `kube-dns` in `kube-system` on a cloud
+flavor) gets no caller-ingress or scrape-ingress policy over the platform's
+pods. Kix still writes the caller's own egress rule. When an imported target is
+in a default-deny namespace, default deny isolates that namespace, so Kix still
+writes caller-ingress and scrape-ingress policies for it. The `service-ref`
+package is an instance Kix manages, so its target counts as deployed, as
+before. Outside default-deny namespaces, explicit
+`networkPolicy.platformIntents` entries remain the way to write policy over
+pods that Kix does not deploy.
 
 **Cost.** On upgrade, a namespace containing only imports loses its
 default-deny policy without a build error. That requires a `silent`
