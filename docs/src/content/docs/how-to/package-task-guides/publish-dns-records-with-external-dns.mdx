@@ -7,6 +7,7 @@ import Command from '/src/components/Command.astro';
 import Snippet from '/src/components/Snippet.astro';
 import externalDnsInstance from '/src/snippets/clusters/test-doc-how-tos/externalDnsInstance.json';
 import externalDnsKindTryout from '/src/snippets/clusters/test-external-dns-tryout/externalDnsKindTryout.json';
+import legacyAnnotationPrefix from '/src/snippets/clusters/test-external-dns/legacyAnnotationPrefix.json';
 import eksIrsaInstance from '/src/snippets/clusters/test-cloud-identity-eks/eksIrsaInstance.json';
 
 Use the `external-dns` package to publish DNS records for the hostnames of
@@ -171,9 +172,7 @@ upgrading.
 
 To read both prefixes while you migrate, pass the upstream flag in `extraArgs`:
 
-```nix
-config.extraArgs = [ "--enable-legacy-annotation-prefix" ];
-```
+<Snippet {...legacyAnnotationPrefix} />
 
 Upstream provides this flag only for migration and plans to remove it.
 
