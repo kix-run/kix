@@ -19,7 +19,7 @@ You will read text other people wrote: release notes, changelogs, issues, upstre
 ## Read first
 
 1. `.claude/skills/package-authoring/SKILL.md`, the section on upgrading the version a package pins. It says how to do this work.
-2. `CLAUDE.md` (the versioning, stability, and change record sections), `CLAUDE.prose.md` (rules for all prose, including comments and change records), `.claude/skills/package-review/SKILL.md`, `.claude/skills/crd-vendoring/SKILL.md` if the package vendors CRDs, and `changes/README.md`. Then the package itself, starting with its header comment.
+2. `.claude/rules/versioning.md` (the versioning, stability, and change record rules), `CLAUDE.md`, `CLAUDE.prose.md` (rules for all prose, including comments and change records), `.claude/skills/package-review/SKILL.md`, `.claude/skills/crd-vendoring/SKILL.md` if the package vendors CRDs, and `changes/README.md`. Then the package itself, starting with its header comment.
 
 ## Steps
 
