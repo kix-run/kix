@@ -14,7 +14,7 @@ Each entry is named `YYYY-MM-DD-short-slug.md` for the date the problem was noti
 
 From the repository root, run `head -qn1 housekeeping/*.md` to list the first line of every file, or `grep -ril <keyword> housekeeping/` to search by keyword.
 
-- Entries record current problems only, with no priority, owner, or promise of a fix. Missing features go in [`ROADMAP.md`](../ROADMAP.md), and open design discussions go in [`v2_discussions/`](../v2_discussions/).
+- Entries record current problems only, with no priority, owner, or promise of a fix. Missing features go in [`ROADMAP.md`](../ROADMAP.md), and open design discussions go in [`discussions/`](../discussions/).
 - When an agent runs into the same problem again, it adds `Hit again <date> while <what it was doing>` to the existing entry. Repeat hits show the maintainers which problems come up most often.
 - Entries that need a maintainer's decision before they can be fixed include a `Decision required from` line.
 - Periodic batch reviews in [`housekeeping/reviews/`](reviews/) group entries by shared cause, since one underlying fix often resolves many entries at once.
