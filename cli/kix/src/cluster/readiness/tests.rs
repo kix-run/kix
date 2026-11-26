@@ -2871,6 +2871,7 @@ fn rollout_pods(current: &[Value], held: Option<&str>) -> terminal::RolloutPods 
     terminal::RolloutPods {
         current: current.to_vec(),
         held: held.map(str::to_string),
+        exact: true,
     }
 }
 

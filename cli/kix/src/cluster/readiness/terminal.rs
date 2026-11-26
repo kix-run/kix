@@ -571,6 +571,10 @@ pub fn is_rollout(kind: GroupKind<'_>) -> bool {
 pub struct RolloutPods {
     /// The pods of the current revision.
     pub current: Vec<Value>,
+    /// Whether `current` holds only the current revision's pods. It is false
+    /// when the revision could not be read and `current` holds every pod
+    /// the selector matches.
+    pub exact: bool,
     /// What to do about the pods that hold back a StatefulSet's update
     /// ([`statefulset_held_pods`]).
     pub held: Option<String>,
@@ -610,17 +614,23 @@ pub(super) async fn read_rollout_pods(
                     == Some(update)
             })
             .collect();
-        return Some(RolloutPods { current, held });
+        return Some(RolloutPods {
+            current,
+            held,
+            exact: true,
+        });
     }
-    let selector = match current_revision_pods(client, obj, kind, namespace, &selector).await {
-        RevisionPods::Matching(revision) => format!("{selector},{revision}"),
-        RevisionPods::All => selector,
-        RevisionPods::NotCreated => return None,
-    };
+    let (selector, exact) =
+        match current_revision_pods(client, obj, kind, namespace, &selector).await {
+            RevisionPods::Matching(revision) => (format!("{selector},{revision}"), true),
+            RevisionPods::All => (selector, false),
+            RevisionPods::NotCreated => return None,
+        };
     let current = try_list_pods(client, namespace, &selector).await?;
     Some(RolloutPods {
         current,
         held: None,
+        exact,
     })
 }
 
@@ -752,8 +762,24 @@ pub(super) async fn scan_terminal(
             return nothing();
         };
         let pods = rollout.current.clone();
+        // Only pods known to be of the current revision can show whether the
+        // current pod template got its cloud identity, because older pods may
+        // run an older identity.
+        let identity = if rollout.exact {
+            obj.metadata
+                .annotations
+                .as_ref()
+                .and_then(identity_env)
+                .and_then(|expected| {
+                    pods.iter()
+                        .find_map(|p| classify_pod_identity(p, &expected))
+                        .map(|m| (TerminalReason::CloudIdentityNotApplied, m))
+                })
+        } else {
+            None
+        };
         return ScanResult {
-            terminal: pods.iter().find_map(classify_pod_terminal),
+            terminal: identity.or_else(|| pods.iter().find_map(classify_pod_terminal)),
             pull_retrying: pods.iter().find_map(transient_pull_error),
             pods,
             rollout: Some(rollout),
@@ -765,29 +791,13 @@ pub(super) async fn scan_terminal(
     let Some(selector) = workload_label_selector(&obj.data) else {
         return nothing();
     };
-    let (selector, current_only) =
-        match current_revision_pods(client, obj, kind, namespace, &selector).await {
-            RevisionPods::Matching(revision) => (format!("{selector},{revision}"), true),
-            RevisionPods::All => (selector, false),
-            RevisionPods::NotCreated => return nothing(),
-        };
-    let pods = list_pods_for_workload(client, namespace, &selector).await;
-    // Only pods of the current revision can show whether the current pod
-    // template got its cloud identity.
-    let identity = if current_only {
-        obj.metadata
-            .annotations
-            .as_ref()
-            .and_then(identity_env)
-            .and_then(|expected| {
-                pods.iter()
-                    .find_map(|p| classify_pod_identity(p, &expected))
-                    .map(|m| (TerminalReason::CloudIdentityNotApplied, m))
-            })
-    } else {
-        None
+    let selector = match current_revision_pods(client, obj, kind, namespace, &selector).await {
+        RevisionPods::Matching(revision) => format!("{selector},{revision}"),
+        RevisionPods::All => selector,
+        RevisionPods::NotCreated => return nothing(),
     };
-    let terminal = identity.or_else(|| pods.iter().find_map(classify_pod_terminal));
+    let pods = list_pods_for_workload(client, namespace, &selector).await;
+    let terminal = pods.iter().find_map(classify_pod_terminal);
     let pull_retrying = pods.iter().find_map(transient_pull_error);
     ScanResult {
         terminal,
