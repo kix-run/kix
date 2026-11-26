@@ -444,7 +444,7 @@ in
   # reason once with a count, and each policy as a detail that
   # `kix check -v` lists.
   networkPolicyWidened = {
-    description = "Generated network policies that allow more traffic than Kix's Cilium policies would";
+    description = "Generated NetworkPolicy objects should not allow broader traffic than equivalent Cilium policies";
     level = "cluster";
     severity = "warning";
     tags = [
@@ -473,7 +473,7 @@ in
         describe =
           id:
           widening.${id} or {
-            summary = "Kix marked these policies with the unknown reason `${id}`.";
+            summary = "Marked with unknown widening reason `${id}` in `kix.run/network-policy-widened`.";
             fix = "";
           };
         count = n: if n == 1 then "1 network policy" else "${toString n} network policies";
@@ -484,14 +484,16 @@ in
           d = describe id;
         in
         {
-          message = "${count (builtins.length ps)} (${id}): ${d.summary} ${d.fix}";
+          message = "${count (builtins.length ps)} (${id}): ${d.summary}${
+            lib.optionalString (d.fix != "") " ${d.fix}"
+          }";
         }
       ) byId
       ++ map (p: {
         detail = true;
         namespace = p.metadata.namespace or null;
         resource = "NetworkPolicy/${p.metadata.name}";
-        message = "allows more than the Cilium policy would: ${lib.concatStringsSep ", " (widenedIds p)}.";
+        message = "allows broader traffic than the equivalent Cilium policy: ${lib.concatStringsSep ", " (widenedIds p)}.";
       }) policies;
   };
 }

@@ -110,7 +110,7 @@ Generated from the experimental attribute-set form of [`kix.untrackedRef`](/docs
 | Annotation | Meaning |
 | --- | --- |
 | `kix.run/operand-of` | `"<group>/<Kind>/<name>"` of the operator custom resource whose runtime pods a `Service`, `NetworkPolicy`, or `PodDisruptionBudget` selects. |
-| `kix.run/network-policy-widened` | Comma-separated reasons, such as `world-egress-pods`, on a generated `NetworkPolicy` that allows more traffic than the Cilium policy for the same rules would. The standard network policy enforcer writes it, and the `security.networkPolicyWidened` scorecard rule reads it. |
+| `kix.run/network-policy-widened` | Comma-separated reason codes (such as `world-egress-pods`) stamped on a generated `NetworkPolicy` when it allows broader traffic than the equivalent Cilium policy. Written by the standard `NetworkPolicy` enforcer and read by the `security.networkPolicyWidened` scorecard rule. |
 | `kix.run/monitors-external-service` | `"true"` on a `ServiceMonitor` or `VMServiceScrape` that intentionally targets a Service outside the Kix build. |
 | `kix.run/role` | Reserved key (`kix.keys.role`); not currently stamped by built-in builders or packages. |
 

@@ -5,39 +5,39 @@
 # rule reads them back and prints `summary` and `fix` once per id.
 {
   world-egress-pods = {
-    summary = "A `world` egress rule also allows traffic to pods, because on this platform an ipBlock matches pod addresses.";
-    fix = "Set `cluster.network.podCidr` so Kix can exclude the pod range from `world`.";
+    summary = "`world` egress rules also allow traffic to in-cluster pods because `cluster.network.podCidr` is unset and `ipBlock` rules match pod IPs on this platform.";
+    fix = "Set `cluster.network.podCidr` so Kix excludes pod IPs from `world` egress.";
   };
   world-egress-nodes = {
-    summary = "A `world` egress rule also allows traffic to the nodes, because on this platform an ipBlock matches node addresses.";
-    fix = "Set `cluster.network.nodeCidrs` so Kix can exclude the node ranges from `world`.";
+    summary = "`world` egress rules also allow traffic to cluster nodes because `cluster.network.nodeCidrs` is empty and `ipBlock` rules match node IPs on this platform.";
+    fix = "Set `cluster.network.nodeCidrs` so Kix excludes node IPs from `world` egress.";
   };
   world-egress-services = {
-    summary = "A `world` egress rule also allows traffic to every Service on its port, including the API server, because on this platform an ipBlock matches the Service address.";
-    fix = "Set `cluster.network.serviceCidr` so Kix can exclude the Service range from `world`.";
+    summary = "`world` egress rules also allow traffic to in-cluster Services (including the API server) on the allowed ports because `cluster.network.serviceCidr` is unset and `ipBlock` rules match Service IPs on this platform.";
+    fix = "Set `cluster.network.serviceCidr` so Kix excludes Service IPs from `world` egress.";
   };
   world-ingress-pods = {
-    summary = "A `world` ingress rule also admits traffic from pods, because on this platform an ipBlock matches pod addresses.";
-    fix = "Kix keeps the pod addresses in, because load balancer traffic can arrive from them. Accept this finding, or select the callers with a narrower rule.";
+    summary = "`world` ingress rules also admit traffic from in-cluster pods because `ipBlock` rules match pod IPs on this platform, and Kix cannot exclude pod ranges where load balancer traffic may arrive from them.";
+    fix = "Replace `world` ingress with a narrower caller selector if external load balancer access is not needed; otherwise no change is required.";
   };
   world-ingress-nodes = {
-    summary = "A `world` ingress rule also admits traffic from the nodes, because on this platform an ipBlock matches node addresses.";
-    fix = "Kix keeps the node addresses in, because nodes forward load balancer traffic. Accept this finding.";
+    summary = "`world` ingress rules also admit traffic from cluster nodes because `ipBlock` rules match node IPs on this platform, and Kix cannot exclude node ranges without blocking load balancer traffic forwarded by nodes.";
+    fix = "Replace `world` ingress with a narrower caller selector if external load balancer access is not needed; otherwise no change is required.";
   };
   node-range-pods = {
-    summary = "A rule for the nodes uses `cluster.network.nodeCidrs`, and on this platform it also matches pods whose addresses fall in those ranges.";
-    fix = "Set `cluster.network.nodeCidrs` to ranges that hold only nodes, or accept this finding where pods and nodes share subnets.";
+    summary = "Rules targeting cluster nodes match `cluster.network.nodeCidrs`, which on this platform also matches pods whose IPs fall in those ranges.";
+    fix = "Set `cluster.network.nodeCidrs` to node-only IP ranges if your cluster separates node and pod subnets; where pods and nodes share subnets, no Kix setting can narrow this rule.";
   };
   host-all-nodes = {
-    summary = "A rule for the `host` entity means the pod's own node, and a NetworkPolicy cannot name one node, so it allows every node in `cluster.network.nodeCidrs`.";
-    fix = "Accept this finding, or narrow the rule's ports.";
+    summary = "Rules for the `host` entity allow every node in `cluster.network.nodeCidrs` because standard `NetworkPolicy` cannot restrict traffic to only the pod's own node.";
+    fix = "Restrict the rule to specific ports where possible; otherwise no change is required.";
   };
   apiserver-sources-pods = {
-    summary = "Admission webhook and aggregated API rules admit the address ranges in `cluster.network.apiServer.sources`, and on this platform they also match pods whose addresses fall in those ranges.";
-    fix = "Set `cluster.network.apiServer.sources` to the narrowest ranges the control plane calls from, or accept this finding.";
+    summary = "Admission webhook and aggregated API ingress rules allow the IP ranges in `cluster.network.apiServer.sources`, which on this platform also match pods in those ranges.";
+    fix = "Set `cluster.network.apiServer.sources` to the narrowest CIDR ranges the control plane calls from; otherwise no change is required.";
   };
   pod-start-egress-open = {
-    summary = "A new pod can send traffic for about one second before the platform applies its egress policy.";
-    fix = "Accept this finding. On EKS, the VPC CNI's `strict` policy mode closes the gap, but it also blocks every pod that has no policy, including the pods in `kube-system`.";
+    summary = "Newly started pods can send outbound traffic for roughly one second before the platform applies their egress `NetworkPolicy` rules.";
+    fix = "No Kix change is required to keep default behavior. On EKS, enabling `strict` policy mode in the Amazon VPC CNI add-on closes this window, though it also blocks all traffic on pods without a `NetworkPolicy` (including unmanaged pods in `kube-system`).";
   };
 }

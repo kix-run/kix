@@ -29,7 +29,7 @@ This page is maintained alongside `kix/lib/eval/validate.nix`. The test suites i
 | 9 | On a `Deployment`, `StatefulSet`, `DaemonSet`, or `Job`, `spec.selector` (`matchLabels` and `matchExpressions`) matches the pod template labels. | |
 | 10 | `Ingress` backends name a `Service` in the same namespace. | |
 | 11 | Every `metadata.namespace` has a corresponding `Namespace` resource in the build. | `_`-prefixed sentinel namespaces used internally for cluster-scoped instances |
-| 12 | A `NetworkPolicy` `podSelector` matches at least one pod template in its namespace. | Empty `podSelector` (`{ }`); NetworkPolicies carrying `kix.run/operand-of`; NetworkPolicies Kix generates (`kix.run/derived: "true"`), whose selectors come from Services, operator pods, and platform intents |
+| 12 | A `NetworkPolicy` `podSelector` matches at least one pod template in its namespace. | Empty `podSelector` (`{ }`); NetworkPolicies carrying `kix.run/operand-of`; derived NetworkPolicies (`kix.run/derived: "true"`), which may select Services, operator-created pods, or external platform pods |
 | 13 | A named `Service` `targetPort` exists on a container of a selected pod template. | Numeric `targetPort` values; Services that match no pod template in the build |
 | 14 | A `PodDisruptionBudget` `selector` matches at least one pod template in its namespace. | PDBs with an empty selector; PDBs carrying `kix.run/operand-of` |
 | 15 | A `Job`'s pod template labels do not satisfy any `Service` selector in its namespace (which would route live service traffic to a batch Job pod). | Services without a selector |
