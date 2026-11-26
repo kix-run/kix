@@ -64,12 +64,12 @@ did the work.
 
 ## Structured thinking
 
-Use the `structured-thinking` skill (instead of plan mode) when the user wants to think through, brainstorm, design, or analyze something. It routes to `v2_discussions/` or `v2_discussions/interesting_thoughts/`, or for business topics to the private `kix-run/planning-private` repository, and produces a durable doc.
+Use the `structured-thinking` skill (instead of plan mode) when the user wants to think through, brainstorm, design, or analyze something. It routes to `discussions/` or `discussions/interesting_thoughts/`, or for business topics to the private `kix-run/planning-private` repository, and produces a durable doc.
 
 Two rules the skill enforces and you should honor outside it too:
 
-- **Keep discussion docs short.** When a topic needs a new take, don't extend the old doc: start a fresh one, carry forward only the undiscussed/still-important parts, and archive the old. Target ~400 lines per doc. Future / non-blocking ideas go to `v2_discussions/interesting_thoughts/`, never the active folder.
-- **Archive on ship.** When a feature that traces back to a v2_discussions doc lands, re-invoke the skill in the same session: split shipped content from still-open questions (lift to `ROADMAP.md § Open design questions` or `interesting_thoughts/`), move the doc to `archive/`, update the README.
+- **Keep discussion docs short.** When a topic needs a new take, don't extend the old doc: start a fresh one, carry forward only the undiscussed/still-important parts, and archive the old. Target ~400 lines per doc. Future / non-blocking ideas go to `discussions/interesting_thoughts/`, never the active folder.
+- **Archive on ship.** When a feature that traces back to a discussions doc lands, re-invoke the skill in the same session: split shipped content from still-open questions (lift to `ROADMAP.md § Open design questions` or `interesting_thoughts/`), move the doc to `archive/`, update the README.
 
 ## Fixing bugs
 
@@ -92,7 +92,7 @@ this rule too.
 Write for a maintainer reading the current code without the PR. Apply `CLAUDE.prose.md`.
 
 - **Explain why, not what the code already says.** Document invariants, non-obvious constraints, external quirks, and public API contracts. Delete comments that just restate the next line or narrate `if`/`else` branches. Self-explanatory private helpers need no comment; otherwise keep inline comments to 1–2 sentences.
-- **Describe only the current contract.** No issue/PR numbers (`#123`), `v2_discussions/` or `housekeeping/` paths, deleted-code tombstones, or comparisons with old code.
+- **Describe only the current contract.** No issue/PR numbers (`#123`), `discussions/` or `housekeeping/` paths, deleted-code tombstones, or comparisons with old code.
 - **Write plain, natural English.**
   - Start function comments with a verb (`# Return ...`, `# Validate ...`), never a verbless noun phrase (`# The X a Y activates, or null.`, `# Why X fails...`).
   - One idea per sentence. Do not chain clauses with colons/semicolons or invert word order (`"an import marker no object uses included"`).

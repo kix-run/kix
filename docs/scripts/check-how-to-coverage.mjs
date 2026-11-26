@@ -58,7 +58,7 @@ for (const entry of entries) {
 
   // Unlike `<Snippet>` excerpts, hand-written ```nix blocks are not checked
   // against a source file. The September 2026 audit found that most examples
-  // that failed as written were in these blocks (v2_discussions/142).
+  // that failed as written were in these blocks (discussions/142).
   //
   // They remain useful for short fragments and files the reader is creating.
   // Recording the count in the ledger makes each addition explicit and keeps

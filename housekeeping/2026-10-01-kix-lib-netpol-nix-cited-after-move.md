@@ -2,5 +2,5 @@
 
 Network policy derivation lives in `kix/lib/plugins/netpol/`, but a reader who follows the old path finds nothing.
 The stale path appears in `ROADMAP.md` (twice) and `guide/03-advanced.md`.
-Several open `v2_discussions/` docs cite it too.
+Several open `discussions/` docs cite it too.
 Find them with `git grep -n "lib/netpol\.nix"`.
