@@ -74,6 +74,7 @@ impl Line {
                 configured: r.configured,
                 unchanged: r.unchanged,
                 failed: r.failed,
+                failed_after_apply: r.failed_after_apply,
                 cancelled: r.cancelled,
                 pruned: r.pruned,
             },
@@ -167,6 +168,10 @@ pub enum Event {
         configured: usize,
         unchanged: usize,
         failed: usize,
+        /// The objects in `failed` that the run wrote to the cluster and
+        /// that then did not become ready. Older logs leave it out.
+        #[serde(default)]
+        failed_after_apply: usize,
         cancelled: usize,
         pruned: usize,
     },

@@ -178,15 +178,14 @@ fn load_balancer_advice(service: &DynamicObject) -> String {
         .and_then(Value::as_str)
     {
         Some(class) => format!(
-            "Kix stopped waiting for an address. The Service sets loadBalancerClass \"{class}\", \
-             so only a load balancer controller that serves that class gives it an address, \
-             and the cluster's default load balancer ignores it. Check that such a controller runs \
-             on the cluster, or remove loadBalancerClass to use the default load balancer. \
-             `{describe}` shows the Service's events."
+            "Kix stopped waiting for an address. Because spec.loadBalancerClass is \"{class}\", \
+             the cluster's default load balancer ignores this Service. Check that a load balancer \
+             controller for \"{class}\" is running on the cluster, or remove spec.loadBalancerClass \
+             to use the default load balancer. Run `{describe}` to inspect the Service's events."
         ),
         None => format!(
-            "Kix stopped waiting for an address. `{describe}` shows what the load balancer \
-             reported. If this cluster has no load balancer, change the Service's type to \
+            "Kix stopped waiting for an address. Run `{describe}` to inspect the Service's events. \
+             If this cluster has no load balancer, change the Service's type to \
              ClusterIP or NodePort, and set cluster.roles.loadBalancer.binding = \"absent\" \
              in the cluster definition so the build rejects LoadBalancer Services."
         ),

@@ -161,10 +161,11 @@ The health-check Job's logs say whether the post-deploy probe passed:
 
 ## When the last deploy failed
 
-A deploy that fails leaves the previous deploy current. `kix status` then
-starts with the failed deploy, when it failed, and why, and lists the objects
-only that deploy added under `Only in the failed deploy`. It exits `2` until
-a deploy succeeds. Fix what stopped the deploy, and run `kix deploy` again.
+When a deploy fails, the previous deploy stays active. `kix status` shows the
+failed deploy first, along with when and why it failed, followed by the current
+deploy. Any objects that belong only to the failed deploy appear under
+`Only in the failed deploy`, and `kix status` exits `2` until a new deploy
+succeeds. Fix the cause of the failure and run `kix deploy` again.
 
 ## What readiness does not show
 

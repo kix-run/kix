@@ -432,6 +432,10 @@ pub struct DeployResult {
     pub configured: usize,
     pub unchanged: usize,
     pub failed: usize,
+    /// The nodes in `failed` that this run wrote to the cluster before they
+    /// failed readiness. Kix applied them, so the cluster holds the new
+    /// spec, and they never became ready.
+    pub failed_after_apply: usize,
     pub cancelled: usize,
     pub pruned: usize,
     /// Every node counted in `failed`, in the order it failed, for the text

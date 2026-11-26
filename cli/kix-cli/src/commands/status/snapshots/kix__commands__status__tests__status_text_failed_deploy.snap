@@ -12,7 +12,7 @@ Current deploy: shop-7f3a2b1c0d9e  Active  2d0h ago
 Only in the failed deploy shop-9a8b7c6d5e4f
   Service ingress/pending  not ready (no load balancer address in status.loadBalancer.ingress yet)
 
-1 resource: 1 ok. 1 deploy failed after the current one.
-Next: fix what stopped the last deploy and run `kix deploy shop` again. `kix history shop` lists the deploys.
+1 resource: 1 ok. Last deploy failed.
+Next: fix what caused the last deploy to fail and run `kix deploy shop` again.
 
 This account may not list secrets, so Kix did not check objects of those kinds.

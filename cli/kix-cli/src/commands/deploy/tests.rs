@@ -448,7 +448,27 @@ mod run_end_tests {
         assert!(!text.contains("rollback"), "{text}");
         assert!(text.contains(", 4 not started"), "{text}");
         assert!(
-            text.contains("1 failed (during apply or after being applied), and 4 were never sent to the cluster."),
+            text.contains("1 failed, and 4 were never sent to the cluster."),
+            "{text}"
+        );
+        // A failed object that was applied before it failed readiness is on
+        // the cluster with its new spec, and the counts say so.
+        let applied = DeployResult {
+            failed_after_apply: 1,
+            ..counts.clone()
+        };
+        let text = super::observer::closing(
+            &applied,
+            &closing(Previous::Active("prod-4be1c09a".into()), None),
+        );
+        assert!(
+            text.contains("1 failed (1 applied, then not ready), 4 not started"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "1 failed (1 applied, then not ready), and 4 were never sent to the cluster."
+            ),
             "{text}"
         );
         let first = super::observer::closing(&counts, &closing(Previous::FirstDeploy, None));

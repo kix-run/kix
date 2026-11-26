@@ -745,6 +745,9 @@ impl<'a> Run<'a> {
         message: String,
     ) {
         self.result.failed += 1;
+        if wrote_then_not_ready(entry, &detail) {
+            self.result.failed_after_apply += 1;
+        }
         self.result.failures.push(NodeFailure {
             node: node_id.clone(),
             message: message.clone(),
@@ -1519,6 +1522,17 @@ impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         self.0.abort();
     }
+}
+
+/// Return true when a node that failed with `detail` had written its object
+/// first: an apply or a recreate whose object then failed readiness. A
+/// readiness failure on an unchanged node wrote nothing.
+fn wrote_then_not_ready(entry: &PlanNodeEntry, detail: &NodeDetail) -> bool {
+    matches!(entry.kind, TransitionKind::Apply | TransitionKind::Recreate)
+        && matches!(
+            detail,
+            NodeDetail::ReadinessTimeout { .. } | NodeDetail::ReadinessFailed { .. }
+        )
 }
 
 /// CRD barrier state.

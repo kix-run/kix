@@ -3107,8 +3107,8 @@ mod workload_waits {
         };
         assert!(message.starts_with("[K1243] "), "{message}");
         assert!(
-            message.contains("loadBalancerClass \"example.com/none\"")
-                && message.contains("remove loadBalancerClass")
+            message.contains("spec.loadBalancerClass \"example.com/none\"")
+                && message.contains("remove spec.loadBalancerClass")
                 && !message.contains("loadBalancer.binding"),
             "{message}"
         );

@@ -101,27 +101,31 @@ manager that now owns it. See
 A Job that finished counts as present and ready. Jobs that Kix builds do not
 delete themselves, so a Job that is gone is missing.
 
-## A deploy that failed
+## Failed deploys
 
-A deploy that fails leaves the previous deploy record current, so the current
-deploy is the last one that finished. When a deploy failed after it, `kix
-status` reports that as a problem. The first lines name the failed deploy,
-when it failed, and why, and then the current deploy. The objects only the
-failed build has, by kind, namespace, and name, are checked like the current
-deploy's and listed under `Only in the failed deploy <record>`. They are what
-the failed deploy tried to add, such as a `LoadBalancer` Service that got no
-address. An object both builds have is checked once, against what the
-cluster holds now, as part of the current deploy.
+When a deploy fails, the previous deploy record stays current. If a deploy has
+failed since the current deploy finished, `kix status` reports the failed
+deploy and exits `2`. The header shows the failed deploy first (with when and
+why it failed), followed by the current deploy.
 
-## How a workload's readiness is described
+Any object in the failed build that is not in the current deploy (matched by
+kind, namespace, and name) is checked the same way and listed under
+`Only in the failed deploy <record>`. For example, this section includes a new
+`LoadBalancer` Service from the failed deploy that never received an address.
+Objects present in both builds are checked once under the current deploy
+against the live cluster state.
 
-For a Deployment, StatefulSet, or DaemonSet that is not ready, `kix status`
-reads the workload's pods and describes it as `kix deploy` does while it
-waits: how many pods of the current revision are ready, why the first one
-that is not ready waits (such as the scheduler's message), and a StatefulSet
-pod that holds back the update. This costs one or two list requests for each
-workload that is not ready, and none for a ready one. When the pods cannot be
-read, the line gives the workload's own counts.
+## How workload readiness is reported
+
+When a Deployment, StatefulSet, or DaemonSet is not ready, `kix status`
+inspects its pods and reports the same details that `kix deploy` shows while
+waiting: how many pods on the current revision are ready, why the first unready
+pod is waiting (such as a scheduling error or a failing readiness probe), and
+whether an unready pod on an older revision is blocking a StatefulSet update.
+This adds one or two API list requests per unready workload, and none for ready
+workloads. If Kix cannot list the pods (or the controller has not acted on the
+current revision yet), the output falls back to the counts on the workload's
+status.
 
 ## Text output
 
@@ -241,9 +245,9 @@ fields and values they do not know.
 | `clusters[].objects_from` | Where Kix found the deploy's objects: `index` (the record's package index), `depends_on` (the live objects' `kix.run/depends-on` annotations), or `unknown` (nowhere; no object was checked). |
 | `clusters[].notes` | Warnings about the cluster, such as a platform interface that changed. |
 | `clusters[].packages[]` | One entry for each package, with `name` (`namespace/instance`, or `null` for the cluster-level objects), `summary`, and `resources`. |
-| `clusters[].failed_deploy` | The newest deploy that failed after the current one, or `null`: `name`, `identity_hash`, `failed_at`, `reason`, `packages` (the objects only the failed build has, in the same shape as `clusters[].packages`), and `summary` (their counts, which the cluster's `summary` leaves out). |
+| `clusters[].failed_deploy` | The newest deploy that failed since `deploy`, or `null`: `name`, `identity_hash`, `failed_at`, `reason`, `packages` (objects present only in the failed build, in the same shape as `clusters[].packages`), and `summary` (counts for those objects, which are excluded from the cluster's `summary`). |
 | `clusters[].leaving[]` | Kix-managed objects of this Kix cluster that are not in the current deploy and are still being deleted. Each entry has `kind`, `group` (omitted for core `v1` kinds), `namespace` (`null` when cluster-scoped), `name`, `package` (`namespace/instance`, or `null`), `deleting_since` (`metadata.deletionTimestamp`), and `finalizers`. |
-| `summary` | Counts over every cluster: `resources`, `ok`, `missing`, `changed`, `not_ready`, `deleting` (objects in the current deploy being deleted), `leaving` (objects in `leaving[]`, not counted in `resources`, and `0` on a package `summary`), `not_checked`, and `failed_deploys` (Kix clusters whose newest deploy failed after the current one). Each cluster and package has the same object. `ok` counts only the objects that every selected check passed. An object with two problems counts under both. |
+| `summary` | Counts over every cluster: `resources`, `ok`, `missing`, `changed`, `not_ready`, `deleting` (objects in the current deploy being deleted), `leaving` (objects in `leaving[]`, not counted in `resources`, and `0` on a package `summary`), `not_checked`, and `failed_deploys` (Kix clusters where a deploy failed since the current deploy; `0` on a package `summary`). Each cluster and package has the same object. `ok` counts only the objects that every selected check passed. An object with two problems counts under both. |
 
 Each entry of `resources[]`:
 
@@ -277,7 +281,7 @@ Each entry of `resources[]`:
 | --- | --- |
 | `0` | Every selected check passed. Objects that were not checked do not count. |
 | `1` | Kix could not answer: no connection to the cluster, no current deploy for the named cluster, no Kix cluster deployed on the Kubernetes cluster, a `--package` that matches no package, or a record that lists no objects and whose own object is gone. |
-| `2` | An object is missing, changed, not ready, or being deleted (including objects outside the current deploy), or a deploy failed after the current one. |
+| `2` | An object is missing, changed, not ready, or being deleted (including objects outside the current deploy), or a deploy has failed since the current deploy. |
 
 A command line Kix cannot use exits `1`, including `kix health`, `kix drift`,
 and `kix status --operator`, which 0.10 removed. So `2` always means that

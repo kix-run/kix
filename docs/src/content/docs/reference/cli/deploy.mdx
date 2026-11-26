@@ -373,7 +373,12 @@ line has `"type": "kubernetes"` and identifies the target cluster with
 `null` when not set in the kubeconfig. When the run
 reaches the deploy engine, the last JSON line is the `summary` object, with
 `succeeded` (which matches the exit status), `dry_run`, and the `created`,
-`configured`, `unchanged`, `failed`, `cancelled`, and `pruned` counts. Every
+`configured`, `unchanged`, `failed`, `cancelled`, and `pruned` counts. Each
+object counts once, by how it ended: an object the run applied that then did
+not become ready counts under `failed`, not under `created` or `configured`.
+`failed_after_apply` counts those objects among `failed`, because the cluster
+holds their new spec. The text summary shows them as
+`1 failed (1 applied, then not ready)`. Every
 line includes `schema_version` (currently `"2026-11-25"`), the date of the
 latest breaking change to the log format. For a deleted object
 (`"kind": "delete"`), Kix emits the `ready` event only after the object is

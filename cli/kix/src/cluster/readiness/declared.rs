@@ -1122,7 +1122,7 @@ pub fn not_ready_reason(obj: &DynamicObject, kind: GroupKind<'_>) -> String {
             .and_then(Value::as_str)
         {
             Some(class) => format!(
-                "no load balancer address in status.loadBalancer.ingress yet, and only a controller for loadBalancerClass \"{class}\" can give one"
+                "no load balancer address in status.loadBalancer.ingress yet; requires a controller for spec.loadBalancerClass \"{class}\""
             ),
             None => "no load balancer address in status.loadBalancer.ingress yet".to_string(),
         },
