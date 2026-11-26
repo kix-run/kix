@@ -1037,6 +1037,7 @@
       "status": "implemented",
       "snippets": [
         "eksIrsaInstance",
+        "eksPodIdentity",
         "eksCertManager",
         "importedStorageClass",
         "eksNetworkPolicy"

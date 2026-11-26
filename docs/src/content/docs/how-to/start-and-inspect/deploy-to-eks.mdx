@@ -6,6 +6,7 @@ description: "Configure a Kix cluster for Amazon EKS, set up IRSA or EKS Pod Ide
 import Command from '/src/components/Command.astro';
 import Snippet from '/src/components/Snippet.astro';
 import eksIrsaInstance from '/src/snippets/clusters/test-cloud-identity-eks/eksIrsaInstance.json';
+import eksPodIdentity from '/src/snippets/clusters/test-cloud-identity-eks-pod-identity/eksPodIdentity.json';
 import eksCertManager from '/src/snippets/clusters/test-cloud-identity-eks/eksCertManager.json';
 import importedStorageClass from '/src/snippets/clusters/example-import/importedStorageClass.json';
 import eksNetworkPolicy from '/src/snippets/clusters/test-netpol-eks/eksNetworkPolicy.json';
@@ -79,9 +80,9 @@ Evaluate, preview, deploy, and check your cluster:
 
 ## Grant AWS IAM roles to workloads
 
-Pass `kix.cloudIdentity.aws { roleArn = "arn:aws:iam::123456789012:role/<role>"; }` to packages that call AWS APIs, and create the IAM roles and trust bindings in AWS.
+Pass `kix.cloudIdentity.aws { roleArn = "arn:aws:iam::111122223333:role/<role>"; }` to packages that call AWS APIs (replace `111122223333` with your AWS account ID throughout the examples below). Kix renders the Kubernetes configuration, and you create the IAM roles, trust policies, and any EKS Pod Identity associations in AWS.
 
-On EKS, every cloud-identity package supports both IRSA and EKS Pod Identity:
+On EKS, every cloud-identity package works with both [IAM roles for service accounts (IRSA)](https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html) and [EKS Pod Identity](https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html):
 
 - `external-dns` (`deps.providerCredentials`)
 - `cert-manager` (`deps.controllerIdentity`)
@@ -90,45 +91,147 @@ On EKS, every cloud-identity package supports both IRSA and EKS Pod Identity:
 - `tempo` (`deps.storageCredentials`)
 - `cnpg-cluster` (`deps.storageCredentials`)
 
-For example, wire an IAM role to `external-dns` (the snippet uses a test account ID from the repository; substitute your own AWS account ID, such as `123456789012`):
+Each package's upstream documentation defines the IAM permissions its role requires. For the `external-dns` examples below, attach the Route 53 permissions policy from the [ExternalDNS AWS tutorial](https://kubernetes-sigs.github.io/external-dns/latest/docs/tutorials/aws/).
 
-<Snippet {...eksIrsaInstance} />
+`cluster.flavor.eks.cloudIdentity` selects the mechanism for the cluster: `"irsa"` (the default) or `"pod-identity"`. One IAM role can include both trust policy statements if you want it to work in either mode.
 
-### Choose IRSA or EKS Pod Identity
+### Set up IRSA (default)
 
-`cluster.flavor.eks.cloudIdentity` selects how pods assume `roleArn`:
+1. **Declare the role in Kix.** With `cluster.flavor.eks.cloudIdentity` at its `"irsa"` default, pass the IAM role ARN to `external-dns`:
 
-1. **IRSA (`"irsa"`, the default).** Kix writes `eks.amazonaws.com/role-arn` on the Kubernetes ServiceAccount. In AWS IAM, register your cluster's OIDC provider and set the role's trust policy to allow `sts:AssumeRoleWithWebIdentity` for subject `system:serviceaccount:<namespace>:<serviceaccount>`.
-2. **EKS Pod Identity (`"pod-identity"`).** Set `cluster.flavor.eks.cloudIdentity = "pod-identity";` in a cluster module and install the `eks-pod-identity-agent` EKS add-on. Configure the IAM role's trust policy to allow `pods.eks.amazonaws.com`, and create an association in AWS for each ServiceAccount:
+   <Snippet {...eksIrsaInstance} />
 
+   Kix writes `eks.amazonaws.com/role-arn` (and `kix.run/cloud-identity`) on the `route53` ServiceAccount. When the pod starts, EKS's webhook injects `AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_REGION`, and a projected token volume.
+
+2. **Inspect the required trust values.** Run `kix list resources <cluster>` (which reads only the build, with no cluster connection needed) to print the exact Kubernetes subject and role ARN under **Cloud identities**:
+
+   {/* Output maintained by hand from clusters/test-cloud-identity-eks.nix (outside the kix-examples capture pipeline) and can drift. */}
    <Command
      commands={[
-       "aws eks create-pod-identity-association --cluster-name <cluster> --namespace external-dns --service-account route53 --role-arn arn:aws:iam::123456789012:role/external-dns",
+       {
+         command: "kix list resources <cluster>",
+         stdout: [
+           "Cloud identities:",
+           " Subject                                     Mechanism  Identity",
+           " system:serviceaccount:external-dns:route53  irsa       roleArn=arn:aws:iam::111122223333:role/external-dns",
+         ].join("\n"),
+       },
      ]}
    />
 
-   In `"pod-identity"` mode, Kix omits `eks.amazonaws.com/role-arn`. Kix records `roleArn` on the ServiceAccount for `kix list resources`, while the AWS association determines which role the pod receives; if an association points to a different role, the pod gets the association's role and `kix deploy` still succeeds.
+   Pass `-o json` (`kix list resources <cluster> -o json`) when feeding the `cloudIdentities` array into Terraform.
 
-### Inspect required IAM subjects
+3. **Create the OIDC provider and IAM role in AWS.** Register your cluster's OIDC issuer as an IAM OIDC provider if you have not already. Look up the issuer URL:
 
-List every Kix-rendered ServiceAccount with an AWS identity:
+   <Command
+     commands={[
+       "aws eks describe-cluster --name <cluster> --query 'cluster.identity.oidc.issuer' --output text",
+     ]}
+   />
 
-<Command
-  commands={[
-    "kix list resources <cluster>",
-    "kix list resources <cluster> -o json",
-  ]}
-/>
+   Create `arn:aws:iam::111122223333:role/external-dns` with a trust policy whose condition key prefix is that issuer URL without `https://` (`oidc.eks.<region>.amazonaws.com/id/<oidc-id>`) and whose `:sub` condition matches the `Subject` column from `kix list resources`:
 
-Plain output prints each namespace, ServiceAccount name, `roleArn`, and subject under **Cloud identities**. JSON output provides the `cloudIdentities` array (`namespace`, `serviceAccount`, `identity`, `subject`, `kubernetesSubject`, and `trustPrincipal`, which is `"pods.eks.amazonaws.com"` in `"pod-identity"` mode) for Terraform or scripts.
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [{
+       "Effect": "Allow",
+       "Principal": { "Federated": "arn:aws:iam::111122223333:oidc-provider/oidc.eks.<region>.amazonaws.com/id/<oidc-id>" },
+       "Action": "sts:AssumeRoleWithWebIdentity",
+       "Condition": { "StringEquals": {
+         "oidc.eks.<region>.amazonaws.com/id/<oidc-id>:aud": "sts.amazonaws.com",
+         "oidc.eks.<region>.amazonaws.com/id/<oidc-id>:sub": "system:serviceaccount:external-dns:route53"
+       } }
+     }]
+   }
+   ```
 
-### Verify and troubleshoot identities
+   Attach the Route 53 permissions policy from the [ExternalDNS AWS tutorial](https://kubernetes-sigs.github.io/external-dns/latest/docs/tutorials/aws/) to the role.
 
-- **Deploy-time environment check (`CloudIdentityNotApplied`).** During `kix deploy`, Kix checks new Deployment, StatefulSet, and DaemonSet pods for the environment variables EKS injects and fails with `CloudIdentityNotApplied` when they are missing or mismatched:
-  - In `"pod-identity"` mode without an AWS association, the pod has no AWS credentials variables, and the error tells you to create the association.
-  - In `"irsa"` mode when an EKS Pod Identity association also exists for that ServiceAccount, EKS gives the association precedence; the error tells you to delete the association and restart the pods. Delete the AWS association first whenever switching a ServiceAccount from `"pod-identity"` back to `"irsa"`.
-  - Containers named in the pod annotation `eks.amazonaws.com/skip-containers` receive no identity variables in either mode and are skipped by this check.
-- **IAM permissions and trust errors.** Kix cannot verify whether AWS IAM accepts the role. A role that lacks permissions or trusts the wrong ServiceAccount name passes `kix deploy` and reports `ok` in `kix status`, while API calls fail in the pod logs (`Not authorized to perform sts:AssumeRoleWithWebIdentity` or `AccessDenied`). Inspect the workload's logs after deploying.
+4. **Deploy and confirm.** Apply the cluster and read the controller log:
+
+   <Command
+     commands={[
+       "kix deploy <cluster>",
+       "kubectl logs -n external-dns deploy/route53",
+     ]}
+   />
+
+   `kix deploy` verifies that the pod received the IRSA environment variables. Because Kix cannot see whether AWS IAM accepts the role (`kix status` reports `ok` either way), check the pod log: a working role logs DNS updates such as `2 record(s) were successfully updated`, whereas a wrong `:sub` logs `Not authorized to perform sts:AssumeRoleWithWebIdentity` and missing permissions log `AccessDenied: User: arn:aws:sts::111122223333:assumed-role/<role>/... is not authorized to perform: route53:ListHostedZones`.
+
+### Set up EKS Pod Identity
+
+1. **Switch the cluster to Pod Identity and declare the role.** Set `cluster.flavor.eks.cloudIdentity = "pod-identity";` and pass `roleArn` on the instance:
+
+   <Snippet {...eksPodIdentity} />
+
+   In `"pod-identity"` mode, Kix omits `eks.amazonaws.com/role-arn` on the ServiceAccount and records `roleArn` in `kix.run/cloud-identity` for `kix list resources`. The EKS Pod Identity association in AWS decides which role the pod receives.
+
+2. **Inspect the required association and trust principal.** Run `kix list resources <cluster>` to read the namespace, ServiceAccount name, trust principal, and role ARN:
+
+   {/* Output maintained by hand from clusters/test-cloud-identity-eks-pod-identity.nix (outside the kix-examples capture pipeline) and can drift. */}
+   <Command
+     commands={[
+       {
+         command: "kix list resources <cluster>",
+         stdout: [
+           "Cloud identities:",
+           " Subject                                                                   Mechanism         Identity",
+           " association for external-dns/route53, role trusts pods.eks.amazonaws.com  eks-pod-identity  roleArn=arn:aws:iam::111122223333:role/external-dns",
+         ].join("\n"),
+       },
+     ]}
+   />
+
+   In `kix list resources <cluster> -o json`, each entry carries `"namespace": "external-dns"`, `"serviceAccount": "route53"`, `"subject": null`, and `"trustPrincipal": "pods.eks.amazonaws.com"`.
+
+3. **Install the agent, create the role, and add the association in AWS.** Ensure the `eks-pod-identity-agent` EKS add-on is installed on your cluster. Create `arn:aws:iam::111122223333:role/external-dns` with a trust policy for the `pods.eks.amazonaws.com` service principal shown in the table, and attach the Route 53 permissions policy from the [ExternalDNS AWS tutorial](https://kubernetes-sigs.github.io/external-dns/latest/docs/tutorials/aws/):
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [{
+       "Effect": "Allow",
+       "Principal": { "Service": "pods.eks.amazonaws.com" },
+       "Action": ["sts:AssumeRole", "sts:TagSession"]
+     }]
+   }
+   ```
+
+   Create an EKS Pod Identity association linking the namespace (`external-dns`), ServiceAccount (`route53`), and `roleArn` from the table:
+
+   <Command
+     commands={[
+       "aws eks create-pod-identity-association --cluster-name <cluster> --namespace external-dns --service-account route53 --role-arn arn:aws:iam::111122223333:role/external-dns",
+     ]}
+   />
+
+4. **Deploy and confirm.** Apply the cluster and inspect the pod log:
+
+   <Command
+     commands={[
+       "kix deploy <cluster>",
+       "kubectl logs -n external-dns deploy/route53",
+     ]}
+   />
+
+   `kix deploy` checks that the pod received `AWS_CONTAINER_CREDENTIALS_FULL_URI` and `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE`, and the `route53` log confirms records are written.
+
+### When EKS identity setup is wrong
+
+During `kix deploy`, Kix inspects each new Deployment, StatefulSet, or DaemonSet pod and fails the workload with reason `CloudIdentityNotApplied` when expected identity variables are missing or overridden:
+
+```text
+pod <pod> (ServiceAccount `<sa>`) did not receive its cloud identity: <problem>. Kix stopped waiting for this workload. <fix>
+```
+
+- **Pod Identity mode with no AWS association:** `<problem>` is ``container `external-dns` is missing `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE` and `AWS_CONTAINER_CREDENTIALS_FULL_URI`, which EKS Pod Identity sets``, and `<fix>` reads: `Create an EKS Pod Identity association in AWS linking this ServiceAccount to the configured IAM role (Kix does not create it), and check that the EKS Pod Identity Agent add-on is running. Then restart the workload's pods.`
+- **IRSA mode while an AWS association exists:** EKS gives an EKS Pod Identity association precedence over IRSA, so `<problem>` is ``container `external-dns` has `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE` and `AWS_CONTAINER_CREDENTIALS_FULL_URI`, so the cluster applied EKS Pod Identity instead of IAM roles for service accounts (IRSA)``, with `<fix>` telling you to delete the association in AWS and restart the pods (or switch `cluster.flavor.eks.cloudIdentity` to `"pod-identity"`). Delete the AWS association first whenever switching a ServiceAccount from `"pod-identity"` back to `"irsa"`.
+- **Container sets `AWS_ROLE_ARN` itself:** EKS webhooks leave existing container environment variables untouched. If a container sets `AWS_ROLE_ARN` to another value in `env`, `CloudIdentityNotApplied` names that value and tells you to remove it from `env`. Containers listed in the pod annotation `eks.amazonaws.com/skip-containers` receive no identity variables in either mode and are skipped by this check.
+- **What `CloudIdentityNotApplied` cannot catch:** Kix cannot detect a role whose trust policy or IAM permissions are wrong (those appear only in the workload's pod logs while `kix deploy` and `kix status` report `ok`). In `"pod-identity"` mode, Kix also cannot read AWS associations: if an association names a different IAM role than `roleArn`, the pod receives the association's role and `kix deploy` succeeds.
+
+Other operational details on EKS:
+
 - **Pod restarts and operator pods.** Changing `roleArn` updates `checksum/cloud-identity` on Kix-built pod templates and restarts those pods on deploy. Pods created by an operator (`cnpg-cluster`, `stackgres-cluster`) keep their old role until recreated; see each package's guide. Avoid changing `cert-manager`'s role while an ACME DNS-01 challenge is pending, which can leave the previous `_acme-challenge` TXT record in Route 53 until the controller has a working role again.
 - **AWS region and node credentials.** Both IRSA and Pod Identity inject `AWS_REGION` automatically. When you pass static AWS keys in a Secret instead, set `AWS_REGION` or `AWS_DEFAULT_REGION` explicitly (`external-dns` fails evaluation without one). Workloads with no cloud identity reach the node's IAM role only if the node group's instance metadata hop limit allows it; on the tested node group (hop limit `1`), pods received no node credentials.
 
@@ -145,7 +248,7 @@ EKS runs CoreDNS in `kube-system` with label `k8s-app: kube-dns`, matching Kix's
 For public DNS records and certificates in Route 53:
 
 - **`external-dns`:** Set `provider = "aws"` with an IAM role on `deps.providerCredentials`. Packaged `external-dns` 0.24 reads `external-dns.kubernetes.io/hostname` and ignores the older `external-dns.alpha.kubernetes.io/hostname` annotation unless you add `"--enable-legacy-annotation-prefix"` to `extraArgs`. See [Publish DNS records with external-dns](/docs/how-to/package-task-guides/publish-dns-records-with-external-dns/).
-- **`cert-manager` DNS-01:** Pass an IAM role to `deps.controllerIdentity` on `cert-manager` and omit static key fields on `dns01.route53`. Replace `<your-email>` with a real email address because Let's Encrypt rejects `example.com` (and substitute your own AWS account ID for the test ARN):
+- **`cert-manager` DNS-01:** Pass an IAM role to `deps.controllerIdentity` on `cert-manager` and omit static key fields on `dns01.route53`. Replace `<your-email>` with a real email address because Let's Encrypt rejects `example.com`, and replace `111122223333` with your AWS account ID:
 
   <Snippet {...eksCertManager} />
 

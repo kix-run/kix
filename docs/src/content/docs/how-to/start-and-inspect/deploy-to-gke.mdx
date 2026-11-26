@@ -100,7 +100,7 @@ Switch the first module to `kix.flavors.gke-autopilot` on Autopilot clusters. Au
 
 ## Grant Google Cloud identities to workloads
 
-Kix configures Kubernetes ServiceAccounts for Workload Identity Federation for GKE, and you create the Google Cloud IAM bindings or Google service accounts in your Google Cloud project.
+Kix configures Kubernetes ServiceAccounts for [Workload Identity Federation for GKE](https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity), and you create the Google Cloud IAM bindings or Google service accounts in your Google Cloud project (`my-project` with project number `123456789012` in the examples below).
 
 On GKE, these packages accept `kix.cloudIdentity.gcp`:
 
@@ -111,65 +111,133 @@ On GKE, these packages accept `kix.cloudIdentity.gcp`:
 
 `tempo` and `cnpg-cluster` support only S3 cloud identities today; passing `kix.cloudIdentity.gcp` to either package fails `kix check` with `Google Cloud is not supported yet`.
 
-### Choose direct IAM grants or a linked service account
+Each package's upstream documentation defines the Google Cloud IAM permissions it requires. For the `external-dns` examples below, grant the Cloud DNS permissions described in the [ExternalDNS GKE tutorial](https://kubernetes-sigs.github.io/external-dns/latest/docs/tutorials/gke/).
 
-`kix.cloudIdentity.gcp` supports two forms:
+`kix.cloudIdentity.gcp` supports two forms: granting IAM roles directly to the Kubernetes ServiceAccount (`kix.cloudIdentity.gcp { }`), or linking the Kubernetes ServiceAccount to a Google service account (`kix.cloudIdentity.gcp { serviceAccount = "..."; }`).
 
-1. **Direct IAM grant (`kix.cloudIdentity.gcp { }`).** Grant Google Cloud IAM roles directly to the Kubernetes ServiceAccount's principal. Kix omits `iam.gke.io/gcp-service-account` on the ServiceAccount:
+### Grant IAM roles directly to the ServiceAccount
+
+1. **Declare the identity in Kix.** Pass `kix.cloudIdentity.gcp { }` on `external-dns` (in the snippet, the `externalDns` helper sets `provider = "google"`, `policy = "upsert-only"`, `txtOwnerId`, and `extraArgs` with `"--google-project=my-project"` and `"--domain-filter=example.com"`):
 
    <Snippet {...gkeIdentityDirect} />
 
-2. **Linked Google service account (`kix.cloudIdentity.gcp { serviceAccount = "..."; }`).** The Kubernetes ServiceAccount impersonates a Google service account, and Kix writes `iam.gke.io/gcp-service-account` on the ServiceAccount:
+   Kix omits `iam.gke.io/gcp-service-account` on the `clouddns` ServiceAccount because Google Cloud grants roles directly to the Kubernetes ServiceAccount's principal.
+
+2. **Inspect the required IAM principal.** Run `kix list resources <cluster>` (which reads only the build, with no cluster connection needed) to print the principal under **Cloud identities**:
+
+   {/* Output maintained by hand from clusters/test-cloud-identity-gke.nix (outside the kix-examples capture pipeline) and can drift. */}
+   <Command
+     commands={[
+       {
+         command: "kix list resources <cluster>",
+         stdout: [
+           "Cloud identities:",
+           " Subject                                                                                                                                                       Mechanism  Identity",
+           " principal://iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/<project-id>.svc.id.goog/subject/ns/external-dns/sa/clouddns  gke        Kubernetes ServiceAccount",
+           "Replace <project-id> and <project-number> with the cluster's Google Cloud project ID and project number before using a subject in IAM.",
+         ].join("\n"),
+       },
+     ]}
+   />
+
+   In `kix list resources <cluster> -o json` (for Terraform), this entry lists `["<project-number>", "<project-id>"]` in `subjectPlaceholders`.
+
+3. **Bind the Google Cloud IAM role.** Look up your project number and bind the package's required `<role>` to the `Subject` principal with `<project-id>` (`my-project`) and `<project-number>` (`123456789012`) filled in:
+
+   <Command
+     commands={[
+       "gcloud projects describe my-project --format='value(projectNumber)'",
+       "gcloud projects add-iam-policy-binding my-project --role=<role> --member=principal://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/my-project.svc.id.goog/subject/ns/external-dns/sa/clouddns",
+     ]}
+   />
+
+   :::caution
+   Every GKE cluster in a Google Cloud project shares one Workload Identity pool (`<project-id>.svc.id.goog`). A direct IAM grant to `ns/<namespace>/sa/<serviceaccount>` applies to that namespace and ServiceAccount name in every GKE cluster in the project. Use separate Google Cloud projects or linked Google service accounts when clusters in one project need isolated permissions.
+   :::
+
+4. **Deploy and confirm.** Apply the cluster and check the controller log:
+
+   <Command
+     commands={[
+       "kix deploy <cluster>",
+       "kubectl logs -n external-dns deploy/clouddns",
+     ]}
+   />
+
+   Once the IAM binding propagates, `external-dns` logs DNS records being created. You can also confirm the active identity from inside the pod by querying the GKE metadata server (use `kubectl debug -n external-dns <pod> --image=<image-with-curl>` for an ephemeral container if the workload image lacks `curl`):
+
+   <Command
+     commands={[
+       "curl -H 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/email",
+     ]}
+   />
+
+   For a direct IAM grant, the metadata server answers `my-project.svc.id.goog`.
+
+### Link a Google service account
+
+1. **Declare the Google service account in Kix.** Pass `serviceAccount` in `kix.cloudIdentity.gcp`:
 
    <Snippet {...gkeIdentityLinked} />
 
-Velero's GCP plugin signs download and log URLs using `backupStorageLocation.config.serviceAccount`, so pass a Google service account email there alongside `deps.cloudCredentials` (see [Deploy Velero](/docs/how-to/package-task-guides/deploy-velero/#use-a-cloud-identity-instead-of-keys)):
+   Kix writes `iam.gke.io/gcp-service-account: external-dns@my-project.iam.gserviceaccount.com` on the `clouddns` ServiceAccount.
+
+2. **Inspect the required IAM member.** Run `kix list resources <cluster>` to get the `roles/iam.workloadIdentityUser` member string under **Cloud identities**:
+
+   {/* Output maintained by hand from clusters/test-cloud-identity-gke.nix (outside the kix-examples capture pipeline) and can drift. */}
+   <Command
+     commands={[
+       {
+         command: "kix list resources <cluster>",
+         stdout: [
+           "Cloud identities:",
+           " Subject                                                                Mechanism  Identity",
+           " serviceAccount:<project-id>.svc.id.goog[external-dns-linked/clouddns]  gke        serviceAccount=external-dns@my-project.iam.gserviceaccount.com",
+           "Replace <project-id> and <project-number> with the cluster's Google Cloud project ID and project number before using a subject in IAM.",
+         ].join("\n"),
+       },
+     ]}
+   />
+
+   In `kix list resources <cluster> -o json`, this entry lists `["<project-id>"]` in `subjectPlaceholders`.
+
+3. **Grant the package role and allow impersonation in Google Cloud.** Ensure the Google service account `external-dns@my-project.iam.gserviceaccount.com` exists and holds the Google Cloud `<role>` the package needs, then grant `roles/iam.workloadIdentityUser` on that Google service account to the `Subject` member with `<project-id>` replaced:
+
+   <Command
+     commands={[
+       "gcloud iam service-accounts add-iam-policy-binding external-dns@my-project.iam.gserviceaccount.com --role=roles/iam.workloadIdentityUser --member='serviceAccount:my-project.svc.id.goog[external-dns-linked/clouddns]'",
+     ]}
+   />
+
+4. **Deploy and confirm.** Apply the cluster and check the controller log:
+
+   <Command
+     commands={[
+       "kix deploy <cluster>",
+       "kubectl logs -n external-dns-linked deploy/clouddns",
+     ]}
+   />
+
+   Querying `http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/email` with `-H 'Metadata-Flavor: Google'` from inside the pod returns `external-dns@my-project.iam.gserviceaccount.com`, and the `clouddns` log shows DNS records created.
+
+Velero's GCP plugin also signs download and log URLs using `backupStorageLocation.config.serviceAccount`, so pass the same Google service account email there alongside `deps.cloudCredentials` (see [Deploy Velero](/docs/how-to/package-task-guides/deploy-velero/#use-a-cloud-identity-instead-of-keys)):
 
 <Snippet {...veleroGkeIdentity} />
 
-### Inspect required IAM subjects
+### When GKE identity setup is wrong
 
-List every Kix-rendered ServiceAccount that carries a cloud identity and the principal Google Cloud must trust:
+- **No deploy-time pod check on GKE.** GKE injects no identity environment variables into containers, so `kix deploy` cannot check whether a pod received its identity and never raises `CloudIdentityNotApplied` on GKE. A workload with missing or broken IAM bindings deploys cleanly and reports `ok` in `kix status`; check the pod logs and metadata server to diagnose failures.
+- **Log messages that distinguish IAM failures:**
+  - **Missing Google Cloud permissions on the principal or Google service account:** API calls fail with HTTP 403 (for `external-dns`, `failed to list zones: googleapi: Error 403: Forbidden`).
+  - **Missing `roles/iam.workloadIdentityUser` on the Google service account (linked form):** the Kubernetes ServiceAccount cannot impersonate the Google service account, and pods log `Permission 'iam.serviceAccounts.getAccessToken' denied`. A newly created IAM binding can take a minute or two to apply, during which pods log this same error before succeeding.
+- **Host-network pods refused at `kix check` (`[K2669]`).** Workload Identity Federation for GKE does not grant cloud identities to pods with `hostNetwork: true`, which GKE runs with the node pool's service account instead. If a host-network workload uses a ServiceAccount that carries a cloud identity, `kix check` rejects it with `[K2669]`:
 
-<Command
-  commands={[
-    "kix list resources <cluster>",
-    "kix list resources <cluster> -o json",
-  ]}
-/>
+  ```text
+  <workload> sets `hostNetwork: true` and uses ServiceAccount `<sa>`, which has a cloud identity from `deps.<dep>`. GKE Workload Identity Federation does not grant cloud identities to host-network pods, so they would run with the node's credentials. Kix rejected <workload>.
+  ```
 
-Plain output prints a **Cloud identities** section showing each namespace, ServiceAccount name (for example, `cert-manager`, `external-secrets`, `velero-server`, or your `external-dns` instance name), and subject. JSON output provides the `cloudIdentities` array for tools such as Terraform, with `<project-id>` and `<project-number>` listed in `subjectPlaceholders`.
-
-Find your project number when replacing `<project-number>`:
-
-<Command
-  commands={[
-    "gcloud projects describe my-project --format='value(projectNumber)'",
-  ]}
-/>
-
-Use the matching member identifier in your Google Cloud IAM bindings:
-
-- **Direct grant (`gcp { }`):** Grant the Google Cloud IAM roles your workload needs to `principal://iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/<project-id>.svc.id.goog/subject/ns/<namespace>/sa/<serviceaccount>`.
-- **Linked Google service account (`gcp { serviceAccount = "..."; }`):** Grant the Google Cloud roles to the Google service account, and grant `roles/iam.workloadIdentityUser` on that Google service account to `serviceAccount:<project-id>.svc.id.goog[<namespace>/<serviceaccount>]`.
-
-:::caution
-Every GKE cluster in a Google Cloud project shares one Workload Identity pool (`<project-id>.svc.id.goog`). A direct IAM grant to `ns/<namespace>/sa/<serviceaccount>` applies to that namespace and ServiceAccount name in every GKE cluster in the project. Use separate Google Cloud projects or linked Google service accounts when clusters in one project need isolated permissions.
-:::
-
-### Verify and troubleshoot identities
-
-- **Pod restarts on change.** Kix writes `checksum/cloud-identity` onto the pod templates it builds, so changing an identity restarts Deployment, StatefulSet, and DaemonSet pods on deploy. Pods created at runtime by an operator (such as StackGres) keep their previous identity until recreated.
-- **Workloads without an identity and `hostNetwork`.** With Workload Identity Federation enabled, a pod whose ServiceAccount has no cloud identity runs as its own Kubernetes ServiceAccount principal, which has no Google Cloud roles unless you grant them. Pods with `hostNetwork: true` receive the node pool's service account from GKE, so Kix stops the build with `[K2669]` if a host-network workload uses a ServiceAccount with a cloud identity.
-- **Checking cloud access.** GKE injects no identity environment variables into containers, and Kix cannot verify whether Google Cloud IAM accepts a binding. A workload with missing permissions still deploys cleanly and shows `ok` in `kix status` while its API calls return `403`. New IAM bindings also take a minute or two to propagate, during which pods can log `Permission 'iam.serviceAccounts.getAccessToken' denied` before succeeding. Check the workload's logs, or inspect the active identity from inside a pod (using `kubectl debug` with an ephemeral container if the image lacks `curl`):
-
-<Command
-  commands={[
-    "curl -H 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/email",
-  ]}
-/>
-
-The metadata server returns `my-project.svc.id.goog` for the direct form and the Google service account's email address for the linked form.
+  Use a separate ServiceAccount without a cloud identity, or remove `hostNetwork: true`.
+- **Workloads without an identity and pod restarts.** With Workload Identity Federation enabled, a pod whose ServiceAccount has no cloud identity runs as its own Kubernetes ServiceAccount principal, which holds no Google Cloud roles unless you grant them. Kix writes `checksum/cloud-identity` onto Kix-built pod templates so changing an identity restarts Deployment, StatefulSet, and DaemonSet pods on deploy; pods created at runtime by an operator (such as StackGres) keep their previous identity until recreated.
 
 :::note[Reference]
 See [Cloud identities](/docs/reference/instances-and-composition/#cloud-identities) for the full `cloudIdentities` JSON fields and evaluation checks.
@@ -213,11 +281,11 @@ Standard `NetworkPolicy` has no selectors for the API server or cluster nodes, s
   />
 
   Append `/32` to each IPv4 address returned, and update this list whenever you rotate the control plane IP. Kix never checks this address against the live cluster: a wrong address deploys without error, open connections stay up, and pods fail to reach the API server after their next restart.
-- **`cluster.network.nodeCidrs`:** Required when a policy targets nodes (for example, Prometheus scraping `node-exporter` on the host network). Kix also excludes this range from outbound `world` rules on GKE so internet egress does not open node kubelets. Set it to your node subnet's primary IPv4 range:
+- **`cluster.network.nodeCidrs`:** Required when a policy targets nodes (for example, Prometheus scraping `node-exporter` on the host network). Kix also excludes this range from outbound `world` rules on GKE so internet egress does not open node kubelets. Set it to your node subnet's primary IPv4 range. Read `networkConfig.subnetwork`, which prints `projects/<project>/regions/<region>/subnetworks/<subnet>` so one command gives both `<subnet>` and `<region>` (for a zonal cluster whose `<location>` is a zone such as `europe-west3-a`, its `<region>` is the zone name without the last part, `europe-west3`):
 
   <Command
     commands={[
-      "gcloud container clusters describe <cluster> --location <location> --format='value(subnetwork)'",
+      "gcloud container clusters describe <cluster> --location <location> --format='value(networkConfig.subnetwork)'",
       "gcloud compute networks subnets describe <subnet> --region <region> --format='value(ipCidrRange)'",
     ]}
   />
