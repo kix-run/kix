@@ -15,12 +15,14 @@ kix.buildCluster {
     (
       { ref, ... }:
       {
-        # A Secret with the keys AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.
+        # A Secret with the keys AWS_ACCESS_KEY_ID,
+        # AWS_SECRET_ACCESS_KEY, and AWS_REGION.
         instances.external-dns.aws-keys = {
           package = packages.secret-ref;
           config.keys = [
             "AWS_ACCESS_KEY_ID"
             "AWS_SECRET_ACCESS_KEY"
+            "AWS_REGION"
           ];
         };
         instances.external-dns.route53.deps.providerCredentials = ref.external-dns.aws-keys;

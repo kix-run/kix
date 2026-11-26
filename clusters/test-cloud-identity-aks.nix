@@ -48,7 +48,7 @@ kix.buildCluster {
         package = packages.experimental.cluster-issuer;
         config.spec.acme = {
           server = "https://acme-staging-v02.api.letsencrypt.org/directory";
-          email = "platform@example.com";
+          email = "<your-email>";
           solvers = [
             {
               dns01.azureDNS = {

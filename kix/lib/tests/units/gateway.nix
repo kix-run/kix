@@ -342,7 +342,7 @@ in
       config.ingress = {
         host = "web.test.local";
         extraHosts = [ "www.test.local" ];
-        annotations."external-dns.alpha.kubernetes.io/target" = "edge.test.local";
+        annotations."external-dns.kubernetes.io/target" = "edge.test.local";
         timeouts.request = "0s";
       };
       viaGateway =
@@ -387,7 +387,7 @@ in
         "web.test.local"
         "www.test.local"
       ]
-      && route.metadata.annotations."external-dns.alpha.kubernetes.io/target" == "edge.test.local"
+      && route.metadata.annotations."external-dns.kubernetes.io/target" == "edge.test.local"
       && builtins.length route.spec.rules == 2
       && builtins.head route.spec.rules == redirect
       && (builtins.elemAt route.spec.rules 1).filters == [ header ]

@@ -52,10 +52,14 @@
 #     package = packages.experimental.cluster-issuer;
 #     config.spec.acme = {
 #       server = "https://acme-v02.api.letsencrypt.org/directory";
-#       email = "platform@example.com";
+#       email = "<your-email>";
 #       solvers = [ { dns01.route53.region = "eu-west-1"; } ];
 #     };
 #   };
+#
+# Replace `<your-email>` with your own address. Let's Encrypt
+# refuses an `example.com` contact, and the issuer then stays not ready until
+# the deploy's readiness timeout.
 #
 # The package fills in two things:
 #   - `acme.privateKeySecretRef.name`, when unset, with
@@ -324,7 +328,7 @@ in
       {
         acme = {
           server = "https://acme-v02.api.letsencrypt.org/directory";
-          email = "platform@example.com";
+          email = "<your-email>";
           solvers = [
             {
               dns01.cloudflare.apiTokenSecretRef.key = "api-token";

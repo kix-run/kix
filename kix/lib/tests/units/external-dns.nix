@@ -509,4 +509,74 @@ in
       })
     )
     || throw "external-dns alerts: ${staleExpr { }}, ${staleExpr { interval = "10m"; }}";
+
+  # `provider = "aws"` with a Secret of access keys needs a region, because
+  # only a platform-injected identity brings one. A region in the Secret,
+  # in `env`, or through `secretEnv` satisfies the check.
+  external-dns-aws-keys-need-a-region =
+    let
+      aws =
+        extra:
+        {
+          provider = "aws";
+          policy = "sync";
+          txtOwnerId = "test";
+        }
+        // extra;
+      keys = [
+        "AWS_ACCESS_KEY_ID"
+        "AWS_SECRET_ACCESS_KEY"
+      ];
+      cases = {
+        missing = failedMessages {
+          config = aws { };
+          inherit keys;
+        };
+        inSecret = failedMessages {
+          config = aws { };
+          keys = keys ++ [ "AWS_DEFAULT_REGION" ];
+        };
+        inEnv = failedMessages {
+          config = aws { env.AWS_REGION = "eu-central-1"; };
+          inherit keys;
+        };
+        mapped = failedMessages {
+          config = aws { secretEnv.AWS_REGION = "region"; };
+          keys = keys ++ [ "region" ];
+        };
+        sd = failedMessages {
+          config = aws { provider = "aws-sd"; };
+          inherit keys;
+        };
+      };
+    in
+    (
+      someMessageHas [ "Missing Region" "AWS_REGION" ] cases.missing
+      && someMessageHas [ "Missing Region" ] cases.sd
+      && cases.inSecret == [ ]
+      && cases.inEnv == [ ]
+      && cases.mapped == [ ]
+    )
+    || throw "external-dns aws region assertions: ${builtins.toJSON cases}";
+
+  # The package passes no annotation-prefix flag, so external-dns reads
+  # only `external-dns.kubernetes.io/`. `extraArgs` can add the upstream
+  # flag that also reads the legacy `external-dns.alpha.kubernetes.io/`
+  # prefix.
+  external-dns-annotation-prefix-args =
+    let
+      argsOf =
+        config:
+        let
+          d = byName "edns" (ofKind "Deployment" (manifests (ednsCluster config)));
+        in
+        (builtins.head d.spec.template.spec.containers).args;
+      plain = argsOf (inmemory { });
+      legacy = argsOf (inmemory {
+        extraArgs = [ "--enable-legacy-annotation-prefix" ];
+      });
+      mentions = builtins.any (a: lib.hasInfix "annotation-prefix" a);
+    in
+    (!(mentions plain) && builtins.elem "--enable-legacy-annotation-prefix" legacy)
+    || throw "external-dns annotation prefix args: ${builtins.toJSON { inherit plain legacy; }}";
 }

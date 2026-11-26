@@ -97,6 +97,10 @@ Kix derives `cluster.availability.substrate` from `cluster.capabilities`:
 
 When `multiNode` or `availabilityZones` is `null` (unknown), Kix derives `"node"` and emits a cluster warning asking you to declare the capability explicitly. Requesting a `cluster.availability.default` or instance `availability` higher than a known substrate fails evaluation.
 
+:::note[Sizing a small multi-node cluster]
+On a cluster with two or more nodes, `cluster.availability.default` is at least `"node"`, so packages that scale with availability run two or more replicas of each workload (for example, `cert-manager` runs two controller, two webhook, and two cainjector pods). Installing several such packages on small nodes can exhaust CPU requests and leave DaemonSet pods unschedulable. To run one replica by default across the cluster, set `cluster.availability.default = "none"`. To change a single package, set [`availability`](/docs/reference/instances-and-composition/#availability) on its instance.
+:::
+
 ```nix
 cluster.capabilities.multiNode = true;
 cluster.capabilities.availabilityZones = [ "eu-west-1a" "eu-west-1b" "eu-west-1c" ];

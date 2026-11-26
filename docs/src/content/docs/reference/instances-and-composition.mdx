@@ -178,6 +178,13 @@ instances.external-dns.route53 = {
 };
 ```
 
+On AWS, workload identity injects `AWS_REGION` into the pod automatically,
+whereas static access keys in a Secret do not. Packages that use the AWS SDK
+with a Secret may therefore require an explicit region: for example,
+`external-dns` with `provider = "aws"` or `"aws-sd"` fails evaluation unless
+`AWS_REGION` or `AWS_DEFAULT_REGION` is set in `config.env` or provided by the
+Secret.
+
 | Constructor | Fields | What Kix writes on the ServiceAccount and pods |
 | --- | --- | --- |
 | `kix.cloudIdentity.aws` | `roleArn` (IAM role ARN) | `<annotationPrefix>/role-arn` (`eks.amazonaws.com/role-arn` by default) on the ServiceAccount. With `cluster.flavor.eks.cloudIdentity = "pod-identity"`, Kix omits this annotation because EKS Pod Identity links the ServiceAccount to an IAM role through an AWS association that you create outside Kix. Set that AWS association to the same `roleArn`; Kix records `roleArn` in `kix.run/cloud-identity` (shown by `kix list resources`), but pods receive whichever role the AWS association specifies. |

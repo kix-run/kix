@@ -30,6 +30,10 @@ solver. This example uses Cloudflare DNS-01:
 
 <Snippet {...acmeClusterIssuer} />
 
+Replace `<your-email>` with your own address. Let's Encrypt refuses
+`example.com`, and `kix deploy` waits for the readiness timeout before showing
+that error.
+
 The `cloudflare-api-token` instance declares a Secret created outside Kix that
 holds the token under the key `api-token`. Use
 [a Kix-managed Secret](/docs/how-to/platform-capabilities/use-kix-managed-secrets/),

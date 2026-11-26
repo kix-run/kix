@@ -190,23 +190,22 @@ Evaluation fails when:
   `stackgres-object-storage` reads a Secret, or when the identity's cloud does
   not match the storage type.
 
-Because the StackGres operator creates the database pods, Kix cannot restart
-them when `deps.backupIdentity` changes, and running pods keep their previous
-credentials until restarted. After deploying a change to `deps.backupIdentity`,
-restart the cluster by applying an `SGDbOps` resource:
+Because the StackGres operator creates the database pods, Kix cannot replace
+them automatically when `deps.backupIdentity` changes. The cloud platform
+injects credentials only when a pod is created, so running pods keep their old
+identity until they are recreated.
 
-```yaml
-apiVersion: stackgres.io/v1
-kind: SGDbOps
-metadata:
-  name: postgres-restart
-  namespace: database
-spec:
-  sgCluster: postgres
-  op: restart
-  restart:
-    method: ReducedImpact
-```
+After deploying a change to `deps.backupIdentity`, delete each database pod so
+StackGres creates a new pod with the updated identity. Do not use an `SGDbOps`
+`restart` (`ReducedImpact` or `InPlace`): it completes without recreating the
+pod, so the pod keeps its old role.
+
+<Command commands={["kubectl delete pod --namespace <namespace> <cluster>-0"]} />
+
+Delete one pod at a time and wait for its replacement to become ready before
+deleting the next. On a multi-instance cluster, delete replicas first and the
+primary last so the cluster fails over only once. A single-instance cluster is
+unavailable while its pod is recreated.
 
 ## Monitor PostgreSQL
 
