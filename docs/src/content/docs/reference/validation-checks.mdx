@@ -29,7 +29,7 @@ This page is maintained alongside `kix/lib/eval/validate.nix`. The test suites i
 | 9 | On a `Deployment`, `StatefulSet`, `DaemonSet`, or `Job`, `spec.selector` (`matchLabels` and `matchExpressions`) matches the pod template labels. | |
 | 10 | `Ingress` backends name a `Service` in the same namespace. | |
 | 11 | Every `metadata.namespace` has a corresponding `Namespace` resource in the build. | `_`-prefixed sentinel namespaces used internally for cluster-scoped instances |
-| 12 | A `NetworkPolicy` `podSelector` matches at least one pod template in its namespace. | Empty `podSelector` (`{ }`) |
+| 12 | A `NetworkPolicy` `podSelector` matches at least one pod template in its namespace. | Empty `podSelector` (`{ }`); NetworkPolicies carrying `kix.run/operand-of` |
 | 13 | A named `Service` `targetPort` exists on a container of a selected pod template. | Numeric `targetPort` values; Services that match no pod template in the build |
 | 14 | A `PodDisruptionBudget` `selector` matches at least one pod template in its namespace. | PDBs with an empty selector; PDBs carrying `kix.run/operand-of` |
 | 15 | A `Job`'s pod template labels do not satisfy any `Service` selector in its namespace (which would route live service traffic to a batch Job pod). | Services without a selector |
@@ -84,7 +84,7 @@ The following markers satisfy existence and selector checks:
 - **Untracked references**: A name wrapped in [`kix.untrackedRef`](/docs/reference/composition-helpers/#facts-and-untrackedref) satisfies name checks in the referring resource's namespace regardless of kind.
 - **Service and Secret ref markers**: `scope.mkServiceRef` and `scope.mkSecretRef` satisfy `Service` and `Secret` checks in their namespace, and the `selector` declared on `scope.mkServiceRef` counts as a pod template for checks 4 and 12. (Check 6 still requires a rendered `Service` with `clusterIP: None`.)
 - **Platform and service imports**: `kix.mkImport` markers with `kind` and `out.name` satisfy checks for that kind. Built-in cluster-scoped kinds (`StorageClass`, `IngressClass`) imported via `kix.mkImport` satisfy references across all namespaces.
-- **Operator-managed pods**: A `Service` (check 4) or `PodDisruptionBudget` (check 14) that selects pods created at runtime by an operator can set `metadata.annotations."kix.run/operand-of" = "<group>/<Kind>/<name>"`. The check passes when that custom resource exists in the same namespace in the build.
+- **Operator-managed pods**: A `Service` (check 4), `NetworkPolicy` (check 12), or `PodDisruptionBudget` (check 14) that selects pods created at runtime by an operator can set `metadata.annotations."kix.run/operand-of" = "<group>/<Kind>/<name>"`. The check passes when that custom resource exists in the same namespace in the build.
 
 ## Failure output
 
