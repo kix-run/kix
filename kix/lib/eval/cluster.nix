@@ -717,6 +717,7 @@ in
             allResources = builtins.concatMap (
               inst: map (r: r.rawManifest or { }) (collectResources inst)
             ) allInstancesList;
+            derivedResources = map (r: r.rawManifest or { }) clusterHookResources;
             clusterConfig = cfg;
             ruleDefaults = scorecardConfig.ruleDefaults or { };
             ruleOverrides = scorecardConfig.ruleOverrides or { };

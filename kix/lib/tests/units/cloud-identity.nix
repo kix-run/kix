@@ -1564,12 +1564,32 @@ in
         inherit port;
         protocol = "TCP";
       };
+      # The test enforcer takes the role from the platform's own enforcer,
+      # which the gke flavours and the eks flavour with the VPC CNI declare.
+      testEnforcerWins =
+        { options, ... }:
+        {
+          config = lib.mkMerge [
+            { cluster.roles.network-policy-enforcer.binding = lib.mkForce "shadowable"; }
+            (lib.optionalAttrs (lib.hasAttrByPath [ "cluster" "flavor" "eks" "networkPolicy" ] options) {
+              cluster.flavor.eks.networkPolicy = "vpc-cni";
+            })
+          ];
+        };
       # The intent rules the test enforcer echoes on the worker's three
       # egress policies.
       intentRulesOf =
         modules:
         let
-          ms = manifests (mkCluster (modules ++ [ netpolOn ]));
+          ms = manifests (
+            mkCluster (
+              modules
+              ++ [
+                netpolOn
+                testEnforcerWins
+              ]
+            )
+          );
           rulesOf =
             name:
             map (r: removeAttrs r [ "stubRule" ]) (

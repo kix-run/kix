@@ -626,6 +626,13 @@ rec {
       # template labels, a ServiceRef selector, or the operand pods of the
       # custom resource its `kix.run/operand-of` names, as check 14 accepts
       # for a PodDisruptionBudget. An unmatched NetworkPolicy is dead config.
+      # A policy the netpol plugin derives (`kix.run/derived`) is skipped. Its
+      # selector comes from a Service, a custom resource's operand pods, or a
+      # platform intent, so it often selects pods an operator or the platform
+      # creates, which have no template in the build. The checks on those
+      # sources already cover it.
+
+      isDerivedPolicy = np: (np.metadata.labels.${kixKeys.derived} or null) == "true";
 
       networkPolicyFailures = builtins.concatMap (
         np:
@@ -658,7 +665,7 @@ rec {
           [
             "NetworkPolicy ${ns}/${np.metadata.name} podSelector ${builtins.toJSON selector} matches no workload pod template in namespace ${ns}. Check the selector against the intended workload's pod labels"
           ]
-      ) (builtins.filter (r: r.kind == "NetworkPolicy") resources);
+      ) (builtins.filter (r: r.kind == "NetworkPolicy" && !(isDerivedPolicy r)) resources);
 
       # Validate that named Service targetPorts exist on at least one matched
       # workload container. Services that match no workload pod template in the

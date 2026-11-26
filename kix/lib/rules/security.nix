@@ -9,6 +9,7 @@ let
   inherit (import ../core/util.nix { inherit lib; }) listOr attrsOr;
   inherit (import ../core/pod-spec.nix { inherit lib; }) podSpecOf;
   workloadKinds = import ../core/workload-kinds.nix { inherit lib; };
+  widening = import ../plugins/netpol/widening.nix;
 
   getPodSpec = podSpecOf;
 
@@ -435,5 +436,62 @@ in
         [ { message = "namespace '${namespaceName}' has workloads but no network policy"; } ]
       else
         [ ];
+  };
+
+  # Report generated NetworkPolicies that allow more traffic than the Cilium
+  # policy Kix writes for the same rules. The standard enforcer marks each
+  # such policy with `kix.run/network-policy-widened`. The rule reports each
+  # reason once with a count, and each policy as a detail that
+  # `kix check -v` lists.
+  networkPolicyWidened = {
+    description = "Generated network policies that allow more traffic than Kix's Cilium policies would";
+    level = "cluster";
+    severity = "warning";
+    tags = [
+      "security"
+      "network"
+    ];
+    check =
+      {
+        allResources,
+        derivedResources ? [ ],
+        ...
+      }:
+      let
+        widenedIds =
+          r:
+          let
+            v = r.metadata.annotations.${kixKeys.networkPolicyWidened} or "";
+          in
+          if v == "" then [ ] else lib.splitString "," v;
+        policies = builtins.filter (r: (r.kind or "") == "NetworkPolicy" && widenedIds r != [ ]) (
+          allResources ++ derivedResources
+        );
+        byId = builtins.zipAttrsWith (_: ps: ps) (
+          builtins.concatMap (p: map (id: { ${id} = p; }) (widenedIds p)) policies
+        );
+        describe =
+          id:
+          widening.${id} or {
+            summary = "Kix marked these policies with the unknown reason `${id}`.";
+            fix = "";
+          };
+        count = n: if n == 1 then "1 network policy" else "${toString n} network policies";
+      in
+      lib.mapAttrsToList (
+        id: ps:
+        let
+          d = describe id;
+        in
+        {
+          message = "${count (builtins.length ps)} (${id}): ${d.summary} ${d.fix}";
+        }
+      ) byId
+      ++ map (p: {
+        detail = true;
+        namespace = p.metadata.namespace or null;
+        resource = "NetworkPolicy/${p.metadata.name}";
+        message = "allows more than the Cilium policy would: ${lib.concatStringsSep ", " (widenedIds p)}.";
+      }) policies;
   };
 }

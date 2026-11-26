@@ -707,7 +707,62 @@ in
       serviceCidr = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        description = "Service network CIDR (e.g. '10.96.0.0/16').";
+        description = ''
+          Service network CIDR (e.g. '10.96.0.0/16'). Where a standard
+          NetworkPolicy's ipBlock matches Service addresses (EKS), Kix leaves
+          this range out of `world` egress rules and derives
+          `apiServer.cidrs` from its first address.
+        '';
+      };
+      nodeCidrs = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [ "10.128.0.0/20" ];
+        description = ''
+          The address ranges of the cluster's nodes. A standard
+          NetworkPolicy can match the nodes only by address, so on a
+          platform that enforces it, Kix builds rules for the nodes (the
+          `host`, `remote-node`, and `cluster` entities, and scrape targets
+          on the host network) from these ranges, and leaves them out of
+          `world` egress rules. A rule that needs the nodes fails the build
+          while this is empty. Cilium does not read it.
+        '';
+      };
+      apiServer = {
+        cidrs = lib.mkOption {
+          type = lib.types.listOf lib.types.str;
+          default = [ ];
+          example = [ "10.0.0.2/32" ];
+          description = ''
+            The addresses a pod reaches the API server at, as a standard
+            NetworkPolicy sees them. On GKE that is the control plane's
+            endpoint address. On EKS it is the `kubernetes` Service address,
+            and Kix uses the first address of `serviceCidr` when this is
+            empty. A workload bound to a Role or ClusterRole fails the build
+            on a platform that enforces the standard NetworkPolicy until
+            Kix knows the address. Cilium does not read it.
+          '';
+        };
+        port = lib.mkOption {
+          type = lib.types.port;
+          default = 443;
+          description = "The port of the API server at `cidrs`.";
+        };
+        sources = lib.mkOption {
+          type = lib.types.listOf (lib.types.attrsOf lib.types.anything);
+          default = [ ];
+          example = [ { cidr = "10.0.0.0/16"; } ];
+          description = ''
+            Where the API server's calls to admission webhooks and aggregated
+            APIs come from, as `{ cidr = "..."; }` for an address range or
+            `{ namespace = "..."; podSelector = { ... }; }` for proxy pods.
+            The `gke` and `gke-autopilot` flavors set the
+            `konnectivity-agent` pods in `kube-system`. On EKS, set the
+            control plane's subnets. A package that serves a webhook fails
+            the build on a platform that enforces the standard
+            NetworkPolicy while this is empty. Cilium does not read it.
+          '';
+        };
       };
       dnsUpstream = lib.mkOption {
         type = lib.types.listOf lib.types.str;

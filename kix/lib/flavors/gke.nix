@@ -35,6 +35,10 @@ let
     inherit (config) clusterDomain;
   };
   platformCloudIdentity = import ./cloud-identity.nix { inherit kix; };
+  platformNetworkPolicy = import ./platform-network-policy.nix {
+    inherit lib kix;
+    inherit (config.cluster) network;
+  };
   mechanisms = import ../vocab/cloud-identity-mechanisms.nix { inherit lib; };
 in
 {
@@ -47,6 +51,12 @@ in
     cni = {
       binding = lib.mkDefault "exclusive";
       provider = lib.mkDefault "gke-native (dataplane v2)";
+    };
+    # Dataplane V2 always enforces the standard NetworkPolicy, and a second
+    # enforcer such as Cilium cannot run beside it.
+    network-policy-enforcer = {
+      binding = lib.mkDefault "exclusive";
+      provider = lib.mkDefault "GKE Dataplane V2";
     };
     dns.binding = lib.mkDefault "shadowable";
     storageClasses.binding = lib.mkDefault "shadowable";
@@ -91,6 +101,17 @@ in
     serviceCidr = lib.mkDefault null;
   };
 
+  # The API server calls admission webhooks and aggregated APIs through the
+  # konnectivity-agent pods in kube-system, which a live GKE Standard
+  # cluster showed. A private cluster or one without konnectivity is
+  # untested.
+  cluster.network.apiServer.sources = lib.mkDefault [
+    {
+      namespace = "kube-system";
+      podSelector."k8s-app" = "konnectivity-agent";
+    }
+  ];
+
   instances.kube-system = {
     platform-dns = platformDns {
       name = "kube-dns";
@@ -99,6 +120,16 @@ in
     };
 
     cloud-identity = platformCloudIdentity { mechanism = mechanisms.gke { }; };
+
+    # How Dataplane V2 matches an ipBlock, each tested on a live GKE cluster:
+    # never against pod addresses, against node addresses when the ipBlock
+    # covers the node range, and after Service address translation.
+    platform-network-policy = platformNetworkPolicy {
+      provider = "GKE Dataplane V2";
+      ipBlockSelectsPods = false;
+      ipBlockSelectsNodes = true;
+      ipBlockSeesServiceAddress = false;
+    };
 
     platform-storage = {
       package = kix.mkImport {
