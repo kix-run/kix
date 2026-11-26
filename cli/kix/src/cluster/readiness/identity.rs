@@ -37,7 +37,7 @@ pub(crate) fn identity_env(annotations: &BTreeMap<String, String>) -> Option<Ide
         Ok(parsed) if !parsed.env.is_empty() => Some(parsed),
         Ok(_) => None,
         Err(e) => {
-            tracing::debug!(error = %e, "unreadable cloud identity annotation; skipping the pod check");
+            tracing::debug!(error = %e, annotation = keys::CLOUD_IDENTITY_ENV, "invalid annotation; skipping pod identity check");
             None
         }
     }
@@ -76,7 +76,7 @@ pub(crate) fn classify_pod_identity(pod: &Value, expected: &IdentityEnv) -> Opti
             .collect();
         let problem = if !missing.is_empty() {
             Some(format!(
-                "container `{name}` has no {}, which {} adds to a pod it gives a cloud identity to",
+                "container `{name}` is missing {}, which {} sets",
                 quoted_list(&missing),
                 expected.description
             ))
@@ -86,7 +86,7 @@ pub(crate) fn classify_pod_identity(pod: &Value, expected: &IdentityEnv) -> Opti
                 let got = env.get(key.as_str()).copied().flatten().unwrap_or("");
                 (got != want).then(|| {
                     format!(
-                        "container `{name}` has `{key}` set to `{got}`, but the cloud identity in the definition is `{want}`"
+                        "container `{name}` has `{key}` set to `{got}`, but Kix expected `{want}`"
                     )
                 })
             })
@@ -98,7 +98,7 @@ pub(crate) fn classify_pod_identity(pod: &Value, expected: &IdentityEnv) -> Opti
                 .map(|f| format!(" {f}"))
                 .unwrap_or_default();
             return Some(format!(
-                "pod {pod_name} (ServiceAccount `{account}`) did not get its cloud identity: {problem}.{fix}"
+                "pod {pod_name} (ServiceAccount `{account}`) did not receive its cloud identity: {problem}. Kix stopped waiting for this workload.{fix}"
             ));
         }
     }
@@ -110,7 +110,8 @@ fn quoted_list(names: &[&str]) -> String {
     match quoted.as_slice() {
         [] => String::new(),
         [one] => one.clone(),
-        [init @ .., last] => format!("{} or {last}", init.join(", ")),
+        [first, second] => format!("{first} and {second}"),
+        [init @ .., last] => format!("{}, and {last}", init.join(", ")),
     }
 }
 
@@ -179,7 +180,7 @@ mod tests {
         let message = classify_pod_identity(&p, &irsa()).expect("refused");
         assert_eq!(
             message,
-            "pod worker-1 (ServiceAccount `worker`) did not get its cloud identity: container `worker` has no `AWS_ROLE_ARN` or `AWS_WEB_IDENTITY_TOKEN_FILE`, which IAM roles for service accounts (IRSA) adds to a pod it gives a cloud identity to. Delete the association."
+            "pod worker-1 (ServiceAccount `worker`) did not receive its cloud identity: container `worker` is missing `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE`, which IAM roles for service accounts (IRSA) sets. Kix stopped waiting for this workload. Delete the association."
         );
         let bare = json!({
             "metadata": { "name": "worker-1" },
@@ -201,7 +202,7 @@ mod tests {
         let message = classify_pod_identity(&p, &irsa()).expect("refused");
         assert!(
             message.contains(
-                "has `AWS_ROLE_ARN` set to `arn:aws:iam::111122223333:role/other`, but the cloud identity in the definition is `arn:aws:iam::111122223333:role/worker`"
+                "has `AWS_ROLE_ARN` set to `arn:aws:iam::111122223333:role/other`, but Kix expected `arn:aws:iam::111122223333:role/worker`"
             ),
             "{message}"
         );

@@ -409,7 +409,7 @@ build =
 | `cloud` | Which cloud API the software calls: `"aws"`, `"gcp"`, `"azure"`, or `null` when cloud identities are not accepted. Passing an identity for any other cloud fails evaluation. |
 | `arg` | Optional string (defaults to `null`). Name of the dependency argument in `build`, such as `"providerCredentials"`. When set, evaluation errors name `deps.<arg>` and set the error's `dependency` field. Always pass `arg` when a package has more than one credentials dependency, so users know which one to fix. |
 | `identityGoesTo` | Optional string (defaults to `null`). Where the cluster author should move the cloud identity, such as ``"`deps.controllerIdentity` of the cert-manager instance"``. Appended to the error's fix when `cloud` is `null` and `dep` is a cloud identity. |
-| `supportedClouds` | Optional list (defaults to `null`). Every cloud the package can call in any configuration, such as `[ "aws" ]` for a package that writes only S3 settings. An identity for a cloud outside the list fails evaluation with a message that says the package does not support that cloud yet, and the fix does not suggest changing `config`. With `null`, the fix suggests changing `config` to the identity's cloud. |
+| `supportedClouds` | Optional list of strings (defaults to `null`), such as `[ "aws" ]` for a package that supports only S3 settings. Lists every cloud the package supports across all configurations. Passing an identity for an unlisted cloud fails evaluation, reports that the package does not support that cloud yet, and omits the suggestion to change `config`. When `null`, a cloud mismatch suggests changing `config` to match the identity's cloud. |
 
 `kix.cloudIdentity.use` returns an attribute set with three fields:
 
@@ -475,7 +475,7 @@ When the package that chooses the cloud depends on the ServiceAccount owner, cal
 - `cloud`: `"aws"`, `"gcp"`, `"azure"`, or `null` (when using a static Secret instead of pod credentials).
 - `holder`: the dependency instance whose pods make the cloud API calls (which publishes `out.identityCloud`).
 
-`ambientProblem` returns `{ message, fix }` when `cloud` and `holder.out.identityCloud` are both non-null and differ, or `null` otherwise (including when `holder` has no cloud identity, since its pods may get credentials from the platform without one, such as the node's). Wrap a non-null result with `// { assertion = false; }` in the package's `assertions` list.
+`ambientProblem` returns `{ message, fix }` when `cloud` and `holder.out.identityCloud` are both non-null and differ, or `null` otherwise (including when `holder` has no cloud identity, since its pods may still receive default credentials from the cluster or node). Wrap a non-null result with `// { assertion = false; }` in the package's `assertions` list.
 
 When the ServiceAccount owner exposes a builder function in `out` that chooses the cloud (such as `out.mkSecretStore` in `external-secrets`), the package cannot pass itself as `holder`. Pass `holderName` and `identityCloud` instead:
 

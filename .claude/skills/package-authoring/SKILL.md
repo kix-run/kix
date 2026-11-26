@@ -521,10 +521,10 @@ ServiceAccount, because a ServiceAccount carries a single identity:
   `"gcp"`, or `"azure"`) a cloud identity, such as `external-dns`. When
   `cloud` is `null` because another package owns the ServiceAccount, pass
   `identityGoesTo` naming that instance's identity dependency so the error's
-  fix points there. When no `config` can make the package call another
-  cloud, pass `supportedClouds` (such as `[ "aws" ]` in `tempo` and
-  `cnpg-cluster`), so the refusal of another cloud's identity says the
-  package does not support it instead of suggesting a `config` change.
+  fix points there. If the package supports only specific clouds regardless
+  of `config`, pass `supportedClouds` (such as `[ "aws" ]` in `tempo` and
+  `cnpg-cluster`) so Kix reports that other clouds are not supported yet and
+  omits the suggestion to change `config`.
 - `kix.cloudIdentity.useIdentity { inherit scope dep secretGoesTo; arg; cloud ? ...; }`:
   unpacks an optional cloud identity on a package that owns the ServiceAccount
   while another package chooses the cloud and accepts any Secret (`secretGoesTo`

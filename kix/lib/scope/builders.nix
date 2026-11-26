@@ -242,8 +242,8 @@ in
           fail {
             id = "K2669";
             instance = builtBy;
-            message = "${workload} sets `hostNetwork: true` and its pods use ServiceAccount `${sa.out.name}`, which has a cloud identity. ${identity.description} does not give a cloud identity to pods on the host network, so these pods would run with the node's credentials instead. Kix rejected the ${workload}.";
-            fix = "Give the host-network workload its own ServiceAccount without a cloud identity, or remove `hostNetwork: true` from it.";
+            message = "${workload} sets `hostNetwork: true` and uses ServiceAccount `${sa.out.name}`, which has a cloud identity. ${identity.description} does not grant cloud identities to host-network pods, so they would run with the node's credentials. Kix rejected ${workload}.";
+            fix = "Use a separate ServiceAccount without a cloud identity, or remove `hostNetwork: true`.";
           }
         else
           metadata

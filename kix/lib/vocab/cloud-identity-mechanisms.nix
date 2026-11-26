@@ -60,7 +60,7 @@ let
           AWS_ROLE_ARN = value.roleArn;
           AWS_WEB_IDENTITY_TOKEN_FILE = null;
         };
-        podEnvFix = "Check that the IRSA webhook runs (on EKS it is part of the control plane). On EKS, an EKS Pod Identity association for this ServiceAccount takes precedence over IRSA: delete the association in AWS. Then restart the workload's pods.";
+        podEnvFix = "On EKS, if this ServiceAccount has an EKS Pod Identity association, delete that association in AWS so IRSA can apply. On a self-managed cluster, check that the IRSA webhook is running. Then restart the workload's pods.";
       };
     };
 
@@ -84,7 +84,7 @@ let
           AWS_CONTAINER_CREDENTIALS_FULL_URI = null;
           AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE = null;
         };
-        podEnvFix = "Create an EKS Pod Identity association in AWS for this ServiceAccount and the role in the cloud identity (Kix does not create it), and check that the EKS Pod Identity Agent add-on runs. Then restart the workload's pods.";
+        podEnvFix = "Create an EKS Pod Identity association in AWS linking this ServiceAccount to the configured IAM role (Kix does not create it), and check that the EKS Pod Identity Agent add-on is running. Then restart the workload's pods.";
       };
     };
 
@@ -131,7 +131,7 @@ let
           AZURE_TENANT_ID = value.tenantId;
           AZURE_FEDERATED_TOKEN_FILE = null;
         };
-        podEnvFix = "Check that the Azure Workload Identity webhook runs and that its mutating webhook configuration covers this namespace. Then restart the workload's pods.";
+        podEnvFix = "Check that the Azure Workload Identity webhook is running and that its mutating webhook configuration includes this namespace. Then restart the workload's pods.";
       };
     };
 

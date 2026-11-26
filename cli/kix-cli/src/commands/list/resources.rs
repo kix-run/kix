@@ -159,13 +159,13 @@ impl CommandResponse for InspectResponse {
         }
 
         if !self.cloud_identities.is_empty() {
-            out.push_str("\n\nCloud identities (the subjects the cloud must trust):\n");
+            out.push_str("\n\nCloud identities:\n");
             let mut table = comfy_table::Table::new();
             table.load_preset(comfy_table::presets::NOTHING);
             table.set_header(["Subject", "Mechanism", "Identity"]);
             for id in &self.cloud_identities {
                 let identity = if id.identity.is_empty() {
-                    "the ServiceAccount itself".to_string()
+                    "Kubernetes ServiceAccount".to_string()
                 } else {
                     id.identity
                         .iter()
@@ -279,6 +279,6 @@ mod tests {
             text.contains("system:serviceaccount:external-dns:dns"),
             "{text}"
         );
-        assert!(text.contains("the ServiceAccount itself"), "{text}");
+        assert!(text.contains("Kubernetes ServiceAccount"), "{text}");
     }
 }

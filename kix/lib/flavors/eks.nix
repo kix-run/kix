@@ -39,16 +39,16 @@ in
       How pods on this EKS cluster assume AWS IAM roles from
       `kix.cloudIdentity.aws { roleArn = "..."; }`. `"irsa"` (IAM roles for
       service accounts) writes `eks.amazonaws.com/role-arn` on the
-      ServiceAccount. An EKS Pod Identity association for the same
-      ServiceAccount takes precedence over it. `"pod-identity"` (EKS Pod
-      Identity) omits that annotation. Install the EKS Pod Identity Agent
-      add-on and create an EKS Pod Identity association in AWS that links the
-      ServiceAccount to `roleArn`. Kix does not create the association and
-      cannot read it, so the pods get the association's role whatever
-      `roleArn` says. `kix list resources` lists the ServiceAccounts and roles
-      the associations need. Both modes add `checksum/cloud-identity` to pod
-      templates so changing the role restarts pods, and `kix deploy` checks
-      that new pods got the variables the mechanism adds.
+      ServiceAccount. An EKS Pod Identity association on the same
+      ServiceAccount overrides IRSA. `"pod-identity"` (EKS Pod Identity) omits
+      that annotation; install the EKS Pod Identity Agent add-on and create an
+      EKS Pod Identity association in AWS linking the ServiceAccount to
+      `roleArn`. Kix cannot create or inspect AWS associations, so pods receive
+      whichever role the association specifies. Run `kix list resources` to see
+      each ServiceAccount and its `roleArn`. Both modes add
+      `checksum/cloud-identity` to pod templates so changing `roleArn` restarts
+      pods, and `kix deploy` verifies that new pods receive the expected AWS
+      identity environment variables.
     '';
   };
 

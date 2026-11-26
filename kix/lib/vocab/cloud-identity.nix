@@ -294,9 +294,9 @@ let
           m:
           if supportedClouds != null && !(builtins.elem dep.cloud supportedClouds) then
             {
-              message = "${words.This} is set to `${m.given} { ... }` (${m.givenCloud}), but this package can call only ${
-                lib.concatMapStringsSep " or " (c: clouds.${c}) supportedClouds
-              }. It does not support ${m.givenCloud} yet, so Kix rejected the cloud identity.";
+              message = "${words.This} is set to `${m.given} { ... }` (${m.givenCloud}), but this package works only with ${
+                lib.concatMapStringsSep " and " (c: clouds.${c}) supportedClouds
+              } (${m.givenCloud} is not supported yet). Kix rejected the cloud identity.";
               fix = "Set ${words.this} to `${m.wanted} { ... }` or a Secret instance (`ref.<namespace>.<instance>`) with ${m.wantedCloud} credentials.";
             }
           else

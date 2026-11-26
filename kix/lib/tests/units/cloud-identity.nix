@@ -1142,8 +1142,8 @@ in
     (
       lib.hasInfix "configured to call AWS" other
       && lib.hasInfix "change this instance's `config`" other
-      && lib.hasInfix "can call only AWS" onlyAws
-      && lib.hasInfix "does not support Google Cloud yet" onlyAws
+      && lib.hasInfix "works only with AWS" onlyAws
+      && lib.hasInfix "Google Cloud is not supported yet" onlyAws
       && !(lib.hasInfix "`config`" onlyAws)
       && supported.identity != null
       && lib.hasInfix "does not authenticate with a cloud identity" none
