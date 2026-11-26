@@ -26,6 +26,31 @@ pub(crate) struct IdentityEnv {
     /// What to check when a pod lacks them.
     #[serde(default)]
     pub fix: Option<String>,
+    /// The pod annotation that tells the platform to leave some containers
+    /// alone. Those containers are not checked.
+    #[serde(default)]
+    pub skip: Option<SkipAnnotation>,
+    /// The other mechanisms of the same cloud, so a pod that got one of them
+    /// instead is named as such.
+    #[serde(default)]
+    pub alternatives: Vec<Alternative>,
+}
+
+/// A pod annotation that lists containers the platform does not change.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct SkipAnnotation {
+    pub annotation: String,
+    pub separator: String,
+}
+
+/// Another mechanism of the same cloud, by the variables it adds.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct Alternative {
+    pub description: String,
+    pub env: Vec<String>,
+    /// What to do when a pod got this mechanism instead.
+    #[serde(default)]
+    pub fix: Option<String>,
 }
 
 /// Return the cloud identity variables that a workload's annotations
@@ -45,7 +70,10 @@ pub(crate) fn identity_env(annotations: &BTreeMap<String, String>) -> Option<Ide
 
 /// Return why `pod` did not get the cloud identity that `expected` describes,
 /// or `None` when every container carries the declared variables with the
-/// declared values.
+/// declared values. A container that the pod's skip annotation names is not
+/// checked, because the platform was told to leave it alone. A container that
+/// carries every variable of an alternative mechanism is reported as having
+/// got that mechanism.
 pub(crate) fn classify_pod_identity(pod: &Value, expected: &IdentityEnv) -> Option<String> {
     let pod_name = pod
         .pointer("/metadata/name")
@@ -55,9 +83,24 @@ pub(crate) fn classify_pod_identity(pod: &Value, expected: &IdentityEnv) -> Opti
         .pointer("/spec/serviceAccountName")
         .and_then(Value::as_str)
         .unwrap_or("default");
+    let skipped: Vec<&str> = expected
+        .skip
+        .as_ref()
+        .and_then(|s| {
+            let list = pod
+                .pointer("/metadata/annotations")
+                .and_then(Value::as_object)?
+                .get(&s.annotation)?
+                .as_str()?;
+            Some(list.split(s.separator.as_str()).map(str::trim).collect())
+        })
+        .unwrap_or_default();
     let containers = pod.pointer("/spec/containers").and_then(Value::as_array)?;
     for container in containers {
         let name = container.get("name").and_then(Value::as_str).unwrap_or("?");
+        if skipped.contains(&name) {
+            continue;
+        }
         let env: BTreeMap<&str, Option<&str>> = container
             .get("env")
             .and_then(Value::as_array)
@@ -74,29 +117,49 @@ pub(crate) fn classify_pod_identity(pod: &Value, expected: &IdentityEnv) -> Opti
             .map(String::as_str)
             .filter(|k| !env.contains_key(k))
             .collect();
-        let problem = if !missing.is_empty() {
-            Some(format!(
-                "container `{name}` is missing {}, which {} sets",
-                quoted_list(&missing),
-                expected.description
+        // A container that carries every variable of another mechanism got
+        // that mechanism from the platform instead.
+        let instead = expected
+            .alternatives
+            .iter()
+            .find(|a| !a.env.is_empty() && a.env.iter().all(|k| env.contains_key(k.as_str())));
+        let problem = if let (false, Some(other)) = (missing.is_empty(), instead) {
+            let names: Vec<&str> = other.env.iter().map(String::as_str).collect();
+            Some((
+                format!(
+                    "container `{name}` has {}, which {} sets, so the platform applied {} instead of {}",
+                    quoted_list(&names),
+                    other.description,
+                    other.description,
+                    expected.description
+                ),
+                other.fix.as_deref().or(expected.fix.as_deref()),
+            ))
+        } else if !missing.is_empty() {
+            Some((
+                format!(
+                    "container `{name}` is missing {}, which {} sets",
+                    quoted_list(&missing),
+                    expected.description
+                ),
+                expected.fix.as_deref(),
             ))
         } else {
             expected.env.iter().find_map(|(key, want)| {
                 let want = want.as_deref()?;
                 let got = env.get(key.as_str()).copied().flatten().unwrap_or("");
                 (got != want).then(|| {
-                    format!(
-                        "container `{name}` has `{key}` set to `{got}`, but Kix expected `{want}`"
+                    (
+                        format!(
+                            "container `{name}` has `{key}` set to `{got}`, but Kix expected `{want}`"
+                        ),
+                        expected.fix.as_deref(),
                     )
                 })
             })
         };
-        if let Some(problem) = problem {
-            let fix = expected
-                .fix
-                .as_deref()
-                .map(|f| format!(" {f}"))
-                .unwrap_or_default();
+        if let Some((problem, fix)) = problem {
+            let fix = fix.map(|f| format!(" {f}")).unwrap_or_default();
             return Some(format!(
                 "pod {pod_name} (ServiceAccount `{account}`) did not receive its cloud identity: {problem}. Kix stopped waiting for this workload.{fix}"
             ));
@@ -130,7 +193,13 @@ mod tests {
         identity_env(&annotations(json!({
             "description": "IAM roles for service accounts (IRSA)",
             "env": { "AWS_ROLE_ARN": ROLE, "AWS_WEB_IDENTITY_TOKEN_FILE": null },
-            "fix": "Delete the association."
+            "fix": "Delete the association.",
+            "skip": { "annotation": "eks.amazonaws.com/skip-containers", "separator": "," },
+            "alternatives": [{
+                "description": "EKS Pod Identity",
+                "env": ["AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", "AWS_CONTAINER_CREDENTIALS_FULL_URI"],
+                "fix": "Delete the EKS Pod Identity association."
+            }]
         })))
         .expect("declared")
     }
@@ -226,5 +295,37 @@ mod tests {
         });
         let message = classify_pod_identity(&p, &irsa()).expect("refused");
         assert!(message.contains("container `sidecar`"), "{message}");
+    }
+
+    // An EKS Pod Identity association takes precedence over IRSA. The pod
+    // then carries the Pod Identity variables, and the message says so as a
+    // fact, with the alternative's own fix.
+    #[test]
+    fn a_pod_that_got_another_mechanism_is_named() {
+        let p = pod(json!([
+            { "name": "AWS_CONTAINER_CREDENTIALS_FULL_URI", "value": "http://169.254.170.23/v1/credentials" },
+            { "name": "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", "value": "/var/run/secrets/pods.eks.amazonaws.com/serviceaccount/eks-pod-identity-token" }
+        ]));
+        let message = classify_pod_identity(&p, &irsa()).expect("refused");
+        assert!(
+            message.contains("so the platform applied EKS Pod Identity instead of IAM roles for service accounts (IRSA)"),
+            "{message}"
+        );
+        assert!(
+            message.ends_with("Delete the EKS Pod Identity association."),
+            "{message}"
+        );
+    }
+
+    // A container the pod's skip annotation names is left alone by the
+    // platform, so it is not checked. Another container still is.
+    #[test]
+    fn a_skipped_container_is_not_checked() {
+        let mut p = pod(json!([]));
+        p["metadata"]["annotations"] =
+            json!({ "eks.amazonaws.com/skip-containers": "worker, other" });
+        assert_eq!(classify_pod_identity(&p, &irsa()), None);
+        p["metadata"]["annotations"] = json!({ "eks.amazonaws.com/skip-containers": "other" });
+        assert!(classify_pod_identity(&p, &irsa()).is_some());
     }
 }

@@ -19,6 +19,11 @@ let
   #   checks a new pod for them, because only the platform can say whether
   #   the pod got the identity.
   # - `podEnvFix`: what to check when a pod lacks them.
+  # - `podEnvSkip`: the pod annotation (`annotation`) that tells the
+  #   platform to leave some containers alone, and the `separator` between
+  #   their names. The deploy does not check those containers.
+  # - `podEnvOverrideFix`: what to do when a pod got this mechanism while
+  #   its ServiceAccount asks for another mechanism of the same cloud.
   # - `servesHostNetwork = false` when the platform gives no identity to a
   #   pod with `hostNetwork: true`.
   mkMechanism =
@@ -61,6 +66,11 @@ let
           AWS_WEB_IDENTITY_TOKEN_FILE = null;
         };
         podEnvFix = "On EKS, if this ServiceAccount has an EKS Pod Identity association, delete that association in AWS so IRSA can apply. On a self-managed cluster, check that the IRSA webhook is running. Then restart the workload's pods.";
+        # The webhook README documents a comma-separated list.
+        podEnvSkip = {
+          annotation = "${annotationPrefix}/skip-containers";
+          separator = ",";
+        };
       };
     };
 
@@ -85,6 +95,14 @@ let
           AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE = null;
         };
         podEnvFix = "Create an EKS Pod Identity association in AWS linking this ServiceAccount to the configured IAM role (Kix does not create it), and check that the EKS Pod Identity Agent add-on is running. Then restart the workload's pods.";
+        # AWS documents no opt-out for Pod Identity. The EKS webhook reads
+        # this annotation for IRSA, and not checking a container it names
+        # cannot fail a pod that got its identity.
+        podEnvSkip = {
+          annotation = "eks.amazonaws.com/skip-containers";
+          separator = ",";
+        };
+        podEnvOverrideFix = "Delete the EKS Pod Identity association for this ServiceAccount in AWS, then restart the workload's pods.";
       };
     };
 
@@ -132,6 +150,11 @@ let
           AZURE_FEDERATED_TOKEN_FILE = null;
         };
         podEnvFix = "Check that the Azure Workload Identity webhook is running and that its mutating webhook configuration includes this namespace. Then restart the workload's pods.";
+        # The Azure Workload Identity docs give a semicolon-separated list.
+        podEnvSkip = {
+          annotation = "azure.workload.identity/skip-containers";
+          separator = ";";
+        };
       };
     };
 

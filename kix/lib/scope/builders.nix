@@ -150,8 +150,7 @@ in
                             inherit (rendered)
                               podLabels
                               stamp
-                              podEnv
-                              podEnvFix
+                              podCheck
                               servesHostNetwork
                               description
                               ;
@@ -276,15 +275,11 @@ in
         let
           identity = _templateIdentity rawTemplateSpec;
         in
-        if identity == null || identity.podEnv == { } then
+        if identity == null || identity.podCheck == null then
           { }
         else
           {
-            ${kixKeys.cloudIdentityEnv} = builtins.toJSON {
-              inherit (identity) description;
-              env = identity.podEnv;
-              fix = identity.podEnvFix;
-            };
+            ${kixKeys.cloudIdentityEnv} = builtins.toJSON identity.podCheck;
           };
 
       _expandHeadlessService =

@@ -741,6 +741,21 @@ in
       }
       && lib.hasInfix "IRSA" irsaEnv.deployment.description
       && lib.hasInfix "EKS Pod Identity association" irsaEnv.deployment.fix
+      &&
+        irsaEnv.deployment.skip == {
+          annotation = "eks.amazonaws.com/skip-containers";
+          separator = ",";
+        }
+      && map (a: a.description) irsaEnv.deployment.alternatives == [ "EKS Pod Identity" ]
+      &&
+        (builtins.head irsaEnv.deployment.alternatives).env == [
+          "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE"
+          "AWS_CONTAINER_CREDENTIALS_FULL_URI"
+        ]
+      &&
+        map (a: a.description) podIdentityEnv.deployment.alternatives == [
+          "IAM roles for service accounts (IRSA)"
+        ]
       && irsaEnv.job == null
       &&
         podIdentityEnv.deployment.env == {
@@ -755,6 +770,8 @@ in
           AZURE_TENANT_ID = null;
           AZURE_FEDERATED_TOKEN_FILE = null;
         }
+      && aksEnv.deployment.skip.separator == ";"
+      && aksEnv.deployment.alternatives == [ ]
       && noneEnv.deployment == null
     )
     || throw "pod env: irsa ${builtins.toJSON irsaEnv}, pod identity ${builtins.toJSON podIdentityEnv}, gke ${builtins.toJSON gkeEnv}, aks ${builtins.toJSON aksEnv}, none ${builtins.toJSON noneEnv}";

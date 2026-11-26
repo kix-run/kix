@@ -64,7 +64,13 @@ struct CloudIdentity {
     /// `system:serviceaccount:<namespace>:<name>`, the subject of the
     /// ServiceAccount's Kubernetes token, on every cloud.
     kubernetes_subject: String,
+    /// The principal the role's trust policy must name when Kix knows it:
+    /// `pods.eks.amazonaws.com` for EKS Pod Identity. Null otherwise.
+    trust_principal: Option<String>,
 }
+
+/// The service principal an EKS Pod Identity role must trust.
+const POD_IDENTITY_PRINCIPAL: &str = "pods.eks.amazonaws.com";
 
 /// Placeholders for the Google Cloud project that holds the cluster's
 /// workload identity pool, which the cluster definition does not name.
@@ -118,6 +124,8 @@ fn cloud_identity_of(manifest: &serde_json::Value, rid: &ResourceId) -> Option<C
         subject,
         subject_placeholders,
         kubernetes_subject: format!("system:serviceaccount:{}:{}", rid.namespace, rid.name),
+        trust_principal: (mechanism == "eks-pod-identity")
+            .then(|| POD_IDENTITY_PRINCIPAL.to_string()),
         namespace: rid.namespace.clone(),
         service_account: rid.name.clone(),
         cloud,
@@ -226,7 +234,12 @@ impl CommandResponse for InspectResponse {
                         .join(" ")
                 };
                 let subject = id.subject.clone().unwrap_or_else(|| {
-                    format!("association for {}/{}", id.namespace, id.service_account)
+                    format!(
+                        "association for {}/{}, role trusts {}",
+                        id.namespace,
+                        id.service_account,
+                        id.trust_principal.as_deref().unwrap_or("?")
+                    )
                 });
                 table.add_row([subject.as_str(), id.mechanism.as_str(), &identity]);
             }
@@ -395,5 +408,44 @@ mod subject_tests {
             "sa",
         );
         assert_eq!(pod_identity, (None, vec![]));
+    }
+
+    // Under EKS Pod Identity the cloud side needs an association and a
+    // role that trusts the EKS service principal, never a token subject.
+    #[test]
+    fn pod_identity_names_the_association_and_principal() {
+        let m = json!({
+            "apiVersion": "v1",
+            "kind": "ServiceAccount",
+            "metadata": {
+                "name": "route53",
+                "namespace": "external-dns",
+                "annotations": { keys::CLOUD_IDENTITY: json!({
+                    "mechanism": "eks-pod-identity",
+                    "aws": { "roleArn": "arn:aws:iam::111122223333:role/dns" }
+                }).to_string() }
+            }
+        });
+        let rid = ResourceId::from_value(&m);
+        let id = cloud_identity_of(&m, &rid).expect("bound");
+        assert_eq!(id.subject, None);
+        assert_eq!(
+            id.trust_principal.as_deref(),
+            Some("pods.eks.amazonaws.com")
+        );
+        let response = InspectResponse {
+            cluster_name: "c".into(),
+            total_resources: 1,
+            by_namespace: BTreeMap::from([(rid.namespace.clone(), vec![rid.clone()])]),
+            kind_counts: BTreeMap::from([("ServiceAccount".into(), 1)]),
+            cloud_identities: vec![id],
+        };
+        let text = response.text();
+        assert!(
+            text.contains(
+                "association for external-dns/route53, role trusts pods.eks.amazonaws.com"
+            ),
+            "{text}"
+        );
     }
 }

@@ -32,7 +32,55 @@ let
   kixKeys = (import ../core/annotations.nix).keys;
   errors = import ../core/error.nix { inherit lib; };
 
-  inherit (import ./cloud-identity-mechanisms.nix { inherit lib; }) mechanismType;
+  mechanisms = import ./cloud-identity-mechanisms.nix { inherit lib; };
+  inherit (mechanisms) mechanismType;
+
+  # Every built-in mechanism, so a pod check can name the one the platform
+  # applied instead. The prefix of IRSA does not change its variables.
+  allMechanisms = [
+    (mechanisms.irsa { })
+    (mechanisms.eksPodIdentity { })
+    (mechanisms.gke { })
+    (mechanisms.azureWorkloadId { })
+  ];
+  # A value of every cloud's fields, for reading a mechanism's variable
+  # names without an identity.
+  anyValue = {
+    roleArn = "";
+    clientId = "";
+    tenantId = null;
+    serviceAccount = null;
+  };
+
+  # Return what the deploy checks on the pods of a workload bound to
+  # `mechanism` with `rendered` as its output, or null when the platform
+  # adds no variables. `alternatives` are the other mechanisms of the same
+  # cloud, by their variable names, so a pod that got one of them is named.
+  podCheckOf =
+    mechanism: rendered:
+    let
+      env = rendered.podEnv or { };
+      alternatives = lib.concatMap (
+        m:
+        let
+          r = m.render anyValue;
+        in
+        lib.optional (m.cloud == mechanism.cloud && m.name != mechanism.name && (r.podEnv or { }) != { }) {
+          inherit (m) description;
+          env = builtins.attrNames r.podEnv;
+          fix = r.podEnvOverrideFix or null;
+        }
+      ) allMechanisms;
+    in
+    if env == { } then
+      null
+    else
+      {
+        inherit (mechanism) description;
+        inherit env alternatives;
+        fix = rendered.podEnvFix or null;
+        skip = rendered.podEnvSkip or null;
+      };
   identityType = "kix-cloud-identity";
 
   # How a message names each cloud.
@@ -143,8 +191,9 @@ let
   # provider (`{ ns; inst; out; }`, or null). Return `{ problem; }` with a
   # `{ message; fix; }` when the cluster cannot deliver it, or the
   # ServiceAccount annotations (with `kix.run/cloud-identity`), the pod
-  # labels, the restart stamp, and the mechanism's facts about pods
-  # (`podEnv`, `podEnvFix`, `servesHostNetwork`, and its `description`).
+  # labels, the restart stamp, and the mechanism's facts about pods:
+  # `podCheck` (what the deploy checks, or null), `servesHostNetwork`, and
+  # its `description`.
   render =
     { identity, provider }:
     let
@@ -198,8 +247,7 @@ let
         };
         inherit (rendered) podLabels;
         stamp = builtins.hashString "sha256" recordJson;
-        podEnv = rendered.podEnv or { };
-        podEnvFix = rendered.podEnvFix or null;
+        podCheck = podCheckOf mechanism rendered;
         servesHostNetwork = rendered.servesHostNetwork or true;
         inherit (mechanism) description;
       };
