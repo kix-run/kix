@@ -80,11 +80,19 @@ Settled without a question, from the code:
   that names the object with that build hash.
 - **`status.applied` does not match `spec` one to one.** A `Partial`
   record's revision for an instance it did not apply has no hashes.
-- **The first deploy of a cluster** creates the revisions before the record,
-  because the record waits for its CRD. The lock keeps cleanup out.
-  Decision 14 removes this case.
-- **The operator builds revisions from the objects it applies,** which
-  leaves out CRDs and the record.
+- **Revisions are created before the record names them.** A run creates
+  its revisions, then writes the phase and the map in one write. A map then
+  never names a revision that was not created. Revisions that no record
+  names are removed by the next cleanup. This reverses the order in doc
+  175, section 4.5, step 3.
+- **The CLI and the operator name the same revisions for one build.** Both
+  name every object of the build. The operator does not apply CRDs, and
+  those objects have no applied hash after it deploys.
+- **A `Superseded` record has no map,** so a map exists only on a record
+  that should have revisions.
+- **Cleanup refuses when it cannot be sure.** It refuses when the list of
+  records does not hold the current record or the lock's record, and when a
+  record's map is in a format this Kix cannot read.
 - **A kind the account may not list** stays skipped with a warning.
 - **The readers of the notes and of the package index stay for one
   release,** behind one constructor, for clusters and records an earlier
@@ -99,15 +107,31 @@ Each stage builds and passes the tests on its own. New state is written
 beside the old before any reader moves.
 
 1. The `PackageInstanceRevision` kind, its store, and building revisions
-   from a build.
+   from a build. Built.
 2. Records name revisions. Steps 3 and 9 of a deploy. The kept-orphans
-   revision.
-3. Applied hashes in revision status.
-4. One reader for "which Kix cluster deploys this object", from revisions,
+   revision. Built.
+3. The program installs and updates Kix's four CRDs (decision 14). Each
+   definition has a number that rises when its content changes, and a
+   higher number replaces a lower one. Number 1 of Activation and
+   PackageInstance is what builds applied before, and stays the only number
+   while a Kix that applies them from a build is still supported. A build
+   from before this change loses its two CRDs when it is loaded.
+4. Applied hashes in revision status.
+5. One reader for "which Kix cluster deploys this object", from revisions,
    with the old reader kept for clusters that are not migrated.
-5. The one planner: the three rules of doc 175, section 4.3.
-6. The program installs Kix's CRDs. One field manager per Kix cluster, and
-   the prune guard that reads it.
-7. Migration: the one write per object, the end of the second write, the
+6. The one planner: the three rules of doc 175, section 4.3.
+7. One field manager per Kix cluster, and the prune guard that reads it.
+8. Migration: the one write per object, the end of the second write, the
    rule for a Kubernetes cluster with Kix clusters on two versions.
-8. Docs, change records, and the copy pass.
+9. Docs, change records, and the copy pass.
+
+## 5. Red-team reviews
+
+**Stages 1 and 2 (2026-11-26).** The review found three ways cleanup could
+delete a revision that was still needed, and six ways the stored state
+could mislead a later reader. The four entries above that begin "Revisions
+are created", "The CLI and the operator", "A `Superseded` record", and
+"Cleanup refuses" come from it. It also found that `kix gc` deleted kept
+orphans and left the list that named them, and that a kept-orphans list
+that could not be written was dropped with a warning. Both now fail or
+rewrite the list under the lock.
