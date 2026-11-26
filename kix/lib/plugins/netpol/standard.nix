@@ -457,11 +457,16 @@ let
             widened = parts.widened ++ lib.optional hostOnly "host-all-nodes";
           };
 
+      # `ports` are pod ports; an empty list admits every port.
       mkExternalIngressRule =
         {
           entities ? [ "world" ],
+          ports ? [ ],
         }:
-        entitiesRule "ingress" "An external ingress rule" entities;
+        let
+          rule = entitiesRule "ingress" "An external ingress rule" entities;
+        in
+        if ports == [ ] then rule else withPorts rule ports;
 
       mkExternalEgressRule =
         {

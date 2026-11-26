@@ -824,7 +824,14 @@ let
             // lib.optionalAttrs denyEgress { egress = [ ]; };
           dnsEgressRule = rule "dns-egress" { inherit dnsPeers; };
           apiServerEgressRule = rule "apiserver-egress" { };
-          mkExternalIngressRule = { entities }: rule "external-ingress" { inherit entities; };
+          mkExternalIngressRule =
+            {
+              entities,
+              ports ? [ ],
+            }:
+            rule "external-ingress" (
+              { inherit entities; } // lib.optionalAttrs (ports != [ ]) { inherit ports; }
+            );
           mkExternalEgressRule = { entities }: rule "external-egress" { inherit entities; };
           mkServiceEgressRule =
             {

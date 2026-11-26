@@ -16,7 +16,7 @@ let
     isService
     ;
   inherit (import ../../core/markers.nix { inherit lib; }) isProvidedLoadBalancerClass;
-  inherit (import ../../core/pod-spec.nix { inherit lib; }) podSpecOf;
+  inherit (import ../../core/pod-spec.nix { inherit lib; }) podSpecOf podTemplateOf;
   inherit (import ./interface.nix { inherit lib; }) checkEntities checkIntentEntities;
 
   # Return whether Kix may write an ingress policy over the target of
@@ -88,17 +88,22 @@ in
             selfRules = enforcerApi.mkSelfRules { selector = wSelector; };
             selfEgress = lib.optional (workloadKind == "StatefulSet") (builtins.head selfRules.egress);
 
-            egressRules = [
-              enforcerApi.dnsEgressRule
-            ]
-            ++ serviceRules
-            ++ selfEgress
-            ++ intentRules.egressRules
-            ++ identityRules;
+            # Two sources can ask for the same rule, such as a package's
+            # `world` intent on 443 and its cloud identity's credential egress,
+            # so identical rules are written once.
+            egressRules = lib.unique (
+              [
+                enforcerApi.dnsEgressRule
+              ]
+              ++ serviceRules
+              ++ selfEgress
+              ++ intentRules.egressRules
+              ++ identityRules
+            );
 
             selfIngress = lib.optional (workloadKind == "StatefulSet") (builtins.head selfRules.ingress);
 
-            ingressRules = selfIngress ++ intentRules.ingressRules;
+            ingressRules = lib.unique (selfIngress ++ intentRules.ingressRules);
 
             wName = workloadInput.name or (fail "buildWorkloadCnps: workloadInput.name is required");
 
@@ -247,12 +252,33 @@ in
       # comes from kix.providedLoadBalancerClass) is reached from that
       # provider's pods, which open the backend themselves, not from outside
       # the cluster.
-      needsExternalIngress = builtins.any (
+      externalLoadBalancers = builtins.filter (
         r:
         isService r
         && (r.rawManifest.spec.type or "") == "LoadBalancer"
         && !(isProvidedLoadBalancerClass (r.rawManifest.spec.loadBalancerClass or null))
       ) allPartResources;
+
+      # The ports of the external LoadBalancer Services whose selector
+      # matches the workload's pod labels. Traffic from outside reaches the
+      # pod on these ports only, so the external ingress rule names them.
+      externalIngressPortsOf =
+        w:
+        let
+          podLabels = (podTemplateOf w.rawManifest).metadata.labels or { };
+          selects =
+            svc:
+            let
+              selector = svc.rawManifest.spec.selector or { };
+            in
+            selector != { }
+            && builtins.all (k: (podLabels.${k} or null) == selector.${k}) (builtins.attrNames selector);
+        in
+        lib.unique (
+          builtins.concatMap (svc: svc.rawManifest.spec.ports or [ ]) (
+            builtins.filter selects externalLoadBalancers
+          )
+        );
 
       apiServerSupplementPolicies =
         if !enforced.egress then
@@ -285,7 +311,7 @@ in
           ) workloads;
 
       externalIngressSupplementPolicies =
-        if !enforced.ingress || !needsExternalIngress then
+        if !enforced.ingress || externalLoadBalancers == [ ] then
           [ ]
         else
           builtins.concatMap (
@@ -293,8 +319,9 @@ in
             let
               wSelector = getWorkloadSelector w;
               isHostNet = (podSpecOf w.rawManifest).hostNetwork or false;
+              ports = externalIngressPortsOf w;
             in
-            if isHostNet then
+            if isHostNet || ports == [ ] then
               [ ]
             else
               [
@@ -306,6 +333,7 @@ in
                       entities = checkEntities "${namespaceName}/${instanceName}: meta.network.externalIngressEntities" (
                         packageMeta.network.externalIngressEntities or [ "world" ]
                       );
+                      inherit ports;
                     })
                   ];
                   extraArgs = {

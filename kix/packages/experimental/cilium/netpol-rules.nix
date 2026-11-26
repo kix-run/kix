@@ -158,13 +158,19 @@ let
 
     # External ingress (world / custom entities). Kix's entity names are
     # Cilium's, so they pass through unchanged.
+    # `ports` are pod ports; an empty list admits every port.
     mkExternalIngressRule =
       {
         entities ? [ "world" ],
+        ports ? [ ],
       }:
+      let
+        cp = ingressPortsToCilium ports;
+      in
       {
         fromEntities = checkEntities "An external ingress rule" entities;
-      };
+      }
+      // lib.optionalAttrs (cp != [ ]) { toPorts = [ { ports = cp; } ]; };
 
     # External egress (world / custom entities).
     mkExternalEgressRule =

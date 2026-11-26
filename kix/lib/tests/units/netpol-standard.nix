@@ -599,6 +599,125 @@ in
     (standardTo == want && autopilotTo == want)
     || throw "GKE DNS peers: standard ${builtins.toJSON standardTo}, autopilot ${builtins.toJSON autopilotTo}";
 
+  # Traffic from a LoadBalancer reaches the pod on the Service's target
+  # port, so the external ingress rule names that port on both enforcers.
+  netpol-standard-external-ingress-ports =
+    let
+      external = byName "web-deployment-web-external-ingress" (
+        policiesOf (gkeCluster [ (withWeb { serviceType = "LoadBalancer"; }) ])
+      );
+      rule = builtins.head external.spec.ingress;
+      cilium = import ../../../packages/experimental/cilium/netpol-rules.nix { inherit lib; };
+      ciliumRule = cilium.mkExternalIngressRule {
+        entities = [ "world" ];
+        ports = [
+          {
+            port = 80;
+            targetPort = 8080;
+          }
+        ];
+      };
+      ciliumOpen = cilium.mkExternalIngressRule { entities = [ "world" ]; };
+    in
+    (
+      rule.ports == [
+        {
+          port = 8080;
+          protocol = "TCP";
+        }
+      ]
+      &&
+        ciliumRule.toPorts == [
+          {
+            ports = [
+              {
+                port = "8080";
+                protocol = "TCP";
+              }
+            ];
+          }
+        ]
+      && !(ciliumOpen ? toPorts)
+    )
+    || throw "external ingress ports: standard ${builtins.toJSON rule}, cilium ${builtins.toJSON ciliumRule}";
+
+  # Every intent target and source that takes `ports` keeps them.
+  netpol-standard-intent-ports-kept =
+    let
+      np = rulesFor gkeFacts {
+        nodeCidrs = [ "10.128.0.0/20" ];
+        apiServer = {
+          cidrs = [ "10.0.0.2/32" ];
+          sources = [ { cidr = "10.0.0.0/28"; } ];
+        };
+      };
+      ports = [
+        {
+          port = 9000;
+          protocol = "TCP";
+        }
+      ];
+      translated = np.translateIntentRules {
+        intents.all = {
+          egress = map (r: r // { inherit ports; }) [
+            { to = "apiserver"; }
+            { to = "world"; }
+            {
+              to = "world";
+              entities = [ "cluster" ];
+            }
+            { to = "all-pods"; }
+            { to = "pods"; }
+            {
+              to = "node-local";
+              cidr = "169.254.169.254/32";
+            }
+          ];
+          ingress = map (r: r // { inherit ports; }) [
+            { from = "all-pods"; }
+            { from = "world"; }
+            {
+              from = "world";
+              entities = [ "host" ];
+            }
+            { from = "apiserver"; }
+          ];
+        };
+      };
+      rules = translated.egressRules ++ translated.ingressRules;
+      lacking = builtins.filter (r: (r.ports or null) != ports) rules;
+    in
+    (builtins.length rules == 10 && lacking == [ ])
+    || throw "intent rules without their ports: ${builtins.toJSON lacking}";
+
+  # Two intents that ask for the same rule give one rule in the policy.
+  netpol-standard-duplicate-rules-written-once =
+    let
+      world443 = [
+        {
+          to = "world";
+          ports = [
+            {
+              port = 443;
+              protocol = "TCP";
+            }
+          ];
+        }
+      ];
+      egress =
+        (byName "web-deployment-web-egress" (
+          policiesOf (gkeCluster [
+            (withWeb {
+              network.intents = {
+                api.egress = world443;
+                identity.egress = world443;
+              };
+            })
+          ])
+        )).spec.egress;
+    in
+    (builtins.length egress == 2) || throw "egress rules: ${builtins.toJSON egress}";
+
   # A workload bound to a Role needs the API server's address on GKE, and
   # builds once `cluster.network.apiServer.cidrs` names it.
   netpol-standard-gke-apiserver-required =
