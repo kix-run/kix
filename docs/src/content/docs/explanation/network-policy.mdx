@@ -98,7 +98,21 @@ Standard `NetworkPolicy` has no built-in selectors for cluster nodes, the Kubern
 | `all-pods` intent | `namespaceSelector: {}` and `podSelector: {}` | Exact: matches pods in all namespaces (unlike Cilium, which maps `all-pods` to its `cluster` entity and includes nodes and the API server) | Exact: matches pods in all namespaces |
 | Every egress policy | `policyTypes` includes `Egress` | Exact | Wider (`pod-start-egress-open`): in VPC CNI standard mode, new pods can send outbound traffic for about one second before egress rules apply |
 
-When a generated `NetworkPolicy` is wider than intended, Kix records the reason codes in its `kix.run/network-policy-widened` annotation. The `security.networkPolicyWidened` scorecard rule prints one warning per reason with the number of affected policies, and `kix check -v` lists each policy at `info` severity. You can promote `security.networkPolicyWidened` to `"error"` or disable it under `scorecard.ruleOverrides`.
+When a generated `NetworkPolicy` is wider than intended, Kix records the reason codes in its `kix.run/network-policy-widened` annotation. The `security.networkPolicyWidened` scorecard rule prints one summary per reason with the number of affected policies. A reason that a cluster setting removes, such as an unset `cluster.network.serviceCidr`, is a warning. A limit of the platform, which no setting removes, is an `info` finding, and so is each policy; `kix check -v` lists them. You can promote `security.networkPolicyWidened` to `"error"`, which then fails the build only on the reasons a setting removes, or disable it under `scorecard.ruleOverrides`.
+
+### Known limits by platform
+
+These limits come from how each platform enforces a `NetworkPolicy`. No Kix setting removes them, so `kix check` reports them only under `-v`.
+
+| Platform | Limit |
+| --- | --- |
+| GKE and GKE Autopilot | A `world` ingress rule for a `LoadBalancer` Service also admits traffic from the cluster's nodes, because nodes forward load balancer traffic. |
+| GKE and GKE Autopilot | A rule for the `host` entity admits every node in `cluster.network.nodeCidrs`, because a `NetworkPolicy` cannot name the node a pod runs on. |
+| EKS with the VPC CNI | Pods and nodes take addresses from the VPC subnets, which also hold VPC endpoints, load balancers, and databases, so a `world` egress rule also reaches pods and nodes. |
+| EKS with the VPC CNI | A `world` ingress rule for a `LoadBalancer` Service also admits traffic from pods and nodes. |
+| EKS with the VPC CNI | A rule for the nodes also matches pods, and a rule for calls from the API server also admits pods, because both use the shared subnets. |
+| EKS with the VPC CNI | A new pod can send traffic for about one second before its egress policy applies. The add-on's `strict` mode closes this window, but then every pod without a `NetworkPolicy` is blocked, including the pods in `kube-system`. |
+| EKS with the VPC CNI | A rule for the `host` entity admits every node in `cluster.network.nodeCidrs`. |
 
 Kix requires `cluster.network` address options only when a generated policy needs them. For example, a GKE cluster whose workloads have no `RoleBinding` or `ClusterRoleBinding` builds without `cluster.network.apiServer.cidrs`, and a cluster with no node rules or host-network scrape targets builds without `cluster.network.nodeCidrs`.
 

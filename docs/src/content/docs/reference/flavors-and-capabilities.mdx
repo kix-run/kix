@@ -103,7 +103,7 @@ The `rke2` flavor adds the option `cluster.flavor.rke2.cni` (`listOf ("multus" |
 
 ## Capability matrix
 
-Each flavor sets defaults under [`cluster.capabilities`](/docs/reference/cluster-configuration/#cluster-capabilities-and-nodes) and [`cluster.containerd`](/docs/reference/cluster-configuration/#cluster-capabilities-and-nodes). Cells marked `null` are left unset by the flavor so you can declare them per cluster (for example, `multiNode` and `availabilityZones`, which depend on your node pools).
+Each flavor sets defaults under [`cluster.capabilities`](/docs/reference/cluster-configuration/#cluster-capabilities-and-nodes) and [`cluster.containerd`](/docs/reference/cluster-configuration/#cluster-capabilities-and-nodes). Cells marked `null` are left unset by the flavor so you can declare them per cluster (for example, `multiNode` and `availabilityZones`, which depend on your node pools). For what generated network policy cannot narrow on `gke`, `gke-autopilot`, and `eks`, see [Known limits by platform](/docs/explanation/network-policy/#known-limits-by-platform).
 
 | Flavor | `multiNode` | `availabilityZones` | `managedControlPlane` | `nodeAutoscaling` | `privilegedContainers` | `daemonSets` | `podSecurityEnforcement` | `containerd.discardUnpackedLayers` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |

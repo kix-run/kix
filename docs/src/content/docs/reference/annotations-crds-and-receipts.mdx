@@ -98,7 +98,7 @@ Generated from the experimental attribute-set form of [`kix.untrackedRef`](/docs
 | Annotation | Set via | Meaning |
 | --- | --- | --- |
 | `kix.run/secret-keys` | `scope.mkSecret` | Comma-separated list of keys declared on the Secret. |
-| `kix.run/secret-sources` | `scope.mkSecret` | Comma-separated `<key>=<source>` pairs (`inline`, `plain`, `sops`, `controller`, or `*=controller`) read by the `security.secretSource` scorecard rule. |
+| `kix.run/secret-sources` | `scope.mkSecret` | Comma-separated `<key>=<source>` pairs (`inline`, `plain`, `sops`, `controller`, or `*=controller`) read by the `security.secretSource` scorecard rule, which warns about the reasons a cluster setting removes and lists platform limits at `info`. |
 | `kix.run/sops-source` | `scope.mkSecret` (`source`) | Store path of the encrypted SOPS file decrypted at deploy time. |
 | `kix.run/sops-digest` | `scope.mkSecret` (`source`) | SHA-256 of the encrypted SOPS file, in hex. `kix deploy` checks the file against it before decrypting. |
 | `kix.run/secret-type` | `scope.mkSecret` (`type`) | Kubernetes Secret type (defaults to `"Opaque"`). |
@@ -110,7 +110,7 @@ Generated from the experimental attribute-set form of [`kix.untrackedRef`](/docs
 | Annotation | Meaning |
 | --- | --- |
 | `kix.run/operand-of` | `"<group>/<Kind>/<name>"` of the operator custom resource whose runtime pods a `Service`, `NetworkPolicy`, or `PodDisruptionBudget` selects. |
-| `kix.run/network-policy-widened` | Comma-separated reason codes (such as `world-egress-pods` or `pod-start-egress-open`) stamped on a generated `NetworkPolicy` when it allows more traffic than intended, such as in-cluster pods or nodes matching a `world` CIDR rule or outbound traffic during pod startup. Written by the standard `NetworkPolicy` enforcer and read by the [`security.networkPolicyWidened`](/docs/reference/scorecard-and-rules/#built-in-security-rules) scorecard rule. |
+| `kix.run/network-policy-widened` | Comma-separated reason codes (such as `world-egress-pods` or `pod-start-egress-open`) stamped on a generated `NetworkPolicy` when it allows more traffic than intended, such as in-cluster pods or nodes matching a `world` CIDR rule or outbound traffic during pod startup. Written by the standard `NetworkPolicy` enforcer and read by the [`security.networkPolicyWidened`](/docs/reference/scorecard-and-rules/#built-in-security-rules) scorecard rule, which warns about the reasons a cluster setting removes and lists platform limits at `info`. |
 | `kix.run/monitors-external-service` | `"true"` on a `ServiceMonitor` or `VMServiceScrape` that intentionally targets a Service outside the Kix build. |
 | `kix.run/role` | Reserved key (`kix.keys.role`); not currently stamped by built-in builders or packages. |
 
