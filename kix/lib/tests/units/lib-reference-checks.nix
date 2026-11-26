@@ -1641,6 +1641,49 @@ in
     ]
     || throw "helm edges: ${builtins.toJSON got}";
 
+  # --- a chart's binding depends on the role it names ---
+
+  # A binding depends on the chart's Role or ClusterRole that its roleRef
+  # names. A roleRef to a role the chart does not render adds no edge.
+  lib-reference-checks-chart-binding-depends-on-role =
+    let
+      rbac =
+        kind: name: extra:
+        {
+          apiVersion = "rbac.authorization.k8s.io/v1";
+          inherit kind;
+          metadata.name = name;
+        }
+        // extra;
+      binding =
+        kind: name: roleKind: roleName:
+        rbac kind name {
+          roleRef = {
+            apiGroup = "rbac.authorization.k8s.io";
+            kind = roleKind;
+            name = roleName;
+          };
+          subjects = [ ];
+        };
+      edges = builtins.filter (e: e.type == "binds-role") (
+        helmDag.inferEdges [
+          (rbac "Role" "leader" { })
+          (rbac "ClusterRole" "manager" { })
+          (binding "RoleBinding" "leader" "Role" "leader")
+          (binding "RoleBinding" "reads" "ClusterRole" "manager")
+          (binding "ClusterRoleBinding" "manager" "ClusterRole" "manager")
+          (binding "ClusterRoleBinding" "view" "ClusterRole" "view")
+        ]
+      );
+      got = map (e: "${e.from.kind}/${e.from.metadata.name}->${e.to.kind}/${e.to.metadata.name}") edges;
+    in
+    got == [
+      "RoleBinding/leader->Role/leader"
+      "RoleBinding/reads->ClusterRole/manager"
+      "ClusterRoleBinding/manager->ClusterRole/manager"
+    ]
+    || throw "binds-role edges: ${builtins.toJSON got}";
+
   # --- chart custom resources depend on the chart's CRD ---
 
   lib-reference-checks-chart-cr-depends-on-chart-crd =

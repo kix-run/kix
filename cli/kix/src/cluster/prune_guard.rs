@@ -885,7 +885,7 @@ mod tests {
         );
         let ready = stuck_cm_message("controller:", Some(1)).await;
         assert!(
-            ready.contains("ConfigMap controller Deployment.apps/operator@app is ready."),
+            ready.contains("ConfigMap controller Deployment.apps/operator@app has ready pods but"),
             "{ready}"
         );
         let missing = stuck_cm_message("controller:", None).await;

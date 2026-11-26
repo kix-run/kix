@@ -1,10 +1,11 @@
-//! DAG construction from kix.run/depends-on annotations.
-//!
-//! Parses annotated manifests to build a dependency graph.
+//! DAG construction from kix.run/depends-on annotations and the RBAC
+//! bindings that grant a workload's ServiceAccount its rights.
 //! Used for wave computation (deploy ordering) and visualization (kix graph).
 
 use crate::manifest::keys;
+use crate::manifest::kinds::{self, GroupKind};
 use crate::manifest::types::ResourceId;
+use crate::manifest::workload;
 use petgraph::graph::{DiGraph, NodeIndex};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -45,48 +46,27 @@ pub struct ResourceGraph {
 }
 
 impl ResourceGraph {
-    /// Build a dependency graph from annotated manifests.
-    ///
-    /// Each manifest may have these annotations:
-    /// - `kix.run/identity-hash`: 32-char Nix base32 hash
-    /// - `kix.run/depends-on`: comma-separated sorted identity hashes
+    /// Build a dependency graph from annotated manifests, with the
+    /// dependencies [`dependency_pairs`] finds.
     pub fn from_manifests(manifests: &[serde_json::Value]) -> Result<Self, GraphError> {
         let mut graph = DiGraph::new();
         let mut id_to_node = HashMap::new();
-        let mut hash_to_node = HashMap::new();
 
-        // Create nodes before resolving dependency hashes.
         for manifest in manifests {
             let id = ResourceId::from_value(manifest);
-            let identity_hash = get_annotation(manifest, keys::IDENTITY_HASH);
-
             let node = ResourceNode {
                 id: id.clone(),
-                identity_hash: identity_hash.clone(),
+                identity_hash: get_annotation(manifest, keys::IDENTITY_HASH),
                 manifest: manifest.clone(),
             };
-
             let idx = graph.add_node(node);
             id_to_node.insert(id, idx);
-            if let Some(hash) = identity_hash {
-                hash_to_node.insert(hash, idx);
-            }
         }
 
-        // Create edges from depends-on annotations.
-        for manifest in manifests {
-            let id = ResourceId::from_value(manifest);
-            let from_idx = id_to_node[&id];
-
-            if let Some(deps_str) = get_annotation(manifest, keys::DEPENDS_ON) {
-                for dep_hash in keys::depends_on_hashes(&deps_str) {
-                    if let Some(&to_idx) = hash_to_node.get(dep_hash) {
-                        // Directed edge from dependent to dependency.
-                        graph.add_edge(from_idx, to_idx, ());
-                    }
-                    // Dependencies may refer to imported resources outside this set.
-                }
-            }
+        // Each edge points from the dependent to its dependency.
+        let node_of = |i: usize| id_to_node[&ResourceId::from_value(&manifests[i])];
+        for (from, to) in dependency_pairs(manifests) {
+            graph.add_edge(node_of(from), node_of(to), ());
         }
 
         // Cross-package edges remain attached to their referenced resources.
@@ -381,6 +361,114 @@ fn get_annotation(manifest: &serde_json::Value, key: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Return each dependency among `manifests` as a pair of indexes into it,
+/// the dependent first.
+///
+/// Most dependencies are the `kix.run/depends-on` entries that name another
+/// manifest of the set. The library writes those from the references in a
+/// manifest. A RoleBinding or ClusterRoleBinding names the ServiceAccount it
+/// grants rights to, but nothing a pod runs as refers to the bindings that
+/// grant it rights. So this also makes every workload depend on each binding
+/// whose subjects include the ServiceAccount its pods run as. Apply then
+/// creates the rights before the pods that use them, and a delete keeps them
+/// while the pods still run, for example while a controller removes the
+/// finalizers of the custom resources deleted in the same run.
+///
+/// A binding that already depends on the workload, directly or through other
+/// objects, gets no such dependency, because the package recorded the
+/// opposite order. An operator that removes the finalizer of a binding it
+/// manages for its own ServiceAccount is one case.
+pub fn dependency_pairs(manifests: &[serde_json::Value]) -> Vec<(usize, usize)> {
+    let mut by_hash: HashMap<String, usize> = HashMap::new();
+    for (i, m) in manifests.iter().enumerate() {
+        if let Some(hash) = get_annotation(m, keys::IDENTITY_HASH) {
+            by_hash.insert(hash, i);
+        }
+    }
+    let mut pairs = Vec::new();
+    for (i, m) in manifests.iter().enumerate() {
+        // An entry may name an imported object outside this set.
+        if let Some(deps) = get_annotation(m, keys::DEPENDS_ON) {
+            pairs.extend(
+                keys::depends_on_hashes(&deps).filter_map(|hash| Some((i, *by_hash.get(hash)?))),
+            );
+        }
+    }
+
+    let mut grants: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
+    let mut granted = Vec::new();
+    for (i, m) in manifests.iter().enumerate() {
+        let gk = GroupKind::of_manifest(m);
+        if gk != kinds::ROLE_BINDING && gk != kinds::CLUSTER_ROLE_BINDING {
+            continue;
+        }
+        let own_namespace = namespace_of(m);
+        for subject in m
+            .get("subjects")
+            .and_then(|s| s.as_array())
+            .into_iter()
+            .flatten()
+        {
+            if subject.get("kind").and_then(|k| k.as_str()) != Some("ServiceAccount") {
+                continue;
+            }
+            let Some(name) = subject.get("name").and_then(|n| n.as_str()) else {
+                continue;
+            };
+            // The API server requires a namespace on a ServiceAccount
+            // subject, so the binding's own namespace only stands in for a
+            // manifest that has not been through it.
+            let Some(namespace) = subject
+                .get("namespace")
+                .and_then(|n| n.as_str())
+                .or(own_namespace)
+            else {
+                continue;
+            };
+            grants.entry((namespace, name)).or_default().push(i);
+        }
+    }
+    for (i, m) in manifests.iter().enumerate() {
+        let Some(spec) = workload::pod_spec(m) else {
+            continue;
+        };
+        let account = spec
+            .get("serviceAccountName")
+            .or_else(|| spec.get("serviceAccount"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("default");
+        let Some(namespace) = namespace_of(m) else {
+            continue;
+        };
+        for &binding in grants.get(&(namespace, account)).into_iter().flatten() {
+            granted.push((i, binding));
+        }
+    }
+
+    let mut recorded: DiGraph<(), ()> = DiGraph::new();
+    let nodes: Vec<NodeIndex> = manifests.iter().map(|_| recorded.add_node(())).collect();
+    for &(from, to) in &pairs {
+        recorded.add_edge(nodes[from], nodes[to], ());
+    }
+    granted.sort_unstable();
+    for (workload, binding) in granted {
+        if !petgraph::algo::has_path_connecting(&recorded, nodes[binding], nodes[workload], None) {
+            recorded.add_edge(nodes[workload], nodes[binding], ());
+            pairs.push((workload, binding));
+        }
+    }
+    pairs.sort_unstable();
+    pairs.dedup();
+    pairs
+}
+
+fn namespace_of(manifest: &serde_json::Value) -> Option<&str> {
+    manifest
+        .pointer("/metadata/namespace")
+        .and_then(|n| n.as_str())
+        .filter(|n| !n.is_empty())
+}
+
 /// Return the object a controller manifest stands for: the workload itself,
 /// or for an import marker, the workload it imports.
 fn controller_id(manifest: &serde_json::Value) -> ResourceId {
@@ -468,31 +556,19 @@ pub enum Walked<'a, T> {
 }
 
 impl DeleteOrder {
-    /// Order the objects of `manifests` by their `kix.run/depends-on`
-    /// annotations, dependents first, and record those dependencies. When
+    /// Order the objects of `manifests` by the dependencies
+    /// [`dependency_pairs`] finds, dependents first, and record those dependencies. When
     /// they form a cycle, keep the order of `manifests`; the walk then
     /// reports the objects of the cycle instead of deleting them. Callers
     /// pass every manifest they know and [`DeleteOrder::retain`] the objects
     /// to delete.
     pub fn of_manifests(manifests: &[serde_json::Value]) -> Self {
-        let mut by_hash: HashMap<String, ResourceId> = HashMap::new();
-        for m in manifests {
-            if let Some(hash) = get_annotation(m, keys::IDENTITY_HASH) {
-                by_hash.insert(hash, ResourceId::from_value(m));
-            }
-        }
         let mut needs: HashMap<ResourceId, Vec<ResourceId>> = HashMap::new();
-        for m in manifests {
-            let Some(deps) = get_annotation(m, keys::DEPENDS_ON) else {
-                continue;
-            };
-            let id = ResourceId::from_value(m);
-            for hash in keys::depends_on_hashes(&deps) {
-                if let Some(dep) = by_hash.get(hash)
-                    && *dep != id
-                {
-                    needs.entry(id.clone()).or_default().push(dep.clone());
-                }
+        for (from, to) in dependency_pairs(manifests) {
+            let id = ResourceId::from_value(&manifests[from]);
+            let dep = ResourceId::from_value(&manifests[to]);
+            if dep != id {
+                needs.entry(id).or_default().push(dep);
             }
         }
         let ids = match ResourceGraph::from_manifests(manifests) {
@@ -719,6 +795,312 @@ mod tests {
         assert_eq!(order.held_by(&job), Some(&cr));
         assert_eq!(order.held_by(&other), None);
         assert_eq!(order.held_by(&cr), None);
+    }
+
+    /// Return `m` with `field` set at the JSON pointer `path`.
+    fn with(mut m: serde_json::Value, path: &str, field: serde_json::Value) -> serde_json::Value {
+        let mut at = &mut m;
+        for key in path.trim_start_matches('/').split('/') {
+            at = &mut at[key];
+        }
+        *at = field;
+        m
+    }
+
+    fn rbac(kind: &str, name: &str, ns: &str, hash: &str, deps: &str) -> serde_json::Value {
+        with(
+            manifest(kind, name, ns, hash, deps),
+            "/apiVersion",
+            json!("rbac.authorization.k8s.io/v1"),
+        )
+    }
+
+    fn binding(
+        kind: &str,
+        name: &str,
+        ns: &str,
+        hash: &str,
+        deps: &str,
+        sa: (&str, &str),
+    ) -> serde_json::Value {
+        with(
+            rbac(kind, name, ns, hash, deps),
+            "/subjects",
+            json!([{ "kind": "ServiceAccount", "name": sa.1, "namespace": sa.0 }]),
+        )
+    }
+
+    fn runs_as(m: serde_json::Value, sa: &str) -> serde_json::Value {
+        with(
+            m,
+            "/spec/template/spec",
+            json!({ "serviceAccountName": sa, "containers": [] }),
+        )
+    }
+
+    fn rbac_id(kind: &str, ns: &str, name: &str) -> ResourceId {
+        ResourceId::new("rbac.authorization.k8s.io", kind, ns, name)
+    }
+
+    /// The controller of a custom resource whose delete does not finish
+    /// keeps the bindings that grant its ServiceAccount rights, and the roles
+    /// they bind, although nothing in the controller names them. A binding
+    /// for another ServiceAccount is not held.
+    #[test]
+    fn a_held_controller_keeps_the_rights_of_its_service_account() {
+        let sa = manifest("ServiceAccount", "operator", "ops", "hash_sa", "");
+        let operator = runs_as(
+            manifest("Deployment", "operator", "ops", "hash_op", "hash_sa"),
+            "operator",
+        );
+        let cluster_role = rbac("ClusterRole", "operator", CLUSTER_SCOPED, "hash_cr", "");
+        let cluster_binding = binding(
+            "ClusterRoleBinding",
+            "operator",
+            CLUSTER_SCOPED,
+            "hash_crb",
+            "hash_cr,hash_sa",
+            ("ops", "operator"),
+        );
+        let role = rbac("Role", "leader-election", "ops", "hash_role", "");
+        let role_binding = binding(
+            "RoleBinding",
+            "leader-election",
+            "ops",
+            "hash_rb",
+            "hash_role,hash_sa",
+            ("ops", "operator"),
+        );
+        let other_binding = binding(
+            "RoleBinding",
+            "other",
+            "ops",
+            "hash_other",
+            "",
+            ("ops", "someone-else"),
+        );
+        let resource = manifest(
+            "ConfigMap",
+            "resource",
+            "app",
+            "hash_res",
+            "controller:hash_op",
+        );
+        let mut order = DeleteOrder::of_manifests(&[
+            sa,
+            operator,
+            cluster_role,
+            cluster_binding,
+            role,
+            role_binding,
+            other_binding,
+            resource,
+        ]);
+        let resource = ResourceId::new("", "ConfigMap", "app", "resource");
+        order.hold_back(&resource);
+        for held in [
+            ResourceId::new("apps", "Deployment", "ops", "operator"),
+            ResourceId::new("", "ServiceAccount", "ops", "operator"),
+            rbac_id("ClusterRoleBinding", CLUSTER_SCOPED, "operator"),
+            rbac_id("ClusterRole", CLUSTER_SCOPED, "operator"),
+            rbac_id("RoleBinding", "ops", "leader-election"),
+            rbac_id("Role", "ops", "leader-election"),
+        ] {
+            assert_eq!(order.held_by(&held), Some(&resource), "{held}");
+        }
+        assert_eq!(order.held_by(&rbac_id("RoleBinding", "ops", "other")), None);
+    }
+
+    /// A workload is applied after the bindings that grant its ServiceAccount
+    /// rights, and deleted before them. A pod spec that names no
+    /// ServiceAccount runs as `default`. A binding in another namespace, or
+    /// for another ServiceAccount, adds no dependency.
+    #[test]
+    fn a_workload_depends_on_the_bindings_of_its_service_account() {
+        let workload = runs_as(manifest("Deployment", "web", "app", "hash_web", ""), "web");
+        let plain = with(
+            manifest("Job", "job", "app", "hash_job", ""),
+            "/spec/template/spec",
+            json!({ "containers": [] }),
+        );
+        let manifests = [
+            workload,
+            plain,
+            binding("RoleBinding", "web", "app", "hash_rb", "", ("app", "web")),
+            binding(
+                "RoleBinding",
+                "default",
+                "app",
+                "hash_def",
+                "",
+                ("app", "default"),
+            ),
+            binding(
+                "RoleBinding",
+                "elsewhere",
+                "other",
+                "hash_else",
+                "",
+                ("other", "web"),
+            ),
+            binding(
+                "ClusterRoleBinding",
+                "nobody",
+                CLUSTER_SCOPED,
+                "hash_no",
+                "",
+                ("app", "nobody"),
+            ),
+        ];
+        let names = |i: usize| {
+            manifests[i]["metadata"]["name"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        let pairs: Vec<(String, String)> = dependency_pairs(&manifests)
+            .into_iter()
+            .map(|(from, to)| (names(from), names(to)))
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                ("web".to_string(), "web".to_string()),
+                ("job".to_string(), "default".to_string()),
+            ]
+        );
+
+        let graph = ResourceGraph::from_manifests(&manifests).unwrap();
+        let web = ResourceId::new("apps", "Deployment", "app", "web");
+        let deps: Vec<&str> = dependencies(&graph, &web)
+            .iter()
+            .map(|n| n.id.name.as_str())
+            .collect();
+        assert_eq!(deps, vec!["web"]);
+        let ids = DeleteOrder::of_manifests(&manifests).ids().to_vec();
+        let pos = |rid: &ResourceId| ids.iter().position(|r| r == rid).unwrap();
+        assert!(
+            pos(&web) < pos(&rbac_id("RoleBinding", "app", "web")),
+            "{ids:?}"
+        );
+    }
+
+    /// A binding that the build lists as depending on the workload, such as
+    /// one whose finalizer the workload removes, keeps that order, and the
+    /// workload gets no dependency on it, so the graph has no cycle.
+    #[test]
+    fn a_binding_that_depends_on_its_workload_keeps_the_recorded_order() {
+        let sa = manifest("ServiceAccount", "operator", "ops", "hash_sa", "");
+        let operator = runs_as(
+            manifest("Deployment", "operator", "ops", "hash_op", "hash_sa"),
+            "operator",
+        );
+        let managed = binding(
+            "RoleBinding",
+            "managed",
+            "app",
+            "hash_managed",
+            "hash_sa,requires:hash_op",
+            ("ops", "operator"),
+        );
+        let own = binding(
+            "RoleBinding",
+            "own",
+            "ops",
+            "hash_own",
+            "hash_sa",
+            ("ops", "operator"),
+        );
+        let manifests = [sa, operator, managed, own];
+        let graph = ResourceGraph::from_manifests(&manifests).expect("no cycle");
+        let op = ResourceId::new("apps", "Deployment", "ops", "operator");
+        let mut deps: Vec<String> = dependencies(&graph, &op)
+            .iter()
+            .map(|n| n.id.to_string())
+            .collect();
+        deps.sort();
+        assert_eq!(
+            deps,
+            vec![
+                rbac_id("RoleBinding", "ops", "own").to_string(),
+                ResourceId::new("", "ServiceAccount", "ops", "operator").to_string(),
+            ]
+        );
+    }
+
+    /// When the delete of a custom resource does not finish, every workload
+    /// held back with it keeps the bindings that grant its ServiceAccount
+    /// rights, and the roles they bind, in the builds of real operator
+    /// packages. Their workloads do not name those bindings, so without the
+    /// bindings' dependencies prune would delete them while the controller
+    /// still has to remove the finalizers. The fixtures are recorded by
+    /// `tests/fixtures/operator-graphs/record.sh`.
+    #[test]
+    fn operator_graphs_keep_the_rights_of_held_workloads() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/operator-graphs");
+        for cluster in ["cert-manager", "velero", "external-secrets"] {
+            let text = std::fs::read_to_string(dir.join(format!("{cluster}.json"))).unwrap();
+            let manifests: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
+            let base = DeleteOrder::of_manifests(&manifests);
+            let resources: Vec<ResourceId> = base.controllers().keys().cloned().collect();
+            assert!(
+                !resources.is_empty(),
+                "{cluster}: no custom resource names a controller"
+            );
+            let mut unnamed = 0;
+            for resource in &resources {
+                let mut order = base.clone();
+                order.hold_back(resource);
+                for workload in manifests.iter().filter(|m| {
+                    order.held_by(&ResourceId::from_value(m)) == Some(resource)
+                        && crate::manifest::workload::pod_spec(m).is_some()
+                }) {
+                    let account = crate::manifest::workload::pod_spec(workload).unwrap()
+                        ["serviceAccountName"]
+                        .as_str()
+                        .unwrap_or("default");
+                    let namespace = workload["metadata"]["namespace"].as_str().unwrap();
+                    let named = get_annotation(workload, keys::DEPENDS_ON).unwrap_or_default();
+                    for binding in manifests.iter().filter(|m| {
+                        m["subjects"].as_array().is_some_and(|subjects| {
+                            subjects.iter().any(|s| {
+                                s["kind"] == "ServiceAccount"
+                                    && s["name"] == account
+                                    && s["namespace"] == namespace
+                            })
+                        })
+                    }) {
+                        let id = ResourceId::from_value(binding);
+                        assert_eq!(
+                            order.held_by(&id),
+                            Some(resource),
+                            "{cluster}: {id} is deleted while {} still runs",
+                            ResourceId::from_value(workload)
+                        );
+                        let hash = get_annotation(binding, keys::IDENTITY_HASH).unwrap();
+                        if !named.contains(&hash) {
+                            unnamed += 1;
+                        }
+                        let role_ref = &binding["roleRef"];
+                        if let Some(role) = manifests.iter().find(|m| {
+                            m["kind"] == role_ref["kind"]
+                                && m["metadata"]["name"] == role_ref["name"]
+                                && (m["kind"] == "ClusterRole"
+                                    || m["metadata"]["namespace"]
+                                        == binding["metadata"]["namespace"])
+                        }) {
+                            let role = ResourceId::from_value(role);
+                            assert_eq!(order.held_by(&role), Some(resource), "{cluster}: {role}");
+                        }
+                    }
+                }
+            }
+            assert!(
+                unnamed > 0,
+                "{cluster}: every held binding is named by its workload, so this test checks nothing new"
+            );
+        }
     }
 
     /// A dependency through an object that is not deleted still orders the

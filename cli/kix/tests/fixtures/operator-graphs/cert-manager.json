@@ -1,0 +1,1376 @@
+[
+ {
+  "apiVersion": "admissionregistration.k8s.io/v1",
+  "kind": "MutatingWebhookConfiguration",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "ki90h1w64sqhz93rbyag17vc1fsirlhl",
+    "kix.run/identity-hash": "abzkzkw61rxl635d0qx2cpjy3g8304iw"
+   },
+   "name": "cert-manager-webhook"
+  }
+ },
+ {
+  "apiVersion": "admissionregistration.k8s.io/v1",
+  "kind": "ValidatingWebhookConfiguration",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "ki90h1w64sqhz93rbyag17vc1fsirlhl",
+    "kix.run/identity-hash": "6xz72pq1jya6lpbdbzxmx7d8hb2v2svm"
+   },
+   "name": "cert-manager-webhook"
+  }
+ },
+ {
+  "apiVersion": "apps/v1",
+  "kind": "DaemonSet",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:q8562js3cklbvmzka49famh6i4n9a5fh,requires:abypghbzgs4jjf75ihksfn18f3dkv37b",
+    "kix.run/identity-hash": "83hllljs5v21z6ksbyviix8w2j7lbdj5"
+   },
+   "name": "cilium",
+   "namespace": "kube-system"
+  },
+  "spec": {
+   "template": {
+    "spec": {
+     "serviceAccountName": "cilium"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "apps/v1",
+  "kind": "DaemonSet",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:ksq6rx9i3ljszysi5rlf21vrcpplkz4w,requires:342b15jybcpcdzbacmsc22za6ain5zd6",
+    "kix.run/identity-hash": "6cdgzcsxs6hqdr8wxl7brbv2igvizd7z"
+   },
+   "name": "cilium-envoy",
+   "namespace": "kube-system"
+  },
+  "spec": {
+   "template": {
+    "spec": {
+     "serviceAccountName": "cilium-envoy"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3,svvs642f2s14f7vgkxvmqy0maaw7yind,requires:nw2213arbn6igz9iqjm6yq0m3g321dy5,requires:8x66blrsqgb7mwpx42l0y6ds81jy16dz,requires:lzryf37cifpr0bshzxdn5mq9p8q8gs3c,requires:af6scy8za7ad1l4103w5w3b6bk8pxy3m,requires:y5y6pqvclmi8z5sj93r0xjsm367ngi64,requires:i202j6300m05y4rbcndmjfwzcbiinyyr,requires:bp25q9i2k4xrkqpvdvsqf1pa3px863jl,requires:pzpczpbx09wia0h0dcqhdpl9k78fd2ib",
+    "kix.run/identity-hash": "wh8fyw3ddxx90rp88qmsdc1agk6ifsqv"
+   },
+   "name": "cert-manager",
+   "namespace": "cert-manager"
+  },
+  "spec": {
+   "template": {
+    "spec": {
+     "serviceAccountName": "cert-manager"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "4l3lzcsh4m85gfq4il7by9hqcfzw80p9,rn40hbw8756809l5h5bwh65g8klv5bg3,requires:nw2213arbn6igz9iqjm6yq0m3g321dy5,requires:8x66blrsqgb7mwpx42l0y6ds81jy16dz,requires:lzryf37cifpr0bshzxdn5mq9p8q8gs3c,requires:af6scy8za7ad1l4103w5w3b6bk8pxy3m,requires:y5y6pqvclmi8z5sj93r0xjsm367ngi64,requires:i202j6300m05y4rbcndmjfwzcbiinyyr,requires:mv3xlpv8imj4pvpxf8pdi52hbm3s5bjk,requires:qqrmxsp3bam11bhr4d82i3qxxxcww5h8",
+    "kix.run/identity-hash": "pvscayparwbfkr2bg0la6pl305ccbb23"
+   },
+   "name": "cert-manager-cainjector",
+   "namespace": "cert-manager"
+  },
+  "spec": {
+   "template": {
+    "spec": {
+     "serviceAccountName": "cert-manager-cainjector"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "9azxwlyfjbrdxw5lj1djz51fssqw34gj,rn40hbw8756809l5h5bwh65g8klv5bg3,requires:hrc1sx62kxbjrh1ckz04hi5a37ax06n8,requires:2a121hkalagyzf10i84f1zxfhqqvzcl8",
+    "kix.run/identity-hash": "bvzhjhx8ailppiq08cxqrlr7alkvv8sq"
+   },
+   "name": "cert-manager-webhook",
+   "namespace": "cert-manager"
+  },
+  "spec": {
+   "template": {
+    "spec": {
+     "serviceAccountName": "cert-manager-webhook"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:sfr8hvyx389ii606wxx2zrfnlxnp1pg7,requires:abypghbzgs4jjf75ihksfn18f3dkv37b",
+    "kix.run/identity-hash": "jv8lhfij1jlz5sdqhm6v5gcpvqvj784m"
+   },
+   "name": "cilium-operator",
+   "namespace": "kube-system"
+  },
+  "spec": {
+   "template": {
+    "spec": {
+     "serviceAccountName": "cilium-operator"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "batch/v1",
+  "kind": "Job",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "3lg69xyk7w34lqdikvyvgfn50k2igynz,6xz72pq1jya6lpbdbzxmx7d8hb2v2svm,abzkzkw61rxl635d0qx2cpjy3g8304iw,bvzhjhx8ailppiq08cxqrlr7alkvv8sq,ki90h1w64sqhz93rbyag17vc1fsirlhl,nw2213arbn6igz9iqjm6yq0m3g321dy5,pvscayparwbfkr2bg0la6pl305ccbb23,rn40hbw8756809l5h5bwh65g8klv5bg3,requires:70m64229kycd2yz5dbqzj1xipqrh9p82,requires:8sx3pzvsgqa2gfazpc4m088q97k5jrj8,requires:y099xfs04cfyaqyyprzspr6qlgh6iyyv,requires:ivw3pbb2mbhyxgnmcr438ibmsrps1cw1",
+    "kix.run/identity-hash": "x0fqfs2x1qzydizn1650r3z0s30xim1y"
+   },
+   "name": "cert-manager-startupapicheck",
+   "namespace": "cert-manager"
+  },
+  "spec": {
+   "template": {
+    "spec": {
+     "serviceAccountName": "cert-manager-startupapicheck"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "cert-manager.io/v1",
+  "kind": "ClusterIssuer",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "requires:x0fqfs2x1qzydizn1650r3z0s30xim1y,requires:af6scy8za7ad1l4103w5w3b6bk8pxy3m,controller:wh8fyw3ddxx90rp88qmsdc1agk6ifsqv",
+    "kix.run/identity-hash": "krswbqq2xiq9rnpij2flcd2695d1scj2"
+   },
+   "name": "selfsigned"
+  }
+ },
+ {
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumClusterwideNetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "requires:ncb9rh5mqzv8p6gm4g5m17fj549cqs76",
+    "kix.run/identity-hash": "5hb3cxapih2vxgfgykqrdxg31sb8xyrl"
+   },
+   "name": "cilium-cluster-dns-egress"
+  }
+ },
+ {
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumClusterwideNetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "requires:ncb9rh5mqzv8p6gm4g5m17fj549cqs76",
+    "kix.run/identity-hash": "w5c6a6r5i46dskmg5k5cm7x4fwkz9289"
+   },
+   "name": "cilium-health-probes"
+  }
+ },
+ {
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumClusterwideNetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "requires:ncb9rh5mqzv8p6gm4g5m17fj549cqs76",
+    "kix.run/identity-hash": "1kpni30a3lv8jip461094gyynv68zaas"
+   },
+   "name": "local-path-provisioner-egress"
+  }
+ },
+ {
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumNetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3,requires:4wil9kjsr04jx9sgacxzpwc5ccj9dgcc",
+    "kix.run/identity-hash": "zy3ximmy7cqnsm3h0ni3c790n4lix9vv"
+   },
+   "name": "cert-manager-default-deny",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumNetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3,requires:4wil9kjsr04jx9sgacxzpwc5ccj9dgcc",
+    "kix.run/identity-hash": "gg92mfkiw1dygvy4dlggnjpcw5ch5k8a"
+   },
+   "name": "cert-manager-deployment-cert-manager-apiserver-egress",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumNetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3,requires:4wil9kjsr04jx9sgacxzpwc5ccj9dgcc",
+    "kix.run/identity-hash": "pq2bq6i8i6rzph7iz89cp893jaf5dysw"
+   },
+   "name": "cert-manager-deployment-cert-manager-cainjector-apiserver-egress",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumNetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3,requires:4wil9kjsr04jx9sgacxzpwc5ccj9dgcc",
+    "kix.run/identity-hash": "mv3xlpv8imj4pvpxf8pdi52hbm3s5bjk"
+   },
+   "name": "cert-manager-deployment-cert-manager-cainjector-egress",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumNetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3,requires:4wil9kjsr04jx9sgacxzpwc5ccj9dgcc",
+    "kix.run/identity-hash": "qqrmxsp3bam11bhr4d82i3qxxxcww5h8"
+   },
+   "name": "cert-manager-deployment-cert-manager-cainjector-ingress",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumNetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3,requires:4wil9kjsr04jx9sgacxzpwc5ccj9dgcc",
+    "kix.run/identity-hash": "bp25q9i2k4xrkqpvdvsqf1pa3px863jl"
+   },
+   "name": "cert-manager-deployment-cert-manager-egress",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumNetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3,requires:4wil9kjsr04jx9sgacxzpwc5ccj9dgcc",
+    "kix.run/identity-hash": "pzpczpbx09wia0h0dcqhdpl9k78fd2ib"
+   },
+   "name": "cert-manager-deployment-cert-manager-ingress",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumNetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3,requires:4wil9kjsr04jx9sgacxzpwc5ccj9dgcc",
+    "kix.run/identity-hash": "r0i6qcinzagq42b3yh5sddsxsjaipmq5"
+   },
+   "name": "cert-manager-deployment-cert-manager-webhook-apiserver-egress",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumNetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3,requires:4wil9kjsr04jx9sgacxzpwc5ccj9dgcc",
+    "kix.run/identity-hash": "hrc1sx62kxbjrh1ckz04hi5a37ax06n8"
+   },
+   "name": "cert-manager-deployment-cert-manager-webhook-egress",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumNetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3,requires:4wil9kjsr04jx9sgacxzpwc5ccj9dgcc",
+    "kix.run/identity-hash": "2a121hkalagyzf10i84f1zxfhqqvzcl8"
+   },
+   "name": "cert-manager-deployment-cert-manager-webhook-ingress",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumNetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3,requires:4wil9kjsr04jx9sgacxzpwc5ccj9dgcc",
+    "kix.run/identity-hash": "xpqj7ga7jslxwy99njvxb76yiixs5z0f"
+   },
+   "name": "cert-manager-job-cert-manager-startupapicheck-apiserver-egress",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumNetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3,requires:4wil9kjsr04jx9sgacxzpwc5ccj9dgcc",
+    "kix.run/identity-hash": "y099xfs04cfyaqyyprzspr6qlgh6iyyv"
+   },
+   "name": "cert-manager-job-cert-manager-startupapicheck-egress",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumNetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3,requires:4wil9kjsr04jx9sgacxzpwc5ccj9dgcc",
+    "kix.run/identity-hash": "ivw3pbb2mbhyxgnmcr438ibmsrps1cw1"
+   },
+   "name": "cert-manager-job-cert-manager-startupapicheck-ingress",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumNetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "z4zq9wr0kcwzk0v9lmw0n32z3n39lw68,requires:4wil9kjsr04jx9sgacxzpwc5ccj9dgcc",
+    "kix.run/identity-hash": "rzmfsflqknvnfg36qvr8nr2kbpxsd69f"
+   },
+   "name": "certs-default-deny",
+   "namespace": "certs"
+  }
+ },
+ {
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumNetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:4wil9kjsr04jx9sgacxzpwc5ccj9dgcc",
+    "kix.run/identity-hash": "1sd3pfaf3gf6kvmlqfz066dwsb7ghpm2"
+   },
+   "name": "coredns-egress",
+   "namespace": "kube-system"
+  }
+ },
+ {
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumNetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:4wil9kjsr04jx9sgacxzpwc5ccj9dgcc",
+    "kix.run/identity-hash": "yyc725q6pg5sw23w7mp8xbxyd8ydn8kw"
+   },
+   "name": "coredns-ingress",
+   "namespace": "kube-system"
+  }
+ },
+ {
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumNetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:4wil9kjsr04jx9sgacxzpwc5ccj9dgcc",
+    "kix.run/identity-hash": "gm7zi6hrq0ijmymslxmspx3gybarld83"
+   },
+   "name": "kube-system-default-deny",
+   "namespace": "kube-system"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "Activation",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "44dbb5j089d262hwb7rzp652c9h7dn89,9s8z8m5r7gl9scmcbmkjr8dnwpyhx8km,r5sgwjk8w3m41l0xaj0s16xxsacd0nk6,wkcip6jzi6fw455c38pz1g7mabbb0zcb,wlz8abva9h0i84wgf5nnwvgg9fvgk0ax,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj,extra:rzmfsflqknvnfg36qvr8nr2kbpxsd69f,extra:zy3ximmy7cqnsm3h0ni3c790n4lix9vv,extra:gm7zi6hrq0ijmymslxmspx3gybarld83,extra:1kpni30a3lv8jip461094gyynv68zaas",
+    "kix.run/identity-hash": "k4hwfsmlc17y5zv1gs9cllhghpr5zbcj"
+   },
+   "name": "test-cert-manager-k4hwfsmlc17y"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "2imr8c3vkplwsyw3q3f85aiah750w90y,3n82h2sx2mfr58fqcsgkjaqcah8mbn69,4l3lzcsh4m85gfq4il7by9hqcfzw80p9,5m46bqzc84i7l8p7413g1x7ihsm1l3f1,6xz72pq1jya6lpbdbzxmx7d8hb2v2svm,8i1nja3j9nqjp5dgja6wamazx5gnm29v,9azxwlyfjbrdxw5lj1djz51fssqw34gj,9sr80l02ha5596y7k9mmkhj2488ak6sh,abzkzkw61rxl635d0qx2cpjy3g8304iw,afa1mcipmvfbblw8ra75ggyi5r6ix679,bvzhjhx8ailppiq08cxqrlr7alkvv8sq,gg92mfkiw1dygvy4dlggnjpcw5ch5k8a,idcjr6wprawdki9xj4x30r4ixpq165mi,in3dxh90m35x18j9p08skfnx4q9flay4,iw2w5v9a1skm2fi4wwx9mhg5mg57g545,jhvw48asyiv014vak9gfm0dbx7g72m37,ki90h1w64sqhz93rbyag17vc1fsirlhl,lz66hsfawmvpdw3cvkls4lhqxyvswnr3,nwymin89x7ijj54zij19b8974mr0zah3,pq2bq6i8i6rzph7iz89cp893jaf5dysw,pvscayparwbfkr2bg0la6pl305ccbb23,r0i6qcinzagq42b3yh5sddsxsjaipmq5,rn40hbw8756809l5h5bwh65g8klv5bg3,svvs642f2s14f7vgkxvmqy0maaw7yind,wh8fyw3ddxx90rp88qmsdc1agk6ifsqv,wm8pqb2g1swrlagz0ismwyhaf607jc8z,x0fqfs2x1qzydizn1650r3z0s30xim1y,xfvkhvncmwx13syqm7n0hvcr7x6pp5ma,xpqj7ga7jslxwy99njvxb76yiixs5z0f,xxc0k04jhr2mnfwb7bbyd32jprv1biv2,z1kzfjpg47025z1ilakpwc368zrgxqf5,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+    "kix.run/identity-hash": "44dbb5j089d262hwb7rzp652c9h7dn89"
+   },
+   "name": "cert-manager",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "krswbqq2xiq9rnpij2flcd2695d1scj2,rn40hbw8756809l5h5bwh65g8klv5bg3,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+    "kix.run/identity-hash": "wlz8abva9h0i84wgf5nnwvgg9fvgk0ax"
+   },
+   "name": "selfsigned",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "042fw73kl4ba5hlz5nbjv6smk323fyfy,2fq8vl9gvads7h9kc2s38pvy1dszwlb4,39p2znzr3xh38vcn6kbwh9a8bwmc5w9k,47ly4f8ika1xz88y6wcmgkwqyhjf6fhx,4wil9kjsr04jx9sgacxzpwc5ccj9dgcc,5hb3cxapih2vxgfgykqrdxg31sb8xyrl,5mw012mndw81gl4cmi3a7l0jr3hw0gry,83hllljs5v21z6ksbyviix8w2j7lbdj5,h31i5i8ksabsipx10x1ick57l2ibg0a7,jrqmz7fd2dkpmcrv5i8ncd15866srykw,jv8lhfij1jlz5sdqhm6v5gcpvqvj784m,sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,w5c6a6r5i46dskmg5k5cm7x4fwkz9289,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+    "kix.run/identity-hash": "wkcip6jzi6fw455c38pz1g7mabbb0zcb"
+   },
+   "name": "cilium",
+   "namespace": "kube-system"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:83hllljs5v21z6ksbyviix8w2j7lbdj5,requires:6cdgzcsxs6hqdr8wxl7brbv2igvizd7z,requires:jv8lhfij1jlz5sdqhm6v5gcpvqvj784m",
+    "kix.run/identity-hash": "ncb9rh5mqzv8p6gm4g5m17fj549cqs76"
+   },
+   "name": "crd-ref-cilium-ciliumclusterwidenetworkpolicies-cilium-io",
+   "namespace": "kube-system"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:83hllljs5v21z6ksbyviix8w2j7lbdj5,requires:6cdgzcsxs6hqdr8wxl7brbv2igvizd7z,requires:jv8lhfij1jlz5sdqhm6v5gcpvqvj784m",
+    "kix.run/identity-hash": "4wil9kjsr04jx9sgacxzpwc5ccj9dgcc"
+   },
+   "name": "crd-ref-cilium-ciliumnetworkpolicies-cilium-io",
+   "namespace": "kube-system"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,extra:1sd3pfaf3gf6kvmlqfz066dwsb7ghpm2,extra:yyc725q6pg5sw23w7mp8xbxyd8ydn8kw",
+    "kix.run/identity-hash": "9s8z8m5r7gl9scmcbmkjr8dnwpyhx8km"
+   },
+   "name": "platform-dns",
+   "namespace": "kube-system"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+    "kix.run/identity-hash": "r5sgwjk8w3m41l0xaj0s16xxsacd0nk6"
+   },
+   "name": "platform-storage",
+   "namespace": "kube-system"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "97djdpz42fmri0j0jniig1vqrz329fyr"
+   },
+   "name": "cert-manager-cainjector"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "xfvkhvncmwx13syqm7n0hvcr7x6pp5ma"
+   },
+   "name": "cert-manager-cluster-view"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "6fivrqzbrliig39p1awnzfp8ybl1pza5"
+   },
+   "name": "cert-manager-controller-approve:cert-manager-io"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "7m8zp48sklh0a5aibwhxcira76gs9as1"
+   },
+   "name": "cert-manager-controller-certificates"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "m4ixba68pp9yxywklx6ag0zzsfh8pf3a"
+   },
+   "name": "cert-manager-controller-certificatesigningrequests"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "q7lzk6j86r00iaysy6525s9nc22snrk6"
+   },
+   "name": "cert-manager-controller-challenges"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "sa0f54nvkxqkps5ybwvyy6w1hw38v2zc"
+   },
+   "name": "cert-manager-controller-clusterissuers"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "8bfmlcz9m022ilj9jvhjbd9xazq4rvh0"
+   },
+   "name": "cert-manager-controller-ingress-shim"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "4jjp7ms3hqzh8acgyiiprl6jkzhpwcyg"
+   },
+   "name": "cert-manager-controller-issuers"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "gqwlshryblh1my2vs7pwrbly8mx659si"
+   },
+   "name": "cert-manager-controller-orders"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "afa1mcipmvfbblw8ra75ggyi5r6ix679"
+   },
+   "name": "cert-manager-edit"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "idcjr6wprawdki9xj4x30r4ixpq165mi"
+   },
+   "name": "cert-manager-view"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "v95n12q58bidq63nd8hmizcvp7a4xrsy"
+   },
+   "name": "cert-manager-webhook:subjectaccessreviews"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "jn981amgdxf6mzwy054bkamwxriryrlb"
+   },
+   "name": "cilium"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "4n4hgb9izh0pk7ms0vqbfig07d01bqfm"
+   },
+   "name": "cilium-operator"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "4l3lzcsh4m85gfq4il7by9hqcfzw80p9,97djdpz42fmri0j0jniig1vqrz329fyr",
+    "kix.run/identity-hash": "lz66hsfawmvpdw3cvkls4lhqxyvswnr3"
+   },
+   "name": "cert-manager-cainjector"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cert-manager-cainjector"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager-cainjector",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "6fivrqzbrliig39p1awnzfp8ybl1pza5,svvs642f2s14f7vgkxvmqy0maaw7yind",
+    "kix.run/identity-hash": "8i1nja3j9nqjp5dgja6wamazx5gnm29v"
+   },
+   "name": "cert-manager-controller-approve:cert-manager-io"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cert-manager-controller-approve:cert-manager-io"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "7m8zp48sklh0a5aibwhxcira76gs9as1,svvs642f2s14f7vgkxvmqy0maaw7yind",
+    "kix.run/identity-hash": "nwymin89x7ijj54zij19b8974mr0zah3"
+   },
+   "name": "cert-manager-controller-certificates"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cert-manager-controller-certificates"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "m4ixba68pp9yxywklx6ag0zzsfh8pf3a,svvs642f2s14f7vgkxvmqy0maaw7yind",
+    "kix.run/identity-hash": "2imr8c3vkplwsyw3q3f85aiah750w90y"
+   },
+   "name": "cert-manager-controller-certificatesigningrequests"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cert-manager-controller-certificatesigningrequests"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "q7lzk6j86r00iaysy6525s9nc22snrk6,svvs642f2s14f7vgkxvmqy0maaw7yind",
+    "kix.run/identity-hash": "z1kzfjpg47025z1ilakpwc368zrgxqf5"
+   },
+   "name": "cert-manager-controller-challenges"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cert-manager-controller-challenges"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sa0f54nvkxqkps5ybwvyy6w1hw38v2zc,svvs642f2s14f7vgkxvmqy0maaw7yind",
+    "kix.run/identity-hash": "jhvw48asyiv014vak9gfm0dbx7g72m37"
+   },
+   "name": "cert-manager-controller-clusterissuers"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cert-manager-controller-clusterissuers"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "8bfmlcz9m022ilj9jvhjbd9xazq4rvh0,svvs642f2s14f7vgkxvmqy0maaw7yind",
+    "kix.run/identity-hash": "3n82h2sx2mfr58fqcsgkjaqcah8mbn69"
+   },
+   "name": "cert-manager-controller-ingress-shim"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cert-manager-controller-ingress-shim"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "4jjp7ms3hqzh8acgyiiprl6jkzhpwcyg,svvs642f2s14f7vgkxvmqy0maaw7yind",
+    "kix.run/identity-hash": "iw2w5v9a1skm2fi4wwx9mhg5mg57g545"
+   },
+   "name": "cert-manager-controller-issuers"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cert-manager-controller-issuers"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "gqwlshryblh1my2vs7pwrbly8mx659si,svvs642f2s14f7vgkxvmqy0maaw7yind",
+    "kix.run/identity-hash": "in3dxh90m35x18j9p08skfnx4q9flay4"
+   },
+   "name": "cert-manager-controller-orders"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cert-manager-controller-orders"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "9azxwlyfjbrdxw5lj1djz51fssqw34gj,v95n12q58bidq63nd8hmizcvp7a4xrsy",
+    "kix.run/identity-hash": "xxc0k04jhr2mnfwb7bbyd32jprv1biv2"
+   },
+   "name": "cert-manager-webhook:subjectaccessreviews"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cert-manager-webhook:subjectaccessreviews"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager-webhook",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "requires:q8562js3cklbvmzka49famh6i4n9a5fh,requires:jn981amgdxf6mzwy054bkamwxriryrlb",
+    "kix.run/identity-hash": "5mw012mndw81gl4cmi3a7l0jr3hw0gry"
+   },
+   "name": "cilium"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cilium"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cilium",
+    "namespace": "kube-system"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "requires:sfr8hvyx389ii606wxx2zrfnlxnp1pg7,requires:4n4hgb9izh0pk7ms0vqbfig07d01bqfm",
+    "kix.run/identity-hash": "39p2znzr3xh38vcn6kbwh9a8bwmc5w9k"
+   },
+   "name": "cilium-operator"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cilium-operator"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cilium-operator",
+    "namespace": "kube-system"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "Role",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "i5pgnlhxqsn4rbq4r813fc6bdvkanyq2"
+   },
+   "name": "cert-manager-cainjector:leaderelection",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "Role",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "70m64229kycd2yz5dbqzj1xipqrh9p82"
+   },
+   "name": "cert-manager-startupapicheck:create-cert",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "Role",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "w9r54ahgyvnji9clrb3dvscvaxvapni9"
+   },
+   "name": "cert-manager-webhook:dynamic-serving",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "Role",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "qiwzllp0zmk2zvsf26733x2yh04nxpka"
+   },
+   "name": "cert-manager:leaderelection",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "Role",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m",
+    "kix.run/identity-hash": "cfmb1gccr6zlc7f0a8r2kly3mr535lsi"
+   },
+   "name": "cilium-config-agent",
+   "namespace": "kube-system"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "Role",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m",
+    "kix.run/identity-hash": "7l9kc2g9w33j2scbr32wbmmqnv734a6w"
+   },
+   "name": "cilium-operator-tlsinterception-secrets",
+   "namespace": "kube-system"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "Role",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m",
+    "kix.run/identity-hash": "7ixq8hyapss1n722ybxdlkvq6f0zyfqc"
+   },
+   "name": "cilium-operator-ztunnel",
+   "namespace": "kube-system"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "Role",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m",
+    "kix.run/identity-hash": "j2layr5scc55p5g4mfrsr4ajydk5v51c"
+   },
+   "name": "cilium-tlsinterception-secrets",
+   "namespace": "kube-system"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "RoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "4l3lzcsh4m85gfq4il7by9hqcfzw80p9,i5pgnlhxqsn4rbq4r813fc6bdvkanyq2,rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "5m46bqzc84i7l8p7413g1x7ihsm1l3f1"
+   },
+   "name": "cert-manager-cainjector:leaderelection",
+   "namespace": "cert-manager"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "Role",
+   "name": "cert-manager-cainjector:leaderelection"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager-cainjector",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "RoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "3lg69xyk7w34lqdikvyvgfn50k2igynz,70m64229kycd2yz5dbqzj1xipqrh9p82,rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "8sx3pzvsgqa2gfazpc4m088q97k5jrj8"
+   },
+   "name": "cert-manager-startupapicheck:create-cert",
+   "namespace": "cert-manager"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "Role",
+   "name": "cert-manager-startupapicheck:create-cert"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager-startupapicheck",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "RoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "9azxwlyfjbrdxw5lj1djz51fssqw34gj,rn40hbw8756809l5h5bwh65g8klv5bg3,w9r54ahgyvnji9clrb3dvscvaxvapni9",
+    "kix.run/identity-hash": "9sr80l02ha5596y7k9mmkhj2488ak6sh"
+   },
+   "name": "cert-manager-webhook:dynamic-serving",
+   "namespace": "cert-manager"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "Role",
+   "name": "cert-manager-webhook:dynamic-serving"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager-webhook",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "RoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "qiwzllp0zmk2zvsf26733x2yh04nxpka,rn40hbw8756809l5h5bwh65g8klv5bg3,svvs642f2s14f7vgkxvmqy0maaw7yind",
+    "kix.run/identity-hash": "wm8pqb2g1swrlagz0ismwyhaf607jc8z"
+   },
+   "name": "cert-manager:leaderelection",
+   "namespace": "cert-manager"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "Role",
+   "name": "cert-manager:leaderelection"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "RoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:q8562js3cklbvmzka49famh6i4n9a5fh,requires:cfmb1gccr6zlc7f0a8r2kly3mr535lsi",
+    "kix.run/identity-hash": "2fq8vl9gvads7h9kc2s38pvy1dszwlb4"
+   },
+   "name": "cilium-config-agent",
+   "namespace": "kube-system"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "Role",
+   "name": "cilium-config-agent"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cilium",
+    "namespace": "kube-system"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "RoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:sfr8hvyx389ii606wxx2zrfnlxnp1pg7,requires:7l9kc2g9w33j2scbr32wbmmqnv734a6w",
+    "kix.run/identity-hash": "h31i5i8ksabsipx10x1ick57l2ibg0a7"
+   },
+   "name": "cilium-operator-tlsinterception-secrets",
+   "namespace": "kube-system"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "Role",
+   "name": "cilium-operator-tlsinterception-secrets"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cilium-operator",
+    "namespace": "kube-system"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "RoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:sfr8hvyx389ii606wxx2zrfnlxnp1pg7,requires:7ixq8hyapss1n722ybxdlkvq6f0zyfqc",
+    "kix.run/identity-hash": "jrqmz7fd2dkpmcrv5i8ncd15866srykw"
+   },
+   "name": "cilium-operator-ztunnel",
+   "namespace": "kube-system"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "Role",
+   "name": "cilium-operator-ztunnel"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cilium-operator",
+    "namespace": "kube-system"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "RoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:q8562js3cklbvmzka49famh6i4n9a5fh,requires:j2layr5scc55p5g4mfrsr4ajydk5v51c",
+    "kix.run/identity-hash": "042fw73kl4ba5hlz5nbjv6smk323fyfy"
+   },
+   "name": "cilium-tlsinterception-secrets",
+   "namespace": "kube-system"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "Role",
+   "name": "cilium-tlsinterception-secrets"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cilium",
+    "namespace": "kube-system"
+   }
+  ]
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ConfigMap",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m",
+    "kix.run/identity-hash": "abypghbzgs4jjf75ihksfn18f3dkv37b"
+   },
+   "name": "cilium-config",
+   "namespace": "kube-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ConfigMap",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m",
+    "kix.run/identity-hash": "342b15jybcpcdzbacmsc22za6ain5zd6"
+   },
+   "name": "cilium-envoy-config",
+   "namespace": "kube-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Namespace",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "rn40hbw8756809l5h5bwh65g8klv5bg3"
+   },
+   "name": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Namespace",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "z4zq9wr0kcwzk0v9lmw0n32z3n39lw68"
+   },
+   "name": "certs"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Namespace",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m"
+   },
+   "name": "kube-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "bvzhjhx8ailppiq08cxqrlr7alkvv8sq,rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "ki90h1w64sqhz93rbyag17vc1fsirlhl"
+   },
+   "name": "cert-manager-webhook",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:6cdgzcsxs6hqdr8wxl7brbv2igvizd7z",
+    "kix.run/identity-hash": "47ly4f8ika1xz88y6wcmgkwqyhjf6fhx"
+   },
+   "name": "cilium-envoy",
+   "namespace": "kube-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ServiceAccount",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "svvs642f2s14f7vgkxvmqy0maaw7yind"
+   },
+   "name": "cert-manager",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ServiceAccount",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "4l3lzcsh4m85gfq4il7by9hqcfzw80p9"
+   },
+   "name": "cert-manager-cainjector",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ServiceAccount",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "3lg69xyk7w34lqdikvyvgfn50k2igynz"
+   },
+   "name": "cert-manager-startupapicheck",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ServiceAccount",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "9azxwlyfjbrdxw5lj1djz51fssqw34gj"
+   },
+   "name": "cert-manager-webhook",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ServiceAccount",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m",
+    "kix.run/identity-hash": "q8562js3cklbvmzka49famh6i4n9a5fh"
+   },
+   "name": "cilium",
+   "namespace": "kube-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ServiceAccount",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m",
+    "kix.run/identity-hash": "ksq6rx9i3ljszysi5rlf21vrcpplkz4w"
+   },
+   "name": "cilium-envoy",
+   "namespace": "kube-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ServiceAccount",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m",
+    "kix.run/identity-hash": "sfr8hvyx389ii606wxx2zrfnlxnp1pg7"
+   },
+   "name": "cilium-operator",
+   "namespace": "kube-system"
+  }
+ }
+]

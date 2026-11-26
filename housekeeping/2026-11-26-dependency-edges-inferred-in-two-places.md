@@ -1,0 +1,3 @@
+# 2026-11-26 · `kix/lib/helm-dag.nix`, `cli/kix/src/cluster/graph.rs` · Two places add dependencies that no reference records.
+
+The library's `helm-dag.nix` infers a chart's edges from Kubernetes references (a workload to its ServiceAccount, a binding to its role) and writes them into `kix.run/depends-on`. The CLI's `graph::dependency_pairs` adds one more kind at deploy time: a workload depends on each RoleBinding or ClusterRoleBinding of its ServiceAccount. Nix rules and `kix status` read only `kix.run/depends-on`, so they do not see the CLI's edges. A new rule of this kind has two candidate homes, and a reader of one may miss the other.
