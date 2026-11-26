@@ -1,8 +1,12 @@
-# The DNS endpoints of the cluster's `dns` role provider (`out.dnsPeers`),
+# The DNS endpoints of the cluster's `dns` role provider (`meta.dnsPeers`),
 # which the network policy enforcer builds its DNS egress rule from.
 #
 # A peer is `{ namespace; podSelector; }` (pods by label in one namespace)
-# or `{ cidr; }` (an address range).
+# or `{ cidr; }` (an address range). A pod peer without `namespace` means
+# the namespace of the provider's instance. Kix reads the peers from the
+# provider's metadata, which it can read without evaluating the instance.
+# The provider's `out` cannot serve: evaluating the instance evaluates its
+# own policies, and those need the peers.
 
 { lib }:
 
@@ -38,32 +42,39 @@ rec {
     in
     if !(builtins.isList peers) || peers == [ ] then
       fail {
-        message = "DNS provider `${provider}` sets `out.dnsPeers` to ${builtins.toJSON peers}, which must be a non-empty list, so Kix could not build DNS egress rules.";
-        fix = "Set `out.dnsPeers` on `${provider}` to a non-empty list of `{ namespace = \"...\"; podSelector = { ... }; }` or `{ cidr = \"...\"; }` entries, or omit `out.dnsPeers` to allow `k8s-app = \"kube-dns\"` pods in `kube-system`.";
+        message = "DNS provider `${provider}` sets `meta.dnsPeers` to ${builtins.toJSON peers}, which must be a non-empty list, so Kix could not build DNS egress rules.";
+        fix = "Set `meta.dnsPeers` on `${provider}` to a non-empty list of `{ namespace = \"...\"; podSelector = { ... }; }` or `{ cidr = \"...\"; }` entries, or leave `meta.dnsPeers` unset to allow `k8s-app = \"kube-dns\"` pods in `kube-system`.";
       }
     else if bad != [ ] then
       fail {
-        message = "DNS provider `${provider}` has invalid entries in `out.dnsPeers`: ${builtins.toJSON bad}. Kix could not build DNS egress rules.";
-        fix = "Write each entry in `out.dnsPeers` as either `{ namespace = \"<namespace>\"; podSelector = { ... }; }` (to match DNS pods by label) or `{ cidr = \"<cidr>\"; }` (to match an IP range), with no extra fields.";
+        message = "DNS provider `${provider}` has invalid entries in `meta.dnsPeers`: ${builtins.toJSON bad}. Kix could not build DNS egress rules.";
+        fix = "Write each entry in `meta.dnsPeers` as either `{ namespace = \"<namespace>\"; podSelector = { ... }; }` (to match DNS pods by label; leave out `namespace` for the provider's own namespace) or `{ cidr = \"<cidr>\"; }` (to match an IP range), with no extra fields.";
       }
     else
       peers;
 
-  # Return the DNS peers of the cluster's `dns` role provider, or
-  # `defaultDnsPeers` when no instance claims the role or the provider sets
-  # none. Kix reads `out.dnsPeers` of an import only (`kix.mkImport`, such as
-  # a flavour's `platform-dns`), whose `out` is fixed data. Reading a managed
-  # package's `out` evaluates the whole instance, whose own network policies
-  # read these peers, so a managed provider gets the default.
+  # Return the DNS peers of the cluster's `dns` role provider
+  # (`{ ns; inst; meta; }` from `findRoleProvider`), with a pod peer's
+  # missing `namespace` set to the provider's, or `defaultDnsPeers` when no
+  # instance claims the role or the provider declares none.
   dnsPeersOf =
     findRoleProvider:
     let
       provider = findRoleProvider "dns";
+      declared = if provider == null then null else provider.meta.dnsPeers or null;
+      withNamespace =
+        p:
+        if builtins.isAttrs p && p ? podSelector && !(p ? namespace) then
+          p // { namespace = provider.ns; }
+        else
+          p;
     in
-    if provider == null || !(provider.isImport or false) || !(provider.out ? dnsPeers) then
+    if declared == null then
       defaultDnsPeers
     else
-      checkDnsPeers "${provider.ns}/${provider.inst}" provider.out.dnsPeers;
+      checkDnsPeers "${provider.ns}/${provider.inst}" (
+        if builtins.isList declared then map withNamespace declared else declared
+      );
 
   # Return the enforcer's `out` with its rules built for the cluster's DNS
   # peers (`dnsPeersOf`), or null for a null `enforcerOut`. Every reader of

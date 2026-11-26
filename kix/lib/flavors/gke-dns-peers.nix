@@ -1,5 +1,5 @@
 # Where pods on GKE send DNS queries, as the `platform-dns` import's
-# `out.dnsPeers`. A GKE cluster uses one or two of these, depending on
+# `dnsPeers`. A GKE cluster uses one or two of these, depending on
 # NodeLocal DNSCache and Cloud DNS. A rule for a peer the cluster does not
 # run opens only port 53 to that address, so the flavours list all four.
 [

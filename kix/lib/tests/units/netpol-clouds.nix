@@ -163,8 +163,8 @@ let
       out = {
         name = "kube-dns";
         fqdn = "kube-dns.kube-system.svc.cluster.local";
-      }
-      // lib.optionalAttrs (peers != null) { dnsPeers = peers; };
+      };
+      dnsPeers = peers;
     };
 
   # Return the DNS rule of the `web` Deployment's egress policy in a cluster
@@ -315,24 +315,33 @@ in
     )
     || throw "entities: known ${toString (evalFails known)}, unknown intent ${toString (evalFails unknownIntent)}, known external ${toString (evalFails knownExternal)}, unknown external ${toString (evalFails unknownExternal)}";
 
-  # The enforcer builds every workload's DNS rule from the `dns` import's
-  # `out.dnsPeers`, and from the kube-dns pods in kube-system when it sets
-  # none. A managed provider's `out` is not read, so it gets the default.
+  # The enforcer builds every workload's DNS rule from the `dns` provider's
+  # `meta.dnsPeers`, and from the kube-dns pods in kube-system when it sets
+  # none. A managed provider declares them in its package metadata, and a
+  # pod peer without `namespace` is in the provider's namespace.
   netpol-clouds-dns-peers-from-import =
     let
       custom = webDnsRuleWith (dnsImport customPeers);
       unset = webDnsRuleWith (dnsImport null);
       managed = webDnsRuleWith (mkCmPackage {
         name = "dns";
-        metaExtra.roles = [ "dns" ];
-        out = {
-          fqdn = "dns.kube-system.svc.cluster.local";
-          dnsPeers = customPeers;
+        metaExtra = {
+          roles = [ "dns" ];
+          dnsPeers = [ { podSelector.app = "resolver"; } ];
         };
+        out.fqdn = "dns.kube-system.svc.cluster.local";
       });
     in
     (
-      custom.dnsPeers == customPeers && unset.dnsPeers == defaultPeers && managed.dnsPeers == defaultPeers
+      custom.dnsPeers == customPeers
+      && unset.dnsPeers == defaultPeers
+      &&
+        managed.dnsPeers == [
+          {
+            namespace = "kube-system";
+            podSelector.app = "resolver";
+          }
+        ]
     )
     || throw "DNS peers: custom ${builtins.toJSON custom}, unset ${builtins.toJSON unset}, managed ${builtins.toJSON managed}";
 

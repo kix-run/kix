@@ -100,9 +100,9 @@ Beyond cross-package Service references, Kix automatically derives rules for fou
 
 ### DNS peers
 
-The DNS egress rule allows UDP and TCP port 53 to the cluster's DNS peers. By default, these are pods labeled `k8s-app: kube-dns` in `kube-system`, where kubeadm, kind, k3s, RKE2, and EKS run CoreDNS. A `dns` import (such as a flavor's `platform-dns`) can override this list in `out.dnsPeers`. Each entry selects either pods by label in a single namespace (`{ namespace; podSelector; }`) or an IP range (`{ cidr; }`). The `gke` and `gke-autopilot` flavors set `out.dnsPeers` to `kube-dns`, `node-local-dns`, `169.254.169.254/32`, and `169.254.20.10/32`, covering standard `kube-dns`, NodeLocal DNSCache, and Cloud DNS.
+The DNS egress rule allows UDP and TCP port 53 to the cluster's DNS peers. By default, these are pods labeled `k8s-app: kube-dns` in `kube-system`, where kubeadm, kind, k3s, RKE2, and EKS run CoreDNS. The package that provides the `dns` role can override this list in `meta.dnsPeers`, and a `kix.mkImport` (such as a flavor's `platform-dns`) takes the same list as its `dnsPeers` argument. Each entry selects either pods by label in a single namespace (`{ namespace; podSelector; }`, where a missing `namespace` means the provider's own namespace) or an IP range (`{ cidr; }`). The `coredns` package lists its own pods, so it can run in any namespace. The `gke` and `gke-autopilot` flavors set the list to `kube-dns`, `node-local-dns`, `169.254.169.254/32`, and `169.254.20.10/32`, covering standard `kube-dns`, NodeLocal DNSCache, and Cloud DNS.
 
-Kix reads `out.dnsPeers` only from `kix.mkImport` instances. When a managed package such as `coredns` provides the `dns` role, Kix uses the default peers, so with `networkPolicy.enable = true` that package must run in `kube-system` with the label `k8s-app: kube-dns`. Because Cilium cannot combine pod selectors and IP ranges in one DNS rule, the `cilium` enforcer accepts only `{ namespace; podSelector; }` entries and fails evaluation when `out.dnsPeers` includes `{ cidr; }`.
+Because Cilium cannot combine pod selectors and IP ranges in one DNS rule, the `cilium` enforcer accepts only pod entries and fails evaluation when the DNS peers include `{ cidr; }`.
 
 ### Cloud credentials
 

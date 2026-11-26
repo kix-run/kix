@@ -50,6 +50,10 @@ rec {
       # annotation-ownership rule accepts annotations under them on any
       # instance, with no dependency on this import.
       annotationDomains ? [ ],
+      # For an import that claims the `dns` role: where pods send DNS
+      # queries (`core/dns-peers.nix`), or null for the kube-dns pods in
+      # kube-system.
+      dnsPeers ? null,
     }:
     {
       _type = "kix-import";
@@ -62,7 +66,8 @@ rec {
         ;
       meta = {
         inherit roles scope annotationDomains;
-      };
+      }
+      // lib.optionalAttrs (dnsPeers != null) { inherit dnsPeers; };
     };
 
   mkImportScope =

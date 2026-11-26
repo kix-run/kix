@@ -375,8 +375,8 @@ in
             out = {
               name = "rke2-coredns-rke2-coredns";
               fqdn = "rke2-coredns-rke2-coredns.kube-system.svc.cluster.local";
-              dnsPeers = peers;
             };
+            dnsPeers = peers;
           }
         );
       };

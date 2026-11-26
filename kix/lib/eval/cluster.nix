@@ -387,6 +387,9 @@ in
                 provider = clusterInstances.${lookup.ns}.${lookup.inst};
               in
               if provider ? raw then provider.raw.root.resource or provider.raw.root else provider.root;
+            # The provider's metadata, which reading does not evaluate the
+            # instance (`core/dns-peers.nix` reads `dnsPeers` from it).
+            meta = peekedMetas.${lookup.ns}.${lookup.inst};
             out = roles.checkOutContract {
               inherit role;
               providerLabel = "${lookup.ns}/${lookup.inst}";
