@@ -12,7 +12,7 @@
 | 3 | Repair the enforcer envelope: add `selector`, `ingress`, and `egress` arguments to `mkPolicy` and `kix.operandPolicy`, migrate all in-tree callers, and restrict `entities` on `meta.network.intents` to the fixed list. Keep `spec` working on the Cilium renderer for now. Every cluster in `clusters/` must build identical manifests. | none | `added` |
 | 4 | Add `out.dnsPeers` to the `dns` role and read it in the Cilium renderer and `cilium` package. Audit all 11 `all-pods` callers and split out explicit node or API server rules where needed. Existing manifests must stay unchanged. | 3 | `added` |
 | 5 | Skip default-deny in namespaces whose only instances are imports or inactive optional instances, and add `networkPolicy.platformNamespaces` (decision 5). | none | `silent` (minor release) |
-| 6 | Implement the standard `NetworkPolicy` renderer, `cluster.network.apiServer`, `cluster.network.nodeCidrs`, unsupported-rule refusals, the `networkPolicyWidened` scorecard rule, the policy-kind validation check, the check 12 skip for policies that Kix generates for operator-created pods and platform intents (AWS F17), and the `kix deploy` API server IP check. Enable the standard renderer in `gke` and `gke-autopilot`, plus `k3s` and `kind` once live tests confirm stock enforcement. | 3, 4, 5 | `added` |
+| 6 | Implement the standard `NetworkPolicy` renderer, the link-local exclusion on `world` rules, `cluster.network.apiServer`, `cluster.network.nodeCidrs`, unsupported-rule refusals, the `networkPolicyWidened` scorecard rule, the policy-kind validation check, the check 12 skip for policies that Kix generates for operator-created pods and platform intents (AWS F17), and the `kix deploy` API server IP check. Enable the standard renderer in `gke` and `gke-autopilot`, plus `k3s` and `kind` once live tests confirm stock enforcement. | 3, 4, 5 | `added` |
 | 7 | Add `egress` rules on cloud identity mechanisms, the `"node-local"` intent target, and `networkIntents` on bound identity values. | 3 | `fixed` (adds egress rules on Cilium clusters using cloud identity; no user action needed) |
 | 8 | Add `cluster.flavor.eks.networkPolicy` and the verified VPC CNI behavior flags. | 6 | `added` |
 | 9 | Remove the legacy `spec` argument with an error naming `selector`, `ingress`, and `egress`. | 3 (next minor release) | `error` (with an id) |
@@ -39,9 +39,10 @@ on a GKE Dataplane V2 cluster with NodeLocal DNSCache enabled once those steps
 are built. Test 10 can run immediately in a scratch namespace using an explicit
 `NetworkPolicy` manifest before any Kix changes are built.
 
-The live GKE test (N1 and N2) already answered the platform questions in tests
-5 and 7 (webhook source and node kubelet egress). Tests 1 through 9 still need
-to run against Kix once steps 6 and 7 land, and test 10 still needs to run:
+The live GKE tests already answered the platform questions in tests 5 (N1,
+webhook source) and 7 (N2, node kubelet egress), plus test 10 (N4, excluding
+the node range from `0.0.0.0/0` egress). Tests 1 through 9 still need to run
+against Kix once steps 6 and 7 land:
 
 1. Deploy a cluster with `kix.flavors.gke`, `networkPolicy.enable = true`, and
    one `echo-server` instance in namespace `np`. Verify that `kix build`
