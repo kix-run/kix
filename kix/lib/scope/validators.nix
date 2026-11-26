@@ -351,35 +351,52 @@ in
         else
           [ ];
 
+      # Check pod settings that `cluster.capabilities.privilegedContainers`
+      # covers. The capability stands for several platform rules, so the
+      # refusal names the rule this pod breaks.
       checkPrivileged =
         templateSpec:
         let
           containers = lst (templateSpec.containers or [ ]);
           initContainers = lst (templateSpec.initContainers or [ ]);
           allContainers = containers ++ initContainers;
-          hasPrivileged = builtins.any (c: (c.securityContext.privileged or false) == true) allContainers;
-          hasHostNetwork = templateSpec.hostNetwork or false;
-          hasHostPID = templateSpec.hostPID or false;
+          privileged = builtins.filter (c: (c.securityContext.privileged or false) == true) allContainers;
+          hostNamespaces = builtins.filter (f: templateSpec.${f} or false) [
+            "hostNetwork"
+            "hostPID"
+          ];
           volumes = lst (templateSpec.volumes or [ ]);
           hostPathVols = builtins.filter (v: v ? hostPath) volumes;
-          hasHostPath = hostPathVols != [ ];
-          reason =
-            if hasHostNetwork then
-              "hostNetwork: true"
-            else if hasHostPID then
-              "hostPID: true"
-            else if hasHostPath then
-              "hostPath volume '${(builtins.head hostPathVols).name or "?"}' → ${
-                (builtins.head hostPathVols).hostPath.path or "?"
-              }"
+          broken =
+            if hostNamespaces != [ ] then
+              {
+                what = "set ${builtins.head hostNamespaces} = true";
+                rule = "pods to share a host namespace";
+                fix = "Remove ${builtins.head hostNamespaces} from the pod spec";
+              }
+            else if hostPathVols != [ ] then
+              let
+                v = builtins.head hostPathVols;
+              in
+              {
+                what = "mount hostPath volume '${v.name or "?"}' (${v.hostPath.path or "?"}) from the node";
+                rule = "hostPath volumes";
+                fix = "Replace the hostPath volume with another volume type (such as emptyDir or persistentVolumeClaim)";
+              }
             else
-              "securityContext.privileged: true";
+              {
+                what = "run container '${
+                  (builtins.head privileged).name or "?"
+                }' with securityContext.privileged = true";
+                rule = "privileged containers";
+                fix = "Remove securityContext.privileged (or replace it with specific Linux capabilities in securityContext.capabilities.add)";
+              };
         in
-        if hasPrivileged || hasHostNetwork || hasHostPID || hasHostPath then
+        if privileged != [ ] || hostNamespaces != [ ] || hostPathVols != [ ] then
           checkCapability {
             cap = "privilegedContainers";
-            message = "Workload uses ${reason} but cluster.capabilities.privilegedContainers is false.";
-            fix = "Remove the privileged settings or use a cluster that supports them.";
+            message = "Pods in this workload ${broken.what}. This cluster does not allow ${broken.rule} (cluster.capabilities.privilegedContainers = false), so Kix stopped the build.";
+            fix = "${broken.fix}, or deploy this workload to a cluster that allows host access and privileged containers. If your cluster does allow them, set cluster.capabilities.privilegedContainers = true in the cluster definition.";
           }
         else
           [ ];
