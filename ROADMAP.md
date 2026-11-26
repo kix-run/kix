@@ -203,7 +203,7 @@
   - [x] EKS Pod Identity as a cluster-wide choice: `cluster.flavor.eks.cloudIdentity = "pod-identity"` swaps the flavor's mechanism for EKS Pod Identity, which renders only the record and the stamp.
   - [ ] A per-instance choice of mechanism on EKS, and optionally an ACK `PodIdentityAssociation`.
   - [ ] Self-managed federation without a webhook (`projectedToken`: a projected ServiceAccount token volume and the SDK's variables).
-  - [ ] Print the subject each instance's role must trust (`system:serviceaccount:<ns>:<sa>`) as JSON for Terraform, and check at deploy that a new pod carries the injected variables (`AWS_ROLE_ARN`, `AZURE_CLIENT_ID`).
+  - [ ] Print the subject each instance's role must trust (`system:serviceaccount:<ns>:<sa>`) as JSON for Terraform, and check at deploy that a new pod carries the injected variables (`AWS_ROLE_ARN`, `AZURE_CLIENT_ID`). GKE injects nothing into the pod, so that check cannot catch a broken Workload Identity binding there, and no check at deploy can see whether the cloud accepts an identity (`check-resource-status.mdx`, "What readiness does not show").
   - [ ] Warn about a `hostNetwork` pod with a GKE identity, which Google excludes.
 
 ## Platform capabilities (module-level features)

@@ -35,7 +35,9 @@ use super::discovery;
 use crate::manifest::kinds;
 use crate::manifest::types::ResourceId;
 
-pub use declared::{check_readiness, declared_rule, is_immediate_kind, not_ready_reason};
+pub use declared::{
+    check_readiness, declared_rule, is_immediate, is_immediate_kind, not_ready_reason,
+};
 pub use deletion::{
     Controller, ControllerState, DeletePath, Deletion, Runner, STUCK_DELETE_ID, Stuck,
     controller_state, cycle_reason, deletion_reason, finalizers_of, held_back_reason,
@@ -69,7 +71,7 @@ use declared::{
     FailureWatch, declared_failure, declared_pending_restart, is_wait_for_first_consumer,
     readiness_message,
 };
-use terminal::{progress_fingerprint, scan_terminal};
+use terminal::{progress_fingerprint, rollout_message, scan_terminal, statefulset_held_pods_live};
 
 /// Return whether API discovery serves the kind that `crd` defines.
 ///
@@ -157,6 +159,15 @@ pub(crate) fn being_deleted(rid: &ResourceId, reason: &str) -> String {
     )
 }
 
+/// The id of the change record that made a `LoadBalancer` Service wait for
+/// its address. A timeout on such a Service starts with it.
+const LOAD_BALANCER_WAIT_ID: &str = "[K1243] ";
+
+/// What to do when a `LoadBalancer` Service gets no address.
+const LOAD_BALANCER_ADVICE: &str = "Kix stopped waiting for an address. \
+     If this cluster has no load balancer, change the Service's type to ClusterIP or NodePort, \
+     and set cluster.roles.loadBalancer.binding = \"absent\" in the cluster definition so the build rejects LoadBalancer Services.";
+
 /// Absolute upper bound on how long any single resource may take to become
 /// Ready. Enforced regardless of the per-resource idle budget so a resource
 /// whose fingerprint changes continuously without reaching Ready still times
@@ -197,6 +208,12 @@ const HARD_CEILING: Duration = Duration::from_secs(5 * 60);
 /// A ready custom resource whose declared `pendingRestart` state matches for
 /// the current spec returns `ReadyPendingRestart`, as an `OnDelete` DaemonSet
 /// with pods on the previous template does ([`declared_pending_restart`]).
+///
+/// While a Deployment, StatefulSet, or DaemonSet is not ready, the message
+/// counts the ready pods of its current revision and says why the first one
+/// that is not ready waits ([`rollout_message`]). A StatefulSet that runs out
+/// of time also names the pods that hold back its rolling update
+/// ([`statefulset_held_pods_live`]).
 ///
 /// Returns `Ready` on success, `Failed` on a terminal signal, `TimedOut` when
 /// either timeout budget elapses, or `Cancelled` if `cancel` is triggered.
@@ -281,7 +298,8 @@ pub(crate) async fn wait_for_ready(
             });
         }
 
-        let mut message = readiness_message(&obj, kind);
+        let mut message = rollout_message(&obj, kind, &scan.pods)
+            .unwrap_or_else(|| readiness_message(&obj, kind));
         if check_readiness(&obj, kind) {
             if kind == kinds::DAEMON_SET
                 && let Some(stale) = daemonset_pending_restart(&obj.data)
@@ -328,11 +346,23 @@ pub(crate) async fn wait_for_ready(
             message = format!("{message} after this error: {pull}");
         }
 
+        let out_of_time = idle >= idle_budget || total >= hard_ceiling;
+        let mut lead = "";
+        if out_of_time
+            && kind == kinds::STATEFUL_SET
+            && let Some(held) = statefulset_held_pods_live(client, &obj).await
+        {
+            message = format!("{message}. {held}");
+        }
+        if out_of_time && kind == kinds::SERVICE {
+            lead = LOAD_BALANCER_WAIT_ID;
+            message = format!("{message}. {LOAD_BALANCER_ADVICE}");
+        }
         if idle >= idle_budget {
             return Ok(ReadinessResult::TimedOut {
                 elapsed: total,
                 message: format!(
-                    "no readiness progress for {}s (idle budget {}s): {message}",
+                    "{lead}no readiness progress for {}s (idle budget {}s): {message}",
                     idle.as_secs(),
                     idle_budget.as_secs()
                 ),
@@ -342,7 +372,7 @@ pub(crate) async fn wait_for_ready(
             return Ok(ReadinessResult::TimedOut {
                 elapsed: total,
                 message: format!(
-                    "hard ceiling {}s exceeded: {message}",
+                    "{lead}hard ceiling {}s exceeded: {message}",
                     hard_ceiling.as_secs()
                 ),
             });

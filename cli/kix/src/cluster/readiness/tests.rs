@@ -441,7 +441,7 @@ fn an_object_being_deleted_is_not_ready() {
 fn immediate_kinds() {
     assert!(is_immediate_kind(gk("ConfigMap")));
     assert!(is_immediate_kind(gk("Secret")));
-    assert!(is_immediate_kind(gk("Service")));
+    assert!(!is_immediate_kind(gk("Service")));
     assert!(is_immediate_kind(gk("Namespace")));
     assert!(is_immediate_kind(gk("ServiceAccount")));
     assert!(is_immediate_kind(gk("ClusterRole")));
@@ -452,6 +452,42 @@ fn immediate_kinds() {
     assert!(!is_immediate_kind(gk("Deployment")));
     assert!(!is_immediate_kind(gk("StatefulSet")));
     assert!(!is_immediate_kind(gk("Job")));
+}
+
+fn service(spec: Value, status: Value) -> DynamicObject {
+    make_obj(json!({ "spec": spec, "status": status }))
+}
+
+/// A ClusterIP or NodePort Service is ready as soon as it exists. A
+/// `LoadBalancer` Service is ready once its load balancer has given it an
+/// address, because until then nothing outside the cluster can reach it.
+#[test]
+fn a_load_balancer_service_is_ready_once_it_has_an_address() {
+    let cluster_ip = service(json!({"type": "ClusterIP"}), json!({}));
+    assert!(is_immediate(gk("Service"), &cluster_ip.data));
+    assert!(check_readiness(&cluster_ip, gk("Service")));
+    let untyped = service(json!({}), json!({}));
+    assert!(is_immediate(gk("Service"), &untyped.data));
+
+    let pending = service(json!({"type": "LoadBalancer"}), json!({"loadBalancer": {}}));
+    assert!(!is_immediate(gk("Service"), &pending.data));
+    assert!(!check_readiness(&pending, gk("Service")));
+    assert!(
+        not_ready_reason(&pending, gk("Service")).contains("status.loadBalancer.ingress"),
+        "{}",
+        not_ready_reason(&pending, gk("Service"))
+    );
+    let empty = service(
+        json!({"type": "LoadBalancer"}),
+        json!({"loadBalancer": {"ingress": []}}),
+    );
+    assert!(!check_readiness(&empty, gk("Service")));
+
+    let served = service(
+        json!({"type": "LoadBalancer"}),
+        json!({"loadBalancer": {"ingress": [{"ip": "203.0.113.7"}]}}),
+    );
+    assert!(check_readiness(&served, gk("Service")));
 }
 
 #[test]
@@ -540,6 +576,44 @@ fn deployment_with_a_stuck_rollout_is_not_ready() {
         }),
     );
     assert!(check_readiness(&done, gk("Deployment")));
+}
+
+/// While old pods run, a Deployment's `readyReplicas` counts them too, so
+/// the text does not present it as the ready count of the updated pods.
+#[test]
+fn a_rollout_with_old_pods_does_not_claim_the_updated_pods_are_ready() {
+    let stuck = make_obj_gen(
+        3,
+        json!({
+            "spec": {"replicas": 2},
+            "status": {
+                "observedGeneration": 3,
+                "replicas": 3,
+                "readyReplicas": 2,
+                "updatedReplicas": 2,
+            }
+        }),
+    );
+    assert_eq!(
+        not_ready_reason(&stuck, gk("Deployment")),
+        "2/2 updated, 1 old pod still running, 2 ready including the old pod"
+    );
+    let rolling = make_obj_gen(
+        3,
+        json!({
+            "spec": {"replicas": 2},
+            "status": {
+                "observedGeneration": 3,
+                "replicas": 2,
+                "readyReplicas": 1,
+                "updatedReplicas": 2,
+            }
+        }),
+    );
+    assert_eq!(
+        not_ready_reason(&rolling, gk("Deployment")),
+        "1/2 ready, 2/2 updated"
+    );
 }
 
 /// A StatefulSet counts a terminating pod in `status.replicas`, so a
@@ -2730,4 +2804,302 @@ fn declared_pending_restart_without_generation_uses_the_transition_time() {
         }]),
     );
     assert!(declared_pending_restart(&known, at("2026-11-18T10:05:00Z")).is_some());
+}
+
+fn pod(name: &str, revision: &str, status: Value) -> Value {
+    json!({
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+            "name": name,
+            "namespace": "demo",
+            "labels": {"app": "hello", "controller-revision-hash": revision},
+        },
+        "status": status,
+    })
+}
+
+fn ready_pod_status() -> Value {
+    json!({
+        "phase": "Running",
+        "conditions": [
+            {"type": "PodScheduled", "status": "True"},
+            {"type": "Ready", "status": "True"},
+        ],
+        "containerStatuses": [{"name": "app", "ready": true, "state": {"running": {}}}],
+    })
+}
+
+fn unschedulable_pod_status() -> Value {
+    json!({
+        "phase": "Pending",
+        "conditions": [{
+            "type": "PodScheduled",
+            "status": "False",
+            "reason": "Unschedulable",
+            "message": "0/2 nodes are available: 1 Insufficient cpu.",
+        }],
+    })
+}
+
+/// A rollout stuck on a pod the scheduler cannot place: the Deployment
+/// counts one new and one old pod as ready, and the message counts only the
+/// pods of the new revision and quotes the scheduler.
+#[test]
+fn a_rollout_message_counts_updated_pods_and_quotes_the_scheduler() {
+    let deployment = make_obj_gen(
+        3,
+        json!({
+            "spec": {"replicas": 2},
+            "status": {
+                "observedGeneration": 3,
+                "replicas": 3,
+                "readyReplicas": 2,
+                "updatedReplicas": 2,
+            }
+        }),
+    );
+    let pods = [
+        pod("hello-new-a", "new", ready_pod_status()),
+        pod("hello-new-b", "new", unschedulable_pod_status()),
+    ];
+    assert_eq!(
+        terminal::rollout_message(&deployment, gk("Deployment"), &pods).as_deref(),
+        Some(
+            "Deployment/test: 1/2 updated pods ready, 1 old pod still running; \
+             pod hello-new-b cannot be scheduled: 0/2 nodes are available: 1 Insufficient cpu."
+        )
+    );
+    let both_ready = [
+        pod("hello-new-a", "new", ready_pod_status()),
+        pod("hello-new-b", "new", ready_pod_status()),
+    ];
+    assert_eq!(
+        terminal::rollout_message(&deployment, gk("Deployment"), &both_ready).as_deref(),
+        Some("Deployment/test: 2/2 updated pods ready, 1 old pod still running")
+    );
+    assert_eq!(
+        terminal::rollout_message(&deployment, gk("Deployment"), &[]),
+        None
+    );
+    assert_eq!(
+        terminal::rollout_message(&deployment, gk("Job"), &pods),
+        None
+    );
+}
+
+#[test]
+fn a_pod_that_is_not_ready_says_why() {
+    let waiting = pod(
+        "p",
+        "r",
+        json!({
+            "phase": "Pending",
+            "conditions": [{"type": "PodScheduled", "status": "True"}],
+            "containerStatuses": [{
+                "name": "app",
+                "ready": false,
+                "state": {"waiting": {"reason": "ContainerCreating"}},
+            }],
+        }),
+    );
+    assert_eq!(
+        terminal::pod_not_ready_reason(&waiting).as_deref(),
+        Some("pod p/app is waiting: ContainerCreating")
+    );
+    let probing = pod(
+        "p",
+        "r",
+        json!({
+            "phase": "Running",
+            "conditions": [{"type": "Ready", "status": "False"}],
+            "containerStatuses": [{"name": "app", "ready": false, "state": {"running": {}}}],
+        }),
+    );
+    assert_eq!(
+        terminal::pod_not_ready_reason(&probing).as_deref(),
+        Some("pod p/app is running, but its readiness probe has not passed")
+    );
+    assert_eq!(
+        terminal::pod_not_ready_reason(&pod("p", "r", ready_pod_status())),
+        None
+    );
+}
+
+fn statefulset(spec_extra: Value, update_revision: &str) -> DynamicObject {
+    let mut spec = json!({"replicas": 1, "selector": {"matchLabels": {"app": "hello"}}});
+    if let (Some(spec), Some(extra)) = (spec.as_object_mut(), spec_extra.as_object()) {
+        spec.extend(extra.clone());
+    }
+    let mut obj = make_obj_gen(
+        5,
+        json!({
+            "apiVersion": "apps/v1",
+            "kind": "StatefulSet",
+            "spec": spec,
+            "status": {
+                "observedGeneration": 5,
+                "replicas": 1,
+                "readyReplicas": 0,
+                "updatedReplicas": 0,
+                "currentRevision": update_revision,
+                "updateRevision": update_revision,
+            }
+        }),
+    );
+    obj.metadata.namespace = Some("demo".into());
+    obj
+}
+
+fn crash_looping_pod_status() -> Value {
+    json!({
+        "phase": "Running",
+        "conditions": [{"type": "Ready", "status": "False"}],
+        "containerStatuses": [{
+            "name": "app",
+            "ready": false,
+            "restartCount": 9,
+            "state": {"waiting": {"reason": "CrashLoopBackOff"}},
+        }],
+    })
+}
+
+/// A StatefulSet whose template was reverted to a good revision keeps its
+/// crash-looping pod on the bad one, because with OrderedReady the
+/// controller replaces no pod while one is not ready. The message names the
+/// pod and the command that frees it.
+#[test]
+fn a_statefulset_names_the_pod_that_holds_back_its_rollout() {
+    let sts = statefulset(json!({}), "hello-good");
+    let held = [pod("hello-0", "hello-bad", crash_looping_pod_status())];
+    let message = terminal::statefulset_held_pods(&sts, &held).expect("a held pod");
+    assert!(
+        message.starts_with(
+            "Pod hello-0 is not ready and is still on revision hello-bad (current revision: hello-good)."
+        ),
+        "{message}"
+    );
+    assert!(
+        message.ends_with("kubectl delete pod -n demo hello-0"),
+        "{message}"
+    );
+
+    // A pod of the old revision that is ready does not block the controller,
+    // which replaces it in turn.
+    let replaceable = [pod("hello-0", "hello-bad", ready_pod_status())];
+    assert_eq!(terminal::statefulset_held_pods(&sts, &replaceable), None);
+    // A pod of the current revision that is not ready is the rollout itself.
+    let current = [pod("hello-0", "hello-good", crash_looping_pod_status())];
+    assert_eq!(terminal::statefulset_held_pods(&sts, &current), None);
+    // With Parallel pod management or OnDelete the rule does not apply.
+    let parallel = statefulset(json!({"podManagementPolicy": "Parallel"}), "hello-good");
+    assert_eq!(terminal::statefulset_held_pods(&parallel, &held), None);
+    let on_delete = statefulset(
+        json!({"updateStrategy": {"type": "OnDelete"}}),
+        "hello-good",
+    );
+    assert_eq!(terminal::statefulset_held_pods(&on_delete, &held), None);
+}
+
+mod workload_waits {
+    use super::*;
+    use crate::cluster::fake_api::FakeApi;
+
+    async fn wait(
+        api: &FakeApi,
+        group: &str,
+        kind: &str,
+        plural: &str,
+        name: &str,
+    ) -> ReadinessResult {
+        let api_version = if group.is_empty() {
+            "v1".to_string()
+        } else {
+            format!("{group}/v1")
+        };
+        let ar = ApiResource {
+            group: group.into(),
+            version: "v1".into(),
+            api_version,
+            kind: kind.into(),
+            plural: plural.into(),
+        };
+        let rid = ResourceId {
+            group: group.into(),
+            kind: kind.into(),
+            namespace: "demo".into(),
+            name: name.into(),
+        };
+        wait_for_ready(
+            &api.client(),
+            &ar,
+            &Scope::Namespaced,
+            &rid,
+            None,
+            DEFAULT_TIMEOUT,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap()
+    }
+
+    fn lb_service(ingress: Value) -> Value {
+        json!({
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {"name": "hello", "namespace": "demo"},
+            "spec": {"type": "LoadBalancer"},
+            "status": {"loadBalancer": ingress},
+        })
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_load_balancer_service_waits_for_its_address() {
+        let api = FakeApi::new([lb_service(json!({}))]);
+        let result = wait(&api, "", "Service", "services", "hello").await;
+        let ReadinessResult::TimedOut { message, .. } = result else {
+            panic!("expected a timeout, got {result:?}");
+        };
+        assert!(message.starts_with("[K1243] "), "{message}");
+        assert!(message.contains("status.loadBalancer.ingress"), "{message}");
+        assert!(message.contains("loadBalancer.binding"), "{message}");
+
+        let api = FakeApi::new([lb_service(json!({"ingress": [{"ip": "203.0.113.7"}]}))]);
+        let result = wait(&api, "", "Service", "services", "hello").await;
+        assert_eq!(result, ReadinessResult::Ready);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_held_statefulset_times_out_with_the_pod_to_delete() {
+        let mut sts = serde_json::to_value(statefulset(json!({}), "hello-good")).unwrap();
+        sts["metadata"]["name"] = json!("hello");
+        sts["metadata"]["generation"] = json!(5);
+        sts["metadata"]["uid"] = json!("sts-uid");
+        let owned = |mut pod: Value| {
+            pod["metadata"]["ownerReferences"] = json!([{"uid": "sts-uid"}]);
+            pod
+        };
+        let held = owned(pod("hello-0", "hello-bad", crash_looping_pod_status()));
+        let api = FakeApi::new([sts.clone(), held]);
+        let result = wait(&api, "apps", "StatefulSet", "statefulsets", "hello").await;
+        let ReadinessResult::TimedOut { message, .. } = result else {
+            panic!("expected a timeout, got {result:?}");
+        };
+        assert!(
+            message.contains("Pod hello-0 is not ready and is still on revision hello-bad")
+                && message.ends_with("kubectl delete pod -n demo hello-0"),
+            "{message}"
+        );
+
+        let fine = owned(pod("hello-0", "hello-good", crash_looping_pod_status()));
+        let mut fine_status = fine.clone();
+        fine_status["status"]["containerStatuses"][0]["restartCount"] = json!(0);
+        let api = FakeApi::new([sts, fine_status]);
+        let result = wait(&api, "apps", "StatefulSet", "statefulsets", "hello").await;
+        let ReadinessResult::TimedOut { message, .. } = result else {
+            panic!("expected a timeout, got {result:?}");
+        };
+        assert!(!message.contains("kubectl delete pod"), "{message}");
+    }
 }

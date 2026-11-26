@@ -577,3 +577,29 @@ fn an_object_from_an_index_without_groups_is_found_through_discovery() {
     let two = Apis::of(&served(&["apps", "apps.example.com"], "Deployment"), &[]);
     assert_eq!(web(&two).presence, Presence::Ambiguous);
 }
+
+/// `kix status` judges a Service by its type: a ClusterIP Service has no
+/// readiness, and a `LoadBalancer` Service is not ready until its load
+/// balancer gives it an address.
+#[test]
+fn a_load_balancer_service_without_an_address_is_not_ready() {
+    let service = |spec: Value, status: Value| -> DynamicObject {
+        serde_json::from_value(json!({
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {"name": "hello", "namespace": "demo"},
+            "spec": spec,
+            "status": status,
+        }))
+        .unwrap()
+    };
+    let cluster_ip = service(json!({"type": "ClusterIP"}), json!({}));
+    assert_eq!(readiness_of(&cluster_ip), Readiness::NotApplicable);
+    let pending = service(json!({"type": "LoadBalancer"}), json!({"loadBalancer": {}}));
+    assert!(matches!(readiness_of(&pending), Readiness::NotReady(_)));
+    let served = service(
+        json!({"type": "LoadBalancer"}),
+        json!({"loadBalancer": {"ingress": [{"hostname": "lb.example.com"}]}}),
+    );
+    assert_eq!(readiness_of(&served), Readiness::Ready);
+}

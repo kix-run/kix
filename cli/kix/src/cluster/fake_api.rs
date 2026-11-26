@@ -1,7 +1,7 @@
 //! An in-memory apiserver for tests of code that takes a `kube::Client`.
 //!
 //! It serves discovery for a fixed set of kinds (ConfigMap, Secret, Namespace,
-//! CustomResourceDefinition, Deployment,
+//! Service, Pod, CustomResourceDefinition, Deployment, StatefulSet,
 //! Job, ClusterRole, Kix's Activation, and two kinds of a group served at two
 //! versions), and GET, LIST (with an equality or existence label
 //! selector), PATCH (as a JSON merge patch, on the object or its `status`),
@@ -39,6 +39,8 @@ const KINDS: &[(&str, &str, &str, &str, bool)] = &[
     ("", "v1", "ConfigMap", "configmaps", true),
     ("", "v1", "Secret", "secrets", true),
     ("", "v1", "Namespace", "namespaces", false),
+    ("", "v1", "Service", "services", true),
+    ("", "v1", "Pod", "pods", true),
     (
         "apiextensions.k8s.io",
         "v1",
@@ -52,6 +54,7 @@ const KINDS: &[(&str, &str, &str, &str, bool)] = &[
     (OTHER_JOB_GROUP, "v1alpha1", "Job", "jobs", false),
     ("batch", "v1", "Job", "jobs", true),
     ("apps", "v1", "Deployment", "deployments", true),
+    ("apps", "v1", "StatefulSet", "statefulsets", true),
     (
         "rbac.authorization.k8s.io",
         "v1",

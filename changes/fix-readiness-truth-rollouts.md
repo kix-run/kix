@@ -1,0 +1,4 @@
++++
+kind = "fixed"
++++
+While waiting for a Deployment, StatefulSet, or DaemonSet, `kix deploy` and `kix rollback` now count only ready pods from the new revision and show why the first unready pod is waiting, such as a scheduling error or a readiness probe that has not passed. Previously, a Deployment stuck on a new pod could report `2/2 ready, 2/2 updated, 1 old pod left` because Kubernetes includes old pods in the ready count; `kix status` now states when a Deployment's ready count includes old pods that are still running. When a StatefulSet rollout times out because an unready pod is still on an older revision, the error now names the pod and prints the `kubectl delete pod` command to replace it. With the default `OrderedReady` pod management policy, Kubernetes does not replace that pod on its own, even after you roll the StatefulSet back to a working version.
