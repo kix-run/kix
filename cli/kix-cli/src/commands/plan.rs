@@ -735,12 +735,10 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
         p.client().is_some(),
         &p.build.graph().cluster_name,
     );
-    // Shared orphans are listed with the prune section of `render::render_text`.
-    plan::print_checked(&p.checked, &fate, verbose);
 
-    // Where the extra work in this plan came from. Without this the reader
-    // sees a deploy of an unchanged config proposing changes, and has no way
-    // to tell why.
+    // Say where the extra work in this plan came from before the changes and
+    // orphans it explains. Without this the reader sees a deploy of an
+    // unchanged config proposing changes, and has no way to tell why.
     if !p.baseline.failed().is_empty() {
         let names: Vec<&str> = p
             .baseline
@@ -760,6 +758,9 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
             names.join(", "),
         );
     }
+
+    // Shared orphans are listed with the prune section of `render::render_text`.
+    plan::print_checked(&p.checked, &fate, verbose);
 
     output::progress_text(&render::render_text(doc));
 }
