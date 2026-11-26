@@ -474,10 +474,10 @@ in
         describe =
           id:
           widening.${id} or {
-            summary = "This policy carries the unknown reason code `${id}` in `kix.run/network-policy-widened`.";
-            fix = "";
+            summary = "Annotation `kix.run/network-policy-widened` contains unknown reason code `${id}`. Kix kept the policy and could not check whether a cluster setting narrows it.";
+            fix = "If you set `kix.run/network-policy-widened` directly on a `NetworkPolicy`, remove `${id}`.";
             fixable = false;
-            detail = "it carries the unknown reason code `${id}` in `kix.run/network-policy-widened`";
+            detail = "unknown reason code in `kix.run/network-policy-widened`";
           };
         count = n: if n == 1 then "1 network policy" else "${toString n} network policies";
       in
@@ -500,7 +500,7 @@ in
         detail = true;
         namespace = p.metadata.namespace or null;
         resource = "NetworkPolicy/${p.metadata.name}";
-        message = "allows more traffic than intended: ${
+        message = "allows broader traffic than intended: ${
           lib.concatMapStringsSep "; " (id: "${(describe id).detail} (${id})") (widenedIds p)
         }.";
       }) policies;
