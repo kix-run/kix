@@ -29,6 +29,7 @@ kix.buildCluster {
     kix.modules.experimental.monitoring
 
     {
+      # region:eksNetworkPolicy
       networkPolicy.enable = true;
       cluster.flavor.eks.networkPolicy = "vpc-cni";
       cluster.network = {
@@ -36,6 +37,7 @@ kix.buildCluster {
         nodeCidrs = [ "192.168.0.0/16" ];
         apiServer.sources = [ { cidr = "192.168.0.0/16"; } ];
       };
+      # endregion:eksNetworkPolicy
 
       instances.storage.gp3.package = kix.mkImport {
         kind = "StorageClass";
