@@ -79,6 +79,7 @@
         "new_build",
         "objects",
         "deployed_build",
+        "generation",
         "flags",
         "new_refusal",
         "new_reverted_drift",

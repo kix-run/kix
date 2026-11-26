@@ -12,6 +12,7 @@ pub mod gc;
 pub mod graph;
 pub mod graph_stream;
 pub mod list;
+pub(crate) mod lock;
 pub mod logs;
 pub mod migrate;
 pub mod operator;

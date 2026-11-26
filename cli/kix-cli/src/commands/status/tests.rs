@@ -512,6 +512,37 @@ fn the_text_output() {
     );
 }
 
+/// `kix status` names the run that holds the deploy lock, and says when it
+/// has probably stopped, but never waits for it.
+#[test]
+fn the_run_that_holds_the_lock_is_named() {
+    use kix::cluster::head::{LockView, Purpose};
+    let view = |since: i64| LockView {
+        holder: "cli-1".into(),
+        hint: "kix deploy by ana@laptop, process 7".into(),
+        purpose: Purpose::Deploy,
+        activation: Some("shop-new".into()),
+        renewed: "2026-11-26T10:00:00.000Z".into(),
+        seconds_since_renewal: Some(since),
+        probably_dead: since > 30,
+    };
+    let mut doc = document(&[], Some("vaultwarden"));
+    let cluster = doc.clusters[0].cluster.clone();
+    doc.set_locks(&BTreeMap::from([(cluster.clone(), view(4))]));
+    insta::assert_snapshot!(
+        "status_text_locked",
+        text::render(&doc, text::Detail::Packages, &two_days_ago)
+    );
+    doc.set_locks(&BTreeMap::from([(cluster, view(300))]));
+    insta::assert_snapshot!(
+        "status_text_lock_probably_dead",
+        text::render(&doc, text::Detail::Packages, &two_days_ago)
+    );
+    let json = serde_json::to_value(&doc).unwrap();
+    assert_eq!(json["clusters"][0]["lock"]["probably_dead"], true);
+    assert_eq!(json["clusters"][0]["lock"]["seconds_since_renewal"], 300);
+}
+
 #[test]
 fn the_json_output() {
     let doc = document(&[], Some("vaultwarden"));

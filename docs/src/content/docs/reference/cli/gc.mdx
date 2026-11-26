@@ -155,6 +155,29 @@ entry to the `kix.run/activations` annotation on every managed resource, which
 is why the count is capped. A record is deleted only if it has not changed
 since it was listed.
 
+## Deploy lock and version checks
+
+Before reading deployment records, `kix gc` checks the cluster's
+[deploy lock](/docs/reference/cli/deploy/#the-deploy-lock) the same way
+`kix deploy` does: if an active run holds the lock, `kix gc` stops; if the
+lock's lease has expired, `kix gc` takes it over, cleans up, and releases it.
+`kix gc` then records the lock generation alongside the deployment records
+while building the deletion plan. After you confirm, `kix gc` takes the lock
+and holds it until deletion finishes. If another run holds the lock or
+modified the cluster after `kix gc` read the records (changing the lock
+generation), `kix gc` stops without deleting anything. `kix gc --operator`
+does not take the lock.
+
+`kix gc` also stops before deleting anything if a newer minor version of Kix
+last changed the cluster, or if running `kix gc` would skip a
+[required stop](/docs/reference/cli/deploy/#required-stops). Unlike
+`kix deploy` and `kix rollback`, `kix gc` has no downgrade override:
+
+```text
+Garbage collection blocked: cluster prod was last deployed with Kix 0.9.1, and this is Kix 0.8.4.
+Nothing was deleted from cluster prod.
+```
+
 ## Examples
 
 <Command commands={[
@@ -170,7 +193,7 @@ since it was listed.
 | Code | Meaning |
 | --- | --- |
 | `0` | Nothing to collect, everything planned was deleted, `--dry-run` printed the plan, or the prompt was declined |
-| `1` | A deletion failed or timed out, or `kix gc` left a planned object in place because an undeleted object depends on it or its dependencies form a cycle; confirmation was needed on a non-interactive terminal; or a build or cluster error |
+| `1` | A deletion failed or timed out, or `kix gc` left a planned object in place because an undeleted object depends on it or its dependencies form a cycle; confirmation was needed on a non-interactive terminal; another run holds the deploy lock or modified the cluster after `kix gc` read its records; a newer minor version of Kix last changed the cluster, or `kix gc` would skip a required stop; or a build or cluster error |
 
 :::tip[Use it in a task]
 See [Garbage-collect stale resources](/docs/how-to/operate-a-cluster/garbage-collect-stale-resources/)

@@ -203,7 +203,10 @@ pub(super) fn compare(args: &Comparison, ctx: &mut CommandContext) -> Result<Exi
                 .block_on(fetch_live_manifests(&global, connection, &new_graph))?;
             clear_spinner(&spinner);
             let current = live.current.as_ref().map(activation::Record::of);
-            super::deploy::stops::warn(args.cluster, current.as_ref());
+            super::deploy::stops::warn(
+                args.cluster,
+                &kix::cluster::stops::LastWrite::of(None, current.as_ref()),
+            );
             // The current record's package index places each live object where
             // the deployed build put it. Without one, the new build does.
             let deployed = current.and_then(|record| record.package_index);

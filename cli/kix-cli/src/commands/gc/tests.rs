@@ -896,3 +896,98 @@ mod live_order_tests {
         );
     }
 }
+
+mod lock_tests {
+    use super::*;
+    use kix::cluster::fake_api::FakeApi;
+    use kix::cluster::head;
+    use serde_json::json;
+
+    fn record(name: &str, phase: &str) -> Value {
+        json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": lifecycle::RECORD_KIND,
+            "metadata": {
+                "name": name,
+                "labels": { "app.kubernetes.io/managed-by": "kix", (keys::CLUSTER_LABEL): "c" },
+            },
+            "status": { "phase": phase },
+        })
+    }
+
+    fn policy() -> RetentionPolicy {
+        RetentionPolicy {
+            keep_min: 0,
+            keep_max: 0,
+            keep_for: None,
+            now: chrono::Utc::now(),
+        }
+    }
+
+    async fn retirement(api: &FakeApi) -> RecordRetirement {
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let records = Records::open(&client, &discovery).unwrap().into_records();
+        plan_records_with(records, "c", &policy()).await.unwrap()
+    }
+
+    /// gc binds to the generation of the deploy lock it read with the
+    /// records, refuses once another run has changed the cluster since,
+    /// holds the lock as `gc`, and writes the records through it.
+    #[tokio::test]
+    async fn gc_holds_the_deploy_lock_it_read() {
+        let api = FakeApi::new([
+            record("cur", "Active"),
+            record("old", "Superseded"),
+            json!({
+                "apiVersion": keys::API_VERSION,
+                "kind": head::KIND,
+                "metadata": { "name": "c" },
+                "status": { "current": "cur", "generation": 2 },
+            }),
+        ]);
+        let client = api.client();
+        let mut stale = retirement(&api).await;
+        api.patch_object(head::KIND, "c", |o| o["status"]["generation"] = json!(3));
+        let err = stale.lock(&client, "c").await.unwrap_err();
+        assert!(err.to_string().contains("changed after this plan"), "{err}");
+
+        let mut fresh = retirement(&api).await;
+        assert_eq!(fresh.plan.retire.len(), 1);
+        let lock = fresh.lock(&client, "c").await.unwrap();
+        let held = &api.object(head::KIND, "c").unwrap()["status"]["lock"];
+        assert_eq!(held["purpose"], "gc");
+        let (retired, failed) = delete_records(&fresh).await.unwrap();
+        assert_eq!((retired, failed), (1, 0));
+        assert!(lock.wrote(), "the records were written through the lock");
+        crate::commands::lock::release(&lock).await;
+        let status = &api.object(head::KIND, "c").unwrap()["status"];
+        assert_eq!(status["generation"], 4);
+        assert_eq!(status["writer"]["program"], "cli");
+    }
+
+    /// gc refuses when a newer minor of Kix wrote to the cluster last, as
+    /// the head names it, and passes when this Kix did.
+    #[tokio::test]
+    async fn gc_by_an_older_kix_than_the_last_writer_is_refused() {
+        let head = |version: &str| {
+            json!({
+                "apiVersion": keys::API_VERSION,
+                "kind": head::KIND,
+                "metadata": { "name": "c" },
+                "status": {
+                    "current": "cur",
+                    "generation": 1,
+                    "writer": { "version": version, "program": "cli" },
+                },
+            })
+        };
+        let newer = FakeApi::new([record("cur", "Active"), head("99.0.0")]);
+        assert!(retirement(&newer).await.check_writer("c").is_err());
+        let same = FakeApi::new([
+            record("cur", "Active"),
+            head(&kix::version::running().to_string()),
+        ]);
+        assert!(retirement(&same).await.check_writer("c").is_ok());
+    }
+}

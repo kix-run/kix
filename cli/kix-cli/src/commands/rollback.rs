@@ -291,6 +291,17 @@ fn run_direct(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Resul
             .await
             .map_err(|e| miette!("{e}"))?;
         let records = Records::open_installed(&client, &discovery).map_err(|e| miette!("{e}"))?;
+        // Another run's lock is settled before the records are read, so the
+        // plan sees what a dead run's takeover left.
+        if !args.dry_run {
+            super::lock::settle(
+                &client,
+                cluster,
+                Command::Rollback.invocation(),
+                Command::Rollback.purpose(),
+            )
+            .await?;
+        }
         let current = records
             .active(cluster)
             .await
@@ -302,15 +313,24 @@ fn run_direct(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Resul
         // one that may deploy the cluster, whichever Kix built the target.
         // With `--operator`, the operator checks instead.
         // A dry run writes nothing, so it only warns.
+        let head = kix::cluster::head::read(&client, cluster)
+            .await
+            .map_err(|e| {
+                miette!(
+                    "cannot read deploy lock `ActivationHead` `{cluster}`: {}. Nothing was applied to cluster {cluster}. Check your cluster connection and grant this account `get` on `{}` if needed, then run the command again.",
+                    kix::cluster::errors::describe(&e),
+                    kix::cluster::head::crd_name()
+                )
+            })?;
+        let last = kix::cluster::stops::LastWrite::of(
+            head.as_ref().and_then(|h| h.writer()),
+            Some(&current),
+        );
         let downgrade = if args.dry_run {
-            super::deploy::stops::warn(cluster, Some(&current));
+            super::deploy::stops::warn(cluster, &last);
             None
         } else {
-            super::deploy::stops::check(
-                cluster,
-                Some(&current),
-                super::deploy::stops::Writer::Rollback,
-            )?
+            super::deploy::stops::check(cluster, &last, super::deploy::stops::Writer::Rollback)?
         };
 
         let superseded = records
@@ -370,7 +390,9 @@ fn run_direct(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Resul
                 &connected.client,
                 &p.checked,
                 &connected.last_runs,
-            ))
+                Command::Rollback,
+                connected.head.as_ref(),
+            ))?
             .is_some()
     {
         crate::say!(
@@ -477,7 +499,7 @@ async fn run_operator_async(
 ) -> Result<Exit> {
     let (client, records, connection) =
         super::operator::connect_and_verify(ctx.global.context.as_deref()).await?;
-    super::operator::require_requests(&client).await?;
+    super::operator::require_features(&client).await?;
 
     let current = records
         .active(cluster)

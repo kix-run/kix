@@ -166,6 +166,11 @@ async fn main() -> anyhow::Result<()> {
         shutdown: CancelToken::new(),
         events: k8s_events::recorder(client.clone(), std::env::var("HOSTNAME").ok()),
         deploy_retries: controller::deploy_retries(),
+        holder: kix::cluster::head::Holder::operator(
+            client.default_namespace(),
+            std::env::var("HOSTNAME").ok().as_deref(),
+        ),
+        runs: Default::default(),
     });
     tracing::info!(
         retries = ctx.deploy_retries,

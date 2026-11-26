@@ -682,6 +682,10 @@ impl DeployRecord for ScriptedOps {
         b.run().await.map_err(RecordWriteError::Scripted)
     }
 
+    async fn before_prune(&self) -> Result<(), RecordWriteError> {
+        Ok(())
+    }
+
     async fn end_partial(&self) -> Result<(), RecordWriteError> {
         self.record(Call::EndPartial);
         let b = self.end_partial.lock().unwrap().clone();

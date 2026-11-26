@@ -46,6 +46,7 @@ use kix::cluster::activation::{Record, Records};
 use kix::cluster::binding::{self, BindingError, Connection};
 use kix::cluster::cancel::CancelToken;
 use kix::cluster::graph::DeleteOrder;
+use kix::cluster::head::{self, Holder, Lock, Purpose, TakeError, WritesStopped};
 use kix::cluster::kubernetes_version;
 use kix::cluster::prune_guard::{self, Pruned, Removal, Step};
 use kix::cluster::readiness::{self, DeletePath};
@@ -130,6 +131,62 @@ pub struct Context {
     /// How many times a deploy that stopped at a failure is retried before
     /// its record is marked Failed, normally [`deploy_retries`].
     pub deploy_retries: u32,
+    /// Who the operator is on each Kix cluster's deploy lock. The id stays
+    /// the same after a restart.
+    pub holder: Holder,
+    /// One mutex per Kix cluster, so the operator runs one deploy, repair,
+    /// or teardown of a Kix cluster at a time. A lock held by its own id is
+    /// then always one a previous pod left.
+    pub runs: std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+}
+
+impl Context {
+    /// Return the mutex that orders this operator's runs on Kix cluster
+    /// `cluster`.
+    fn runs_of(&self, cluster: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.runs
+            .lock()
+            .expect("runs lock")
+            .entry(cluster.to_string())
+            .or_default()
+            .clone()
+    }
+
+    /// Take the deploy lock of Kix cluster `cluster` for `purpose`, deploying
+    /// record `activation`. Return `None`, after logging who holds it, when
+    /// another run holds the lock, so the caller tries again later.
+    async fn take(
+        &self,
+        cluster: &str,
+        purpose: Purpose,
+        activation: &str,
+    ) -> Result<Option<Lock>, OperatorError> {
+        let request = head::Request {
+            cluster: cluster.to_string(),
+            holder: self.holder.clone(),
+            purpose,
+            activation: Some(activation.to_string()),
+            expect: None,
+        };
+        let on_watch = |other: &head::LockState| {
+            tracing::info!(cluster, holder = %other.holder, hint = %other.hint, purpose = other.purpose.as_str(), "another run holds the deploy lock; watching it");
+        };
+        match head::take(&self.client, request, head::system_clock(), &on_watch).await {
+            Ok(lock) => Ok(Some(lock)),
+            Err(TakeError::Held(held)) => {
+                tracing::info!(cluster, activation, "{held}");
+                Ok(None)
+            }
+            Err(e) => Err(OperatorError::LifecycleError(e.to_string())),
+        }
+    }
+}
+
+/// Release `lock`, logging a failure. The lock then expires after its lease.
+async fn release(lock: &Lock) {
+    if let Err(e) = lock.release().await {
+        tracing::warn!(error = %e, "could not release the deploy lock; its lease will expire automatically");
+    }
 }
 
 /// Errors from the operator reconcile loop.
@@ -483,7 +540,8 @@ async fn start_queued(
     let index = match index_of(activation) {
         Ok(index) => index,
         Err(e) => {
-            let action = after_failed_attempt(activation, ctx, name, &e.to_string()).await?;
+            let action =
+                after_failed_attempt(activation, ctx, &ctx.records, name, &e.to_string()).await?;
             finish_request(ctx, name, record.request.as_deref()).await?;
             return Ok(action);
         }
@@ -533,11 +591,9 @@ async fn start_queued(
         .active(cluster)
         .await
         .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
-    if let Err(refusal) = stops::check(
-        old_active.as_ref(),
-        kix::version::running(),
-        &ctx.required_stops,
-    ) {
+    let head = head::read(&ctx.client, cluster).await?;
+    let last = stops::LastWrite::of(head.as_ref().and_then(|h| h.writer()), old_active.as_ref());
+    if let Err(refusal) = stops::check(&last, kix::version::running(), &ctx.required_stops) {
         let reason = refusal.to_string();
         tracing::warn!(name, %reason, "Refusing the Queued activation");
         ctx.records
@@ -675,7 +731,7 @@ impl Reconcile {
 /// holds nothing the operator applies.
 async fn sweep(
     activation: &DynamicObject,
-    ctx: &Context,
+    client: &Client,
     name: &str,
 ) -> Result<Option<LivePlan>, OperatorError> {
     let path = source_path(activation).ok_or(OperatorError::MissingSourcePath)?;
@@ -703,25 +759,67 @@ async fn sweep(
         return Ok(None);
     }
 
-    LivePlan::sweep(&ctx.client, activation, &managed_manifests)
+    LivePlan::sweep(client, activation, &managed_manifests)
         .await
         .map(Some)
         .map_err(operator_error)
 }
 
-/// Load desired state, fetch live state, diff, wave-plan, and apply.
+/// Take the Kix cluster's deploy lock, then load desired state, fetch live
+/// state, diff, wave-plan, and apply. A repair holds the lock as a repair,
+/// which gives way to a run that waits for it. When another run holds the
+/// lock, try again after [`QUEUED_REQUEUE_INTERVAL`].
 async fn run_reconcile(
     activation: &DynamicObject,
     ctx: &Context,
     name: &str,
     reconcile: Reconcile,
 ) -> Result<Action, OperatorError> {
+    // A record with no cluster label uses the head named after itself.
+    let cluster = cluster_of(activation)
+        .filter(|c| !c.is_empty())
+        .unwrap_or_else(|| name.to_string());
+    let runs = ctx.runs_of(&cluster);
+    let _one_at_a_time = runs.lock().await;
+    let purpose = if reconcile == Reconcile::Repair {
+        Purpose::Repair
+    } else {
+        Purpose::Deploy
+    };
+    let Some(lock) = ctx.take(&cluster, purpose, name).await? else {
+        return Ok(Action::requeue(QUEUED_REQUEUE_INTERVAL));
+    };
+    let lock = Arc::new(lock);
+    let result = run_locked(activation, ctx, name, reconcile, &lock).await;
+    let yielded = lock.stopped() == Some(WritesStopped::Yielded);
+    release(&lock).await;
+    if yielded {
+        tracing::info!(
+            name,
+            "Yielded the deploy lock to a waiting run; drift repair will retry later"
+        );
+        return Ok(Action::requeue(QUEUED_REQUEUE_INTERVAL));
+    }
+    result
+}
+
+/// Carry out [`run_reconcile`] once the operator holds `lock`. Every write
+/// goes through the lock's guarded client.
+async fn run_locked(
+    activation: &DynamicObject,
+    ctx: &Context,
+    name: &str,
+    reconcile: Reconcile,
+    lock: &Arc<Lock>,
+) -> Result<Action, OperatorError> {
+    let client = lock.guarded(&ctx.client);
+    let records = ctx.records.through(&client);
     let manage_lifecycle = reconcile.manages_lifecycle();
-    let mut plan = match sweep(activation, ctx, name).await {
+    let mut plan = match sweep(activation, &client, name).await {
         Ok(Some(plan)) => plan,
         Ok(None) => return Ok(Action::requeue(requeue_interval())),
         Err(e) if reconcile.counts_failed_runs() => {
-            return after_failed_attempt(activation, ctx, name, &e.to_string()).await;
+            return after_failed_attempt(activation, ctx, &records, name, &e.to_string()).await;
         }
         Err(e) => return Err(e),
     };
@@ -790,8 +888,10 @@ async fn run_reconcile(
             keys::API_VERSION,
         )) as Arc<dyn DeployObserver>,
     ]));
-    let result = plan.run(manage_lifecycle, config, observer).await;
-    after_run(activation, ctx, name, reconcile, result).await
+    let result = plan
+        .run(lock.clone(), manage_lifecycle, config, observer)
+        .await;
+    after_run(activation, ctx, &records, name, reconcile, result).await
 }
 
 /// Decide what follows a `reconcile` run of record `name` that ended with
@@ -799,6 +899,7 @@ async fn run_reconcile(
 async fn after_run(
     activation: &DynamicObject,
     ctx: &Context,
+    records: &Records,
     name: &str,
     reconcile: Reconcile,
     result: Result<DeployResult, DeployError>,
@@ -823,7 +924,7 @@ async fn after_run(
             tracing::error!(name, error = %e, "Reconciliation failed");
             Err(OperatorError::ReconcileError(stop_cause(&e)))
         }
-        Err(e) => after_failed_attempt(activation, ctx, name, &stop_cause(&e)).await,
+        Err(e) => after_failed_attempt(activation, ctx, records, name, &stop_cause(&e)).await,
     }
 }
 
@@ -839,13 +940,13 @@ async fn after_run(
 async fn after_failed_attempt(
     activation: &DynamicObject,
     ctx: &Context,
+    records: &Records,
     name: &str,
     cause: &str,
 ) -> Result<Action, OperatorError> {
     let lifecycle =
         |e: kix::cluster::activation::RecordsError| OperatorError::LifecycleError(e.to_string());
-    let failed_before = ctx
-        .records
+    let failed_before = records
         .get(name)
         .await
         .map_err(lifecycle)?
@@ -884,7 +985,7 @@ async fn after_failed_attempt(
             return Ok(Action::await_change());
         }
     } else {
-        ctx.records
+        records
             .fail_attempt(name, attempts, cause, false)
             .await
             .map_err(lifecycle)?;
@@ -994,7 +1095,23 @@ async fn handle_delete(
             let mut order = DeleteOrder::of_manifests(&manifests);
             order.retain(|rid| all_rids.contains(rid));
 
-            let deleted = delete_closure(&ctx.client, cluster, name, order, &ctx.shutdown).await;
+            // A record with no cluster label uses the head named after
+            // itself.
+            let head_of = if cluster.is_empty() { name } else { cluster };
+            let runs = ctx.runs_of(head_of);
+            let _one_at_a_time = runs.lock().await;
+            let Some(lock) = ctx.take(head_of, Purpose::Teardown, name).await? else {
+                return Ok(Action::requeue(QUEUED_REQUEUE_INTERVAL));
+            };
+            let deleted = delete_closure(
+                &lock.guarded(&ctx.client),
+                cluster,
+                name,
+                order,
+                &ctx.shutdown,
+            )
+            .await;
+            release(&lock).await;
             if let Err(e @ OperatorError::DeletionUnfinished { .. }) = &deleted
                 && !ctx.shutdown.is_cancelled()
             {
@@ -1261,6 +1378,8 @@ mod tests {
             shutdown: CancelToken::new(),
             events: crate::k8s_events::recorder(api.client(), None),
             deploy_retries: DEFAULT_DEPLOY_RETRIES,
+            holder: Holder::operator("kix", None),
+            runs: Default::default(),
         });
         let activation: DynamicObject = serde_json::from_value(queued).unwrap();
         reconcile_activation(Arc::new(activation), ctx.clone())
@@ -1353,6 +1472,8 @@ mod tests {
             shutdown: CancelToken::new(),
             events: crate::k8s_events::recorder(api.client(), None),
             deploy_retries: DEFAULT_DEPLOY_RETRIES,
+            holder: Holder::operator("kix", None),
+            runs: Default::default(),
         });
         let activation: DynamicObject = serde_json::from_value(record).unwrap();
         let err = reconcile_activation(Arc::new(activation), ctx.clone())
@@ -1394,6 +1515,8 @@ mod tests {
             shutdown: CancelToken::new(),
             events: crate::k8s_events::recorder(api.client(), None),
             deploy_retries: DEFAULT_DEPLOY_RETRIES,
+            holder: Holder::operator("kix", None),
+            runs: Default::default(),
         });
         let name = record["metadata"]["name"].as_str().unwrap().to_string();
         let activation: DynamicObject = serde_json::from_value(record).unwrap();
@@ -1987,6 +2110,8 @@ mod tests {
                 shutdown: CancelToken::new(),
                 events: crate::k8s_events::recorder(api.client(), None),
                 deploy_retries: DEFAULT_DEPLOY_RETRIES,
+                holder: Holder::operator("kix", None),
+                runs: Default::default(),
             })
         });
         assert_eq!(
@@ -2047,7 +2172,52 @@ mod tests {
             shutdown: CancelToken::new(),
             events: crate::k8s_events::recorder(api.client(), None),
             deploy_retries: retries,
+            holder: Holder::operator("kix", None),
+            runs: Default::default(),
         }
+    }
+
+    /// The operator takes a Kix cluster's deploy lock as itself. When a live
+    /// run from a machine holds it, the operator waits for its next
+    /// renewal, then leaves the lock alone and tries again later. A lock its
+    /// own previous pod left is taken over at once.
+    #[tokio::test(start_paused = true)]
+    async fn the_operator_waits_for_a_live_lock_and_takes_back_its_own() {
+        let api = FakeApi::new([]);
+        let ctx = operator(&api, DEFAULT_DEPLOY_RETRIES).await;
+        let cli = head::take(
+            &ctx.client,
+            head::Request {
+                cluster: "a".into(),
+                holder: Holder::cli("kix deploy"),
+                purpose: Purpose::Deploy,
+                activation: Some("a-new".into()),
+                expect: None,
+            },
+            head::system_clock(),
+            &|_| {},
+        )
+        .await
+        .unwrap();
+        assert!(
+            ctx.take("a", Purpose::Repair, "a-old")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        cli.release().await.unwrap();
+
+        let mine = ctx
+            .take("a", Purpose::Deploy, "a-new")
+            .await
+            .unwrap()
+            .unwrap();
+        // The pod stops without releasing; the next pod has the same id.
+        drop(mine);
+        let started = tokio::time::Instant::now();
+        let again = ctx.take("a", Purpose::Deploy, "a-new").await.unwrap();
+        assert!(again.is_some());
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     /// Hand `result` of a `reconcile` run of record `a-new` to the operator,
@@ -2060,7 +2230,7 @@ mod tests {
     ) -> (Result<Action, OperatorError>, Value) {
         let record: DynamicObject =
             serde_json::from_value(api.object("Activation", "a-new").unwrap()).unwrap();
-        let answer = after_run(&record, ctx, "a-new", reconcile, result).await;
+        let answer = after_run(&record, ctx, &ctx.records, "a-new", reconcile, result).await;
         let status = api.object("Activation", "a-new").unwrap()["status"].clone();
         (answer, status)
     }

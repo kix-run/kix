@@ -1047,12 +1047,38 @@ fn fence_for(body: &str) -> String {
     "`".repeat(longest.max(2) + 1)
 }
 
+/// Say who held the deploy lock when the plan read it, if anyone did.
+fn write_lock_holder(out: &mut String, plan: &Plan) -> fmt::Result {
+    let Some(lock) = plan.head.as_ref().and_then(|h| h.lock.as_ref()) else {
+        return Ok(());
+    };
+    writeln!(out, "#### :lock: Another run holds the deploy lock")?;
+    writeln!(out)?;
+    writeln!(out, "{}", lock_holder_line(lock))?;
+    writeln!(out)
+}
+
+/// Return the line a plan prints for the run that holds the deploy lock.
+/// While a run other than the operator's drift repair holds it, the plan
+/// leaves out what earlier failed or partial deploys applied, because that
+/// run may still be applying objects, and the line says so.
+pub(crate) fn lock_holder_line(lock: &kix::cluster::head::LockView) -> String {
+    let mut line = format!("{}.", lock.describe());
+    if lock.purpose != kix::cluster::head::Purpose::Repair {
+        line.push_str(
+            " While that run holds the lock, this plan leaves out resources from earlier failed or partial deploys.",
+        );
+    }
+    line
+}
+
 /// Render the Markdown plan sections that follow the package diff.
 pub fn render_markdown(plan: &Plan) -> String {
     written(|out| write_markdown(out, plan))
 }
 
 fn write_markdown(out: &mut String, plan: &Plan) -> fmt::Result {
+    write_lock_holder(out, plan)?;
     write_left_alone(out, plan, true)?;
     write_warnings_markdown(out, plan)?;
     let conflicts = plan.conflicts.items();
@@ -1306,6 +1332,33 @@ mod tests {
         );
         plan.drift = Checked::found(drift);
         plan
+    }
+
+    /// A plan that read a held lock says who holds it, and, past the lease
+    /// by this machine's clock, that the run has probably stopped.
+    #[test]
+    fn a_plan_names_the_run_that_holds_the_lock() {
+        use kix::cluster::head::{LockView, Purpose};
+        let view = |since: i64| LockView {
+            holder: "cli-1".into(),
+            hint: "kix deploy by ana@laptop, process 7".into(),
+            purpose: Purpose::Deploy,
+            activation: Some("prod-abc".into()),
+            renewed: "2026-11-26T10:00:00.000Z".into(),
+            seconds_since_renewal: Some(since),
+            probably_dead: since > 30,
+        };
+        let mut plan = plan_with(Vec::new());
+        plan.head = Some(kix::plan::document::PlanHead {
+            generation: 4,
+            current: Some("prod-old".into()),
+            lock: Some(view(6)),
+        });
+        insta::assert_snapshot!("lock_holder_live", render_markdown(&plan));
+        plan.head.as_mut().unwrap().lock = Some(view(140));
+        insta::assert_snapshot!("lock_holder_probably_dead", render_markdown(&plan));
+        plan.head.as_mut().unwrap().lock = None;
+        assert!(!render_markdown(&plan).contains("deploy lock"));
     }
 
     /// An object being deleted is listed as a warning, with what its delete

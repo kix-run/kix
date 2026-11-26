@@ -70,6 +70,10 @@ pub struct ClusterStatus {
     /// deploy leaves the previous record current, so `deploy` and
     /// `packages` describe that record.
     pub failed_deploy: Option<FailedDeployStatus>,
+    /// The run that holds the cluster's deploy lock, or `null` when none
+    /// does or this account may not read the lock. `kix status` never waits
+    /// for the lock and never takes it.
+    pub lock: Option<kix::cluster::head::LockView>,
     pub summary: Summary,
 }
 
@@ -504,7 +508,18 @@ fn cluster_status(
         packages,
         leaving,
         failed_deploy,
+        lock: None,
         summary,
+    }
+}
+
+impl StatusDocument {
+    /// Name the run that holds each Kix cluster's deploy lock, from `locks`
+    /// keyed by cluster.
+    pub fn set_locks(&mut self, locks: &BTreeMap<String, kix::cluster::head::LockView>) {
+        for c in &mut self.clusters {
+            c.lock = locks.get(&c.cluster).cloned();
+        }
     }
 }
 

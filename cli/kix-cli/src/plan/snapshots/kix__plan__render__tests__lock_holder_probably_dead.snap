@@ -1,0 +1,9 @@
+---
+source: kix-cli/src/plan/render.rs
+expression: render_markdown(&plan)
+---
+#### :lock: Another run holds the deploy lock
+
+kix deploy by ana@laptop, process 7 holds the deploy lock (deploy of prod-abc), renewed 140s ago. Its 30s lease has expired, so that run has likely stopped; the next command that changes the cluster will take over the lock. While that run holds the lock, this plan leaves out resources from earlier failed or partial deploys.
+
+> Made by a read-only comparison with the cluster. Not checked: admission webhooks, admission policies, field ownership conflicts, and invalid objects; `kix plan` checks them.

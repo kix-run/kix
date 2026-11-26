@@ -1,9 +1,11 @@
 # 175: One home for what a deploy did
 
-**Status:** Draft, second version. Rewritten on 2026-11-24 after a red-team review (section 9).
+**Status:** Accepted, third version. Rewritten on 2026-11-24 after a red-team review (section 9). Brought up to date on 2026-11-26 for `kix deploy --only`, with the build order (section 10). Part 1 is built (branch `head-lock`, 2026-11-26); section 10 says what, and section 4.4 marks where it differs.
 **Related:** `122_runtime_content_drift.md` (the applied hash), `81_deploy_as_lifecycle_engine.md`, `55_shared_resource_ownership.md`, `archive/150_scope_managed_sweep_to_one_cluster.md` (several Kix clusters on one Kubernetes cluster), `archive/157_kix_plan_primary_preview.md` (the plan), `interesting_thoughts/54_activation_signing.md`, `housekeeping/reviews/2026-11-23.md` (themes 4 and 5)
 
-Type: design doc. It reads code at `origin/main` on 2026-11-24. Nothing here is built.
+Type: design doc. It reads code at `origin/main` on 2026-11-26, with the
+branch that adds `kix deploy --only` and the `Partial` phase. Section 10 says
+what is built.
 
 ## 1. Summary
 
@@ -58,12 +60,18 @@ PackageInstance kind is not changed.
   150 KiB. With names it holds about 1,200 objects. Past that Kix drops the
   names, and past about 3,600 objects it stores no list.
 - **Nothing orders two deploys**
-  (`housekeeping/2026-09-28-kept-orphans-list-last-finalize-wins.md`,
-  `housekeeping/2026-11-11-stale-deploying-record-never-cleared.md`). The
-  deploy reference says a second deploy is refused, and the code does not
-  refuse it.
+  (housekeeping entries `2026-09-28-kept-orphans-list-last-finalize-wins`
+  and `2026-11-11-stale-deploying-record-never-cleared`, both deleted when
+  part 1 was built). The deploy reference said a second deploy is refused,
+  and the code did not refuse it.
 - **The cluster does not know which Kix wrote it last**
-  (`housekeeping/2026-11-20-record-names-the-builder-not-the-writer.md`).
+  (`2026-11-20-record-names-the-builder-not-the-writer`, deleted with part 1).
+- **A deploy of part of a build makes two deploys at once likely.** With
+  `kix deploy --only`, two people may each deploy one instance of the same
+  build. Both runs write the same record, and the last to finish sets its
+  phase and `status.partial`
+  (`2026-11-26-two-deploys-of-one-cluster-are-not-blocked`, deleted with
+  part 1).
 - **Commands disagree.** `kix deploy` compares two builds. The operator and
   gc read the notes on live objects. `kix plan --read-only` compares a
   filtered view of live objects.
@@ -89,7 +97,13 @@ PackageInstance kind is not changed.
    deployed.
 10. The first deploy by the new Kix removes the two old notes from every
     object (section 7). Pods of operators that copy annotations restart once.
-11. The first of the two releases is a required stop (section 7).
+11. One release carries the whole design (Adam, 2026-11-26). An earlier
+    version split it in two so that every project passed through a Kix whose
+    `kix gc` refuses. Kix has two users of earlier releases, so they are told
+    instead (section 7).
+12. A deploy of part of a build ends with its record in its own phase,
+    `Partial` (Adam, 2026-11-26). This design treats a `Partial` record as it
+    treats a `Failed` one, except where it says otherwise.
 
 Decision 1 reverses a rule the CLI states today: live state is read "never to
 decide" (`cli/README.md`, "Baseline: what a plan compares against"). That
@@ -152,18 +166,25 @@ cluster-level revision.
 - **An object belongs to a record** when one of the record's revisions names
   it.
 - **Which records keep revisions.** The current record, the record a lock
-  holder is deploying, a queued record, and each `Failed` record until a
-  later deploy finishes and takes in what it left. A `Superseded` record
+  holder is deploying, a queued record, and each `Failed` or `Partial` record
+  until a later deploy finishes and takes in what it left. A `Superseded` record
   keeps none. A rollback to it writes its revisions again from its build.
 - **Kept orphans.** A deploy that finishes without pruning leaves objects
   that the new build no longer makes. The new record lists them in one more
   revision, the kept orphans: the ones the deploy left, plus the ones the
   record before it already listed that are still live. This replaces
   `status.orphansKeptFrom`, which names whole builds.
-- **An orphan** is a live object that a `Failed` record or the kept-orphans
-  revision names and that the current record's instances do not.
+- **An orphan** is a live object that a `Failed` record, a `Partial` record,
+  or the kept-orphans revision names and that the current record's instances
+  do not.
 - **Which Kix cluster an object belongs to** is read from the same records:
-  current, in flight, queued, `Failed`, and the kept orphans.
+  current, in flight, queued, `Failed`, `Partial`, and the kept orphans.
+- **A `Partial` record** names a revision for every instance of its build,
+  like any record. `status.partial.only` stays the list of instances the
+  deploys with `--only` applied in full. The applied hashes cannot replace
+  it: an instance the build did not change has them too. A second deploy
+  with `--only` of the same build adds to the list while it holds the lock,
+  so the two runs no longer race.
 - **A reader that finds a named revision missing** refuses to compute orphans
   and refuses to prune. It says which revision is missing. A lock holder with
   the build creates it again, with the same name.
@@ -190,8 +211,10 @@ A plan decides with three rules, in this order:
 
 1. **The live build hash differs from the new build's hash, or the object is
    missing: apply.** The records supply only the label: no label for an
-   intended change, "left by a failed deploy" when a `Failed` record's
-   revision names the live hash, and "left by a deploy with failures" when a
+   intended change, "applied by deploy record X" when a `Failed` or
+   `Partial` record's revision names the live hash (the plan prints this
+   label today, from the record's build), and "left by a deploy with
+   failures" when a
    `Degraded` record names an object it did not reach.
 2. **The applied hash is missing: apply and record it,** with its own label.
    It is never read as "in sync". This covers a run that died between an
@@ -211,51 +234,125 @@ One object per Kix cluster, cluster-wide, named after the Kix cluster.
 | Field | Meaning |
 |---|---|
 | `status.current` | Name of the record the cluster runs. |
-| `status.generation` | A counter that rises at each finish. A plan binds to this value. |
+| `status.generation` | A counter that rises each time a run that wrote to the cluster releases the lock: a finish, a deploy with `--only` that ends `Partial`, a failed run, a prune, or a gc. A plan binds to this value. |
 | `status.lock.holder` | An id for the run, with a hint a person can read. The operator's id survives a restart of its pod. |
 | `status.lock.activation` | The record the holder is deploying. |
-| `status.lock.renewed`, `durationSeconds` | Lease values. The holder renews every third of the duration. |
+| `status.lock.renewed`, `durationSeconds` | Lease values. The duration is 30 seconds. The holder renews every 10 seconds. |
+| `status.lock.purpose` | `deploy`, `rollback`, `gc`, `migrate`, or `repair`. |
+| `status.lock.waiting` | The id of a run that waits for a repair to give up the lock. |
 | `status.writer` | The Kix version and program (CLI or operator) that last finished a write to the cluster. |
 
 Rules:
 
 - **Every write uses the object's `resourceVersion` as a precondition.**
   Kubernetes then refuses the second of two writers.
-- **Every command that changes objects takes the lock first:** deploy,
-  rollback, gc, prune, and migrate. `kix deploy --operator` is the one
-  exception: it only queues a request, and the operator takes the lock.
+- **Every command that changes objects takes the lock first:** deploy
+  (with or without `--only`), rollback, gc, prune, and migrate. `kix deploy
+  --operator` is the one exception: it only queues a request, and the
+  operator takes the lock.
+- **The operator's repair gives way.** A repair holds the lock with the
+  purpose `repair`. A run that finds such a holder writes its own id to
+  `status.lock.waiting`. The repair reads the head before each object it
+  applies, and releases the lock when `waiting` is set. A repair does not
+  change `status.writer` or `status.generation`.
 - **A second run watches before it decides.** One read cannot tell a live
   lock from a dead one without agreed clocks. The run watches for up to one
-  lease. If the holder renews, the run refuses and names the holder. If
-  nothing renews, it takes over. Kubernetes' own leader election measures
-  expiry this way.
+  lease. If the holder renews, the run refuses and names the holder, its
+  purpose, and the record it is deploying. If nothing renews, it takes over.
+  Kubernetes' own leader election measures expiry this way. A live holder
+  renews within 10 seconds, so a refusal takes at most that long, and a
+  takeover takes 30.
 - **Taking over a dead lock.** If the dead run was deploying the record that
   is already current, the takeover only clears the lock. If the new holder is
   about to deploy the same record, it continues it. Otherwise it marks the
   dead run's record `Failed`.
 - **The holder stops itself.** It notes when it last renewed and sends no
-  apply, status write, or delete once that time plus a margin has passed. The
-  clock must count time while the machine sleeps, since a closed laptop is
-  the likely pause. The holder renews immediately before it prunes and checks
+  apply, status write, or delete once 20 seconds have passed since then,
+  which is 10 seconds before another run may take over. The clock must count
+  time while the machine sleeps, since a closed laptop is the likely pause.
+  No one clock does that on every system, so the holder measures with the
+  monotonic clock and with the wall clock and uses the longer of the two. The holder renews immediately before it prunes and checks
   the deadline before each delete.
+- **A held lock is settled before the plan** (added when part 1 was built).
+  A command that will take the lock first deals with one another run holds,
+  before it reads the state it plans from: it refuses a live holder at once,
+  and takes a dead holder's lock over with the cleanup below, raises the
+  generation, and releases it. Only then does it plan. Without this, every
+  takeover refused its own run for the generation it had just raised.
 - **A plan is bound to `status.generation`.** A plan is shown and confirmed
-  before the lock is taken. The run refuses if the generation has moved.
+  before the lock is taken. The run refuses if the generation has moved. A
+  saved plan stores the generation beside what it binds to today.
+- **A read never waits.** `kix status` and `kix plan` print the holder, its
+  purpose, the record, and how long ago it renewed. When that is longer than
+  the lease by this machine's clock, they say the run has probably died and
+  that the next deploy will take over. They do not decide it.
+- **The head's CRD is part of the Kix program, not of the build.** The CLI
+  and the operator create it when it is absent, before they take the lock.
+  A rollback to a build from before this design, and an Activation applied
+  by hand, then need nothing from the build. The operator's role gains
+  `create` on CustomResourceDefinitions for this.
+- **An Activation with no `kix.run/cluster` label** uses the head named
+  after the Kix cluster it is read as today, which is its own name.
 - **The checks for required stops and for an older Kix read `status.writer`**
   (`cli/kix/src/cluster/stops.rs`). `kix gc` gains the check, which it lacks
   today.
 - **When the head and the phases disagree,** the head is right when it was
-  written after the records. If the record that is current by phase has no
-  revision map, an older Kix deployed after the head was written. Kix then
-  treats the Kix cluster as not migrated and rebuilds the head (section 7).
+  written after the records. Two cases show that it was not. In the first,
+  the record `status.current` names is `Superseded` or gone while another
+  record is current by phase. In the second, built with the revisions, the
+  record that is current by phase has no revision map. In both an older Kix
+  deployed after the head was written. Kix then treats the Kix cluster as
+  not migrated and rebuilds the head (section 7). A head with no `status`,
+  as after a restore from a backup, is rebuilt the same way. When no record
+  has a phase either, the Kix cluster has no current record, as today.
 
 The phases on records stay as history and for older readers.
+
+**Where part 1 differs from the rules above** (built 2026-11-26):
+
+- **No status subresource.** The head's CRD has none, so creating the head
+  writes the lock in the same request, and every write is a PUT of the
+  whole object with its `resourceVersion`. The `status.*` paths are as in
+  the table.
+- **`status.lock.hint`** is a field of its own beside `holder`, and the
+  purposes include **`teardown`**, the operator deleting a deleted record's
+  objects.
+- **Step 8 keeps the lock.** The commit writes `current`, `generation`, and
+  `writer` and leaves the lock held, and the run releases it after step 9,
+  so every write of a run is under its lock. A run that dies between the
+  commit and the release leaves a lock whose record is current, which the
+  next run clears (the first takeover rule), and phases it repairs.
+- **A takeover raises the generation**, unless the new holder continues
+  the dead run's record or the dead run was a repair. The dead run may have
+  written, and a plan made while it held the lock did not see that. This
+  includes the case where the dead run deployed the current record, which
+  the rules above say only clears the lock.
+- **Correcting the head or the phases raises the generation.** Repairing
+  the phases from the head does, because a plan read the old phases.
+  Rebuilding a head that had a `status` does too (an older Kix deployed),
+  and forgets `writer`, so the writer checks read the current record as
+  before. Creating the head, or rebuilding one with no `status`, does not.
+- **A plan made with `--offline` binds to no generation.** It read nothing
+  from the cluster. The check of the cached build against the current
+  record still runs once it connects.
+- **The operator runs one job per Kix cluster at a time** (an in-process
+  mutex), so a lock held by its own stable id (`kix-operator/<namespace>`)
+  is always one its previous pod left, and is taken over at once.
+- **A held lock is settled before planning**, as the rule above now says,
+  and a takeover raises the generation once. The plan warns about a
+  `Deploying` record only when no lock names a run, and the lock's holder
+  line says when the plan leaves out what failed deploys applied.
+- **A repair gives way on its next write or renewal.** It reads the head
+  before each write, and its renewal every 10 seconds also sees `waiting`.
+  A run that waits gives up after 60 seconds of a repair that keeps
+  renewing.
 
 ### 4.5 One deploy, step by step
 
 | Step | Writes | If the run dies here |
 |---|---|---|
 | 1. Create the head's CRD if it is absent | One CRD | Nothing to repair |
-| 2. Take the lock, check `status.writer` and `status.generation`, then update Kix's CRDs | Head, CRDs | The lock expires |
+| 2. Take the lock, check `status.writer` and `status.generation`, then update Kix's CRDs. A lock another run held was settled before the plan, so this take normally finds none. | Head, CRDs | The lock expires |
 | 3. Create the record, phase `Deploying`. Then send a create for every revision it names and accept "already exists". | Record, revisions | The next run takes over as section 4.4 says, and sends the creates again |
 | 4. Apply each changed object, in dependency order | One write per object | Objects it reached carry its build hash. Rule 1 or 2 of section 4.3 applies them again. |
 | 5. Write `status.applied` on each revision whose objects were applied | One write per changed instance | Some applied hashes are missing. Rule 2 applies and records them. |
@@ -265,6 +362,13 @@ The phases on records stay as history and for older readers.
 | 9. Set the phases, and delete the revisions no longer needed | Records, revisions | The next run repairs the phases from the head and deletes them |
 
 Step 8 is the one point where the deploy becomes current.
+
+A deploy with `--only` takes steps 1 to 5 for the objects it selected. It
+never prunes. In place of steps 7 to 9 it sets the record's phase to
+`Partial` with `status.partial`, then raises `generation`, sets `writer`,
+and releases the lock in one write to the head. `current` does not change.
+If the run dies before that write, the next run takes over and marks the
+record `Failed`, as for any deploy.
 
 ### 4.6 How each command reads
 
@@ -506,11 +610,12 @@ and one list per kind.
   migrates again. The cluster-state fixtures gain this case.
 - **An older Kix that runs `kix gc` after the new one** is not refused today.
   With one Kix cluster on the Kubernetes cluster, the older gc counts objects
-  that name no record as its own. So this ships as two releases. The first
-  adds the head, the lock, and the writer check in `kix gc`, and it is a
-  required stop. The second adds revisions and removes the notes. Every
-  project then passes through a Kix whose gc refuses. A Kix older than the
-  first release, run from an old checkout, is still not refused.
+  that name no record as its own, and would delete live objects once the
+  notes are gone. Two releases, the first a required stop whose gc refuses,
+  would close this for every project that upgrades in order. It would not
+  stop a Kix from an old checkout. With two users of earlier releases, one
+  release ships, and its change record says not to run an older `kix gc`
+  on a cluster this Kix has deployed.
 - **The operator.** An older operator beside a new CLI applies its whole
   build on every requeue and writes the notes back. The operator is upgraded
   before the first deploy by the new CLI, and the new CLI refuses when the
@@ -525,8 +630,14 @@ and one list per kind.
 
 Nothing is waiting for Adam.
 
+Settled on 2026-11-26, in section 4.4: the lease duration and the holder's
+margin (was question 3), a restore that drops `status` (4), what a read
+shows while a lock may be dead (5), an Activation with no cluster label (6),
+who installs the head's CRD (7, for the head; the revision CRD is open until
+part 2), and what a saved plan binds to (9).
+
 Settled on 2026-11-24: the old notes are removed on the first deploy
-(decision 10), the first release is a required stop (decision 11), the
+(decision 10), the
 field manager test comes first (decision 6), the
 repair takes the lock (decision 7), no revision history (decision 8), and an
 older `kix gc` is stopped (decision 9). The repair yields to a waiting deploy
@@ -539,18 +650,13 @@ To settle by reading or testing before any code:
    removed. The rest of the field manager test passed (section 4.7).
 2. Measure on a cluster larger than 334 objects. The sizes and timings in
    section 4.8 come from one small cluster on kind.
-3. Decide the lease duration and the holder's margin.
-4. Say what the next deploy does after a restore that drops `status`: how
-    the head finds `current` when no record has a phase.
-5. Say what `kix status` and `kix plan` show when a record is `Deploying`
-    and the lock may be dead, since one read cannot tell.
-6. Say which head an Activation with no `kix.run/cluster` label uses. It
-    takes its own name as the Kix cluster today.
-7. Say who installs the two CRDs on a cluster that only the operator
-    deploys. The operator leaves CRDs out of its reconcile.
-8. Find the new home for the cleanup of retired annotation keys
+3. Say who installs the revision CRD on a cluster that only the operator
+   deploys. The operator leaves CRDs out of its reconcile.
+4. Find the new home for the cleanup of retired annotation keys
    (section 4.6).
-9. Confirm that a saved plan binds to nothing but what section 4.4 lists.
+5. Say what an older Kix does with a `Partial` record, which it does not
+   know (`housekeeping/2026-11-26-older-kix-ignores-a-partial-record.md`).
+   The head's `status.writer` lets a later Kix see it. An older one cannot.
 
 Not in this document: the planner itself (review theme 4), replacing an
 object that cannot change in place (theme 6), and readiness (theme 7). Each
@@ -584,3 +690,47 @@ Two claims of the first version were only half right. A deploy writes to
 every unchanged object only when a new build finishes. The record's list
 repeats the note only when the list exists, which it does not past 150 KiB
 or for a record the operator made from a hand-applied Activation.
+
+## 10. Build order
+
+The work is two pull requests in one release. The lock needs none of the
+tests that the revisions wait for, so it is built first.
+
+**Part 1: the head and the lock.** Built on 2026-11-26. The module is
+`cli/kix/src/cluster/head/`; `cli/README.md` ("Deploy lock") describes it.
+The one write guard is the `kube::Client` that `Lock::guarded` returns:
+the engine, gc, migrate, and records write through it. Not built in part 1:
+the operator's request bookkeeping on records before it takes the lock
+(`housekeeping/2026-11-26-operator-request-bookkeeping-outside-the-lock.md`),
+clearing a record a run before the lock left `Deploying`
+(`housekeeping/2026-11-26-deploying-record-from-before-the-lock-stays.md`),
+and updating the head's CRD in a later release
+(`housekeeping/2026-11-26-head-crd-is-never-updated.md`). `kix gc
+--operator` takes no lock, as the other `--operator` commands.
+
+- The `ActivationHead` kind, created by the CLI and the operator.
+- The lock, for deploy, rollback, gc, prune, migrate, the operator's
+  deploys, and its repair. The holder's deadline. The takeover rules.
+- `status.current`, `status.generation`, and `status.writer`. Plans and
+  saved plans bind to the generation. The checks for a required stop and
+  for an older Kix read the writer, and `kix gc` gains them.
+- The first run by this Kix creates the head from the phases. Phases are
+  still written, and the head is rebuilt when an older Kix wrote after it.
+- `kix status` and `kix plan` show the holder.
+- The operator announces the feature, and the CLI refuses an operator
+  that does not.
+
+Part 1 changes nothing about the notes on objects, the package index, the
+baseline of a plan, or the prune guard between Kix clusters. Requirements 1
+and 2 of section 3 are not met until part 2.
+
+**Part 2: revisions.** Not started. Before any code: questions 1 to 4 of
+section 8.
+
+- The `PackageInstanceRevision` kind, the revision map on records, and the
+  kept-orphans revision.
+- Applied hashes in revision status, and the three rules of section 4.3 as
+  the one planner.
+- One field manager per Kix cluster, and the prune guard that reads it.
+- The first deploy removes the two notes from every object.
+

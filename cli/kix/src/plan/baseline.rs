@@ -647,9 +647,13 @@ async fn load_failed_unless_in_flight(
     report: &dyn Fn(PlanEvent<'_>),
     live: Option<&LiveClosures>,
 ) -> FailedBaseline {
-    if let Some(record) = deploy_in_flight(records, cluster).await {
-        report(PlanEvent::DeployInFlight(&record));
-        return FailedBaseline::default();
+    match deploy_in_flight(records, cluster).await {
+        InFlight::Locked => return FailedBaseline::default(),
+        InFlight::Unlocked(record) => {
+            report(PlanEvent::DeployInFlight(&record));
+            return FailedBaseline::default();
+        }
+        InFlight::No => {}
     }
     load_failed(records, build, cluster, report, live).await
 }
@@ -1033,23 +1037,46 @@ pub fn sync_kept_roots(cluster: &str, recorded: &[KeptOrphanSource]) {
     crate::eval::store::sync_kept_roots(cluster, &listed);
 }
 
-/// Return a `Deploying` record for `cluster` if another CLI deploy appears to
-/// be running.
+/// Whether another deploy of a Kix cluster may be applying objects now.
+enum InFlight {
+    No,
+    /// Another run holds the cluster's deploy lock to deploy, roll back, or
+    /// delete. Commands that print the plan name it.
+    Locked,
+    /// A `Deploying` record that no run holds the lock for: a run of an
+    /// older Kix, which takes no lock, may be deploying it, or one died
+    /// before it could mark it `Failed`.
+    Unlocked(Box<Record>),
+}
+
+/// Decide whether another deploy of `cluster` may be running, so the caller
+/// leaves the closures of failed deploys out of its plan rather than prune
+/// objects that run is still applying.
 ///
-/// A `Deploying` record is either a live deploy or one whose process died
-/// before it could mark itself `Failed`. Because folding in a closure that
-/// another machine is still applying could prune objects out from under it,
-/// callers skip folding failed closures when a `Deploying` record is present
-/// rather than blocking the command.
-///
-/// Operator-driven records are ignored because the controller resumes them
-/// itself.
-async fn deploy_in_flight(records: &Records, cluster: &str) -> Option<Record> {
+/// The deploy lock answers this when a run other than the operator's drift
+/// repair holds it. Otherwise a `Deploying` record still means a run of a
+/// Kix without the lock may be in flight. Operator-driven records are
+/// ignored there because the controller resumes them itself.
+async fn deploy_in_flight(records: &Records, cluster: &str) -> InFlight {
+    match crate::cluster::head::read(records.client(), cluster).await {
+        Ok(Some(head))
+            if head
+                .lock()
+                .is_some_and(|l| l.purpose != crate::cluster::head::Purpose::Repair) =>
+        {
+            return InFlight::Locked;
+        }
+        Ok(_) => {}
+        Err(e) => tracing::debug!("could not read the deploy lock: {e}"),
+    }
     match records.deploying(cluster).await {
-        Ok(found) => found.into_iter().find(|record| !record.operator_driven),
+        Ok(found) => found
+            .into_iter()
+            .find(|record| !record.operator_driven)
+            .map_or(InFlight::No, |r| InFlight::Unlocked(Box::new(r))),
         Err(e) => {
             tracing::debug!("could not list deploying activations: {e}");
-            None
+            InFlight::No
         }
     }
 }
@@ -1642,13 +1669,21 @@ mod tests {
     /// load. Both records point to a result directory that is not a valid
     /// build, so neither falls back to this machine's activation cache.
     async fn rollback_baseline(extra: Value) -> (Baseline, Vec<String>) {
+        rollback_baseline_with(vec![extra]).await
+    }
+
+    async fn rollback_baseline_with(extras: Vec<Value>) -> (Baseline, Vec<String>) {
         let cluster = "of-record-test";
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("kix-packages.json"), "not a build").unwrap();
         let built_via = dir.path().to_string_lossy().into_owned();
         let mut failed = record(cluster, "fl", PHASE_FAILED);
         failed["metadata"]["annotations"][keys::BUILT_VIA] = json!(built_via);
-        let api = FakeApi::new([record(cluster, "cur", PHASE_ACTIVE), failed, extra]);
+        let api = FakeApi::new(
+            [record(cluster, "cur", PHASE_ACTIVE), failed]
+                .into_iter()
+                .chain(extras),
+        );
         let client = api.client();
         let discovery = discovery::discover_resources(&client).await.unwrap();
         let records = Records::open_installed(&client, &discovery).unwrap();
@@ -1823,6 +1858,30 @@ mod tests {
         assert!(baseline.failed().is_empty());
         assert!(
             events.iter().any(|e| e.starts_with("DeployInFlight")),
+            "{events:?}"
+        );
+    }
+
+    /// When the deploy lock names the run that is deploying, the plan still
+    /// leaves the failed records alone, and prints no warning about a
+    /// record left Deploying: the lock already says who is deploying.
+    #[tokio::test]
+    async fn a_locked_deploy_in_flight_needs_no_warning() {
+        let head = json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": crate::cluster::head::KIND,
+            "metadata": { "name": "of-record-test" },
+            "status": { "generation": 1, "lock": {
+                "holder": "cli-1", "hint": "kix deploy by ana", "purpose": "deploy",
+                "activation": "dp", "renewed": "2026-11-26T10:00:00.000Z", "durationSeconds": 30,
+            } },
+        });
+        let (baseline, events) =
+            rollback_baseline_with(vec![record("of-record-test", "dp", PHASE_DEPLOYING), head])
+                .await;
+        assert!(baseline.failed().is_empty());
+        assert!(
+            !events.iter().any(|e| e.starts_with("DeployInFlight")),
             "{events:?}"
         );
     }

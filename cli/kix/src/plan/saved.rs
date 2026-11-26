@@ -19,6 +19,7 @@ pub enum Rule {
     NewBuild,
     Objects,
     DeployedBuild,
+    Generation,
     Flags,
     NewRefusal,
     NewRevertedDrift,
@@ -34,6 +35,7 @@ impl Rule {
             Rule::NewBuild => "new build",
             Rule::Objects => "objects",
             Rule::DeployedBuild => "deployed build",
+            Rule::Generation => "lock generation",
             Rule::Flags => "flags",
             Rule::NewRefusal => "new refusal",
             Rule::NewRevertedDrift => "new drift",
@@ -311,6 +313,25 @@ pub fn compare(reviewed: &Plan, fresh: &Plan) -> Comparison {
         );
     }
 
+    // The generation rises each time a run that wrote to the cluster ends,
+    // so a plan saved before another run is stale even when the deployed
+    // record is the same, as after a deploy with `--only` or a gc. A plan
+    // saved without it (`--offline`, or by an older Kix) is not held to it.
+    match (&reviewed.head, &fresh.head) {
+        (Some(r), Some(f)) => {
+            if r.generation != f.generation {
+                mismatch(
+                    Rule::Generation,
+                    vec![format!(
+                        "the cluster is at deploy lock generation {}, while the saved plan was made at generation {} (another run changed the cluster after the plan was saved)",
+                        f.generation, r.generation
+                    )],
+                );
+            }
+        }
+        _ => skipped.push(Rule::Generation),
+    }
+
     let flags_differ = match (&reviewed.flags, &fresh.flags) {
         (Some(r), Some(f)) => r != f,
         (None, Some(f)) => f.prune == PrunePolicy::Delete || f.force_conflicts || f.reconcile,
@@ -573,6 +594,11 @@ mod tests {
             version: "0.1.0".into(),
             store_path: Some("/nix/store/kix-a".into()),
         };
+        p.head = Some(super::super::document::PlanHead {
+            generation: 1,
+            current: None,
+            lock: None,
+        });
         p.deployed = Some(DeployedBuild {
             activation: "c-old".into(),
             identity_hash: Some("old".into()),
@@ -864,6 +890,37 @@ mod tests {
             c.mismatches[0].items[0],
             "the plan was made with no planning flags, this deploy uses --skip-orphan-check"
         );
+    }
+
+    /// A saved plan stores the generation of the deploy lock it read, and a
+    /// deploy refuses it once another run changed the cluster. A plan saved
+    /// without it is not held to it.
+    #[test]
+    fn a_saved_plan_of_another_generation_is_stale() {
+        use super::super::document::PlanHead;
+        let at = |generation| {
+            let mut p = plan();
+            p.head = Some(PlanHead {
+                generation,
+                current: None,
+                lock: None,
+            });
+            p
+        };
+        assert!(compare(&at(3), &at(3)).matches);
+        let stale = compare(&at(3), &at(4));
+        assert_eq!(rules(&stale), vec![Rule::Generation]);
+        assert!(
+            stale.mismatches[0].items[0]
+                .contains("generation 4, while the saved plan was made at generation 3"),
+            "{:?}",
+            stale.mismatches
+        );
+        let mut saved_without = plan();
+        saved_without.head = None;
+        let unbound = compare(&saved_without, &at(4));
+        assert!(unbound.matches);
+        assert!(unbound.skipped.contains(&Rule::Generation));
     }
 
     #[test]

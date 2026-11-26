@@ -201,7 +201,9 @@ impl LivePlan {
     }
 
     /// Run the engine over the plan, stamping the record's identity hash
-    /// into `kix.run/activations` on every object it writes.
+    /// into `kix.run/activations` on every object it writes. Every write
+    /// goes through `lock`'s guarded client, and a run that manages the
+    /// lifecycle commits the deploy on `lock`. The caller releases it.
     ///
     /// With `manage_lifecycle` the run writes the record's lifecycle (begin,
     /// checkpoints, finalize); without, it corrects drift and leaves the
@@ -209,13 +211,15 @@ impl LivePlan {
     /// counts the runs that stop and decides when to stop retrying.
     pub async fn run(
         self,
+        lock: Arc<crate::cluster::head::Lock>,
         manage_lifecycle: bool,
         config: SchedulerConfig,
         observer: Arc<dyn DeployObserver>,
     ) -> Result<DeployResult, DeployError> {
+        lock.stop_with(&config.cancel);
         let (cluster, _) = Cluster::new(
             KubeResources::new(
-                self.client,
+                lock.guarded(&self.client),
                 self.discovery,
                 self.cluster,
                 self.record.identity_hash,
@@ -246,6 +250,7 @@ impl LivePlan {
                 // The operator deploys whole builds.
                 only: Vec::new(),
                 mark_failed_on_abort: false,
+                lock: Some(lock),
             },
             Default::default(),
         );

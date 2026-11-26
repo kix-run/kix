@@ -58,12 +58,32 @@ pub(crate) use record::KeptOrphans;
 
 use record::{
     FAILED_ATTEMPTS_FIELD, FAILED_REQUEST_FIELD, FINISHED_REQUEST_FIELD, PARTIAL_FIELD,
-    REQUEST_FIELD, STARTED_REQUEST_FIELD, is_current_phase, phase_on_abort, phase_on_begin,
-    phase_on_end_partial, read_phase, sort_newest_first,
+    REQUEST_FIELD, STARTED_REQUEST_FIELD, is_current_phase, parse_time, phase_on_abort,
+    phase_on_begin, phase_on_end_partial, pick_current, read_phase, sort_newest_first,
 };
 
-#[cfg(test)]
-use record::{parse_time, pick_current};
+/// Return whether `phase` makes a record current (`Active` or `Degraded`).
+pub(crate) fn phase_is_current(phase: &str) -> bool {
+    is_current_phase(phase)
+}
+
+/// Return the current record among `records`, chosen as [`Records::active`]
+/// chooses it: the most recently deployed `Active` or `Degraded` one.
+pub(crate) fn current_among(records: &[Record]) -> Option<&Record> {
+    pick_current(
+        records
+            .iter()
+            .filter(|r| is_current_phase(&r.phase))
+            .map(|r| {
+                (
+                    r,
+                    r.deployed_at.as_deref().and_then(parse_time),
+                    r.name.clone(),
+                )
+            })
+            .collect(),
+    )
+}
 
 /// Error returned when the API server fails an operation on an Activation
 /// record or on the list of records.
@@ -286,6 +306,61 @@ pub struct CurrentDeploy {
 }
 
 impl Records {
+    /// Open records spelled from Kix's own constants, without discovery, for
+    /// the deploy lock, which runs after the command opened its records
+    /// through [`Records::open`].
+    pub(crate) fn undiscovered(client: &Client) -> Records {
+        Records {
+            client: client.clone(),
+            resource: record_resource(),
+        }
+    }
+
+    /// Return the client the records are read and written through.
+    pub fn client(&self) -> &Client {
+        &self.client
+    }
+
+    /// Return the same records, read and written through `client`.
+    pub fn through(&self, client: &Client) -> Records {
+        Records {
+            client: client.clone(),
+            resource: self.resource.clone(),
+        }
+    }
+
+    /// List every record of `cluster`, or none when the Activation CRD is
+    /// not installed.
+    pub(crate) async fn of_cluster(&self, cluster: &str) -> Result<Vec<Record>, RecordsError> {
+        let lp = ListParams::default().labels(&cluster_selector(cluster));
+        match self.api().list(&lp).await {
+            Ok(list) => Ok(list.items.iter().map(Record::of).collect()),
+            Err(kube::Error::Api(e)) if e.code == 404 => Ok(Vec::new()),
+            Err(e) => Err(RecordsError::list(e)),
+        }
+    }
+
+    /// Make the phases agree with the head after a deploy stopped between
+    /// its commit and its phase writes: give record `current` the phase
+    /// `phase`, when one is given, and mark each record in `supersede`
+    /// Superseded.
+    pub(crate) async fn repair_phases(
+        &self,
+        current: &str,
+        phase: Option<&str>,
+        supersede: &[String],
+    ) -> Result<(), RecordsError> {
+        if let Some(phase) = phase {
+            self.patch_status(current, &json!({ "status": { "phase": phase } }))
+                .await?;
+            tracing::info!(activation = %current, phase, "repaired deployment record phase from ActivationHead");
+        }
+        for name in supersede {
+            self.supersede(name).await?;
+        }
+        Ok(())
+    }
+
     /// Validate `discovery` against retired API groups and open a [`Records`]
     /// handle if the Activation CRD is served.
     ///
@@ -828,13 +903,11 @@ impl Records {
     }
 
     /// Supersede the previous activation and finalize the new one as `Active`
-    /// or `Degraded`.
-    ///
-    /// Records the predecessor link, deployment timestamp, cluster label, and
-    /// receipt on the new record, and marks any `Failed` records consumed by
-    /// this plan as `Superseded`. `orphans_kept_from` replaces
-    /// `status.orphansKeptFrom` (an empty slice clears the field).
+    /// or `Degraded`: [`Records::record_finish`], then
+    /// [`Records::settle_phases`]. A run that holds the deploy lock commits
+    /// the deploy on the lock between the two.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub(crate) async fn finalize_deploy(
         &self,
         cluster_name: &str,
@@ -845,28 +918,36 @@ impl Records {
         consumed_failed: &[String],
         orphans_kept_from: &[KeptOrphanSource],
     ) -> Result<(), RecordsError> {
+        self.record_finish(
+            cluster_name,
+            new_activation_name,
+            old_activation,
+            receipt,
+            orphans_kept_from,
+        )
+        .await?;
+        self.settle_phases(
+            new_activation_name,
+            old_activation,
+            had_failures,
+            consumed_failed,
+        )
+        .await
+    }
+
+    /// Write what a finished deploy did onto its record, before the deploy
+    /// becomes current: the predecessor link, deployment timestamp, cluster
+    /// label, and receipt. `orphans_kept_from` replaces
+    /// `status.orphansKeptFrom` (an empty slice clears the field).
+    pub(crate) async fn record_finish(
+        &self,
+        cluster_name: &str,
+        new_activation_name: &str,
+        old_activation: Option<&Record>,
+        receipt: Option<&Value>,
+        orphans_kept_from: &[KeptOrphanSource],
+    ) -> Result<(), RecordsError> {
         let now = chrono::Utc::now().to_rfc3339();
-
-        if let Some(old) = old_activation {
-            self.supersede(&old.name).await?;
-        }
-
-        // Supersede Failed records folded into this plan, skipping the record
-        // being finalized (which shares a name when retrying the same closure).
-        // Failures here are logged rather than failing the deploy after all
-        // resources have been applied.
-        for name in consumed_failed {
-            if name == new_activation_name {
-                continue;
-            }
-            if let Err(e) = self.supersede(name).await {
-                tracing::warn!(
-                    activation = %name,
-                    error = %e,
-                    "could not supersede a consumed Failed record",
-                );
-            }
-        }
 
         // Patch lifecycle annotations with a merge patch so the identity hash
         // and other annotations written during apply are preserved.
@@ -898,13 +979,7 @@ impl Records {
             .await
             .map_err(RecordsError::on("patch", new_activation_name))?;
 
-        let new_phase = if had_failures {
-            PHASE_DEGRADED
-        } else {
-            PHASE_ACTIVE
-        };
         let mut status = serde_json::Map::new();
-        status.insert("phase".to_string(), json!(new_phase));
         if let Some(old) = old_activation {
             status.insert("previousActivation".to_string(), json!(old.name));
         }
@@ -923,7 +998,50 @@ impl Records {
             },
         );
         self.patch_status(new_activation_name, &json!({ "status": status }))
-            .await?;
+            .await
+    }
+
+    /// Set the phases of a finished deploy: mark the previous record and the
+    /// `Failed` records consumed by this plan `Superseded`, and the new one
+    /// `Active` or `Degraded`.
+    pub(crate) async fn settle_phases(
+        &self,
+        new_activation_name: &str,
+        old_activation: Option<&Record>,
+        had_failures: bool,
+        consumed_failed: &[String],
+    ) -> Result<(), RecordsError> {
+        if let Some(old) = old_activation {
+            self.supersede(&old.name).await?;
+        }
+
+        // Supersede Failed records folded into this plan, skipping the record
+        // being finalized (which shares a name when retrying the same closure).
+        // Failures here are logged rather than failing the deploy after all
+        // resources have been applied.
+        for name in consumed_failed {
+            if name == new_activation_name {
+                continue;
+            }
+            if let Err(e) = self.supersede(name).await {
+                tracing::warn!(
+                    activation = %name,
+                    error = %e,
+                    "could not supersede a consumed Failed record",
+                );
+            }
+        }
+
+        let new_phase = if had_failures {
+            PHASE_DEGRADED
+        } else {
+            PHASE_ACTIVE
+        };
+        self.patch_status(
+            new_activation_name,
+            &json!({ "status": { "phase": new_phase } }),
+        )
+        .await?;
 
         tracing::info!(activation = %new_activation_name, phase = new_phase, "finalized");
 

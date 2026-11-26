@@ -18,8 +18,14 @@ use crate::manifest::keys;
 /// `status.startedRequest` and `status.finishedRequest`.
 pub const REQUESTS: &str = "requests";
 
+/// The operator takes each Kix cluster's deploy lock
+/// ([`crate::cluster::head`]) before it deploys, repairs, or tears down, and
+/// commits its deploys on it. A CLI with the lock refuses to hand work to an
+/// operator without it, which would deploy beside the lock.
+pub const HEAD_LOCK: &str = "head-lock";
+
 /// Every feature this release's operator handles.
-const HANDLED: &[&str] = &[REQUESTS];
+const HANDLED: &[&str] = &[REQUESTS, HEAD_LOCK];
 
 /// The features a running operator published.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -102,5 +108,6 @@ mod tests {
         assert!(!read(&client).await.unwrap().handles(REQUESTS));
         publish(&client).await.unwrap();
         assert!(read(&client).await.unwrap().handles(REQUESTS));
+        assert!(read(&client).await.unwrap().handles(HEAD_LOCK));
     }
 }

@@ -53,9 +53,11 @@ use crate::cluster::apply::ChangeAction;
 use crate::cluster::binding;
 use crate::cluster::client::{self, ResiliencePolicy};
 use crate::cluster::discovery;
+use crate::cluster::errors;
 use crate::cluster::errors::FetchError;
 use crate::cluster::graph::DeleteOrder;
 use crate::cluster::graph::ResourceGraph;
+use crate::cluster::head::{self, HeadRead, Lock};
 use crate::cluster::inventory;
 use crate::cluster::inventory::SharedOrphan;
 use crate::cluster::inventory::{Live, LiveObjects};
@@ -284,6 +286,11 @@ impl CheckedPlan {
     /// Return the flags that the plan was made and checked with.
     pub fn flags(&self) -> &PlanFlags {
         &self.flags
+    }
+
+    /// Return the Kix cluster the plan was checked for.
+    pub fn cluster(&self) -> &str {
+        &self.cluster
     }
 
     /// Return what a plan made with `--only` leaves for a later deploy of
@@ -541,14 +548,16 @@ impl CheckedPlan {
     }
 
     /// Run the engine over the checked plan, writing its Activation record
-    /// with `receipt` as the provenance. The prune follows the flags the
-    /// check used.
+    /// with `receipt` as the provenance. Every write goes through `lock`'s
+    /// guarded client, and the finalize commits the deploy on `lock`. The
+    /// caller releases it. The prune follows the flags the check used.
     ///
     /// Also returns the `status.orphansKeptFrom` the run's finalize wrote,
     /// or `None` when it did not finalize.
     pub async fn run(
         self,
         target: Target,
+        lock: Arc<Lock>,
         receipt: Option<Value>,
         config: SchedulerConfig,
         observer: Arc<dyn DeployObserver>,
@@ -558,9 +567,10 @@ impl CheckedPlan {
     ) {
         let ending = self.ending();
         let only = self.applied_instances();
+        lock.stop_with(&config.cancel);
         let (cluster, record) = Cluster::new(
             KubeResources::new(
-                target.client,
+                lock.guarded(&target.client),
                 target.discovery,
                 self.cluster,
                 self.activation_identity_hash,
@@ -579,6 +589,7 @@ impl CheckedPlan {
                 package_index: Some(self.package_index),
                 only,
                 mark_failed_on_abort: true,
+                lock: Some(lock),
             },
             target.sops,
         );
@@ -593,6 +604,22 @@ impl CheckedPlan {
         )
         .await;
         (result, record.orphans_kept_from())
+    }
+}
+
+/// Read the deploy lock of Kix cluster `cluster`, which a plan binds to, or
+/// `None` when the account may not read it.
+async fn read_head(client: &Client, cluster: &str) -> Result<Option<HeadRead>, PlanError> {
+    match head::read(client, cluster).await {
+        Ok(found) => Ok(Some(HeadRead::of(found.as_ref()))),
+        Err(e) if errors::classify(&e) == errors::FailureClass::Forbidden => {
+            tracing::warn!(
+                cluster,
+                "this account cannot read ActivationHead; skipping deploy lock check for this plan"
+            );
+            Ok(None)
+        }
+        Err(e) => Err(PlanError::ReadHead(Box::new(e))),
     }
 }
 
@@ -643,6 +670,10 @@ pub struct Connected {
     /// Which Kubernetes cluster `client` talks to, as the kubeconfig names it.
     pub connection: binding::Connection,
     pub last_runs: LastRuns,
+    /// The Kix cluster's deploy lock as the plan read it, which the run
+    /// binds to. `None` when the account may not read it; the run then
+    /// fails when it takes the lock.
+    pub head: Option<HeadRead>,
 }
 
 impl Planned {
@@ -791,6 +822,16 @@ pub struct Differences {
 pub struct Planner<'a> {
     flags: PlanFlags,
     report: &'a dyn Fn(PlanEvent<'_>),
+    settle: Option<Settle>,
+}
+
+/// The command a [`Planner`] plans for when it settles a held deploy lock
+/// before it reads the cluster ([`Planner::settling`]).
+#[derive(Debug, Clone)]
+pub struct Settle {
+    /// What a user typed, such as `kix deploy`, for the lock's hint.
+    pub command: &'static str,
+    pub purpose: head::Purpose,
 }
 
 impl<'a> Planner<'a> {
@@ -798,7 +839,21 @@ impl<'a> Planner<'a> {
     /// each name once, whatever the caller passed.
     pub fn new(mut flags: PlanFlags, report: &'a dyn Fn(PlanEvent<'_>)) -> Self {
         flags.only = PlanFlags::only_of(&flags.only);
-        Planner { flags, report }
+        Planner {
+            flags,
+            report,
+            settle: None,
+        }
+    }
+
+    /// Settle a deploy lock another run holds before reading the cluster,
+    /// for a command that will take the lock ([`head::settle`]): refuse when
+    /// the holder is alive, and take a dead holder's lock over and release
+    /// it, so the plan reads the state the takeover left. `kix plan` does
+    /// not settle: a read never waits for the lock.
+    pub fn settling(mut self, settle: Settle) -> Self {
+        self.settle = Some(settle);
+        self
     }
 
     /// Plan a deploy of `build` against `old`: connect, unless the old side
@@ -817,6 +872,9 @@ impl<'a> Planner<'a> {
                 TargetChecks::of(new_graph)
                     .run(&client, &connection)
                     .await?;
+                if let Some(settle) = &self.settle {
+                    self.settle_lock(&client, new_graph, settle).await?;
+                }
                 Some((client, connection))
             }
         };
@@ -830,6 +888,44 @@ impl<'a> Planner<'a> {
             None => Baseline::of_cache(&new_graph.cluster_name, self.report),
         };
         self.planned(build, baseline, client).await
+    }
+
+    /// Settle a lock another run holds on the Kix cluster of `graph`, saying
+    /// first who holds it ([`PlanEvent::LockHeld`]). A dead run's record is
+    /// continued rather than marked `Failed` when it is this build's record.
+    async fn settle_lock(
+        &self,
+        client: &Client,
+        graph: &StoreGraph,
+        settle: &Settle,
+    ) -> Result<(), PlanError> {
+        let cluster = &graph.cluster_name;
+        let held = head::read(client, cluster)
+            .await
+            .map_err(|e| PlanError::ReadHead(Box::new(e)))?
+            .and_then(|h| h.lock().cloned());
+        let Some(held) = held else {
+            return Ok(());
+        };
+        (self.report)(PlanEvent::LockHeld(&held));
+        let activation = graph
+            .resources
+            .values()
+            .map(|r| &r.manifest)
+            .find(|m| lifecycle::is_record(m))
+            .and_then(|m| m.pointer("/metadata/name"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let request = head::Request {
+            cluster: cluster.clone(),
+            holder: head::Holder::cli(settle.command),
+            purpose: settle.purpose,
+            activation,
+            expect: None,
+        };
+        head::settle(client, request, head::system_clock(), &|_| {})
+            .await
+            .map_err(|e| PlanError::Lock(Box::new(e)))
     }
 
     /// Report [`PlanEvent::Unbound`] on the first deploy of a build whose
@@ -896,8 +992,9 @@ impl<'a> Planner<'a> {
             detect_migration_pairs(&new_manifests, &baseline.active_manifests);
         let read = match client {
             Some((client, connection)) => {
+                let head = read_head(&client, &new_graph.cluster_name).await?;
                 let live = read_live(&client, &new_manifests).await?;
-                Some((client, connection, live))
+                Some((client, connection, live, head))
             }
             None => None,
         };
@@ -907,7 +1004,7 @@ impl<'a> Planner<'a> {
                 &new_manifests,
                 &new_graph.cluster_name,
                 &baseline,
-                read.as_ref().map(|(client, _, live)| (client, live)),
+                read.as_ref().map(|(client, _, live, _)| (client, live)),
             )
             .await?;
         // A deploy with `--only` makes only the migrations whose new object
@@ -924,10 +1021,11 @@ impl<'a> Planner<'a> {
                 .collect();
             migration_pairs.retain(|pair| written.contains(&pair.target));
         }
-        let connected = read.map(|(client, connection, live)| Connected {
+        let connected = read.map(|(client, connection, live, head)| Connected {
             last_runs: checked.last_runs_from(&live),
             client,
             connection,
+            head,
         });
         Ok(Planned {
             build,

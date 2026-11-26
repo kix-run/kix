@@ -110,28 +110,26 @@ pub fn print(event: PlanEvent<'_>) {
         ),
         PlanEvent::DeployInFlight(record) => {
             let name = &record.name;
-            match record.created_at {
-                Some(started) => warning(&format!(
-                    "deployment record {} is still in phase Deploying (started at {}).",
-                    output::bold(name),
-                    started.to_rfc3339(),
-                )),
-                None => warning(&format!(
-                    "deployment record {} is still in phase Deploying.",
-                    output::bold(name)
-                )),
-            }
+            let since = record
+                .created_at
+                .map(|t| format!(" (started at {})", t.to_rfc3339()))
+                .unwrap_or_default();
+            warning(&format!(
+                "deployment record {}{since} is still in phase Deploying, and no run holds the deploy lock for it.",
+                output::bold(name),
+            ));
             crate::esay!(
-                "  Either another deploy is running now, or an earlier deploy was killed before it could mark {name} Failed; while {name} stays Deploying, this plan leaves out objects from earlier failed deployments, and completing a new deploy will not clear {name}."
+                "  Either an older version of Kix (which does not use the deploy lock) is deploying now, or an earlier deploy stopped before marking {name} Failed. To avoid deleting resources an active deploy may still be applying, this plan leaves out resources from earlier failed or partial deploys, and a new deploy will not clear {name}."
             );
             crate::esay!(
-                "  If no deploy is running, mark {name} Failed and run the command again:"
+                "  If no older Kix is deploying this cluster, mark {name} Failed and run the command again:"
             );
             crate::esay!(
                 "    kubectl patch {}/{name} --subresource=status --type=merge -p '{{\"status\":{{\"phase\":\"Failed\",\"failure\":{{\"reason\":\"abandoned\"}}}}}}'",
                 keys::ACTIVATIONS_CRD,
             );
         }
+        PlanEvent::LockHeld(lock) => crate::commands::lock::say_watching(lock),
         PlanEvent::FailedFolded(record) => match record.partly_deployed() {
             Some(partial) => crate::say!(
                 "  {} including resources from partial deployment {} ({}...), which applied {}",
