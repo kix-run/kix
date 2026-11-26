@@ -1,0 +1,3 @@
+# 2026-11-26 · `kix/lib/core/dns-peers.nix` · A managed DNS provider such as `coredns` cannot publish its DNS peers to network policy.
+
+Kix reads `out.dnsPeers` only from a `dns` import. Reading a managed provider's `out` evaluates its whole instance (`eval/instance.nix` forces every part's warnings first), and that instance's own policies, or those of the enforcer or of any dependency it has, need the DNS rule, so the evaluation recurses. `coredns` therefore keeps the default peers and must run in `kube-system` under `networkPolicy.enable`. A fix needs a way to read declared data of a role provider without evaluating its parts, such as peeked `meta` or an `out` that does not wait for the instance's diagnostics.

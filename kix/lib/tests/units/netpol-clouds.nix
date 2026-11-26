@@ -1,8 +1,8 @@
 # Tests for the parts of generated network policy that managed clouds need:
 # the missing-enforcer error where the platform owns the pod network, and the
 # enforcer-neutral arguments of `kix.operandPolicy` (`selector`, `ingress`,
-# `egress`), the closed list of entity names, and the DNS peers the `dns`
-# role provider publishes.
+# `egress`), the closed list of entity names, the DNS peers the `dns`
+# role provider publishes, and which namespaces get a default deny.
 
 {
   lib,
@@ -425,4 +425,53 @@ in
       && !(builtins.tryEval (builtins.deepSeq withCidr true)).success
     )
     || throw "cilium DNS rule: two pods ${builtins.toJSON twoPods}";
+
+  # A namespace gets `<namespace>-default-deny` when it holds an active
+  # instance Kix deploys or the cluster definition declares it, and never
+  # when it is in `networkPolicy.platformNamespaces`. A workload Kix deploys
+  # in a platform namespace keeps its own policy.
+  netpol-clouds-default-deny-namespaces =
+    let
+      cluster = mkCluster [
+        netpolOn
+        {
+          # Only an import.
+          instances.imports.platform-dns.package = dnsImport null;
+          # An import, and declared under `namespaces`.
+          namespaces.declared = { };
+          instances.declared.marker.package = eval.mkImport {
+            kind = "Service";
+            apiVersion = "v1";
+            out.name = "external";
+          };
+          # Only an optional instance nothing depends on.
+          instances.idle.web = {
+            package = intentPackage { } false;
+            optional = true;
+          };
+          # A workload Kix deploys.
+          instances.app.web.package = intentPackage { } false;
+          # A workload Kix deploys in a platform namespace.
+          instances.kube-system.web.package = intentPackage { } false;
+          networkPolicy.platformNamespaces = [ "kube-system" ];
+        }
+      ];
+      ms = manifests cluster;
+      denied = map (m: m.metadata.name) (
+        builtins.filter (m: (m.metadata.labels."kix.run/policy-type" or null) == "default-deny") ms
+      );
+      want = [
+        "app-default-deny"
+        "declared-default-deny"
+        "infra-default-deny"
+      ];
+    in
+    (
+      builtins.sort builtins.lessThan denied == want
+      &&
+        byName "web-deployment-web-egress" (
+          builtins.filter (m: m.metadata.namespace or null == "kube-system") ms
+        ) != null
+    )
+    || throw "default deny in ${builtins.toJSON denied}";
 }

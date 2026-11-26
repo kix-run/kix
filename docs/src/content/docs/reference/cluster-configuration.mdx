@@ -418,7 +418,7 @@ Today, `packages.experimental.cilium` is the only `network-policy-enforcer` pack
 | Object | Kind | Scope | Written when |
 | --- | --- | --- | --- |
 | Workload and connection policies (caller egress, callee ingress, DNS and API server egress, ingress-controller and LoadBalancer ingress, StatefulSet peer traffic, Prometheus and VMAgent scrapes, and `kix.operandPolicy`) | `CiliumNetworkPolicy` (`cilium.io/v2`) | Namespaced | `networkPolicy.enable = true` |
-| `<namespace>-default-deny` (`endpointSelector: {}`, one empty rule per direction in `networkPolicy.directions`) | `CiliumNetworkPolicy` (`cilium.io/v2`) | Namespaced (every namespace under `namespaces` or holding an instance or import) | `networkPolicy.enable = true` and `networkPolicy.defaultDeny = true` (default) |
+| `<namespace>-default-deny` (`endpointSelector: {}`, one empty rule per direction in `networkPolicy.directions`) | `CiliumNetworkPolicy` (`cilium.io/v2`) | Namespaced (every namespace under `namespaces` or holding an active instance Kix deploys, except those in `networkPolicy.platformNamespaces`) | `networkPolicy.enable = true` and `networkPolicy.defaultDeny = true` (default) |
 | Namespaced platform intents (`networkPolicy.platformIntents.<name>`) | `CiliumNetworkPolicy` (`cilium.io/v2`) | Namespaced | `networkPolicy.enable = true` and `scope = "namespaced"` (default) |
 | Cluster-wide platform intents (`networkPolicy.platformIntents.<name>`) | `CiliumClusterwideNetworkPolicy` | Cluster-wide | `networkPolicy.enable = true` and `scope = "clusterwide"` |
 | `cilium-cluster-dns-egress` (`endpointSelector: {}` to `k8s-app: kube-dns` in `kube-system` on UDP and TCP port 53) | `CiliumClusterwideNetworkPolicy` | Cluster-wide | The `cilium` instance configures Cilium (chart install or RKE2 `HelmChartConfig`), effective `policyEnforcementMode` is `"always"`, and `clusterDnsEgress = true` (default) |
@@ -437,8 +437,9 @@ networkPolicy = {
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `networkPolicy.enable` | `bool` | `false` | Derive network policies from the dependency graph. Requires an active instance that claims `meta.roles = [ "network-policy-enforcer" ]`. |
-| `networkPolicy.defaultDeny` | `bool` | `true` | Emit a default-deny policy in every Kix-managed namespace for the enforced directions. |
+| `networkPolicy.defaultDeny` | `bool` | `true` | Emit a default-deny policy for the enforced directions in every namespace that holds an active instance Kix deploys or is declared under `namespaces`. A namespace that holds only imports or inactive optional instances gets none. |
 | `networkPolicy.directions` | `"ingress" \| "egress" \| "both"` | `"both"` | Which traffic directions Kix enforces in default-deny policies, derived policies, and `kix.operandPolicy`. |
+| `networkPolicy.platformNamespaces` | `listOf str` | `[ ]`; `[ "kube-system" ]` on `gke`, `gke-autopilot`, `eks`, and `aks` | Namespaces whose pods the platform runs and changes. Kix writes no default-deny policy in them. Workloads Kix deploys there still get their own policies. In these namespaces, a scrape target gets ingress only when another policy already isolates its pods. |
 | `networkPolicy.platformIntents` | `attrsOf anything` | `{ }` | Connectivity intents for non-Kix pods (such as pre-installed `kube-system` components) or configurable workload egress targets. |
 
 Each `networkPolicy.platformIntents.<name>` entry supports:

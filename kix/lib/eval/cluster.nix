@@ -634,11 +634,23 @@ in
           holders == [ ] || owner == instanceKey inst
         ) (collectResources inst);
 
+      # Namespaces that hold at least one active instance Kix deploys. An
+      # import (`kix.mkImport`) and an inactive optional instance deploy
+      # nothing, so they do not count.
+      deployedNsNames = builtins.filter (
+        nsName:
+        builtins.any (
+          instName:
+          isActive nsName instName
+          && (mergedInstances.${nsName}.${instName}.package._type or "") != "kix-import"
+        ) (builtins.attrNames (mergedInstances.${nsName} or { }))
+      ) realNsNames;
+
       # `resources` holds the sealed resources of every active instance,
       # including the policies instance hooks derived.
       clusterHookCtx = {
         cluster = clusterCtx;
-        inherit nsResources realNsNames;
+        inherit nsResources realNsNames deployedNsNames;
         resources = builtins.concatMap collectResources allInstancesList;
       };
       clusterHookResults = map (p: p clusterHookCtx) clusterProcessors;

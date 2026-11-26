@@ -67,7 +67,13 @@ in
           defaultDeny = lib.mkOption {
             type = lib.types.bool;
             default = true;
-            description = "Generate deny-all CiliumNetworkPolicy per namespace.";
+            description = ''
+              Generate a deny-all policy (`<namespace>-default-deny`) in each
+              namespace that holds an active instance Kix deploys or that the
+              cluster definition declares under `namespaces`, except those in
+              `platformNamespaces`. A namespace that holds only imports or
+              inactive optional instances gets none.
+            '';
           };
           directions = lib.mkOption {
             type = lib.types.enum [
@@ -91,6 +97,21 @@ in
               deny and every derived policy cover. The netpol plugin's policy
               builders take it, and `kix.operandPolicy` reads it through
               `scope.networkPolicyEnforced`.
+            '';
+          };
+          platformNamespaces = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [ ];
+            example = [ "kube-system" ];
+            description = ''
+              Namespaces whose own pods the platform runs and changes, such
+              as `kube-system` on a managed cloud. Kix writes no
+              `<namespace>-default-deny` policy in them, so those pods keep
+              their traffic. Workloads Kix deploys there still get their own
+              policies, which isolate only those pods. The `gke`,
+              `gke-autopilot`, `eks`, and `aks` flavors set
+              `[ "kube-system" ]`. Describe platform pods that need rules
+              with `platformIntents`.
             '';
           };
           platformIntents = lib.mkOption {
@@ -179,22 +200,31 @@ in
       ctx:
       let
         provider = ctx.cluster.findRoleProvider enforcerRole;
+
+        # The namespaces Kix manages workloads in: those that hold an
+        # active instance Kix deploys, and those the cluster definition
+        # declares. Imports run on pods Kix does not deploy, and a platform
+        # namespace runs pods the platform changes, so a default deny there
+        # would cut traffic Kix cannot see.
+        defaultDenyNamespaces = lib.optionals cfg.defaultDeny (
+          builtins.filter (
+            nsName:
+            (builtins.elem nsName ctx.deployedNsNames || config.namespaces ? ${nsName})
+            && !(builtins.elem nsName cfg.platformNamespaces)
+          ) ctx.realNsNames
+        );
         enforcerOut =
           if provider == null then null else interface.bindDnsPeers ctx.cluster.findRoleProvider provider.out;
 
-        defaultDenyPolicies =
-          if cfg.defaultDeny then
-            map (
-              nsName:
-              derive.generateDefaultDeny {
-                namespaceName = nsName;
-                nsResource = ctx.nsResources.${nsName};
-                inherit enforced;
-                networkPolicyEnforcer = enforcerOut;
-              }
-            ) ctx.realNsNames
-          else
-            [ ];
+        defaultDenyPolicies = map (
+          nsName:
+          derive.generateDefaultDeny {
+            namespaceName = nsName;
+            nsResource = ctx.nsResources.${nsName};
+            inherit enforced;
+            networkPolicyEnforcer = enforcerOut;
+          }
+        ) defaultDenyNamespaces;
 
         platformIntentPolicies = derive.materializePlatformIntents {
           networkConfig = cfg;
@@ -214,7 +244,7 @@ in
             scrape.derive {
               inherit (ctx) resources nsResources realNsNames;
               enforcerApi = enforcerOut.netpol;
-              inherit enforced;
+              inherit enforced defaultDenyNamespaces;
               inherit (cfg) defaultDeny;
               extraPolicies = platformIntentPolicies;
             };
