@@ -742,7 +742,8 @@
       "snippets": [
         "externalDnsInstance",
         "externalDnsKindTryout",
-        "eksIrsaInstance"
+        "eksIrsaInstance",
+        "legacyAnnotationPrefix"
       ],
       "unverifiedNixBlocks": 1,
       "packages": [

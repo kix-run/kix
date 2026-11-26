@@ -27,9 +27,11 @@ mod prune_start_and_timeout_tests {
     #[test]
     fn prune_section_lists_kept_orphans_apart() {
         let all = orphans();
-        let text = render_prune_start(&all[..1], &all[1..], false);
+        let text = render_prune_start(&all[..1], &all[1..], false, "app");
         assert!(
-            text.contains("1 object(s) left the build and remain on the cluster"),
+            text.contains(
+                "1 object(s) left the build, still on the cluster (run `kix gc app` to delete them)"
+            ),
             "{text}"
         );
         assert!(text.contains("- ConfigMap/old@app"), "{text}");
@@ -448,7 +450,27 @@ mod run_end_tests {
         assert!(!text.contains("rollback"), "{text}");
         assert!(text.contains(", 4 not started"), "{text}");
         assert!(
-            text.contains("1 failed (during apply or after being applied), and 4 were never sent to the cluster."),
+            text.contains("1 failed, and 4 were never sent to the cluster."),
+            "{text}"
+        );
+        // A failed object that was applied before it failed readiness is on
+        // the cluster with its new spec, and the counts say so.
+        let applied = DeployResult {
+            failed_after_apply: 1,
+            ..counts.clone()
+        };
+        let text = super::observer::closing(
+            &applied,
+            &closing(Previous::Active("prod-4be1c09a".into()), None),
+        );
+        assert!(
+            text.contains("1 failed (1 applied but not ready), 4 not started"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "1 failed (1 applied but not ready; its new manifest is on the cluster), and 4 were never sent to the cluster."
+            ),
             "{text}"
         );
         let first = super::observer::closing(&counts, &closing(Previous::FirstDeploy, None));

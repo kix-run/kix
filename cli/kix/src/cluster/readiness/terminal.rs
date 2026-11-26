@@ -8,6 +8,7 @@ use kube::{
 use serde_json::Value;
 
 use super::declared::{readiness_message, status_observed_generation};
+use super::identity::{classify_pod_identity, identity_env};
 use crate::manifest::kinds::{self, GroupKind};
 
 /// Number of container restarts required before CrashLoopBackOff is treated
@@ -30,6 +31,9 @@ pub enum TerminalReason {
     ProgressDeadline,
     /// Job exceeded spec.backoffLimit.
     JobBackoffExceeded,
+    /// A pod of the current revision lacks the environment variables that
+    /// the platform adds when it gives the pod its cloud identity.
+    CloudIdentityNotApplied,
 }
 
 impl TerminalReason {
@@ -40,6 +44,7 @@ impl TerminalReason {
             TerminalReason::CrashLoop => "CrashLoopBackOff",
             TerminalReason::ProgressDeadline => "ProgressDeadlineExceeded",
             TerminalReason::JobBackoffExceeded => "JobBackoffExceeded",
+            TerminalReason::CloudIdentityNotApplied => "CloudIdentityNotApplied",
         }
     }
 }
@@ -503,14 +508,13 @@ async fn current_revision_pods(
     }
 }
 
-/// List pods matching a workload's label selector. Returns an empty `Vec` on
-/// API errors so the terminal classifier can continue using workload-level
-/// signals.
-async fn list_pods_for_workload(
+/// List pods matching a workload's label selector, or `None` when the API
+/// refuses or fails the request.
+async fn try_list_pods(
     client: &Client,
     namespace: &str,
     label_selector: &str,
-) -> Vec<Value> {
+) -> Option<Vec<Value>> {
     let pod_ar = ApiResource {
         group: "".into(),
         version: "v1".into(),
@@ -523,21 +527,111 @@ async fn list_pods_for_workload(
     match api.list(&lp).await {
         // `DynamicObject::data` leaves out `metadata`, which the pod name in
         // failure messages comes from, so serialize the whole object.
-        Ok(list) => list
-            .items
-            .into_iter()
-            .filter_map(|p| serde_json::to_value(p).ok())
-            .collect(),
+        Ok(list) => Some(
+            list.items
+                .into_iter()
+                .filter_map(|p| serde_json::to_value(p).ok())
+                .collect(),
+        ),
         Err(e) => {
             tracing::debug!(
                 namespace = namespace,
                 selector = label_selector,
                 error = %e,
-                "failed to list pods for terminal classification; skipping pod-level checks"
+                "failed to list a workload's pods; skipping pod-level checks"
             );
-            Vec::new()
+            None
         }
     }
+}
+
+/// List pods matching a workload's label selector. Returns an empty `Vec` on
+/// API errors so the terminal classifier can continue using workload-level
+/// signals.
+async fn list_pods_for_workload(
+    client: &Client,
+    namespace: &str,
+    label_selector: &str,
+) -> Vec<Value> {
+    try_list_pods(client, namespace, label_selector)
+        .await
+        .unwrap_or_default()
+}
+
+/// Return true for the kinds that roll pods from one revision to the next.
+pub fn is_rollout(kind: GroupKind<'_>) -> bool {
+    matches!(
+        kind,
+        kinds::DEPLOYMENT | kinds::STATEFUL_SET | kinds::DAEMON_SET
+    )
+}
+
+/// What one read of a rollout workload's pods found.
+#[derive(Debug, Clone)]
+pub struct RolloutPods {
+    /// The pods of the current revision.
+    pub current: Vec<Value>,
+    /// Whether `current` holds only the current revision's pods. It is false
+    /// when the revision could not be read and `current` holds every pod
+    /// the selector matches.
+    pub exact: bool,
+    /// What to do about the pods that hold back a StatefulSet's update
+    /// ([`statefulset_held_pods`]).
+    pub held: Option<String>,
+}
+
+/// Read the pods of a Deployment, StatefulSet, or DaemonSet. Return `None`
+/// for another kind, for a workload whose controller has not acted on its
+/// current spec ([`rollout_observed`]), when its current revision does not
+/// exist yet, or when the pods cannot be listed.
+///
+/// A Deployment costs two list requests (its ReplicaSets, then the pods of
+/// the current one), a DaemonSet two (its ControllerRevisions, then the
+/// pods), and a StatefulSet one, because its pods carry the revision label
+/// that `status.updateRevision` names.
+pub(super) async fn read_rollout_pods(
+    client: &Client,
+    obj: &DynamicObject,
+    kind: GroupKind<'_>,
+) -> Option<RolloutPods> {
+    if !is_rollout(kind) || !rollout_observed(obj, kind) {
+        return None;
+    }
+    let selector = workload_label_selector(&obj.data)?;
+    let namespace = obj.metadata.namespace.as_deref().unwrap_or("default");
+    if kind == kinds::STATEFUL_SET {
+        let update = obj
+            .data
+            .pointer("/status/updateRevision")
+            .and_then(Value::as_str)?;
+        let all = try_list_pods(client, namespace, &selector).await?;
+        let held = statefulset_held_pods(obj, &all);
+        let current = all
+            .into_iter()
+            .filter(|p| {
+                p.pointer("/metadata/labels/controller-revision-hash")
+                    .and_then(Value::as_str)
+                    == Some(update)
+            })
+            .collect();
+        return Some(RolloutPods {
+            current,
+            held,
+            exact: true,
+        });
+    }
+    let (selector, exact) =
+        match current_revision_pods(client, obj, kind, namespace, &selector).await {
+            RevisionPods::Matching(revision) => (format!("{selector},{revision}"), true),
+            RevisionPods::All => (selector, false),
+            RevisionPods::NotCreated => return None,
+        };
+    let current = try_list_pods(client, namespace, &selector).await?;
+    Some(RolloutPods {
+        current,
+        held: None,
+        exact,
+    })
 }
 
 /// Return true if `kind` creates pods that can be inspected for terminal
@@ -562,6 +656,9 @@ pub(super) struct ScanResult {
     /// A transient image pull error the kubelet is retrying; see
     /// [`transient_pull_error`].
     pub pull_retrying: Option<String>,
+    /// The pods of a rollout workload, when the scan read them. `pods` then
+    /// holds the same current-revision pods.
+    pub rollout: Option<RolloutPods>,
 }
 
 /// Extract the termination message lines from the most recently started pod.
@@ -641,6 +738,7 @@ pub(super) async fn scan_terminal(
         terminal: None,
         pods: Vec::new(),
         pull_retrying: None,
+        rollout: None,
     };
     if !rollout_observed(obj, kind) {
         return nothing();
@@ -656,6 +754,35 @@ pub(super) async fn scan_terminal(
             terminal: Some(hit),
             pods,
             pull_retrying: None,
+            rollout: None,
+        };
+    }
+    if is_rollout(kind) {
+        let Some(rollout) = read_rollout_pods(client, obj, kind).await else {
+            return nothing();
+        };
+        let pods = rollout.current.clone();
+        // Only pods known to be of the current revision can show whether the
+        // current pod template got its cloud identity, because older pods may
+        // run an older identity.
+        let identity = if rollout.exact {
+            obj.metadata
+                .annotations
+                .as_ref()
+                .and_then(identity_env)
+                .and_then(|expected| {
+                    pods.iter()
+                        .find_map(|p| classify_pod_identity(p, &expected))
+                        .map(|m| (TerminalReason::CloudIdentityNotApplied, m))
+                })
+        } else {
+            None
+        };
+        return ScanResult {
+            terminal: identity.or_else(|| pods.iter().find_map(classify_pod_terminal)),
+            pull_retrying: pods.iter().find_map(transient_pull_error),
+            pods,
+            rollout: Some(rollout),
         };
     }
     if !has_pods(kind) {
@@ -676,7 +803,228 @@ pub(super) async fn scan_terminal(
         terminal,
         pods,
         pull_retrying,
+        rollout: None,
     }
+}
+
+/// Return why a Deployment, StatefulSet, or DaemonSet is not ready. Both a
+/// deploy's wait and `kix status` describe a workload with this function.
+///
+/// With `pods`, read from the cluster by [`read_rollout_pods`], it counts the
+/// ready pods of the current revision and says why the first one that is not
+/// ready waits. The workload's own counts cannot say this, because a
+/// Deployment's `readyReplicas` also counts pods of the old revision. It then
+/// adds what holds back a StatefulSet's update. Without `pods`, and for a
+/// workload being deleted or with a declared readiness rule, it returns
+/// [`super::not_ready_reason`], which reads only the object.
+pub fn rollout_not_ready_reason(
+    obj: &DynamicObject,
+    kind: GroupKind<'_>,
+    pods: Option<&RolloutPods>,
+) -> String {
+    let fallback = || super::declared::not_ready_reason(obj, kind);
+    let Some(pods) = pods else {
+        return fallback();
+    };
+    if super::deletion_reason(obj).is_some() || super::declared::declared_rule(obj).is_some() {
+        return fallback();
+    }
+    let desired = match kind {
+        kinds::DEPLOYMENT | kinds::STATEFUL_SET => obj
+            .data
+            .pointer("/spec/replicas")
+            .and_then(Value::as_i64)
+            .unwrap_or(1),
+        kinds::DAEMON_SET => match obj
+            .data
+            .pointer("/status/desiredNumberScheduled")
+            .and_then(Value::as_i64)
+        {
+            Some(desired) => desired,
+            None => return fallback(),
+        },
+        _ => return fallback(),
+    };
+    let current: Vec<&Value> = pods
+        .current
+        .iter()
+        .filter(|p| p.pointer("/metadata/deletionTimestamp").is_none())
+        .collect();
+    let ready = current.iter().filter(|p| pod_ready(p)).count();
+    let mut message = format!("{ready}/{desired} updated pods ready");
+    if kind == kinds::DEPLOYMENT {
+        let total = obj
+            .data
+            .pointer("/status/replicas")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let updated = obj
+            .data
+            .pointer("/status/updatedReplicas")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        match total - updated {
+            n if n <= 0 => {}
+            1 => message.push_str(", 1 old pod still running"),
+            n => message.push_str(&format!(", {n} old pods still running")),
+        }
+    }
+    if let Some(waiting) = current.iter().find_map(|p| pod_not_ready_reason(p)) {
+        message.push_str("; ");
+        message.push_str(&waiting);
+    }
+    if let Some(held) = &pods.held {
+        message.push_str(". ");
+        message.push_str(held);
+    }
+    message
+}
+
+/// Read a workload's pods and return [`rollout_not_ready_reason`] for it.
+/// `kix status` calls it for a workload that is not ready, so it describes
+/// the workload as a deploy's wait does. Another kind gets
+/// [`super::not_ready_reason`] and costs no request.
+pub async fn live_not_ready_reason(
+    client: &Client,
+    obj: &DynamicObject,
+    kind: GroupKind<'_>,
+) -> String {
+    let pods = read_rollout_pods(client, obj, kind).await;
+    rollout_not_ready_reason(obj, kind, pods.as_ref())
+}
+
+/// Return true when a pod's `Ready` condition is `True`.
+fn pod_ready(pod: &Value) -> bool {
+    pod_condition(pod, "Ready").and_then(|c| c.get("status").and_then(Value::as_str))
+        == Some("True")
+}
+
+fn pod_condition<'a>(pod: &'a Value, condition_type: &str) -> Option<&'a Value> {
+    pod.pointer("/status/conditions")?
+        .as_array()?
+        .iter()
+        .find(|c| c.get("type").and_then(Value::as_str) == Some(condition_type))
+}
+
+/// Return why a pod is not ready, in the words of the scheduler or the
+/// kubelet, or `None` for a ready pod. A pod the scheduler cannot place
+/// reports `PodScheduled=False` with the scheduler's message. A placed pod
+/// names its first container that waits, or that runs and is not ready.
+pub(super) fn pod_not_ready_reason(pod: &Value) -> Option<String> {
+    if pod_ready(pod) {
+        return None;
+    }
+    let name = pod
+        .pointer("/metadata/name")
+        .and_then(Value::as_str)
+        .unwrap_or("?");
+    if let Some(c) = pod_condition(pod, "PodScheduled")
+        && c.get("status").and_then(Value::as_str) == Some("False")
+    {
+        let text = c
+            .get("message")
+            .or_else(|| c.get("reason"))
+            .and_then(Value::as_str)
+            .unwrap_or("not scheduled");
+        return Some(format!("pod {name} cannot be scheduled: {text}"));
+    }
+    for slot in ["/status/initContainerStatuses", "/status/containerStatuses"] {
+        let Some(statuses) = pod.pointer(slot).and_then(Value::as_array) else {
+            continue;
+        };
+        for cs in statuses {
+            let container = cs.get("name").and_then(Value::as_str).unwrap_or("?");
+            if let Some(reason) = cs.pointer("/state/waiting/reason").and_then(Value::as_str) {
+                return Some(
+                    match cs.pointer("/state/waiting/message").and_then(Value::as_str) {
+                        Some(m) if !m.is_empty() => {
+                            format!("pod {name}/{container} is waiting: {reason}: {m}")
+                        }
+                        _ => format!("pod {name}/{container} is waiting: {reason}"),
+                    },
+                );
+            }
+            if slot == "/status/containerStatuses"
+                && cs.pointer("/state/running").is_some()
+                && cs.get("ready").and_then(Value::as_bool) == Some(false)
+            {
+                return Some(format!(
+                    "pod {name}/{container} is running, but its readiness probe has not passed"
+                ));
+            }
+        }
+    }
+    let phase = pod
+        .pointer("/status/phase")
+        .and_then(Value::as_str)
+        .unwrap_or("Unknown");
+    Some(format!("pod {name} is {phase}"))
+}
+
+/// Return what to do about the pods that hold back a StatefulSet's rolling
+/// update, or `None` when none do.
+///
+/// With `podManagementPolicy: OrderedReady` (the default) and the
+/// `RollingUpdate` strategy, the StatefulSet controller replaces no pod while
+/// any of its pods is not ready. A pod left on an older revision that is not
+/// ready therefore stays on that revision, even after its template is
+/// reverted to one that works. The Kubernetes documentation calls this a
+/// forced rollback and tells the user to delete the pod. `pods` are the pods
+/// the StatefulSet's selector matches.
+pub(super) fn statefulset_held_pods(sts: &DynamicObject, pods: &[Value]) -> Option<String> {
+    let data = &sts.data;
+    let policy = data
+        .pointer("/spec/podManagementPolicy")
+        .and_then(Value::as_str)
+        .unwrap_or("OrderedReady");
+    let strategy = data
+        .pointer("/spec/updateStrategy/type")
+        .and_then(Value::as_str)
+        .unwrap_or("RollingUpdate");
+    if policy != "OrderedReady" || strategy != "RollingUpdate" {
+        return None;
+    }
+    let update = data
+        .pointer("/status/updateRevision")
+        .and_then(Value::as_str)?;
+    let uid = sts.metadata.uid.as_deref();
+    let held: Vec<(&str, &str)> = pods
+        .iter()
+        .filter(|p| uid.is_none_or(|uid| owned_by(p, uid)))
+        .filter(|p| p.pointer("/metadata/deletionTimestamp").is_none())
+        .filter(|p| !pod_ready(p))
+        .filter_map(|p| {
+            let revision = p
+                .pointer("/metadata/labels/controller-revision-hash")
+                .and_then(Value::as_str)?;
+            let name = p.pointer("/metadata/name").and_then(Value::as_str)?;
+            (revision != update).then_some((name, revision))
+        })
+        .collect();
+    if held.is_empty() {
+        return None;
+    }
+    let names: Vec<&str> = held.iter().map(|(name, _)| *name).collect();
+    let listed = held
+        .iter()
+        .map(|(name, revision)| format!("{name} (revision {revision})"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let namespace = sts.metadata.namespace.as_deref().unwrap_or("default");
+    let command = format!("kubectl delete pod -n {namespace} {}", names.join(" "));
+    let rule = "With OrderedReady pod management, Kubernetes will not replace pods \
+                while any pod in the StatefulSet is not ready.";
+    Some(if let [(name, revision)] = held.as_slice() {
+        format!(
+            "Pod {name} is not ready and is still on revision {revision} (current revision: {update}). {rule} \
+             If it does not become ready, delete it so the StatefulSet recreates it on the current revision: {command}"
+        )
+    } else {
+        format!(
+            "Pods {listed} are not ready (current revision: {update}). {rule} \
+             If they do not become ready, delete them so the StatefulSet recreates them on the current revision: {command}"
+        )
+    })
 }
 
 /// Build a stable string fingerprint of a resource's progress state.

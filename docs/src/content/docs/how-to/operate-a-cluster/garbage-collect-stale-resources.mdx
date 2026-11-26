@@ -72,17 +72,24 @@ judges only the named cluster's resources. It finds them through the
 Activation records each resource names, skips the other clusters' resources,
 and keeps a resource another cluster's current build also contains.
 
-If a resource matches no Activation record on the cluster, Kix cannot tell
-which Kix cluster it belongs to. A full scan lists it under "No deployment
-record on this cluster" and keeps it, even when only one Kix cluster has
-records there. The resource may come from an earlier deploy whose records
+Leftover resources from a deploy or rollback without `--prune` are still
+deleted by a full scan even after `kix gc` retires the Activation record that
+deployed them. Because the `Active` record lists their build under
+`status.orphansKeptFrom`, Kix still knows they belong to this cluster and
+deletes them without `--include unattributed`.
+
+If a resource does not match any Activation record on the cluster (including
+`status.orphansKeptFrom`), Kix cannot tell which Kix cluster owns it. A full
+scan lists it under "Objects with no matching deployment record" and keeps it,
+even when only one Kix cluster has records there. The resource may come from an
+earlier deploy whose records
 `kix gc` has retired, or from another Kix cluster whose records were deleted.
 Review the listed resources, then pass `--include unattributed` to check them
 against the active deployment's build and delete any not in it.
 
-Resources carrying a Kix label but no `kix.run/identity-hash` are listed under
-"No Kix build annotation" and kept by default. Kix cannot establish that it originally applied
-them. Include them only after checking each reported resource. `--include`
+Resources written by Kix that carry a Kix label without a `kix.run/identity-hash`
+annotation are listed under "No Kix build annotation" and kept by default,
+because Kix cannot match them to a build. Include them only after checking each reported resource. `--include`
 takes a comma-separated list, such as `--include unstamped,unattributed`:
 
 <Command
@@ -159,6 +166,48 @@ example:
   ]}
   cwd="kix-examples/"
 />
+
+## Remove everything a Kix cluster deployed
+
+Kix does not have a single uninstall command. To remove a Kix cluster from a
+Kubernetes cluster, deploy an empty set of packages with `--prune`, then delete
+the remaining cluster-level objects with `kubectl`.
+
+First, list the resources in the current build and note its `Namespace` and
+`CustomResourceDefinition` names, since the next step removes them from the
+build output:
+
+<Command commands={["kix list resources how-to-application"]} cwd="kix-examples/" />
+
+Next, remove every package from the cluster definition (keeping any flavor or
+platform import the definition still needs) and deploy with `--prune`:
+
+<Command commands={["kix deploy how-to-application --prune"]} cwd="kix-examples/" />
+
+Kix deletes every resource from the previous deployment except:
+
+- **Namespaces and CustomResourceDefinitions.** Kix never deletes these
+  automatically. Deleting a Namespace deletes everything inside it. Deleting a
+  CustomResourceDefinition deletes every custom resource of that kind across all
+  namespaces, so check first that no other Kix cluster or tool uses it.
+- **Runtime objects created by operators or workloads**, such as Secrets and
+  Leases. Because Kix did not deploy them, it does not track them. Deleting
+  their Namespace removes them.
+- **Shared resources still deployed by another Kix cluster.** Kix leaves these
+  in place for the other cluster.
+- **Activation records** (the cluster's deployment history). List them with
+  `kubectl get activations.kix.run -l kix.run/cluster=how-to-application`. If
+  the Kix operator manages the cluster, deleting the `Active` record makes the
+  operator delete that deployment's resources, as described in
+  [Let the operator perform cleanup](#let-the-operator-perform-cleanup).
+- **Resources from any flavor or platform import** you kept in the cluster
+  definition.
+- **Kix's own CustomResourceDefinitions** (`activations.kix.run` and
+  `packageinstances.kix.run`). Every Kix cluster on the same Kubernetes cluster
+  shares these two CRDs, so delete them only when no other Kix clusters remain.
+
+Delete the remaining records, Namespaces, and CustomResourceDefinitions you no
+longer need with `kubectl delete`.
 
 :::note[Configure the history window]
 See [Configure Activation retention](/docs/how-to/operate-a-cluster/configure-activation-retention/)

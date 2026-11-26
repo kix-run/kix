@@ -1,0 +1,4 @@
+# 2026-11-25 · `kix/packages/experimental/cert-manager/crds.nix` · A ClusterIssuer that Let's Encrypt refuses for good still makes the deploy wait its whole timeout.
+
+cert-manager 1.21 sets `Ready=False` with reason `ErrRegisterACMEAccount` both when the ACME server answers 4xx (a refusal it never retries, such as an `example.com` contact) and when the request failed for a network or 5xx reason it retries (`pkg/issuer/acme/setup.go`). A `failed` readiness rule matches on reason, so declaring that reason would also stop a deploy that would have succeeded on the retry. The deploy waits out the idle budget and then prints cert-manager's message.
+Decision required from the maintainers: declare the reason as failed and accept false failures on network errors, add message matching to `failed` rules, or ask cert-manager upstream for a separate reason for the refusals it does not retry.

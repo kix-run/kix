@@ -55,6 +55,9 @@ rec {
     importKind = key "import-kind";
     importApiVersion = key "import-apiversion";
     importName = key "import-name";
+    # Stamped only when the imported object is in another namespace than
+    # the marker.
+    importNamespace = key "import-namespace";
     importFqdn = key "import-fqdn";
     importSecretKeys = key "import-secret-keys";
     # Stamped on CRD ref markers (`scope.mkCRDRef` and `mkImport` `crds`) to
@@ -118,6 +121,14 @@ rec {
     # it. Some mechanisms put nothing else on the object, so this is where a
     # diff and other tools read the identity.
     cloudIdentity = key "cloud-identity";
+    # JSON on a workload whose pods use a ServiceAccount bound with
+    # `kix.cloudIdentity.use`: the environment variables the mechanism's
+    # platform adds to each container (`env`, a name mapped to its value or
+    # null), the mechanism's `description`, a `fix`, the pod annotation that
+    # exempts containers (`skip`), and the other mechanisms of the cloud
+    # with their variable names (`alternatives`). The deploy checks the
+    # workload's new pods against it.
+    cloudIdentityEnv = key "cloud-identity-env";
     optionalActivated = key "optional-activated";
   };
 

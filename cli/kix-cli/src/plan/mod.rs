@@ -519,23 +519,37 @@ fn write_kept_line(out: &mut String, id: &ResourceId) {
 
 /// Print resources that left the build and are retained because deleting them
 /// would also delete objects outside the build.
-pub fn print_never_pruned(kept: &[ResourceId]) {
-    print!("{}", render_never_pruned(kept));
+/// Why the objects a never-pruned list shows are candidates for deletion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeptFrom {
+    /// They were in an earlier build of this cluster and left it.
+    LeftTheBuild,
+    /// A full scan found them on the cluster. Some may never have been in
+    /// this cluster's build, such as objects that name no deployment record.
+    FullScan,
 }
 
-pub fn render_never_pruned(kept: &[ResourceId]) -> String {
+pub fn print_never_pruned(kept: &[ResourceId], from: KeptFrom) {
+    print!("{}", render_never_pruned(kept, from));
+}
+
+/// Render the objects kept because Kix never deletes their kind, with a
+/// heading that says why they came up for deletion only where `from` makes
+/// that true.
+pub fn render_never_pruned(kept: &[ResourceId], from: KeptFrom) -> String {
     use std::fmt::Write;
     let mut out = String::new();
     if kept.is_empty() {
         return out;
     }
     let _ = writeln!(out);
-    let _ = writeln!(
-        out,
-        "{} ({} left the build, never deleted automatically):",
-        output::bold("Kept on the cluster"),
-        kept.len(),
-    );
+    let count = kept.len();
+    let what = match from {
+        KeptFrom::LeftTheBuild => format!("{count} left the build, never deleted automatically"),
+        KeptFrom::FullScan if count == 1 => "1 object, never deleted automatically".to_string(),
+        KeptFrom::FullScan => format!("{count} objects, never deleted automatically"),
+    };
+    let _ = writeln!(out, "{} ({what}):", output::bold("Kept on the cluster"));
     for rid in kept {
         let _ = writeln!(out, "    {} {}", output::yellow("!"), rid);
     }
@@ -561,7 +575,13 @@ pub fn kix_build() -> kix::plan::document::KixBuild {
 /// with what happens to them (`fate`).
 pub fn print_checked(checked: &CheckedPlan, fate: &str, verbose: bool) {
     print_package_plan(checked.pkg_diff(), verbose);
-    print_plan_summary(checked.pkg_diff());
+    let reapplied = checked
+        .objects()
+        .writes
+        .iter()
+        .filter(|w| w.change == kix::plan::document::WriteChange::Reapplied)
+        .count();
+    print_plan_summary(checked.pkg_diff(), reapplied);
     print_reruns(
         checked.plan(),
         &[RerunReason::Changed, RerunReason::LastRunFailed],
@@ -586,12 +606,21 @@ pub fn orphans_fate(flags: PlanFlags, connected: bool, cluster: &str) -> String 
     }
 }
 
-/// Return the fate of orphans a deploy of `cluster` keeps without `--prune`.
-/// The new Activation records them under `status.orphansKeptFrom`.
+/// Return the fate of orphans a deploy or rollback of `cluster` keeps
+/// without `--prune`. The new Activation records them under
+/// `status.orphansKeptFrom`.
 pub fn kept_orphans_fate(cluster: &str) -> String {
     format!(
-        "still on the cluster; `kix deploy {cluster} --prune` or `kix gc {cluster}` deletes them"
+        "still on the cluster (run {} to delete them)",
+        kept_orphans_cleanup(cluster)
     )
+}
+
+/// Return the command that deletes the orphans a deploy or rollback of
+/// `cluster` kept. Every message that names it calls this. `kix gc` keeps the
+/// Active build, so it never undoes a rollback, as `kix deploy --prune` would.
+pub fn kept_orphans_cleanup(cluster: &str) -> String {
+    format!("`kix gc {cluster}`")
 }
 
 /// Render the orphaned and protected-resource sections of a deploy or rollback
@@ -612,7 +641,7 @@ pub fn render_plan_orphans(orphans: &[ResourceId], fate: &str) -> String {
             let _ = writeln!(out, "    {} {}", output::red("-"), rid.display_id());
         }
     }
-    out.push_str(&render_never_pruned(&kept));
+    out.push_str(&render_never_pruned(&kept, KeptFrom::LeftTheBuild));
     out
 }
 
@@ -656,7 +685,17 @@ pub fn print_reruns(plan: &DeployPlan, reasons: &[RerunReason]) {
 }
 
 /// Print plan summary line.
-pub fn print_plan_summary(diff: &PackageDiff) {
+/// Print the one-line summary of a plan. `diff` compares the new build with
+/// the deployed one. `reapplied` counts the unchanged objects the deploy
+/// writes again: what a stopped deploy left, objects the cluster lost, and
+/// everything under `--reconcile`. The diff shows none of them, so the
+/// summary counts them itself and agrees with the plan's `Objects:` line.
+pub fn print_plan_summary(diff: &PackageDiff, reapplied: usize) {
+    crate::say!("{}", render_plan_summary(diff, reapplied));
+}
+
+/// Render the lines [`print_plan_summary`] prints.
+pub fn render_plan_summary(diff: &PackageDiff, reapplied: usize) -> String {
     let updated = diff.changed.len();
     let added = diff.added.len();
     let removed = diff.removed.len();
@@ -688,32 +727,34 @@ pub fn print_plan_summary(diff: &PackageDiff) {
         };
         parts.push(output::yellow(s).into_owned());
     }
-
-    if parts.is_empty() && diff.activation.is_none() {
-        crate::say!();
-        crate::say!("  {}", output::green("Everything up to date."));
-    } else if parts.is_empty() {
-        crate::say!();
-        crate::say!(
-            "  Plan: {}",
-            output::dim("only the deployment record changes (no object changes)")
-        );
-    } else {
-        crate::say!();
-        crate::say!("  Plan: {}", parts.join(", "));
-        if totals.any() {
-            let kept = if totals.kept > 0 {
-                format!(", {} kept", totals.kept)
-            } else {
-                String::new()
-            };
-            let res_line = format!(
-                "  Resources: {} changed in content{kept}, {} tracking annotation only (no spec change or restart)",
-                totals.real_content, totals.dep_affected,
-            );
-            crate::say!("{}", output::dim(&res_line));
-        }
+    if reapplied > 0 {
+        let s = format!("{reapplied} unchanged object(s) reapplied");
+        parts.push(output::yellow(&s).into_owned());
     }
+    let writes_objects = updated + added + removed + reapplied > 0 || diff.cluster_level.is_some();
+    if !writes_objects && diff.activation.is_some() {
+        let s = "only the deployment record changes";
+        parts.push(output::dim(s).into_owned());
+    }
+
+    if parts.is_empty() {
+        return format!("\n  {}", output::green("Everything up to date."));
+    }
+    let mut out = format!("\n  Plan: {}", parts.join(", "));
+    if totals.any() {
+        let kept = if totals.kept > 0 {
+            format!(", {} kept", totals.kept)
+        } else {
+            String::new()
+        };
+        let res_line = format!(
+            "  Resources: {} changed in content{kept}, {} tracking annotation only (no spec change or restart)",
+            totals.real_content, totals.dep_affected,
+        );
+        out.push('\n');
+        out.push_str(&output::dim(&res_line));
+    }
+    out
 }
 
 enum PlanEntry<'a> {
@@ -938,5 +979,76 @@ mod render_tests {
         assert!(text.contains("- ConfigMap/old@app"), "{text}");
         assert!(!text.contains("- Namespace"), "{text}");
         assert!(text.contains("! Namespace/gone"), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod never_pruned_tests {
+    use super::*;
+
+    /// A full scan may keep a Namespace that was never in this cluster's
+    /// build, so only a list of objects that left the build says they did.
+    #[test]
+    fn only_objects_that_left_the_build_are_said_to_have_left_it() {
+        let ns = ResourceId {
+            group: String::new(),
+            kind: "Namespace".into(),
+            namespace: kix::manifest::types::CLUSTER_SCOPED.into(),
+            name: "second".into(),
+        };
+        let left = render_never_pruned(std::slice::from_ref(&ns), KeptFrom::LeftTheBuild);
+        assert!(
+            left.contains("1 left the build, never deleted automatically"),
+            "{left}"
+        );
+        let scan = render_never_pruned(std::slice::from_ref(&ns), KeptFrom::FullScan);
+        assert!(
+            scan.contains("(1 object, never deleted automatically)"),
+            "{scan}"
+        );
+        assert!(!scan.contains("left the build"), "{scan}");
+    }
+
+    fn diff(unchanged: usize, new_record: bool) -> PackageDiff {
+        PackageDiff {
+            added: Vec::new(),
+            removed: Vec::new(),
+            changed: Vec::new(),
+            unchanged,
+            cluster_level: None,
+            activation: new_record.then(|| kix::plan::RecordChange {
+                old: Some("c-old".into()),
+                new: Some("c-new".into()),
+            }),
+            labelled: false,
+            labels: Default::default(),
+            shown: Default::default(),
+        }
+    }
+
+    /// The summary agrees with the plan's `Objects:` line: a new deployment
+    /// record and unchanged objects written again are counted, not hidden
+    /// behind "unchanged".
+    #[test]
+    fn the_summary_counts_every_write() {
+        let only_record = render_plan_summary(&diff(2, true), 0);
+        assert!(only_record.contains("2 unchanged"), "{only_record}");
+        assert!(
+            only_record.contains("only the deployment record changes"),
+            "{only_record}"
+        );
+
+        let repair = render_plan_summary(&diff(2, true), 4);
+        assert!(
+            repair.contains("4 unchanged object(s) reapplied"),
+            "{repair}"
+        );
+        assert!(!repair.contains("only the deployment record"), "{repair}");
+
+        let nothing = render_plan_summary(&diff(2, false), 0);
+        assert!(
+            nothing.contains("Plan:") && !nothing.contains("record"),
+            "{nothing}"
+        );
     }
 }

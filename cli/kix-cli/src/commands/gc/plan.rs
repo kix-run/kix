@@ -30,15 +30,17 @@ pub(super) enum GarbageReason {
 }
 
 impl GarbageReason {
-    pub(super) fn label(&self) -> &'static str {
+    /// Describe the reason, naming `compared`, the build this run compared
+    /// live objects with, such as `the build of active deployment c-v2`.
+    pub(super) fn label(&self, compared: &str) -> String {
         match self {
-            GarbageReason::HashNotExpected => {
-                "not in the active deployment's build (or local build if none is active)"
-            }
+            GarbageReason::HashNotExpected => format!("not in {compared}"),
             GarbageReason::NoIdentityHash => {
-                "carries Kix's label but no Kix build annotation (`--include unstamped`)"
+                "no Kix build annotation, so Kix cannot match it to a build".to_string()
             }
-            GarbageReason::RetiredActivation => "activation record retired by retention",
+            GarbageReason::RetiredActivation => {
+                "activation record retired by retention".to_string()
+            }
         }
     }
 }
@@ -187,17 +189,45 @@ pub(super) fn judge_hard(
             continue;
         }
 
+        // A package instance record names its instance in its spec, not in
+        // its `kix.run/package` stamp.
+        let (package, package_namespace) =
+            match kix::eval::store_graph::instance_of_record(&to_manifest_value(obj)) {
+                Some((ns, name)) => (Some(name), Some(ns)),
+                None => (ann_get(keys::PACKAGE), ann_get(keys::PACKAGE_NAMESPACE)),
+            };
         garbage.push(GarbageEntry {
             id: kix::cluster::drift::resource_id(obj),
             identity_hash,
-            package: ann_get(keys::PACKAGE),
-            package_namespace: ann_get(keys::PACKAGE_NAMESPACE),
+            package,
+            package_namespace,
             activations: ann_get(keys::ACTIVATIONS),
             reason,
             deleting: kix::cluster::readiness::deletion_reason(obj),
         });
     }
     (garbage, shared)
+}
+
+/// Split out the unstamped objects that `--include unstamped` covers, unless
+/// `include_unstamped` is set, and return them with the rest of `garbage`.
+///
+/// An unstamped object is one Kix wrote without `kix.run/identity-hash`. A
+/// copy has no hash either, but the sweep already set it apart and
+/// `--include copies` judges it, so `copies` (the ids of the sweep's copies)
+/// stay in the rest. Protected kinds stay in the rest too, so the plan lists
+/// them as kept.
+pub(super) fn hold_back_unstamped(
+    garbage: Vec<GarbageEntry>,
+    copies: &HashSet<ResourceId>,
+    include_unstamped: bool,
+) -> (Vec<GarbageEntry>, Vec<GarbageEntry>) {
+    garbage.into_iter().partition(|g| {
+        g.reason == GarbageReason::NoIdentityHash
+            && !include_unstamped
+            && !copies.contains(&g.id)
+            && !lifecycle::never_pruned(g.id.group_kind())
+    })
 }
 
 /// Return `true` if `obj` carries annotation `key` in its raw data or typed metadata.

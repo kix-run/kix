@@ -41,18 +41,25 @@
 # `cloudDNS` solver with no `serviceAccountSecretRef`, and an `azureDNS`
 # solver with neither `clientID` nor `clientSecretSecretRef` call the cloud
 # with the cert-manager controller's own credentials. Those come from the
-# cloud identity of the cert-manager instance (`out.identityCloud`), or from
-# the node when it has none. A solver for a cloud other than that
+# cloud identity of the cert-manager instance (`out.identityCloud`). With
+# none, the controller gets what the platform gives a pod without an
+# identity: on GKE with Workload Identity Federation, its ServiceAccount's
+# own principal, and on EKS or AKS, the node's identity when pods can reach
+# the instance metadata service. A solver for a cloud other than the
 # identity's fails the build.
 #
 #   instances.cert-manager.letsencrypt = {
 #     package = packages.experimental.cluster-issuer;
 #     config.spec.acme = {
 #       server = "https://acme-v02.api.letsencrypt.org/directory";
-#       email = "platform@example.com";
+#       email = "<your-email>";
 #       solvers = [ { dns01.route53.region = "eu-west-1"; } ];
 #     };
 #   };
+#
+# Replace `<your-email>` with your own address. Let's Encrypt
+# refuses an `example.com` contact, and the issuer then stays not ready until
+# the deploy's readiness timeout.
 #
 # The package fills in two things:
 #   - `acme.privateKeySecretRef.name`, when unset, with
@@ -133,8 +140,9 @@ let
 
   # The DNS-01 providers that, with none of `keyFields` set, call their
   # cloud with the cert-manager controller's own credentials: its cloud
-  # identity, or the node's. Route 53's `auth` exchanges the token of
-  # another ServiceAccount, so it counts as a key.
+  # identity, or what the platform gives a pod without one. Route 53's
+  # `auth` exchanges the token of another ServiceAccount, so it counts as a
+  # key.
   ambientProviders = {
     route53 = {
       cloud = "aws";
@@ -320,7 +328,7 @@ in
       {
         acme = {
           server = "https://acme-v02.api.letsencrypt.org/directory";
-          email = "platform@example.com";
+          email = "<your-email>";
           solvers = [
             {
               dns01.cloudflare.apiTokenSecretRef.key = "api-token";

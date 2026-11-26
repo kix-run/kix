@@ -1,7 +1,7 @@
 //! Sweep Kix-labeled objects on a cluster using parallel LIST requests, then
 //! attribute each object to the Kix clusters whose records it names.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use super::activation::OpenedRecords;
 use super::discovery::api_for;
@@ -33,23 +33,22 @@ pub(crate) fn resource_fqn(ar: &ApiResource) -> String {
 pub struct ManagedSweep {
     /// Objects Kix applied, each carrying `kix.run/identity-hash`.
     pub managed: Vec<DynamicObject>,
-    /// Objects that carry the Kix label without an identity hash or owner.
-    /// Kix never applied them. `kix gc --full-scan` reports them, and nothing
-    /// deletes them unless requested.
-    pub unstamped: Vec<DynamicObject>,
-    /// Stamped objects that Kix never wrote: no `managedFields` entry names
-    /// the `kix` field manager. A controller copied Kix's labels and
-    /// annotations onto them, whether or not it set an owner reference.
-    /// They are excluded from every [`SweepScope`]. `kix gc --full-scan` reports
+    /// Objects Kix wrote that carry the Kix label without an identity hash or
+    /// owner, so no build of Kix's lists them. `kix gc --full-scan` reports
     /// them, and nothing deletes them unless requested.
+    pub unstamped: Vec<DynamicObject>,
+    /// Objects that Kix never wrote: no `managedFields` entry names the `kix`
+    /// field manager. Another program copied Kix's labels, and sometimes its
+    /// annotations, onto them. They are excluded from every [`SweepScope`].
+    /// `kix gc --full-scan` reports them, and nothing deletes them unless
+    /// requested.
     pub copies: Vec<DynamicObject>,
     /// Resource types this account cannot list (403). Callers report these so a
     /// partial view of the cluster is not mistaken for a complete one.
     pub forbidden: Vec<String>,
     /// Under [`SweepScope::Cluster`], objects omitted because they belong only
-    /// to other Kix clusters, counted per owner (multiple owners are joined
-    /// with `", "`).
-    pub foreign: BTreeMap<String, usize>,
+    /// to other Kix clusters.
+    pub foreign: Foreign,
     /// Under [`SweepScope::Cluster`], objects that name no record of any Kix
     /// cluster, so Kix cannot tell which cluster they belong to. Omitted from
     /// `managed` and `unstamped`.
@@ -62,34 +61,46 @@ pub struct ManagedSweep {
     pub tenancy: Tenancy,
 }
 
+/// Objects a [`SweepScope::Cluster`] sweep omitted because only other Kix
+/// clusters' records name them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Foreign {
+    /// How many objects were omitted. An object several clusters deploy
+    /// counts once.
+    pub objects: usize,
+    /// Every Kix cluster whose records name one of those objects.
+    pub clusters: BTreeSet<String>,
+}
+
+impl Foreign {
+    fn add(&mut self, owners: Vec<String>) {
+        self.objects += 1;
+        self.clusters.extend(owners);
+    }
+}
+
 impl ManagedSweep {
     /// Return one line that says how many objects other Kix clusters own,
     /// or `None` when there are none. A line for each cluster would grow with
     /// every cluster that shares the Kubernetes cluster.
     pub fn foreign_note(&self) -> Option<String> {
-        let total: usize = self.foreign.values().sum();
-        let objects = if total == 1 { "object" } else { "objects" };
-        match self.foreign.len() {
-            0 => None,
-            1 => {
-                let (owner, _) = self.foreign.iter().next()?;
-                let (belong, clusters) = match (total == 1, owner.contains(", ")) {
-                    (true, false) => ("belongs", "Kix cluster"),
-                    (true, true) => ("belongs", "Kix clusters"),
-                    (false, false) => ("belong", "Kix cluster"),
-                    (false, true) => ("belong", "Kix clusters"),
-                };
-                Some(format!(
-                    "Skipped {total} {objects} that {belong} to {clusters} '{owner}'."
-                ))
-            }
-            n => {
-                let owners: Vec<&str> = self.foreign.keys().map(String::as_str).collect();
-                Some(format!(
-                    "Skipped {total} {objects} that belong to {n} other Kix clusters: {}.",
-                    owners.join(", ")
-                ))
-            }
+        let total = self.foreign.objects;
+        let (objects, belong) = if total == 1 {
+            ("object", "belongs")
+        } else {
+            ("objects", "belong")
+        };
+        let owners: Vec<&str> = self.foreign.clusters.iter().map(String::as_str).collect();
+        match owners.as_slice() {
+            [] => None,
+            [owner] => Some(format!(
+                "Skipped {total} {objects} that {belong} to Kix cluster '{owner}'."
+            )),
+            _ => Some(format!(
+                "Skipped {total} {objects} that {belong} to {} other Kix clusters: {}.",
+                owners.len(),
+                owners.join(", ")
+            )),
         }
     }
 
@@ -189,16 +200,14 @@ pub fn scope_sweep(sweep: ManagedSweep, scope: SweepScope<'_>, tenancy: Tenancy)
             }
         }
         SweepScope::Cluster(_) => {
-            let mut foreign: BTreeMap<String, usize> = BTreeMap::new();
+            let mut foreign = Foreign::default();
             let mut unattributed = Vec::new();
             let mut keep = |objects: Vec<DynamicObject>| -> Vec<DynamicObject> {
                 let mut kept = Vec::new();
                 for obj in objects {
                     match attribute(&obj, &tenancy) {
                         Attribution::Ours | Attribution::Shared(_) => kept.push(obj),
-                        Attribution::Foreign(owners) => {
-                            *foreign.entry(owners.join(", ")).or_default() += 1;
-                        }
+                        Attribution::Foreign(owners) => foreign.add(owners),
                         Attribution::Unattributed => unattributed.push(obj),
                     }
                 }
@@ -280,24 +289,25 @@ pub async fn sweep_managed(
 /// copies, and unstamped objects.
 ///
 /// Controllers often copy labels and annotations onto derived objects (such as
-/// EndpointSlices, ReplicaSets, and Pods), so the label alone does not prove
-/// Kix applied an object:
+/// EndpointSlices, ReplicaSets, Pods, and Events), so the label alone does not
+/// prove Kix applied an object. Whether Kix wrote it decides that, whether or
+/// not it carries Kix's stamp:
 ///
 /// - Stamped and written by Kix (a `managedFields` entry for the `kix` field
 ///   manager): placed in `managed`, even if a controller later adopted it.
-/// - Stamped and never written by Kix: placed in `copies`. Operators copy a
-///   custom resource's labels and annotations onto the objects they make, and
-///   some leave those objects unowned on purpose, such as data volumes.
-/// - Stamped Activation records: placed in `managed`. Kix writes some of them
-///   under other field managers, and records are never pruned.
+/// - Activation records: never copies. Kix writes some of them under other
+///   field managers, and records are never pruned.
 /// - Unstamped and owned by a controller: dropped as a controller child.
 /// - Unstamped `Endpoints` with the same namespace and name as a stamped
 ///   `Service`: dropped as the endpoints controller's mirror.
-/// - All other unstamped, unowned objects: placed in `unstamped`.
+/// - Any other object Kix never wrote: placed in `copies`. Operators copy a
+///   custom resource's labels onto the objects they make, and some leave those
+///   objects unowned, such as data volumes and the Events they post.
+/// - Unstamped objects Kix wrote: placed in `unstamped`.
 pub fn partition_sweep(objects: Vec<DynamicObject>) -> ManagedSweep {
     let (stamped, rest): (Vec<DynamicObject>, Vec<DynamicObject>) =
         objects.into_iter().partition(is_stamped);
-    let (copies, managed): (Vec<DynamicObject>, Vec<DynamicObject>) =
+    let (mut copies, managed): (Vec<DynamicObject>, Vec<DynamicObject>) =
         stamped.into_iter().partition(is_controller_copy);
     let stamped_services: HashSet<(String, String)> = managed
         .iter()
@@ -305,7 +315,7 @@ pub fn partition_sweep(objects: Vec<DynamicObject>) -> ManagedSweep {
         .filter(|o| super::drift::resource_id(o).group_kind() == crate::manifest::kinds::SERVICE)
         .map(|o| (namespace_of(o), o.metadata.name.clone().unwrap_or_default()))
         .collect();
-    let unstamped = rest
+    let (unstamped_copies, unstamped): (Vec<DynamicObject>, Vec<DynamicObject>) = rest
         .into_iter()
         .filter(|o| !is_owned(o))
         .filter(|o| {
@@ -313,13 +323,14 @@ pub fn partition_sweep(objects: Vec<DynamicObject>) -> ManagedSweep {
                 && stamped_services
                     .contains(&(namespace_of(o), o.metadata.name.clone().unwrap_or_default())))
         })
-        .collect();
+        .partition(is_controller_copy);
+    copies.extend(unstamped_copies);
     ManagedSweep {
         managed,
         unstamped,
         copies,
         forbidden: Vec::new(),
-        foreign: BTreeMap::new(),
+        foreign: Foreign::default(),
         unattributed: Vec::new(),
         other_builds: 0,
         tenancy: Tenancy::empty(""),
@@ -567,7 +578,9 @@ pub(crate) struct Listed {
 
 /// One task's result inside [`fetch_parallel`].
 enum ListOutcome {
-    Items(Vec<DynamicObject>),
+    /// The objects listed through the resource at this index of the
+    /// discovery list.
+    Items(usize, Vec<DynamicObject>),
     Forbidden(String),
 }
 
@@ -586,7 +599,8 @@ fn sweep_concurrency() -> usize {
 }
 
 /// Run parallel LIST calls across all discovered resource types, up to
-/// [`DEFAULT_SWEEP_CONCURRENCY`] at a time.
+/// [`DEFAULT_SWEEP_CONCURRENCY`] at a time, and return each object once
+/// (see [`one_per_object`]).
 ///
 /// Returns any non-403 error that exhausts transport retries and cancels
 /// remaining in-flight LISTs so callers never see a partial result as empty.
@@ -596,16 +610,14 @@ async fn fetch_parallel(
     lp: &ListParams,
 ) -> Result<Listed, FetchError> {
     let mut set = JoinSet::new();
-    let mut listed = Listed {
-        objects: Vec::new(),
-        forbidden: Vec::new(),
-    };
+    let mut batches: Vec<(usize, Vec<DynamicObject>)> = Vec::new();
+    let mut forbidden: Vec<String> = Vec::new();
     let limit = sweep_concurrency();
 
-    for (ar, scope) in discovery {
+    for (index, (ar, scope)) in discovery.iter().enumerate() {
         while set.len() >= limit {
             match set.join_next().await {
-                Some(outcome) => absorb(&mut listed, outcome)?,
+                Some(outcome) => absorb(&mut batches, &mut forbidden, outcome)?,
                 None => break,
             }
         }
@@ -639,7 +651,7 @@ async fn fetch_parallel(
                             obj
                         })
                         .collect();
-                    Ok(ListOutcome::Items(items))
+                    Ok(ListOutcome::Items(index, items))
                 }
                 Err(e) if classify(&e) == FailureClass::Forbidden => {
                     tracing::debug!(resource = %fqn, "forbidden, recorded");
@@ -654,25 +666,84 @@ async fn fetch_parallel(
     }
 
     while let Some(join_result) = set.join_next().await {
-        absorb(&mut listed, join_result)?;
+        absorb(&mut batches, &mut forbidden, join_result)?;
     }
-    listed.forbidden.sort();
-    Ok(listed)
+    batches.sort_by_key(|(index, _)| *index);
+    forbidden.sort();
+    Ok(Listed {
+        objects: one_per_object(batches.into_iter().flat_map(|(_, items)| items)),
+        forbidden,
+    })
 }
 
-/// Fold one finished LIST task into `listed`, or return its error.
+/// Fold one finished LIST task into `batches` or `forbidden`, or return its
+/// error.
 #[allow(clippy::result_large_err)]
 fn absorb(
-    listed: &mut Listed,
+    batches: &mut Vec<(usize, Vec<DynamicObject>)>,
+    forbidden: &mut Vec<String>,
     join_result: Result<Result<ListOutcome, FetchError>, tokio::task::JoinError>,
 ) -> Result<(), FetchError> {
     match join_result {
-        Ok(Ok(ListOutcome::Items(items))) => listed.objects.extend(items),
-        Ok(Ok(ListOutcome::Forbidden(fqn))) => listed.forbidden.push(fqn),
+        Ok(Ok(ListOutcome::Items(index, items))) => batches.push((index, items)),
+        Ok(Ok(ListOutcome::Forbidden(fqn))) => forbidden.push(fqn),
         Ok(Err(e)) => return Err(e),
         Err(e) => return Err(FetchError::ClientError(Box::new(e))),
     }
     Ok(())
+}
+
+/// Keep one copy of each object, identified by its UID, from objects listed
+/// in discovery order.
+///
+/// Kubernetes serves some kinds under more than one API group, such as
+/// `Event` under both the core group and `events.k8s.io`, so listing every
+/// served kind reads such an object once per group. The copy read through the
+/// API group Kix applied it with wins, so its resource id matches the
+/// build's. Otherwise the first copy in discovery order wins.
+fn one_per_object(objects: impl IntoIterator<Item = DynamicObject>) -> Vec<DynamicObject> {
+    let mut kept: Vec<DynamicObject> = Vec::new();
+    let mut by_uid: HashMap<String, usize> = HashMap::new();
+    for obj in objects {
+        let Some(uid) = obj.metadata.uid.clone() else {
+            kept.push(obj);
+            continue;
+        };
+        match by_uid.get(&uid) {
+            None => {
+                by_uid.insert(uid, kept.len());
+                kept.push(obj);
+            }
+            Some(&i) => {
+                if read_as_kix_applied(&obj) && !read_as_kix_applied(&kept[i]) {
+                    kept[i] = obj;
+                }
+            }
+        }
+    }
+    kept
+}
+
+/// Return whether `obj` was read through the API group of a `kix`
+/// `managedFields` entry.
+fn read_as_kix_applied(obj: &DynamicObject) -> bool {
+    let group = |api_version: &str| {
+        api_version
+            .split_once('/')
+            .map_or("", |(g, _)| g)
+            .to_owned()
+    };
+    let Some(read) = obj
+        .data
+        .get("apiVersion")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+    obj.metadata.managed_fields.iter().flatten().any(|e| {
+        e.manager.as_deref() == Some(super::fieldsv1::KIX_FIELD_MANAGER)
+            && e.api_version.as_deref().map(group) == Some(group(read))
+    })
 }
 
 #[cfg(test)]
@@ -703,8 +774,8 @@ mod tests {
                     .into_iter()
                     .collect(),
             );
-            obj = kix_applied(obj);
         }
+        obj = kix_applied(obj);
         if owned {
             obj.metadata.owner_references = Some(vec![OwnerReference {
                 api_version: "v1".into(),
@@ -865,16 +936,27 @@ mod tests {
     }
 
     #[test]
-    fn sweep_reports_unowned_unstamped_label_carriers() {
-        let sweep = partition_sweep(vec![swept(
-            "ConfigMap",
-            "ns",
-            "kubectl-applied",
-            false,
-            false,
-        )]);
+    fn sweep_reports_unowned_unstamped_objects_kix_wrote() {
+        let sweep = partition_sweep(vec![swept("ConfigMap", "ns", "unannotated", false, false)]);
+        assert!(sweep.managed.is_empty() && sweep.copies.is_empty());
+        assert_eq!(names(&sweep.unstamped), ["ns/ConfigMap/unannotated"]);
+    }
+
+    /// An operator copies a custom resource's labels, without Kix's
+    /// annotations, onto the Events it posts about it. Kix never wrote them,
+    /// so they are copies, not unstamped objects of Kix's.
+    #[test]
+    fn sweep_sets_apart_unstamped_objects_kix_never_wrote() {
+        let sweep = partition_sweep(vec![
+            written_by(
+                "stackgres-operator",
+                swept("Event", "ns", "db.1a2b", false, false),
+            ),
+            swept("ConfigMap", "ns", "unannotated", false, false),
+        ]);
+        assert_eq!(names(&sweep.copies), ["ns/Event/db.1a2b"]);
+        assert_eq!(names(&sweep.unstamped), ["ns/ConfigMap/unannotated"]);
         assert!(sweep.managed.is_empty());
-        assert_eq!(names(&sweep.unstamped), ["ns/ConfigMap/kubectl-applied"]);
     }
 
     #[test]
@@ -1011,7 +1093,7 @@ mod tests {
             obj("Deployment", "b-web", "b1"),
             obj("ClusterRole", "shared", "a2,b1"),
             obj("ConfigMap", "leftover", "dead"),
-            swept("ConfigMap", "ns", "kubectl-applied", false, false),
+            swept("ConfigMap", "ns", "unannotated", false, false),
         ])
     }
 
@@ -1042,16 +1124,16 @@ mod tests {
     fn each_cluster_sees_only_its_own_objects() {
         let swept_a = scope_sweep(mixed_sweep(), SweepScope::Cluster("a"), two_clusters("a"));
         assert_eq!(sorted_names(&swept_a.managed), vec!["a-web", "shared"]);
-        assert_eq!(swept_a.foreign, BTreeMap::from([("b".to_string(), 1)]));
+        assert_eq!(swept_a.foreign, foreign(1, &["b"]));
         assert_eq!(
             sorted_names(&swept_a.unattributed),
-            vec!["kubectl-applied", "leftover"]
+            vec!["leftover", "unannotated"]
         );
         assert!(swept_a.unstamped.is_empty());
 
         let swept_b = scope_sweep(mixed_sweep(), SweepScope::Cluster("b"), two_clusters("b"));
         assert_eq!(sorted_names(&swept_b.managed), vec!["b-web", "shared"]);
-        assert_eq!(swept_b.foreign, BTreeMap::from([("a".to_string(), 1)]));
+        assert_eq!(swept_b.foreign, foreign(1, &["a"]));
     }
 
     /// When only one Kix cluster has records on the Kubernetes cluster, the
@@ -1064,15 +1146,15 @@ mod tests {
             obj("Deployment", "web", "a2"),
             obj("ConfigMap", "leftover", "dead"),
             obj("ConfigMap", "never-annotated", ""),
-            swept("ConfigMap", "ns", "kubectl-applied", false, false),
+            swept("ConfigMap", "ns", "unannotated", false, false),
         ]);
         let scoped = scope_sweep(sweep, SweepScope::Cluster("a"), t);
         assert_eq!(sorted_names(&scoped.managed), vec!["web"]);
         assert_eq!(
             sorted_names(&scoped.unattributed),
-            vec!["kubectl-applied", "leftover", "never-annotated"]
+            vec!["leftover", "never-annotated", "unannotated"]
         );
-        assert!(scoped.foreign.is_empty() && scoped.unstamped.is_empty());
+        assert!(scoped.foreign.objects == 0 && scoped.unstamped.is_empty());
 
         // A Kubernetes cluster with no Activation records attributes nothing.
         let none = Tenancy::from_records(&[], "a");
@@ -1094,12 +1176,12 @@ mod tests {
         };
         let both = scope_sweep(sweep(), SweepScope::Cluster("a"), two_clusters("a"));
         assert_eq!(sorted_names(&both.managed), vec!["a-web", "shared"]);
-        assert_eq!(both.foreign, BTreeMap::from([("b".to_string(), 1)]));
+        assert_eq!(both.foreign, foreign(1, &["b"]));
 
         let a_only = scope_sweep(sweep(), SweepScope::Cluster("a"), one_cluster());
         assert_eq!(sorted_names(&a_only.managed), vec!["a-web", "shared"]);
         assert_eq!(sorted_names(&a_only.unattributed), vec!["b-web"]);
-        assert!(a_only.foreign.is_empty());
+        assert!(a_only.foreign.objects == 0);
     }
 
     #[test]
@@ -1116,6 +1198,52 @@ mod tests {
         assert!(scoped.unstamped.is_empty());
         // `a-older` names only a Superseded record of `a`.
         assert_eq!(scoped.other_builds, 1);
+    }
+
+    fn foreign(objects: usize, clusters: &[&str]) -> Foreign {
+        Foreign {
+            objects,
+            clusters: clusters.iter().map(|c| c.to_string()).collect(),
+        }
+    }
+
+    /// Objects that several other clusters deploy count once, and each
+    /// cluster is named once, so the count of clusters matches the names.
+    #[test]
+    fn the_foreign_note_names_each_other_cluster_once() {
+        let records = [
+            record(Some("a"), "a1", lifecycle::PHASE_ACTIVE),
+            record(Some("b"), "b1", lifecycle::PHASE_ACTIVE),
+            record(Some("c"), "c1", lifecycle::PHASE_ACTIVE),
+            record(Some("d"), "d1", lifecycle::PHASE_ACTIVE),
+        ];
+        let sweep = partition_sweep(vec![
+            obj("Deployment", "b-web", "b1"),
+            obj("ClusterRole", "b-and-c", "b1,c1"),
+            obj("ClusterRole", "c-and-d", "c1,d1"),
+            obj("Deployment", "d-web", "d1"),
+        ]);
+        let scoped = scope_sweep(
+            sweep,
+            SweepScope::Cluster("a"),
+            Tenancy::from_records(&records, "a"),
+        );
+        assert_eq!(scoped.foreign, foreign(4, &["b", "c", "d"]));
+        assert_eq!(
+            scoped.foreign_note().unwrap(),
+            "Skipped 4 objects that belong to 3 other Kix clusters: b, c, d."
+        );
+
+        let one = ManagedSweep {
+            foreign: foreign(1, &["b", "c"]),
+            ..partition_sweep(vec![])
+        };
+        assert_eq!(
+            one.foreign_note().unwrap(),
+            "Skipped 1 object that belongs to 2 other Kix clusters: b, c."
+        );
+        let none = partition_sweep(vec![]);
+        assert_eq!(none.foreign_note(), None);
     }
 
     #[test]
@@ -1152,6 +1280,93 @@ mod tests {
             .unwrap();
         let record_list = requests.iter().position(|r| *r == records).unwrap();
         assert!(last_object_list < record_list, "{requests:#?}");
+    }
+
+    /// Build an object read through `api_version` with uid `uid`.
+    fn read_as(api_version: &str, uid: &str, name: &str) -> DynamicObject {
+        let mut o = swept("Event", "ns", name, false, false);
+        o.data["apiVersion"] = json!(api_version);
+        o.metadata.uid = Some(uid.into());
+        o
+    }
+
+    /// Kubernetes serves an Event under two API groups. The sweep keeps one
+    /// copy of each object, and keeps objects with different uids apart.
+    #[test]
+    fn one_per_object_keeps_each_uid_once() {
+        let written_through = |api_version: &str, o: DynamicObject| {
+            let mut o = o;
+            o.metadata.managed_fields = Some(vec![ManagedFieldsEntry {
+                api_version: Some(api_version.into()),
+                ..entry(crate::cluster::fieldsv1::KIX_FIELD_MANAGER, "Apply")
+            }]);
+            o
+        };
+        let group = |o: &DynamicObject| o.data["apiVersion"].as_str().unwrap().to_string();
+
+        // Nobody's write names a group: the first copy in discovery order.
+        let kept = one_per_object([
+            read_as("v1", "u1", "e"),
+            read_as("events.k8s.io/v1", "u1", "e"),
+        ]);
+        assert_eq!(kept.iter().map(group).collect::<Vec<_>>(), ["v1"]);
+
+        // Kix applied it through `events.k8s.io`, listed second: that copy.
+        let kept = one_per_object([
+            written_through("events.k8s.io/v1beta1", read_as("v1", "u1", "e")),
+            written_through(
+                "events.k8s.io/v1beta1",
+                read_as("events.k8s.io/v1", "u1", "e"),
+            ),
+        ]);
+        assert_eq!(
+            kept.iter().map(group).collect::<Vec<_>>(),
+            ["events.k8s.io/v1"]
+        );
+
+        // Two objects with one name but different uids are both kept.
+        let kept = one_per_object([
+            read_as("v1", "u1", "e"),
+            read_as("events.k8s.io/v1", "u2", "e"),
+        ]);
+        assert_eq!(kept.len(), 2);
+    }
+
+    /// A full sweep of a shared cluster reads an operator's Event once,
+    /// although both the core group and `events.k8s.io` serve it, and sets it
+    /// apart as a copy because only the operator wrote it.
+    #[tokio::test]
+    async fn the_sweep_lists_an_event_served_by_two_groups_once_as_a_copy() {
+        use crate::cluster::fake_api::FakeApi;
+        let event = |api_version: &str| {
+            json!({
+                "apiVersion": api_version,
+                "kind": "Event",
+                "metadata": {
+                    "name": "orders.1a2b",
+                    "namespace": "orders",
+                    "uid": "event-uid",
+                    "labels": {
+                        "app.kubernetes.io/managed-by": "kix",
+                        "app.kubernetes.io/instance": "orders",
+                    },
+                    "managedFields": [
+                        { "manager": "stackgres-operator", "operation": "Update",
+                          "apiVersion": api_version },
+                    ],
+                },
+            })
+        };
+        let api = FakeApi::new([event("v1"), event("events.k8s.io/v1")]);
+        let client = api.client();
+        let discovery = discover_resources(&client).await.unwrap();
+        let records = activation::Records::open(&client, &discovery).unwrap();
+        let sweep = sweep_managed(&client, &discovery, &records, SweepScope::Cluster("a"))
+            .await
+            .unwrap();
+        assert_eq!(names(&sweep.copies), ["orders/Event/orders.1a2b"]);
+        assert!(sweep.unattributed.is_empty() && sweep.unstamped.is_empty());
+        assert!(sweep.managed.is_empty());
     }
 
     fn rid(kind: &str, name: &str) -> ResourceId {

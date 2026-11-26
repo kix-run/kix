@@ -74,8 +74,32 @@ impl Line {
                 configured: r.configured,
                 unchanged: r.unchanged,
                 failed: r.failed,
+                failed_after_apply: r.failed_after_apply,
                 cancelled: r.cancelled,
                 pruned: r.pruned,
+                nothing_to_apply: false,
+            },
+        }
+    }
+
+    /// Build the summary line of a deploy that stopped before it ran because
+    /// the plan applies and prunes nothing. `unchanged` counts the objects a
+    /// run would have reported unchanged.
+    pub fn nothing_to_apply(unchanged: usize, elapsed_ms: u64) -> Line {
+        Line {
+            schema_version: SCHEMA_VERSION.to_string(),
+            elapsed_ms,
+            event: Event::Summary {
+                dry_run: false,
+                succeeded: true,
+                created: 0,
+                configured: 0,
+                unchanged,
+                failed: 0,
+                failed_after_apply: 0,
+                cancelled: 0,
+                pruned: 0,
+                nothing_to_apply: true,
             },
         }
     }
@@ -86,7 +110,8 @@ impl Line {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     /// The Kubernetes cluster the deploy writes to. The first line of the
-    /// log.
+    /// log. A deploy whose build is empty never connects, so its log has
+    /// only the `summary` line.
     Kubernetes {
         /// The kubeconfig context, or `null` when the kubeconfig names none.
         context: Option<String>,
@@ -159,7 +184,7 @@ pub enum Event {
         resource: String,
         fields: Vec<FieldNotKept>,
     },
-    /// The counts the text summary line shows.
+    /// The counts the text summary line shows. The last line of the log.
     Summary {
         dry_run: bool,
         succeeded: bool,
@@ -167,8 +192,17 @@ pub enum Event {
         configured: usize,
         unchanged: usize,
         failed: usize,
+        /// The objects in `failed` that the run wrote to the cluster and
+        /// that then did not become ready. Older logs leave it out.
+        #[serde(default)]
+        failed_after_apply: usize,
         cancelled: usize,
         pruned: usize,
+        /// True when the plan had nothing to apply or prune, so the deploy
+        /// wrote nothing and the active deployment record stays current. The
+        /// log then holds no `plan` or `node` lines.
+        #[serde(default)]
+        nothing_to_apply: bool,
     },
 }
 
@@ -275,6 +309,9 @@ pub enum Detail {
     AwaitingRestart {
         message: String,
     },
+    /// A prune found nothing to delete, and the text says why, such as
+    /// `already gone (Kubernetes does not recognize its kind)`.
+    AlreadyGone(String),
     /// A delete did not finish within the wait: after `elapsed_ms`, the
     /// object was still on the cluster, held by `finalizers`. `controllers`
     /// lists the workloads its kind names as its controller (`controller` on
@@ -529,6 +566,7 @@ impl Detail {
             NodeDetail::SecretHydrationFailed(msg) => Detail::SecretHydrationFailed(msg.clone()),
             NodeDetail::RecreatedInPlace { reason } => Detail::RecreatedInPlace(reason.clone()),
             NodeDetail::Rerun { reason } => Detail::Rerun(reason.clone()),
+            NodeDetail::AlreadyGone(why) => Detail::AlreadyGone(why.clone()),
             NodeDetail::PendingRestart {
                 stale: Some(stale),
                 message,

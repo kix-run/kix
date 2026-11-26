@@ -30,6 +30,10 @@ solver. This example uses Cloudflare DNS-01:
 
 <Snippet {...acmeClusterIssuer} />
 
+Replace `<your-email>` with your own address. Let's Encrypt refuses
+`example.com`, and `kix deploy` waits for the readiness timeout before showing
+that error.
+
 The `cloudflare-api-token` instance declares a Secret created outside Kix that
 holds the token under the key `api-token`. Use
 [a Kix-managed Secret](/docs/how-to/platform-capabilities/use-kix-managed-secrets/),
@@ -102,8 +106,12 @@ its Secret from `deps.issuerCredentials`, even when `cert-manager` sets
 
 If a solver omits the fields above and targets a different cloud than
 `deps.controllerIdentity`, evaluation fails and names both the solver and the
-`cert-manager` instance. When `deps.controllerIdentity` is unset, the controller
-falls back to the node's credentials without checking the solver's cloud. Only
+`cert-manager` instance. When `deps.controllerIdentity` is unset, Kix does not
+check the solver's cloud, and the controller uses whatever default credentials
+the cluster gives the pod. On GKE with Workload Identity Federation, the pod
+runs as its Kubernetes ServiceAccount principal, which has no IAM roles unless
+you grant them. On EKS and AKS, the pod uses the node's identity if the node
+allows access to the instance metadata service. Only
 ClusterIssuers can use the controller's credentials; cert-manager allows this
 for ClusterIssuers by default, and the package leaves it disabled for
 namespaced Issuers.

@@ -745,6 +745,9 @@ impl<'a> Run<'a> {
         message: String,
     ) {
         self.result.failed += 1;
+        if wrote_then_not_ready(entry, &detail) {
+            self.result.failed_after_apply += 1;
+        }
         self.result.failures.push(NodeFailure {
             node: node_id.clone(),
             message: message.clone(),
@@ -1180,11 +1183,13 @@ impl<'a> Run<'a> {
                             )
                             .await;
                             match waited {
-                                Ok(()) => Pruning::Gone,
+                                Ok(()) => Pruning::Gone { already: None },
                                 Err(unfinished) => Pruning::Unfinished(unfinished),
                             }
                         }
-                        None => Pruning::Gone,
+                        None => Pruning::Gone {
+                            already: pruned.already_gone(),
+                        },
                     },
                     Err(message) => Pruning::Unfinished(Unfinished::Failed(message)),
                 }
@@ -1199,9 +1204,14 @@ impl<'a> Run<'a> {
                 // holds back what it depends on.
                 |p| matches!(p, Pruning::Unfinished(_) | Pruning::Kept(_)),
                 |rid, walked| match walked {
-                    Walked::Done(Pruning::Gone) => {
+                    Walked::Done(Pruning::Gone { already }) => {
                         result.pruned += 1;
-                        emit(state(rid, Verdict::Ready));
+                        emit(DeployEvent::NodeStateChanged {
+                            node: NodeId::Resource(rid.clone()),
+                            kind: TransitionKind::Delete,
+                            verdict: Verdict::Ready,
+                            detail: already.map(|why| NodeDetail::AlreadyGone(why.to_string())),
+                        });
                     }
                     Walked::Done(Pruning::Kept(outcome)) => {
                         // An object kept because its content drifted still
@@ -1349,8 +1359,9 @@ impl<'a> Run<'a> {
 
 /// How one prune delete ended.
 enum Pruning {
-    /// The object is gone.
-    Gone,
+    /// The object is gone. `already` says why when there was nothing to
+    /// delete ([`Pruned::already_gone`]).
+    Gone { already: Option<&'static str> },
     /// The prune guard kept the object.
     Kept(Pruned),
     /// The object may still be on the cluster.
@@ -1519,6 +1530,17 @@ impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         self.0.abort();
     }
+}
+
+/// Return true when a node that failed with `detail` had written its object
+/// first: an apply or a recreate whose object then failed readiness. A
+/// readiness failure on an unchanged node wrote nothing.
+fn wrote_then_not_ready(entry: &PlanNodeEntry, detail: &NodeDetail) -> bool {
+    matches!(entry.kind, TransitionKind::Apply | TransitionKind::Recreate)
+        && matches!(
+            detail,
+            NodeDetail::ReadinessTimeout { .. } | NodeDetail::ReadinessFailed { .. }
+        )
 }
 
 /// CRD barrier state.

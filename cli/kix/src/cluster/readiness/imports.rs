@@ -29,10 +29,11 @@ use crate::manifest::kinds::{self, GroupKind};
 /// require `Established=True`, and `Secret` resources with `expected_keys`
 /// verify that every declared key is present in `data`.
 ///
-/// The marker lives in its own namespace and the described resource is
-/// expected in the same namespace for namespaced kinds. Cross-namespace
-/// imports are not supported; use a dedicated adapter instance in the owning
-/// namespace and pass the resource handle through dependency injection instead.
+/// For namespaced kinds, the described resource is expected in the namespace
+/// named by `kix.run/import-namespace`, or in the marker's own namespace when
+/// the marker does not carry it. A platform that refuses writes to a
+/// namespace, such as `kube-system` on GKE Autopilot, can then keep the marker
+/// elsewhere.
 #[derive(Debug, Clone)]
 pub struct ImportTarget {
     /// Kubernetes kind of the expected resource (such as `"CustomResourceDefinition"`).
@@ -43,7 +44,8 @@ pub struct ImportTarget {
     pub name: String,
     /// Namespace of the expected resource. `None` for cluster-scoped kinds
     /// (currently `CustomResourceDefinition`). For namespaced kinds, this
-    /// comes from the marker's own `metadata.namespace`.
+    /// comes from `kix.run/import-namespace`, or else the marker's own
+    /// `metadata.namespace`.
     pub namespace: Option<String>,
     /// For `Secret` imports, the set of keys expected in `data`, parsed from
     /// the comma-separated `kix.run/import-secret-keys` annotation. When empty,
@@ -108,8 +110,9 @@ pub struct MalformedMarker {
 /// least one version in `kix.run/crd-served-versions`, or this function returns
 /// [`MalformedMarker`].
 ///
-/// The target's namespace comes from the marker's own `metadata.namespace` for
-/// namespaced kinds, or `None` for `CustomResourceDefinition`.
+/// The target's namespace comes from `kix.run/import-namespace`, or else the
+/// marker's own `metadata.namespace`, for namespaced kinds, or `None` for
+/// `CustomResourceDefinition`.
 pub fn import_target_from_manifest(
     manifest: &Value,
 ) -> Result<Option<ImportTarget>, MalformedMarker> {
@@ -136,9 +139,12 @@ pub fn import_target_from_manifest(
     {
         None
     } else {
-        manifest
-            .pointer("/metadata/namespace")
-            .and_then(Value::as_str)
+        annotation(keys::IMPORT_NAMESPACE)
+            .or_else(|| {
+                manifest
+                    .pointer("/metadata/namespace")
+                    .and_then(Value::as_str)
+            })
             .map(String::from)
     };
 

@@ -1,19 +1,19 @@
 # GKE Autopilot flavor.
 #
-# Google manages both the control plane and worker nodes. Autopilot refuses
-# privileged containers and workloads in GKE-managed namespaces such as
-# `kube-system`. Its own admission policy includes every rule of the
-# `baseline` Pod Security Standard. It owns `cni` and `loadBalancer`
-# exclusively, and its default StorageClass is `standard-rwo`.
+# Google manages both the control plane and worker nodes, and adds nodes as
+# pods need them. GKE's own admission webhook, not Pod Security Admission
+# labels, refuses privileged containers, host namespaces such as
+# `hostNetwork`, writable `hostPath` volumes, and any workload in a
+# GKE-managed namespace such as `kube-system`. Its policy covers every rule
+# of the `baseline` Pod Security Standard. DaemonSets are allowed. Autopilot
+# owns `cni` and `loadBalancer` exclusively, and its default StorageClass is
+# `standard-rwo`.
 #
 # NodeLocal DNSCache is always on in Autopilot. The `platform-dns` import
 # lists it among the DNS peers (`gke-dns-peers.nix`).
 #
 # Pods get Google Cloud identities through Workload Identity Federation for
 # GKE, which the `cloud-identity` import in `gke-managed` declares.
-#
-# No one has tested this flavor on a live Autopilot cluster. Its
-# `daemonSets = false` does not come from Google's documentation.
 
 {
   config,
@@ -64,11 +64,17 @@ in
   };
 
   cluster.capabilities = {
+    # Autopilot adds a node when a pod does not fit on the existing ones.
+    multiNode = lib.mkDefault true;
     managedControlPlane = lib.mkDefault true;
     nodeAutoscaling = lib.mkDefault true;
     privilegedContainers = lib.mkDefault false;
     podSecurityEnforcement = lib.mkDefault "baseline";
-    daemonSets = lib.mkDefault false;
+    daemonSets = lib.mkDefault true;
+    # GKE admits the built-in critical PriorityClasses only in namespaces
+    # with a ResourceQuota for them, and Autopilot refuses user workloads in
+    # `kube-system`, the one such namespace a user could name.
+    criticalPriorityNamespaces = lib.mkDefault [ ];
   };
 
   # The API server calls admission webhooks and aggregated APIs through the
@@ -82,8 +88,9 @@ in
     }
   ];
 
-  # Place platform imports in `gke-managed` because Autopilot blocks user
-  # resources in `kube-system`.
+  # Place platform imports in `gke-managed` because Autopilot refuses user
+  # objects in `kube-system`. Each import names the namespace of the object
+  # it stands for.
   instances.gke-managed = {
     platform-dns = platformDns {
       name = "kube-dns";

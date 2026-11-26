@@ -361,6 +361,8 @@ in
           dep = storageCredentials;
           arg = "storageCredentials";
           cloud = if backupOn then "aws" else null;
+          # The package writes only S3 storage settings.
+          supportedClouds = [ "aws" ];
         };
         identity = storage.identity;
         # The operator creates the instance pods' ServiceAccount from

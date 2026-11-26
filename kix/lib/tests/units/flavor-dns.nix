@@ -56,6 +56,8 @@ let
       inherit ((byName "dns-facts" (ofKind "ConfigMap" ms)).data) name fqdn;
       importKind = marker.metadata.annotations.${kixKeys.importKind};
       importName = marker.metadata.annotations.${kixKeys.importName};
+      importNamespace =
+        marker.metadata.annotations.${kixKeys.importNamespace} or marker.metadata.namespace;
     };
 
   importNamespace = name: if name == "gke-autopilot" then "gke-managed" else "kube-system";
@@ -86,11 +88,34 @@ in
     in
     (
       facts.fqdn == "${expected.${name}}.svc.cluster.local"
+      && facts.importNamespace == lib.last (lib.splitString "." expected.${name})
       && facts.name == service
       && facts.importKind == "Service"
       && facts.importName == service
     )
     || throw "flavour ${name}: platform-dns gives ${builtins.toJSON facts}"
+  ) (builtins.attrNames expected);
+
+  # The marker names the Service's namespace only when the instance lives
+  # elsewhere, so markers in the Service's namespace stay as they were.
+  flavor-dns-marker-names-namespace-only-when-elsewhere = lib.all (
+    name:
+    let
+      marker = byName "platform-dns" (
+        ofKind "PackageInstance" (
+          manifests (mkCluster [
+            (flavor name)
+            { instances.${importNamespace name}.platform-dns.optional = false; }
+          ])
+        )
+      );
+      stamped = marker.metadata.annotations ? ${kixKeys.importNamespace};
+    in
+    stamped == builtins.elem name [
+      "gke-autopilot"
+      "openshift"
+    ]
+    || throw "flavour ${name}: import-namespace stamped is ${builtins.toJSON stamped}"
   ) (builtins.attrNames expected);
 
   # On every flavour, a cluster definition can set `platform-dns.optional`

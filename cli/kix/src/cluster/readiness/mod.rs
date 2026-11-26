@@ -13,6 +13,7 @@
 
 mod declared;
 mod deletion;
+mod identity;
 mod imports;
 mod terminal;
 #[cfg(test)]
@@ -35,7 +36,9 @@ use super::discovery;
 use crate::manifest::kinds;
 use crate::manifest::types::ResourceId;
 
-pub use declared::{check_readiness, declared_rule, is_immediate_kind, not_ready_reason};
+pub use declared::{
+    check_readiness, declared_rule, is_immediate, is_immediate_kind, not_ready_reason,
+};
 pub use deletion::{
     Controller, ControllerState, DeletePath, Deletion, Runner, STUCK_DELETE_ID, Stuck,
     controller_state, cycle_reason, deletion_reason, finalizers_of, held_back_reason,
@@ -43,8 +46,9 @@ pub use deletion::{
 };
 pub use imports::{ImportTarget, MalformedMarker, import_target_from_manifest};
 pub use terminal::{
-    PullError, TerminalReason, classify_pod_terminal, classify_pull_error,
-    classify_workload_terminal, transient_pull_error,
+    PullError, RolloutPods, TerminalReason, classify_pod_terminal, classify_pull_error,
+    classify_workload_terminal, is_rollout, live_not_ready_reason, rollout_not_ready_reason,
+    transient_pull_error,
 };
 
 pub(crate) use declared::{check_job_ready, daemonset_pending_restart};
@@ -157,6 +161,38 @@ pub(crate) fn being_deleted(rid: &ResourceId, reason: &str) -> String {
     )
 }
 
+/// The id of the change record that made a `LoadBalancer` Service wait for
+/// its address. A timeout on such a Service starts with it.
+const LOAD_BALANCER_WAIT_ID: &str = "[K1243] ";
+
+/// Return what to do about a `LoadBalancer` Service that got no address. A
+/// Service that sets `spec.loadBalancerClass` is served only by a controller
+/// for that class, and the cluster's default load balancer ignores it. A
+/// Service without a class waits for the default load balancer.
+fn load_balancer_advice(service: &DynamicObject) -> String {
+    let namespace = service.metadata.namespace.as_deref().unwrap_or("default");
+    let name = service.metadata.name.as_deref().unwrap_or("unknown");
+    let describe = format!("kubectl describe service -n {namespace} {name}");
+    match service
+        .data
+        .pointer("/spec/loadBalancerClass")
+        .and_then(Value::as_str)
+    {
+        Some(class) => format!(
+            "Kix stopped waiting for an address. Because spec.loadBalancerClass is \"{class}\", \
+             the cluster's default load balancer ignores this Service. Check that a load balancer \
+             controller for \"{class}\" is running on the cluster, or remove spec.loadBalancerClass \
+             to use the default load balancer. Run `{describe}` to inspect the Service's events."
+        ),
+        None => format!(
+            "Kix stopped waiting for an address. Run `{describe}` to inspect the Service's events. \
+             If this cluster has no load balancer, change the Service's type to \
+             ClusterIP or NodePort, and set cluster.roles.loadBalancer.binding = \"absent\" \
+             in the cluster definition so the build rejects LoadBalancer Services."
+        ),
+    }
+}
+
 /// Absolute upper bound on how long any single resource may take to become
 /// Ready. Enforced regardless of the per-resource idle budget so a resource
 /// whose fingerprint changes continuously without reaching Ready still times
@@ -197,6 +233,11 @@ const HARD_CEILING: Duration = Duration::from_secs(5 * 60);
 /// A ready custom resource whose declared `pendingRestart` state matches for
 /// the current spec returns `ReadyPendingRestart`, as an `OnDelete` DaemonSet
 /// with pods on the previous template does ([`declared_pending_restart`]).
+///
+/// While a Deployment, StatefulSet, or DaemonSet is not ready, the message
+/// comes from [`rollout_not_ready_reason`], as `kix status` does: the ready
+/// pods of the current revision, why the first one that is not ready waits,
+/// and the pods that hold back a StatefulSet's update.
 ///
 /// Returns `Ready` on success, `Failed` on a terminal signal, `TimedOut` when
 /// either timeout budget elapses, or `Cancelled` if `cancel` is triggered.
@@ -281,7 +322,14 @@ pub(crate) async fn wait_for_ready(
             });
         }
 
-        let mut message = readiness_message(&obj, kind);
+        let mut message = match &scan.rollout {
+            Some(pods) => format!(
+                "{}/{name}: {}",
+                kind.kind,
+                rollout_not_ready_reason(&obj, kind, Some(pods))
+            ),
+            None => readiness_message(&obj, kind),
+        };
         if check_readiness(&obj, kind) {
             if kind == kinds::DAEMON_SET
                 && let Some(stale) = daemonset_pending_restart(&obj.data)
@@ -328,11 +376,17 @@ pub(crate) async fn wait_for_ready(
             message = format!("{message} after this error: {pull}");
         }
 
+        let out_of_time = idle >= idle_budget || total >= hard_ceiling;
+        let mut lead = "";
+        if out_of_time && kind == kinds::SERVICE {
+            lead = LOAD_BALANCER_WAIT_ID;
+            message = format!("{message}. {}", load_balancer_advice(&obj));
+        }
         if idle >= idle_budget {
             return Ok(ReadinessResult::TimedOut {
                 elapsed: total,
                 message: format!(
-                    "no readiness progress for {}s (idle budget {}s): {message}",
+                    "{lead}no readiness progress for {}s (idle budget {}s): {message}",
                     idle.as_secs(),
                     idle_budget.as_secs()
                 ),
@@ -342,7 +396,7 @@ pub(crate) async fn wait_for_ready(
             return Ok(ReadinessResult::TimedOut {
                 elapsed: total,
                 message: format!(
-                    "hard ceiling {}s exceeded: {message}",
+                    "{lead}hard ceiling {}s exceeded: {message}",
                     hard_ceiling.as_secs()
                 ),
             });

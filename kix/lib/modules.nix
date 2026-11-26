@@ -547,7 +547,7 @@ in
         default = null;
         description = ''
           Whether pods can run privileged, use hostNetwork, hostPID, etc.
-          False on GKE Autopilot (hard platform restriction) and effectively
+          False on GKE Autopilot (GKE's admission webhook blocks privileged pods) and effectively
           false on OpenShift (SCC restricted by default). null = unknown:
           relying workloads warn instead of failing.
         '';
@@ -565,7 +565,7 @@ in
         description = ''
           Pod Security Admission enforcement level, if any.
           null = no cluster-wide enforcement (individual namespaces may still set labels).
-          "baseline" = GKE Autopilot default.
+          "baseline" = GKE Autopilot default (enforced by GKE's admission webhook).
           "restricted" = OpenShift SCC default.
         '';
       };
@@ -574,8 +574,7 @@ in
         type = lib.types.nullOr lib.types.bool;
         default = null;
         description = ''
-          Whether DaemonSets can be deployed. False on GKE Autopilot where
-          the platform manages all node-level daemons. null = unknown.
+          Whether DaemonSets can be deployed. null = unknown.
         '';
       };
 
@@ -583,12 +582,14 @@ in
         type = lib.types.nullOr (lib.types.listOf lib.types.str);
         default = null;
         description = ''
-          Namespaces where the cluster allows pods with the built-in
-          `system-node-critical` or `system-cluster-critical` PriorityClass.
+          Namespaces where the cluster allows pods with either built-in
+          PriorityClass, `system-node-critical` and `system-cluster-critical`.
+          A namespace on the list must admit both classes.
           When set, any workload using either class outside these namespaces
           fails the build. The `gke` flavor sets this to `[ "kube-system" ]`
-          because GKE rejects these pods in namespaces without a matching
-          ResourceQuota. `null` means no known restriction.
+          because GKE admits each class only in a namespace with a
+          ResourceQuota whose scope names that class. `null` means no known
+          restriction.
         '';
       };
     };

@@ -62,6 +62,12 @@ not in the current deploy and are still being deleted (see
 objects on the cluster, whether orphaned from an earlier deploy or created
 outside Kix. See [Objects Kix did not apply](/docs/reference/cli/diff/#objects-kix-did-not-apply).
 
+The `readiness` check reflects what Kubernetes and each object's controller
+report on the cluster. It does not test external calls from inside your pods;
+for example, a pod that starts and passes its probes counts as ready even if a
+cloud API rejects its requests. See
+[What readiness does not show](/docs/how-to/operate-a-cluster/check-resource-status/#what-readiness-does-not-show).
+
 A missing object is a problem under every check, because no check can run on
 an object that is gone. `kix status --check drift` and
 `kix status --check readiness` therefore also report missing objects.
@@ -94,6 +100,32 @@ manager that now owns it. See
 
 A Job that finished counts as present and ready. Jobs that Kix builds do not
 delete themselves, so a Job that is gone is missing.
+
+## Failed deploys
+
+When a deploy fails, the previous deploy record stays current. If a deploy has
+failed since the current deploy finished, `kix status` reports the failed
+deploy and exits `2`. The header shows the failed deploy first (with when and
+why it failed), followed by the current deploy.
+
+Any object in the failed build that is not in the current deploy (matched by
+kind, namespace, and name) is checked the same way and listed under
+`Only in the failed deploy <record>`. For example, this section includes a new
+`LoadBalancer` Service from the failed deploy that never received an address.
+Objects present in both builds are checked once under the current deploy
+against the live cluster state.
+
+## How workload readiness is reported
+
+When a Deployment, StatefulSet, or DaemonSet is not ready, `kix status`
+inspects its pods and reports the same details that `kix deploy` shows while
+waiting: how many pods on the current revision are ready, why the first unready
+pod is waiting (such as a scheduling error or a failing readiness probe), and
+whether an unready pod on an older revision is blocking a StatefulSet update.
+This adds one or two API list requests per unready workload, and none for ready
+workloads. If Kix cannot list the pods (or the controller has not acted on the
+current revision yet), the output falls back to the counts on the workload's
+status.
 
 ## Text output
 
@@ -213,8 +245,9 @@ fields and values they do not know.
 | `clusters[].objects_from` | Where Kix found the deploy's objects: `index` (the record's package index), `depends_on` (the live objects' `kix.run/depends-on` annotations), or `unknown` (nowhere; no object was checked). |
 | `clusters[].notes` | Warnings about the cluster, such as a platform interface that changed. |
 | `clusters[].packages[]` | One entry for each package, with `name` (`namespace/instance`, or `null` for the cluster-level objects), `summary`, and `resources`. |
+| `clusters[].failed_deploy` | The newest deploy that failed since `deploy`, or `null`: `name`, `identity_hash`, `failed_at`, `reason`, `packages` (objects present only in the failed build, in the same shape as `clusters[].packages`), and `summary` (counts for those objects, which are excluded from the cluster's `summary`). |
 | `clusters[].leaving[]` | Kix-managed objects of this Kix cluster that are not in the current deploy and are still being deleted. Each entry has `kind`, `group` (omitted for core `v1` kinds), `namespace` (`null` when cluster-scoped), `name`, `package` (`namespace/instance`, or `null`), `deleting_since` (`metadata.deletionTimestamp`), and `finalizers`. |
-| `summary` | Counts over every cluster: `resources`, `ok`, `missing`, `changed`, `not_ready`, `deleting` (objects in the current deploy being deleted), `leaving` (objects in `leaving[]`, not counted in `resources`, and `0` on a package `summary`), and `not_checked`. Each cluster and package has the same object. `ok` counts only the objects that every selected check passed. An object with two problems counts under both. |
+| `summary` | Counts over every cluster: `resources`, `ok`, `missing`, `changed`, `not_ready`, `deleting` (objects in the current deploy being deleted), `leaving` (objects in `leaving[]`, not counted in `resources`, and `0` on a package `summary`), `not_checked`, and `failed_deploys` (Kix clusters where a deploy failed since the current deploy; `0` on a package `summary`). Each cluster and package has the same object. `ok` counts only the objects that every selected check passed. An object with two problems counts under both. |
 
 Each entry of `resources[]`:
 
@@ -226,7 +259,7 @@ Each entry of `resources[]`:
 | `named` | `false` when Kix could not name a missing object. |
 | `present` | `yes`, `no`, `external` (an import marker for an object Kix does not manage), `unknown` (the account may not list the kind), or `ambiguous` (no live object matches its identity hash, multiple API groups serve its kind, and an older deploy record lacks its API group; run `kix deploy <cluster> --reconcile` to record it). |
 | `drift` | `null` when the drift check did not run or the object is gone. Otherwise `verdict` (`in_sync`, `changed`, `unstamped`, or `no_fieldset`), `foreign_owners` (other field managers, each with `manager`, `operation`, `subresource`, `time`, `paths`, and `unshared_paths`; `unshared_paths` lists the paths Kix does not co-own, which can conflict on deploy), and `unrecorded_scale` (a replica count changed through `/scale` that Kubernetes recorded no owner for). |
-| `ready` | `true` or `false` (always `false` while an object is being deleted). `null` when the readiness check did not run, the object is gone, or its kind has no readiness check (such as a ConfigMap) and it is not being deleted. |
+| `ready` | `true` or `false` (always `false` while an object is being deleted). `null` when the readiness check did not run, when the object is gone, or when the object is not being deleted and has no readiness check (such as a ConfigMap, or a Service of a type other than `LoadBalancer`). |
 | `not_ready_reason` | Why the object is not ready, such as `0/1 ready, 0/1 updated`. |
 | `needed_by` | For a missing object, the objects that depend on it, as `Kind.group namespace/name` (or `Kind namespace/name` for core `v1` kinds). |
 | `deleting_since`, `finalizers` | When the object is being deleted, `deleting_since` is `metadata.deletionTimestamp` and `finalizers` lists any finalizers still on it. `deleting_since` is omitted when the object is not being deleted; `finalizers` is omitted when empty. |
@@ -248,7 +281,7 @@ Each entry of `resources[]`:
 | --- | --- |
 | `0` | Every selected check passed. Objects that were not checked do not count. |
 | `1` | Kix could not answer: no connection to the cluster, no current deploy for the named cluster, no Kix cluster deployed on the Kubernetes cluster, a `--package` that matches no package, or a record that lists no objects and whose own object is gone. |
-| `2` | An object is missing, changed, not ready, or being deleted (including objects outside the current deploy). |
+| `2` | An object is missing, changed, not ready, or being deleted (including objects outside the current deploy), or a deploy has failed since the current deploy. |
 
 A command line Kix cannot use exits `1`, including `kix health`, `kix drift`,
 and `kix status --operator`, which 0.10 removed. So `2` always means that

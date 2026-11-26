@@ -577,3 +577,168 @@ fn an_object_from_an_index_without_groups_is_found_through_discovery() {
     let two = Apis::of(&served(&["apps", "apps.example.com"], "Deployment"), &[]);
     assert_eq!(web(&two).presence, Presence::Ambiguous);
 }
+
+/// `kix status` judges a Service by its type: a ClusterIP Service has no
+/// readiness, and a `LoadBalancer` Service is not ready until its load
+/// balancer gives it an address.
+#[test]
+fn a_load_balancer_service_without_an_address_is_not_ready() {
+    let service = |spec: Value, status: Value| -> DynamicObject {
+        serde_json::from_value(json!({
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {"name": "hello", "namespace": "demo"},
+            "spec": spec,
+            "status": status,
+        }))
+        .unwrap()
+    };
+    let cluster_ip = service(json!({"type": "ClusterIP"}), json!({}));
+    assert_eq!(readiness_of(&cluster_ip), Readiness::NotApplicable);
+    let pending = service(json!({"type": "LoadBalancer"}), json!({"loadBalancer": {}}));
+    assert!(matches!(readiness_of(&pending), Readiness::NotReady(_)));
+    let served = service(
+        json!({"type": "LoadBalancer"}),
+        json!({"loadBalancer": {"ingress": [{"hostname": "lb.example.com"}]}}),
+    );
+    assert_eq!(readiness_of(&served), Readiness::Ready);
+}
+
+/// Return `index` with one more object of package `web/web`.
+fn with_object(
+    mut index: RecordPackageIndex,
+    c: char,
+    kind: &str,
+    name: &str,
+    group: &str,
+) -> RecordPackageIndex {
+    index
+        .packages
+        .get_mut("web/web")
+        .unwrap()
+        .resources
+        .push(h(c));
+    index.names.insert(
+        h(c),
+        ObjectName(kind.to_string(), "web".to_string(), name.to_string()),
+    );
+    if !group.is_empty() {
+        index
+            .groups
+            .get_or_insert_with(BTreeMap::new)
+            .insert(h(c), group.to_string());
+    }
+    index
+}
+
+/// A deploy record that failed at `at` with `reason`, and whose build is
+/// `index`.
+fn failed_record(name: &str, index: &RecordPackageIndex, at: &str) -> Value {
+    let mut failed = record(Some(index), "");
+    failed["metadata"]["name"] = json!(name);
+    failed["metadata"]["annotations"][keys::IDENTITY_HASH] = json!(h('f'));
+    failed["metadata"]["annotations"]
+        .as_object_mut()
+        .unwrap()
+        .remove(keys::DEPLOYED_AT);
+    failed["status"]["phase"] = json!("Failed");
+    failed["status"]["failure"] = json!({ "at": at, "reason": "1 resource failed" });
+    failed
+}
+
+fn pending_service() -> Value {
+    let mut service = object("v1", "Service", "web", "pending", 'p', &[], true);
+    service["spec"] = json!({ "type": "LoadBalancer" });
+    service["status"] = json!({ "loadBalancer": {} });
+    service
+}
+
+/// After a deploy fails, the previous record stays current. `kix status`
+/// still reads the failed record, and checks the objects only its build
+/// has, such as a Service that got no address. A record that failed before
+/// the current one was deployed is history and is not reported.
+#[tokio::test]
+async fn a_deploy_that_failed_after_the_current_one_is_read() {
+    let current = index(true);
+    let failed_build = with_object(index(true), 'p', "Service", "pending", "");
+    let mut objects = live_objects();
+    objects.push(record(Some(&current), ""));
+    objects.push(pending_service());
+    objects.push(failed_record(
+        "shop-ffffffffffff",
+        &failed_build,
+        "2026-11-12T11:00:00Z",
+    ));
+    let api = FakeApi::new(objects);
+
+    let seen = observe_fake(&api, ObserveScope::Cluster("shop")).await;
+
+    let view = &seen.clusters[0];
+    assert_eq!(view.record.name, "shop-rrrrrrrrrrrr");
+    let failed = view.failed.as_ref().expect("the failed deploy");
+    assert_eq!(failed.record.name, "shop-ffffffffffff");
+    let names: Vec<&str> = failed.objects.iter().map(|o| o.rid.name.as_str()).collect();
+    assert_eq!(names, ["pending"], "objects both builds have are left out");
+    assert!(matches!(
+        failed.objects[0].readiness,
+        Readiness::NotReady(_)
+    ));
+
+    let mut objects = live_objects();
+    objects.push(record(Some(&current), ""));
+    objects.push(failed_record(
+        "shop-ffffffffffff",
+        &failed_build,
+        "2026-11-12T09:00:00Z",
+    ));
+    let api = FakeApi::new(objects);
+    let seen = observe_fake(&api, ObserveScope::Cluster("shop")).await;
+    assert!(seen.clusters[0].failed.is_none());
+}
+
+/// `kix status` describes a workload that is not ready from its pods, as a
+/// deploy's wait does: here a StatefulSet whose pod is held on an older
+/// revision.
+#[tokio::test]
+async fn status_describes_a_workload_from_its_pods() {
+    let current = with_object(index(true), 'q', "StatefulSet", "db", "apps");
+    let mut objects = live_objects();
+    objects.push(record(Some(&current), ""));
+    let mut sts = object("apps/v1", "StatefulSet", "web", "db", 'q', &[], true);
+    sts["metadata"]["uid"] = json!("sts-uid");
+    sts["metadata"]["generation"] = json!(4);
+    sts["spec"] = json!({ "replicas": 1, "selector": { "matchLabels": { "app": "db" } } });
+    sts["status"] = json!({
+        "observedGeneration": 4,
+        "replicas": 1,
+        "readyReplicas": 0,
+        "updatedReplicas": 0,
+        "updateRevision": "db-good",
+    });
+    objects.push(sts);
+    objects.push(json!({
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+            "name": "db-0",
+            "namespace": "web",
+            "labels": { "app": "db", "controller-revision-hash": "db-bad" },
+            "ownerReferences": [{ "uid": "sts-uid" }],
+        },
+        "status": {
+            "phase": "Running",
+            "conditions": [{ "type": "Ready", "status": "False" }],
+        },
+    }));
+    let api = FakeApi::new(objects);
+
+    let seen = observe_fake(&api, ObserveScope::Cluster("shop")).await;
+
+    let Readiness::NotReady(reason) = &by_name(&seen.clusters[0], "db").readiness else {
+        panic!("the StatefulSet is not ready");
+    };
+    assert!(
+        reason.starts_with("0/1 updated pods ready. Pod db-0 is not ready"),
+        "{reason}"
+    );
+}

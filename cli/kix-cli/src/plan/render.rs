@@ -80,7 +80,7 @@ fn write_objects(out: &mut String, plan: &Plan) -> fmt::Result {
     if reapplied > 0 {
         writeln!(
             out,
-            "  {} {reapplied} written again unchanged from an earlier deploy (changes nothing unless edited on the cluster)",
+            "  {} {reapplied} unchanged object(s) reapplied (restores them if they were changed or deleted on the cluster, including by a stopped deploy)",
             output::yellow("↻"),
         )?;
     }
@@ -691,6 +691,9 @@ fn write_not_checked(out: &mut String, plan: &Plan) -> fmt::Result {
             let why = match reason {
                 UncheckedReason::CrdCreatedByThisDeploy => {
                     "uses a CustomResourceDefinition created by this deploy"
+                }
+                UncheckedReason::CrdInstalledOutsideKix => {
+                    "uses a CustomResourceDefinition not yet on the cluster (Kix does not create it, and the deploy waits for an operator or external tool to install it)"
                 }
                 UncheckedReason::CrdChangedByThisDeploy => {
                     "uses a CustomResourceDefinition changed by this deploy, so it was checked against the definition currently on the cluster"

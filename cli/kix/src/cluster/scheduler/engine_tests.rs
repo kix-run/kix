@@ -1968,6 +1968,63 @@ async fn finalize_learns_whether_orphans_were_left() {
         clusters: vec!["b".into()],
     });
     assert!(!orphans_left(PrunePolicy::Delete, &cm, Behaviour::Now(Ok(shared))).await);
+    // An orphan of a kind the cluster does not serve cannot exist, so it
+    // is not left for the next prune.
+    assert!(
+        !orphans_left(
+            PrunePolicy::Delete,
+            &cm,
+            Behaviour::Now(Ok(Pruned::NotServed))
+        )
+        .await
+    );
+}
+
+/// A prune that found nothing to delete says why on its ready event, while
+/// one that deleted the object carries no such detail.
+#[tokio::test(start_paused = true)]
+async fn a_prune_with_nothing_to_delete_says_so() {
+    for (answer, said) in [
+        (Pruned::NotServed, Pruned::NotServed.already_gone()),
+        (
+            Pruned::Deleted {
+                uid: None,
+                finalizers: Vec::new(),
+            },
+            None,
+        ),
+    ] {
+        let ops = Arc::new(ScriptedOps::new());
+        ops.delete_behaviour(Behaviour::Now(Ok(answer)));
+        let recorder = Arc::new(Recorder::default());
+        let orphan = rid("ConfigMap", "old");
+        let result = run_with_orphans(
+            &ops,
+            plan_of(&[m("ConfigMap", "keep", &[])]),
+            std::slice::from_ref(&orphan),
+            &[],
+            PrunePolicy::Delete,
+            &config(quiet_watchdog()),
+            recorder.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.pruned, 1);
+        let events = recorder.0.lock().unwrap().clone();
+        let ready = events.iter().find_map(|e| match e {
+            DeployEvent::NodeStateChanged {
+                node: NodeId::Resource(r),
+                kind: TransitionKind::Delete,
+                verdict: Verdict::Ready,
+                detail,
+            } if *r == orphan => Some(match detail {
+                Some(NodeDetail::AlreadyGone(why)) => Some(why.clone()),
+                _ => None,
+            }),
+            _ => None,
+        });
+        assert_eq!(ready, Some(said.map(str::to_string)));
+    }
 }
 
 /// An orphan with no manifest among the old manifests is still pruned,
@@ -3733,4 +3790,43 @@ async fn a_slow_prune_delete_is_reported_while_it_waits() {
         matches!(e, DeployEvent::NodeStateChanged { node: NodeId::Resource(r), verdict: Verdict::Ready, .. } if *r == rid("ConfigMap", "slow"))
     });
     assert!(last_wait < ready, "{last_wait:?} {ready:?}");
+}
+
+/// A node the run applied that then fails readiness counts as failed, and
+/// also as applied then not ready. An apply the API server refused and an
+/// unchanged node that is not ready count only as failed.
+#[tokio::test(start_paused = true)]
+async fn an_applied_node_that_is_not_ready_is_counted_as_written() {
+    let manifests = vec![
+        m("Deployment", "stuck", &[]),
+        m("Deployment", "refused", &[]),
+        m("Deployment", "old", &[]),
+        m("Deployment", "web", &["old"]),
+    ];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        rid("Deployment", "stuck"),
+        NodeScript::default().ready(Behaviour::Now(Ready::TimedOut)),
+    );
+    ops.script(
+        rid("Deployment", "refused"),
+        NodeScript::default().apply(Behaviour::Now(Err(ApplyFailure::Other("boom".into())))),
+    );
+    ops.script(
+        rid("Deployment", "old"),
+        NodeScript::default().ready(Behaviour::Now(Ready::Failed("CrashLoopBackOff".into()))),
+    );
+    let mut cfg = config(quiet_watchdog());
+    cfg.on_error = OnErrorPolicy::Continue;
+    let result = run(
+        &ops,
+        plan_with_skips(&manifests, &["old"]),
+        &cfg,
+        Arc::new(NullObserver),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.failed, 3, "{result:?}");
+    assert_eq!(result.failed_after_apply, 1, "{result:?}");
 }

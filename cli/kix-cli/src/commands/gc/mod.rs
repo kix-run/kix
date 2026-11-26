@@ -50,7 +50,7 @@ use crate::cli::{GcArgs, Include};
 use crate::client;
 use crate::exit::{Exit, Stopped};
 use crate::output;
-use crate::plan::{print_never_pruned, print_shared, progress};
+use crate::plan::{KeptFrom, print_never_pruned, print_shared, progress};
 use kix::build_source::Build;
 use kix::cluster::activation::{Record, Records};
 use kix::cluster::binding;
@@ -191,7 +191,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     }
     if !output::quiet() {
         print_record_plan(&retirement, &policy);
-        print_never_pruned(&kept);
+        print_never_pruned(&kept, KeptFrom::LeftTheBuild);
         print_shared(&shared);
     }
     if ordered_rids.is_empty() && retirement.plan.retire.is_empty() {
@@ -438,8 +438,10 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         .collect();
 
     let compared = match &active {
-        Some(active) => format!("active deployment {}", active.name),
-        None => "local build (no active deployment record on cluster)".to_string(),
+        Some(active) => format!("the build of active deployment {}", active.name),
+        None => {
+            "the build from your local files (the cluster has no active deployment)".to_string()
+        }
     };
     crate::say!(
         "Cluster {}: {} resources in {compared}",
@@ -457,6 +459,7 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         &cluster_name,
         graph.kubernetes_uid.as_deref(),
         build_hash.as_deref(),
+        &compared,
     ))
 }
 
@@ -469,6 +472,7 @@ async fn run_hard_async(
     cluster_name: &str,
     kubernetes_uid: Option<&str>,
     build_hash: Option<&str>,
+    compared: &str,
 ) -> Result<()> {
     // `run_hard` already named the target when it read the Active record.
     let connection = binding::Connection::of_context(global.context.as_deref());
@@ -515,14 +519,23 @@ async fn run_hard_async(
             println!("{note}");
         }
         if !sweep.unattributed.is_empty() {
-            print_unattributed(&sweep.unattributed, args.includes(Include::Unattributed));
+            print_unattributed(
+                &sweep.unattributed,
+                args.includes(Include::Unattributed),
+                compared,
+            );
         }
         if !sweep.copies.is_empty() {
-            print_copies(&sweep.copies, args.includes(Include::Copies));
+            print_copies(&sweep.copies, args.includes(Include::Copies), compared);
         }
     }
     let forbidden_none = sweep.forbidden.is_empty();
     let unattributed_judged = sweep.unattributed.is_empty() || args.includes(Include::Unattributed);
+    let copies: HashSet<ResourceId> = sweep
+        .copies
+        .iter()
+        .map(kix::cluster::drift::resource_id)
+        .collect();
     let live = judged_objects(
         sweep,
         args.includes(Include::Unattributed),
@@ -555,14 +568,8 @@ async fn run_hard_async(
     let retirement = plan_records_with(records.into_records(), cluster_name, &policy).await?;
     garbage.extend(record_garbage(&retirement.plan));
 
-    // Separate unstamped resources unless `--include unstamped` is set.
-    // Protected kinds remain in `garbage` so they are listed as kept below.
-    let (unstamped, garbage): (Vec<GarbageEntry>, Vec<GarbageEntry>) =
-        garbage.into_iter().partition(|g| {
-            g.reason == GarbageReason::NoIdentityHash
-                && !args.includes(Include::Unstamped)
-                && !lifecycle::never_pruned(g.id.group_kind())
-        });
+    let (unstamped, garbage) =
+        hold_back_unstamped(garbage, &copies, args.includes(Include::Unstamped));
     if !unstamped.is_empty() && !output::quiet() {
         print_unstamped(&unstamped);
     }
@@ -594,11 +601,11 @@ async fn run_hard_async(
         .into_iter()
         .partition(|g| lifecycle::never_pruned(g.id.group_kind()));
     if !resource_entries.is_empty() {
-        print_garbage_plan(&resource_entries);
+        print_garbage_plan(&resource_entries, compared);
     }
     if !output::quiet() {
         let kept: Vec<ResourceId> = kept.into_iter().map(|g| g.id).collect();
-        print_never_pruned(&kept);
+        print_never_pruned(&kept, KeptFrom::FullScan);
         print_record_plan(&retirement, &policy);
     }
     if resource_entries.is_empty() && record_entries.is_empty() {
@@ -784,20 +791,17 @@ pub(super) async fn delete_resources(
                     rid
                 );
             }
-            Removal::UnknownKind => {
-                eprintln!(
-                    "  {} {}: not deleted because Kubernetes does not recognize its kind. If its CustomResourceDefinition was removed, Kubernetes already deleted this object with it. Run `kix gc --full-scan` instead to check only objects still on the cluster.",
-                    output::red("!"),
-                    rid
-                );
-                done.failed += 1;
-            }
             Removal::Pruned(Pruned::Deleted { .. } | Pruned::AlreadyDeleting { .. }) => {
                 println!("  {} deleted {}", output::red("-"), rid);
                 done.deleted += 1;
             }
-            Removal::Pruned(Pruned::Gone) => {
-                println!("  {} {} already gone", output::dim("="), rid);
+            Removal::Pruned(gone @ (Pruned::Gone | Pruned::NotServed)) => {
+                println!(
+                    "  {} {} {}",
+                    output::dim("="),
+                    rid,
+                    gone.already_gone().unwrap_or_default()
+                );
             }
             Removal::Pruned(outcome @ (Pruned::Kept(_) | Pruned::Changed(_))) => {
                 if matches!(outcome, Pruned::Changed(_)) {

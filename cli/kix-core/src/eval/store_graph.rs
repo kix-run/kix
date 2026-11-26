@@ -265,6 +265,40 @@ fn unrequestable_field(manifest: &serde_json::Value) -> Option<&'static str> {
 /// instance under a `_`-prefixed key such as `_cluster` sits in the cluster's
 /// `cluster.recordNamespace`, because Kubernetes stores a PackageInstance only
 /// inside a real namespace.
+/// Return the `(namespace, instance)` of the package instance that `m`
+/// records, when `m` is a `PackageInstance` that stands for its own package.
+///
+/// The build stamps every `PackageInstance` `kix.run/package: _cluster`,
+/// because the package index lists only the resources an instance renders,
+/// so a reader that wants the instance of a record takes it from the record's
+/// spec. An import marker that a package declares (`crd-ref-*`,
+/// `secret-ref-*`, ...) and that is stamped with that package is a resource
+/// of the package, so it returns `None`.
+pub fn instance_of_record(m: &serde_json::Value) -> Option<(String, String)> {
+    if m.get("kind").and_then(serde_json::Value::as_str)
+        != Some(crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND)
+    {
+        return None;
+    }
+    let stamped = m
+        .pointer("/metadata/annotations")
+        .and_then(|a| a.get(keys::PACKAGE))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|p| p != "_cluster");
+    if crate::manifest::lifecycle::is_marker(m) && stamped {
+        return None;
+    }
+    let name = m
+        .pointer("/spec/instanceName")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            m.pointer("/metadata/name")
+                .and_then(serde_json::Value::as_str)
+        })
+        .unwrap_or("unknown");
+    Some((package_namespace(m).to_string(), name.to_string()))
+}
+
 pub(crate) fn package_namespace(pi: &serde_json::Value) -> &str {
     pi.pointer("/spec/namespaceName")
         .or_else(|| pi.pointer("/metadata/namespace"))
@@ -713,7 +747,6 @@ impl StoreGraph {
         deployed: &[&RecordPackageIndex],
     ) -> StoreGraph {
         use crate::manifest::keys;
-        use crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND;
         use serde_json::Value;
         use std::collections::HashSet;
 
@@ -814,7 +847,6 @@ impl StoreGraph {
                 },
             );
 
-            let is_pi = m.get("kind").and_then(Value::as_str) == Some(PACKAGE_INSTANCE_KIND);
             let package_instance = |key: String| {
                 let version = m
                     .pointer("/spec/version")
@@ -847,17 +879,7 @@ impl StoreGraph {
                 Some(Place::ClusterLevel) => {}
                 None => {
                     let stamped_pkg = ann(m, keys::PACKAGE).filter(|p| p != "_cluster");
-                    // An import marker declared by a package (`crd-ref-*`,
-                    // `secret-ref-*`, ...) is a resource of that package. Any
-                    // other PackageInstance is a package.
-                    if is_pi && !(crate::manifest::lifecycle::is_marker(m) && stamped_pkg.is_some())
-                    {
-                        let ns = package_namespace(m);
-                        let name = m
-                            .pointer("/spec/instanceName")
-                            .and_then(Value::as_str)
-                            .or_else(|| m.pointer("/metadata/name").and_then(Value::as_str))
-                            .unwrap_or("unknown");
+                    if let Some((ns, name)) = instance_of_record(m) {
                         let (key, entry) = package_instance(format!("{ns}/{name}"));
                         pi_by_pkg.insert(key, entry);
                     } else if let Some(pkg) = stamped_pkg {

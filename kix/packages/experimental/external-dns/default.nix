@@ -67,6 +67,19 @@
 #     };
 #   };
 #
+# An instance with a Secret of access keys for `aws` or `aws-sd` also needs
+# AWS_REGION or AWS_DEFAULT_REGION, in the Secret or in `env`. The AWS SDK
+# finds no region otherwise and external-dns stops with "Missing Region". A
+# pod with a cloud identity gets the region from the platform.
+#
+# Annotations: v0.24.0 reads `external-dns.kubernetes.io/<name>` and ignores
+# `external-dns.alpha.kubernetes.io/<name>`, which older guides and charts
+# still show. `extraArgs = [ "--enable-legacy-annotation-prefix" ]` makes it
+# read both. Upstream calls that flag a migration aid and plans to remove it,
+# so the package adds no option for it. With `policy = "sync"`, an object
+# that only has the old prefix loses its records, so move the annotations
+# before an upgrade.
+#
 # Credentials belong in the providerCredentials Secret, not in the rendered
 # manifests. external-dns reads every flag from `EXTERNAL_DNS_<FLAG>` as
 # well, so a credential that upstream takes as a flag (`--pdns-api-key`,
@@ -95,6 +108,7 @@
 # `gateway-httproute` or `gateway-grpcroute` source, a hostname from an
 # annotation or `--fqdn-template` now replaces the listener's hostname, so
 # `policy = "sync"` deletes the records that came from the listener.
+# Annotations with the legacy prefix are ignored (see Annotations above).
 #
 # `out`: root is the Deployment, and `out` adds `version`, the external-dns
 # version `image.tag` names.
@@ -187,10 +201,17 @@ let
         declared
         envStrings
         keySets
+        supplied
         ;
       complete =
         keySets == null || builtins.any (set: builtins.all (k: builtins.elem k supplied) set) keySets;
     };
+
+  # Providers that use the AWS SDK, and so need a region.
+  awsProviders = [
+    "aws"
+    "aws-sd"
+  ];
 
   # Default ports of the providers not reached on TCP 443: DNS UPDATE
   # (rfc2136), the PowerDNS API, the Pi-hole web server, and etcd (coredns,
@@ -369,6 +390,17 @@ in
       wrongKeys = lib.filterAttrs (_: key: !(builtins.elem key s.declared)) config.secretEnv;
       literalSecrets = builtins.filter (var: builtins.elem var secretVariables) s.envStrings;
       firstLiteral = builtins.head (literalSecrets ++ [ "" ]);
+      # The AWS SDK reads the region from these variables. A pod with an
+      # identity gets one injected by the platform webhook, a pod with
+      # access keys does not.
+      regionVars = [
+        "AWS_REGION"
+        "AWS_DEFAULT_REGION"
+      ];
+      awsKeysNeedRegion =
+        builtins.elem config.provider awsProviders
+        && s.dep != null
+        && !(builtins.any (v: builtins.elem v (s.supplied ++ builtins.attrNames config.env)) regionVars);
       ownedKeys = lib.optionals (s.dep != null && config.secretEnv == { }) (
         builtins.filter (key: builtins.elem key ownedEnvNames) s.declared
       );
@@ -402,6 +434,12 @@ in
         reason = "the ClusterRole rules (sources.nix) and supported providers (providers.nix) match external-dns v${release}";
         fix = "To update this package to another version, change release in kix/packages/experimental/external-dns/default.nix and update sources.nix and providers.nix from clusterrole.yaml in that version's chart and pkg/apis/externaldns/types.go.";
       })
+      {
+        assertion = !awsKeysNeedRegion;
+        id = "K0734";
+        message = "`config.provider` is \"${config.provider}\" with Secret \"${depName}\" in `deps.providerCredentials`, and neither `AWS_REGION` nor `AWS_DEFAULT_REGION` is set. Kix rejected this instance because external-dns would exit at startup with \"Missing Region\". Secret \"${depName}\" declares ${listOrNone s.declared}; `secretEnv` maps ${listOrNone (builtins.attrNames config.secretEnv)}; `env` sets ${listOrNone (builtins.attrNames config.env)}.";
+        fix = "Set `config.env.AWS_REGION = \"eu-central-1\"` (using your AWS region), add `AWS_REGION` to the \"${depName}\" Secret, or map a Secret key with `config.secretEnv.AWS_REGION = \"<key>\"`.";
+      }
       {
         assertion = s.complete || s.dep != null || config.secretEnv != { };
         message = "provider \"${config.provider}\" reads its API credentials from ${keySetText}, and no complete set is supplied. Add a secret or secret-ref instance in namespace \"${ns}\" holding them, set deps.providerCredentials = ref.${ns}.<instance>, and name the key ${firstVar} or map it with secretEnv.${firstVar} = \"<key>\".";

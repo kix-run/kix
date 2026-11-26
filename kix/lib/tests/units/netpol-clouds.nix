@@ -16,6 +16,7 @@
   mkCmPackage,
   mkAppPackage,
   baseInstances,
+  kixKeys,
   ...
 }:
 
@@ -469,7 +470,7 @@ in
       ];
       ms = manifests cluster;
       denied = map (m: m.metadata.name) (
-        builtins.filter (m: (m.metadata.labels."kix.run/policy-type" or null) == "default-deny") ms
+        builtins.filter (m: (m.metadata.labels.${kixKeys.policyType} or null) == "default-deny") ms
       );
       want = [
         "app-default-deny"
@@ -545,7 +546,7 @@ in
             builtins.filter (
               m:
               (m.metadata.namespace or null) == ns
-              && (m.metadata.labels."kix.run/policy-type" or null) == "caller-ingress"
+              && (m.metadata.labels.${kixKeys.policyType} or null) == "caller-ingress"
             ) ms
           )
         );

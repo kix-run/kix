@@ -241,6 +241,50 @@ pub fn find<'a>(
         .find(|(ar, _)| ar.group == group && ar.kind == kind)
 }
 
+/// What [`lookup_kind`] found for a group and kind.
+#[derive(Debug, Clone)]
+pub(crate) enum KindLookup {
+    Served(ApiResource, Scope),
+    /// The cluster does not serve the kind, so no object of it exists.
+    /// Kubernetes deletes a custom resource's objects with its
+    /// CustomResourceDefinition, and an object cannot be created before
+    /// its kind is served.
+    NotServed,
+}
+
+/// Return the API that serves `kind` in `group`, from `cached` when it has
+/// it, or else from a fresh discovery of the group. Return
+/// [`KindLookup::NotServed`] only when the cluster lists no such group, or
+/// every version of the group answered and none serves the kind. An
+/// aggregated API that does not answer is an error, because its objects may
+/// still exist behind it.
+pub(crate) async fn lookup_kind(
+    client: &Client,
+    cached: &[(ApiResource, Scope)],
+    group: &str,
+    kind: &str,
+) -> Result<KindLookup, FetchError> {
+    if let Some((ar, scope)) = find(cached, group, kind) {
+        return Ok(KindLookup::Served(ar.clone(), scope.clone()));
+    }
+    let fresh = if group.is_empty() {
+        let pass = discover_group(client, group).await?;
+        if !pass.missing.is_empty() {
+            return Err(FetchError::DiscoveryUnsettled {
+                missing: pass.missing,
+                waited: Duration::ZERO,
+            });
+        }
+        pass.resources
+    } else {
+        discover_groups(client, &[group]).await?
+    };
+    Ok(match find(&fresh, group, kind) {
+        Some((ar, scope)) => KindLookup::Served(ar.clone(), scope.clone()),
+        None => KindLookup::NotServed,
+    })
+}
+
 /// Build a dynamic [`Api`] handle for `rid`. Namespaced kinds keyed with
 /// [`CLUSTER_SCOPED`] target the `default` namespace so pruning can read and
 /// delete legacy objects that omitted a namespace.

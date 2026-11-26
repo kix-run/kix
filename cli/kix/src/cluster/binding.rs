@@ -269,6 +269,20 @@ pub enum BindingError {
     },
 }
 
+/// Return `label  value` lines, one per pair, indented by two spaces, with
+/// the values in one column whatever the labels' lengths.
+fn uid_lines(pairs: &[(String, &String)]) -> String {
+    let width = pairs
+        .iter()
+        .map(|(label, _)| label.len())
+        .max()
+        .unwrap_or(0);
+    pairs
+        .iter()
+        .map(|(label, value)| format!("  {label:<width$}  {value}\n"))
+        .collect()
+}
+
 impl BindingError {
     /// Return the message: what Kix refused, that nothing changed, why, and
     /// what to do next.
@@ -280,31 +294,50 @@ impl BindingError {
                 declared,
                 live,
                 connection,
-            } => match connection {
-                Connection::InCluster => format!(
-                    "cluster '{cluster}' does not match this Kubernetes cluster\n  \
-                     {}\n\n  \
-                     `cluster.kubernetes.uid` in '{cluster}':  {declared}\n  \
-                     `kube-system` UID on this cluster:        {live}\n\n  \
+            } => {
+                let (target, live_label, why, wrong_cluster, recreated_tail) = match connection {
+                    Connection::InCluster => (
+                        "this Kubernetes cluster".to_string(),
+                        "`kube-system` UID on this cluster:",
+                        format!(
+                            "'{cluster}' is bound to a different `kube-system` namespace UID. Either this Kix operator runs on a different Kubernetes cluster, or this cluster was deleted and recreated."
+                        ),
+                        format!(
+                            "- If '{cluster}' belongs on another Kubernetes cluster, deploy it to the cluster whose `kube-system` UID is {declared} instead of this one."
+                        ),
+                        "this cluster's UID shown above, build, and deploy again",
+                    ),
+                    Connection::Context { .. } => (
+                        connection.describe(),
+                        "`kube-system` UID on connected cluster:",
+                        format!(
+                            "'{cluster}' is bound to a different `kube-system` namespace UID. Either Kix is connected to the wrong Kubernetes cluster, or the cluster for '{cluster}' was deleted and recreated."
+                        ),
+                        format!(
+                            "- If Kix is connected to the wrong cluster (the most common cause), pass `--context` for the cluster whose `kube-system` UID is {declared} and run the command again."
+                        ),
+                        "the connected cluster's UID shown above, build, and run the command again",
+                    ),
+                };
+                let uids = uid_lines(&[
+                    (
+                        format!("`cluster.kubernetes.uid` in '{cluster}':"),
+                        declared,
+                    ),
+                    (live_label.to_string(), live),
+                ]);
+                format!(
+                    "cluster '{cluster}' does not match {target}\n  \
+                     {}\n\n\
+                     {uids}\n  \
+                     Why:\n    \
+                     {why}\n\n  \
                      Next:\n    \
-                     If this Kubernetes cluster was recreated and '{cluster}' belongs here, update '{cluster}'s definition to `cluster.kubernetes.uid = \"{live}\";`, build, and deploy again.",
+                     {wrong_cluster}\n    \
+                     - Only if this Kubernetes cluster was deleted and recreated for '{cluster}', update `cluster.kubernetes.uid` in the '{cluster}' cluster definition to {recreated_tail}.",
                     action.nothing(),
-                ),
-                Connection::Context { .. } => {
-                    let connection = connection.describe();
-                    format!(
-                        "cluster '{cluster}' does not match {connection}\n  \
-                         {}\n\n  \
-                         `cluster.kubernetes.uid` in '{cluster}':  {declared}\n  \
-                         `kube-system` UID on {connection}:        {live}\n\n  \
-                         Next:\n    \
-                         - If Kix is connected to the wrong cluster, pass the right `--context` for '{cluster}' and run the command again.\n    \
-                         - If this Kubernetes cluster was recreated and '{cluster}' belongs here, update '{cluster}'s definition and build again:\n        \
-                         cluster.kubernetes.uid = \"{live}\";",
-                        action.nothing(),
-                    )
-                }
-            },
+                )
+            }
             BindingError::Unbound {
                 action,
                 cluster,
@@ -859,24 +892,20 @@ mod tests {
             ),
             "{text}"
         );
+        // The two UIDs line up, whatever the cluster name.
         assert!(
             text.contains(&format!(
-                "`cluster.kubernetes.uid` in 'cluster-a':  {ELSEWHERE}"
+                "\n  `cluster.kubernetes.uid` in 'cluster-a':  {ELSEWHERE}\n  `kube-system` UID on connected cluster:   {HERE}\n"
             )),
             "{text}"
         );
+        // The likelier cause comes first, and no line binds the definition
+        // to the cluster it was refused on.
+        let wrong = text.find("If Kix is connected to the wrong cluster");
+        let recreated = text.find("Only if this Kubernetes cluster was deleted and recreated");
+        assert!(wrong.is_some() && wrong < recreated, "{text}");
         assert!(
-            text.contains(&format!(
-                "`kube-system` UID on context cluster-b (https://b.example:6443):        {HERE}"
-            )),
-            "{text}"
-        );
-        assert!(
-            text.contains("pass the right `--context` for 'cluster-a'"),
-            "{text}"
-        );
-        assert!(
-            text.contains(&format!("cluster.kubernetes.uid = \"{HERE}\";")),
+            !text.contains(&format!("cluster.kubernetes.uid = \"{HERE}\"")),
             "{text}"
         );
         assert_eq!(

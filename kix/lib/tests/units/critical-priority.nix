@@ -103,6 +103,19 @@ in
     ];
   });
 
+  # On Autopilot the class has no namespace a user can deploy to.
+  critical-priority-autopilot-refuses-every-namespace = evalFails (clusterWith {
+    flavorName = "gke-autopilot";
+    ns = "apps";
+  });
+
+  # The same workload without the class builds on Autopilot.
+  critical-priority-autopilot-admits-other-classes = deploys (clusterWith {
+    flavorName = "gke-autopilot";
+    ns = "apps";
+    class = null;
+  });
+
   # A flavour that leaves the capability unset does not restrict the class.
   critical-priority-unset-admits-anywhere = deploys (clusterWith {
     flavorName = "kind";
@@ -118,6 +131,18 @@ in
       result ? thrown
       && lib.hasInfix ''Pods in namespace "apps" set priorityClassName "system-cluster-critical"'' result.thrown
       && lib.hasInfix ''allows only in "kube-system"'' result.thrown
+    )
+    || throw "unexpected check result: ${builtins.toJSON result}";
+
+  # The fix asks for a quota that names both classes, because GKE admits
+  # each class only through a quota whose scope names it.
+  critical-priority-fix-asks-for-both-classes =
+    let
+      result = checkIn [ "kube-system" ] "apps";
+    in
+    (
+      result ? thrown
+      && lib.hasInfix ''includes both "system-node-critical" and "system-cluster-critical"'' result.thrown
     )
     || throw "unexpected check result: ${builtins.toJSON result}";
 

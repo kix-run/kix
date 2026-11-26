@@ -50,7 +50,12 @@ kix.buildCluster {
           provider = "inmemory";
           policy = "sync";
           txtOwnerId = "test-external-dns-services";
-          extraArgs = [ "--inmemory-zone=example.test" ];
+          extraArgs = [
+            "--inmemory-zone=example.test"
+            # region:legacyAnnotationPrefix
+            "--enable-legacy-annotation-prefix"
+            # endregion:legacyAnnotationPrefix
+          ];
         };
       };
 

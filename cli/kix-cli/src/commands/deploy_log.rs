@@ -26,6 +26,9 @@ use kix::manifest::types::ResourceId;
 
 pub struct LineObserver {
     pub verbose: bool,
+    /// The Kix cluster being deployed, named in the command that deletes
+    /// kept orphans.
+    pub cluster: String,
 }
 
 impl DeployObserver for LineObserver {
@@ -117,7 +120,7 @@ impl DeployObserver for LineObserver {
                 delete,
                 ..
             } => {
-                for line in prune_lines(resources, kept, *delete) {
+                for line in prune_lines(resources, kept, *delete, &self.cluster) {
                     println!("{line}");
                 }
             }
@@ -201,6 +204,15 @@ impl JsonObserver {
         println!("{}", json_line(&Line::kubernetes(connection, elapsed_ms)));
     }
 
+    /// Print the summary line of a deploy that has nothing to apply.
+    pub fn nothing_to_apply(&self, unchanged: usize) {
+        let elapsed_ms = self.started_at.elapsed().as_millis() as u64;
+        println!(
+            "{}",
+            json_line(&Line::nothing_to_apply(unchanged, elapsed_ms))
+        );
+    }
+
     /// Print the final summary line for the deploy run.
     pub fn summary(&self, counts: &DeployResult, dry_run: bool, succeeded: bool) {
         let elapsed_ms = self.started_at.elapsed().as_millis() as u64;
@@ -233,6 +245,7 @@ fn json_line(line: &Line) -> String {
 pub(crate) fn delete_line(verdict: &Verdict, detail: Option<&NodeDetail>) -> Option<String> {
     match (verdict, detail) {
         (Verdict::Running, Some(NodeDetail::ReadinessProgress(status))) => Some(deleting(status)),
+        (Verdict::Ready, Some(NodeDetail::AlreadyGone(why))) => Some(why.clone()),
         (Verdict::Ready, _) => Some("deleted".to_string()),
         _ => None,
     }
@@ -249,7 +262,12 @@ pub(crate) fn deleting(status: &str) -> String {
 
 /// Format `PruneStart` lines for `LineObserver`, listing deleted or reported
 /// orphans followed by protected orphans.
-fn prune_lines(resources: &[ResourceId], kept: &[ResourceId], delete: bool) -> Vec<String> {
+fn prune_lines(
+    resources: &[ResourceId],
+    kept: &[ResourceId],
+    delete: bool,
+    cluster: &str,
+) -> Vec<String> {
     let mut lines = Vec::new();
     if !resources.is_empty() {
         let count = resources.len();
@@ -257,7 +275,8 @@ fn prune_lines(resources: &[ResourceId], kept: &[ResourceId], delete: bool) -> V
             format!("prune> deleting {count} object(s) that left the build")
         } else {
             format!(
-                "prune> {count} object(s) left the build and remain on the cluster; run `kix gc` to delete them"
+                "prune> {count} object(s) left the build, {}",
+                crate::plan::kept_orphans_fate(cluster)
             )
         });
         let each = if delete {
@@ -520,6 +539,14 @@ mod tests {
                 }),
             ),
             state(
+                node("Widget", "w"),
+                TransitionKind::Delete,
+                Verdict::Ready,
+                Some(NodeDetail::AlreadyGone(
+                    "already gone (Kubernetes does not recognize its kind)".into(),
+                )),
+            ),
+            state(
                 node("Pod", "after"),
                 TransitionKind::Drain,
                 Verdict::Cancelled {
@@ -650,6 +677,7 @@ mod tests {
             configured: 2,
             unchanged: 3,
             failed: 4,
+            failed_after_apply: 2,
             cancelled: 5,
             pruned: 6,
             ..DeployResult::default()
@@ -698,10 +726,40 @@ mod tests {
         assert_eq!(json_line(&line), text);
     }
 
+    /// A deploy with nothing to apply still ends its log with a summary line
+    /// that says so, while a run that applied something says it did not.
+    #[test]
+    fn a_deploy_with_nothing_to_apply_ends_with_a_summary() {
+        let text = json_line(&Line::nothing_to_apply(9, 3));
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["type"], "summary");
+        assert_eq!(value["succeeded"], true);
+        assert_eq!(value["nothing_to_apply"], true);
+        assert_eq!(value["created"], 0);
+        assert_eq!(value["unchanged"], 9);
+        let ran = json_line(&Line::summary(&DeployResult::default(), false, true, 3));
+        let ran: serde_json::Value = serde_json::from_str(&ran).unwrap();
+        assert_eq!(ran["nothing_to_apply"], false);
+    }
+
+    /// A summary line written before `nothing_to_apply` existed still reads.
+    #[test]
+    fn a_summary_without_nothing_to_apply_reads() {
+        let text = r#"{"schema_version":"2026-11-25","elapsed_ms":1,"type":"summary","dry_run":false,"succeeded":true,"created":0,"configured":0,"unchanged":1,"failed":0,"cancelled":0,"pruned":0}"#;
+        let line: Line = serde_json::from_str(text).unwrap();
+        assert!(matches!(
+            line.event,
+            kix::cluster::deploy_log::Event::Summary {
+                nothing_to_apply: false,
+                ..
+            }
+        ));
+    }
+
     /// Under `--prune`, each object is listed as one Kix will delete.
     #[test]
     fn prune_lines_say_what_will_be_deleted() {
-        let lines = prune_lines(&[rid("ConfigMap", "old")], &[], true);
+        let lines = prune_lines(&[rid("ConfigMap", "old")], &[], true, "app");
         assert_eq!(
             lines,
             vec![
@@ -711,8 +769,8 @@ mod tests {
         );
     }
 
-    /// A delete that waits says what for, and a finished delete says
-    /// "deleted".
+    /// A delete that waits says what for, a finished delete says "deleted",
+    /// and a prune that found nothing to delete says why.
     #[test]
     fn a_delete_reads_as_deleted() {
         assert_eq!(
@@ -723,6 +781,13 @@ mod tests {
         assert_eq!(
             delete_line(&Verdict::Ready, None).as_deref(),
             Some("deleted")
+        );
+        let why = kix::cluster::prune_guard::Pruned::NotServed
+            .already_gone()
+            .unwrap();
+        assert_eq!(
+            delete_line(&Verdict::Ready, Some(&NodeDetail::AlreadyGone(why.into()))).as_deref(),
+            Some("already gone (Kubernetes does not recognize its kind)")
         );
         assert_eq!(
             delete_line(
@@ -748,11 +813,12 @@ mod tests {
             &[rid("ConfigMap", "old")],
             &[rid("Namespace", "gone")],
             false,
+            "app",
         );
         assert_eq!(
             lines,
             vec![
-                "prune> 1 object(s) left the build and remain on the cluster; run `kix gc` to delete them",
+                "prune> 1 object(s) left the build, still on the cluster (run `kix gc app` to delete them)",
                 "ConfigMap/old@app> left the build, still on the cluster",
                 "prune> 1 object(s) left the build and are never deleted automatically",
                 "Namespace/gone@app> left the build, kept (never deleted automatically)",

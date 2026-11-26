@@ -179,9 +179,11 @@ pub enum Work {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Start {
     /// No run starts. `superseded` counts the failed records the plan
-    /// folded in that are now marked Superseded.
+    /// folded in that are now marked Superseded. `unchanged` counts the
+    /// plan's nodes, which a run would have reported unchanged.
     Nothing {
         superseded: usize,
+        unchanged: usize,
     },
     Run,
 }
@@ -294,6 +296,26 @@ impl CheckedPlan {
         &self.pkg_diff
     }
 
+    /// Mark as modified each write of an unchanged file that the package
+    /// diff now lists as changed. A dry run finds such a change when the
+    /// live object differs from the build, as after a stopped deploy, so the
+    /// write changes the object and the objects list says what the package
+    /// view says.
+    fn relabel_reverted_writes(&mut self) {
+        let changed: HashSet<&ResourceId> = self
+            .pkg_diff
+            .changed
+            .iter()
+            .chain(&self.pkg_diff.cluster_level)
+            .flat_map(|c| c.resource_diffs.iter().map(|(id, _)| id))
+            .collect();
+        for write in &mut self.objects.writes {
+            if write.change == WriteChange::Reapplied && changed.contains(&write.resource_id()) {
+                write.change = WriteChange::Modified;
+            }
+        }
+    }
+
     /// Return every object the plan writes and the prune deletes; see
     /// [`super::objects`].
     pub fn objects(&self) -> &Objects {
@@ -356,6 +378,7 @@ impl CheckedPlan {
         match self.work(last_runs) {
             Work::Nothing => Start::Nothing {
                 superseded: supersede(client, &self.consumed_failed).await,
+                unchanged: self.plan.nodes().len(),
             },
             Work::JobsOnly | Work::Changes => Start::Run,
         }
@@ -671,6 +694,7 @@ impl Planned {
             deployed,
         }
         .apply(&mut self.checked.pkg_diff, answers);
+        self.checked.relabel_reverted_writes();
         known.then_some(drift)
     }
 }
@@ -1279,6 +1303,88 @@ mod tests {
         crate::plan::fixtures::plan(&baseline, &build, crate::plan::fixtures::flags(&[])).unwrap()
     }
 
+    /// After a stopped deploy, the dry run finds that the live object differs
+    /// from the build, and the package view lists it as changed. The write
+    /// of that object is then a modification, not a re-apply of an
+    /// unchanged object, while a re-apply the view does not list stays one.
+    #[test]
+    fn a_write_the_dry_run_finds_changed_is_not_a_reapply() {
+        let mut checked = unchanged_plan();
+        let write = |name: &str| crate::plan::document::ObjectWrite {
+            kind: "ConfigMap".into(),
+            namespace: "web".into(),
+            name: name.into(),
+            store_hash: "h".into(),
+            package: "web/web".into(),
+            change: WriteChange::Reapplied,
+            group: String::new(),
+        };
+        checked.objects.writes = vec![write("reverted"), write("same")];
+        checked
+            .pkg_diff
+            .changed
+            .push(super::super::PackageChangeDiff {
+                key: "web/web".into(),
+                old_version: None,
+                new_version: None,
+                resource_diffs: vec![(write("reverted").resource_id(), Vec::new())],
+                dep_affected_resources: Vec::new(),
+                added_resources: Vec::new(),
+                removed_resources: Vec::new(),
+                shared_kept: Vec::new(),
+            });
+        checked.relabel_reverted_writes();
+        let changes: Vec<(&str, WriteChange)> = checked
+            .objects
+            .writes
+            .iter()
+            .map(|w| (w.name.as_str(), w.change))
+            .collect();
+        assert_eq!(
+            changes,
+            [
+                ("reverted", WriteChange::Modified),
+                ("same", WriteChange::Reapplied)
+            ]
+        );
+    }
+
+    /// The `unchanged` count of a plan with nothing to do is what a run of
+    /// the same plan reports.
+    #[tokio::test(start_paused = true)]
+    async fn nothing_to_do_counts_what_a_run_reports_unchanged() {
+        use crate::cluster::scheduler::{self, OnErrorPolicy, PrunePolicy, SchedulerConfig};
+        let checked = unchanged_plan();
+        let read = LastRuns::Read { failed: vec![] };
+        let api = FakeApi::new([failed_record("rec-failed")]);
+        let Start::Nothing { unchanged, .. } = checked.start(&api.client(), &read).await else {
+            panic!("the plan has nothing to do");
+        };
+        let config = SchedulerConfig {
+            timeout: std::time::Duration::from_secs(300),
+            on_error: OnErrorPolicy::Continue,
+            cancel: crate::cluster::cancel::CancelToken::new(),
+            concurrency: scheduler::CONCURRENCY,
+            stall: crate::cluster::watchdog::StallPolicy::off(),
+            check_unchanged: true,
+            names_flags: true,
+        };
+        let ran = scheduler::run_scripted(
+            std::sync::Arc::new(crate::cluster::ops::scripted::ScriptedOps::new()),
+            checked.plan().clone(),
+            &[],
+            &[],
+            PrunePolicy::WarnOnly,
+            &config,
+            std::sync::Arc::new(crate::cluster::stream::NullObserver),
+        )
+        .await
+        .unwrap();
+        assert!(unchanged > 0);
+        assert_eq!(ran.unchanged, unchanged);
+        assert_eq!(ran.created + ran.configured + ran.failed, 0);
+    }
+
     /// A plan with nothing to do starts no run, so no finalize supersedes
     /// the failed records it folded in. `start` supersedes them, as it does
     /// for `kix deploy` and `kix rollback` alike.
@@ -1292,7 +1398,10 @@ mod tests {
         let client = api.client();
         assert_eq!(
             checked.start(&client, &read).await,
-            Start::Nothing { superseded: 1 }
+            Start::Nothing {
+                superseded: 1,
+                unchanged: checked.plan().nodes().len(),
+            }
         );
         assert_eq!(phase(&client, "rec-failed").await, PHASE_SUPERSEDED);
     }

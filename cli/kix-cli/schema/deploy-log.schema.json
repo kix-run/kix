@@ -317,6 +317,19 @@
         },
         {
           "additionalProperties": false,
+          "description": "A prune found nothing to delete, and the text says why, such as\n`already gone (Kubernetes does not recognize its kind)`.",
+          "properties": {
+            "already_gone": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "already_gone"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "A delete did not finish within the wait: after `elapsed_ms`, the\nobject was still on the cluster, held by `finalizers`. `controllers`\nlists the workloads its kind names as its controller (`controller` on\n`scope.mkCRD`), with what Kix found when it read them. `message` is\nthe text the failure reports.",
           "properties": {
             "deletion_unfinished": {
@@ -713,7 +726,7 @@
   "description": "One line of the log.\n\nLater versions of Kix may add fields and new types of line. Skip the ones\nyou do not know.",
   "oneOf": [
     {
-      "description": "The Kubernetes cluster the deploy writes to. The first line of the\nlog.",
+      "description": "The Kubernetes cluster the deploy writes to. The first line of the\nlog. A deploy whose build is empty never connects, so its log has\nonly the `summary` line.",
       "properties": {
         "context": {
           "description": "The kubeconfig context, or `null` when the kubeconfig names none.",
@@ -1042,7 +1055,7 @@
       "type": "object"
     },
     {
-      "description": "The counts the text summary line shows.",
+      "description": "The counts the text summary line shows. The last line of the log.",
       "properties": {
         "cancelled": {
           "format": "uint",
@@ -1066,6 +1079,18 @@
           "format": "uint",
           "minimum": 0,
           "type": "integer"
+        },
+        "failed_after_apply": {
+          "default": 0,
+          "description": "The objects in `failed` that the run wrote to the cluster and\nthat then did not become ready. Older logs leave it out.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "nothing_to_apply": {
+          "default": false,
+          "description": "True when the plan had nothing to apply or prune, so the deploy\nwrote nothing and the active deployment record stays current. The\nlog then holds no `plan` or `node` lines.",
+          "type": "boolean"
         },
         "pruned": {
           "format": "uint",

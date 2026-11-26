@@ -78,6 +78,14 @@ mod kept_garbage_tests {
         assert!(kept_garbage(&kept, &hashes(&build_b), &ids(&build_b)).is_empty());
     }
 
+    /// Verify that a full scan's reason names the build this run compared
+    /// with, never a choice of two.
+    #[test]
+    fn the_reason_names_the_build_compared_with() {
+        let label = GarbageReason::HashNotExpected.label("the build of active deployment c-v2");
+        assert_eq!(label, "not in the build of active deployment c-v2");
+    }
+
     /// Verify that gc uses the build from the current files only when it is
     /// the build the Active record names.
     #[test]
@@ -521,7 +529,8 @@ mod hard_scope_tests {
         ]);
         let sweep =
             inventory::scope_sweep(sweep, inventory::SweepScope::Cluster("a"), tenancy.clone());
-        assert_eq!(sweep.foreign.get("b"), Some(&1));
+        assert_eq!(sweep.foreign.objects, 1);
+        assert_eq!(sweep.foreign.clusters, ["b".to_string()].into());
         assert_eq!(sweep.unattributed.len(), 1);
 
         let expected: HashSet<String> = ["h-cur".to_string()].into();
@@ -582,6 +591,64 @@ mod hard_scope_tests {
         assert_eq!(names(&garbage), vec!["web-x-guest"]);
     }
 
+    /// An operator's Event carries Kix's labels but no Kix annotation and no
+    /// `kix` field-manager entry. `--include copies` alone judges it, while an
+    /// object Kix wrote without a hash still waits for `--include unstamped`.
+    #[test]
+    fn include_copies_judges_a_copy_without_a_hash() {
+        let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");
+        let mut event = live("Event", "db.1a2b", None, "");
+        event.metadata.managed_fields = Some(vec![
+            k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry {
+                manager: Some("stackgres-operator".into()),
+                operation: Some("Update".into()),
+                ..Default::default()
+            },
+        ]);
+        let sweep = inventory::scope_sweep(
+            inventory::partition_sweep(vec![
+                live("ConfigMap", "a-current", Some("h-cur"), "a2"),
+                event,
+                live("ConfigMap", "unannotated", None, ""),
+            ]),
+            inventory::SweepScope::Cluster("a"),
+            tenancy.clone(),
+        );
+        let object_names = |objs: &[DynamicObject]| -> Vec<String> {
+            objs.iter()
+                .filter_map(|o| o.metadata.name.clone())
+                .collect()
+        };
+        assert_eq!(object_names(&sweep.copies), ["db.1a2b"]);
+        assert_eq!(object_names(&sweep.unattributed), ["unannotated"]);
+        let copies: HashSet<ResourceId> = sweep
+            .copies
+            .iter()
+            .map(kix::cluster::drift::resource_id)
+            .collect();
+        let expected: HashSet<String> = ["h-cur".to_string()].into();
+        let judged = judged_objects(sweep, true, true);
+        let (garbage, _) = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
+
+        let (held, rest) = hold_back_unstamped(garbage, &copies, false);
+        assert_eq!(names(&rest), vec!["db.1a2b"]);
+        assert_eq!(names(&held), vec!["unannotated"]);
+
+        let judged = judged_objects(
+            inventory::scope_sweep(
+                inventory::partition_sweep(vec![live("ConfigMap", "unannotated", None, "")]),
+                inventory::SweepScope::Cluster("a"),
+                tenancy.clone(),
+            ),
+            true,
+            true,
+        );
+        let (garbage, _) = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
+        let (held, rest) = hold_back_unstamped(garbage, &copies, true);
+        assert!(held.is_empty());
+        assert_eq!(names(&rest), vec!["unannotated"]);
+    }
+
     /// Verify that hard GC does not delete another Kix cluster's objects
     /// after that cluster's records are gone. They name no record, so they are
     /// judged only with `--include unattributed`, like a leftover of this
@@ -612,6 +679,42 @@ mod hard_scope_tests {
         let judged = judged_objects(sweep(), true, false);
         let (garbage, _) = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
         assert_eq!(names(&garbage), vec!["b-web", "leftover"]);
+    }
+
+    /// Verify that a full scan lists a package instance record under the
+    /// instance its spec names, like the objects of that instance, even
+    /// though the build stamps every record `kix.run/package: _cluster`.
+    #[test]
+    fn a_package_instance_record_is_listed_under_its_instance() {
+        let stamped = |kind: &str, pkg: &str, pkg_ns: &str| -> DynamicObject {
+            let mut obj = live(kind, "web2", Some("h-old"), "");
+            let anns = obj.metadata.annotations.get_or_insert_default();
+            anns.insert(keys::PACKAGE.into(), pkg.into());
+            anns.insert(keys::PACKAGE_NAMESPACE.into(), pkg_ns.into());
+            obj
+        };
+        let mut record = stamped("PackageInstance", "_cluster", "_cluster");
+        record.data["spec"] = json!({ "instanceName": "web2", "namespaceName": "baseline" });
+        let deployment = stamped("Deployment", "web2", "baseline");
+        let tenancy = kix::cluster::tenancy::Tenancy::fixture(&[], "a");
+
+        let (garbage, _) = judge_hard(
+            &[record, deployment],
+            &HashSet::new(),
+            &HashSet::new(),
+            &tenancy,
+        );
+        let packages: Vec<(Option<&str>, Option<&str>)> = garbage
+            .iter()
+            .map(|g| (g.package_namespace.as_deref(), g.package.as_deref()))
+            .collect();
+        assert_eq!(
+            packages,
+            vec![
+                (Some("baseline"), Some("web2")),
+                (Some("baseline"), Some("web2"))
+            ]
+        );
     }
 }
 

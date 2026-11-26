@@ -325,7 +325,7 @@ async fn apply_node(
         return Ok(done);
     }
     let import_target = entry.meta.import_target.as_ref();
-    if import_target.is_none() && readiness::is_immediate_kind(rid.group_kind()) {
+    if import_target.is_none() && readiness::is_immediate(rid.group_kind(), &manifest) {
         return Ok(done);
     }
     Ok(wait_applied(ctx, entry, &node, &rid, applied_at, done).await)

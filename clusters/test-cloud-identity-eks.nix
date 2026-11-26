@@ -74,13 +74,15 @@ kix.buildCluster {
         # endregion:eksIrsaInstance
 
         instances.external-dns-keys = {
-          # A Secret created outside Kix with the keys AWS_ACCESS_KEY_ID and
-          # AWS_SECRET_ACCESS_KEY.
+          # A Secret created outside Kix with the keys AWS_ACCESS_KEY_ID,
+          # AWS_SECRET_ACCESS_KEY, and AWS_REGION. A pod with access keys gets no
+          # region from the platform.
           aws-keys = {
             package = packages.secret-ref;
             config.keys = [
               "AWS_ACCESS_KEY_ID"
               "AWS_SECRET_ACCESS_KEY"
+              "AWS_REGION"
             ];
           };
 
@@ -153,7 +155,7 @@ kix.buildCluster {
           package = packages.experimental.cluster-issuer;
           config.spec.acme = {
             server = "https://acme-staging-v02.api.letsencrypt.org/directory";
-            email = "platform@example.com";
+            email = "<your-email>";
             solvers = [ { dns01.route53.region = "eu-west-1"; } ];
           };
         };

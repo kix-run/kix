@@ -350,9 +350,11 @@ fn controller_line(rid: &ResourceId, controller: &Controller) -> String {
     let id = &controller.id;
     let kind = &rid.kind;
     match &controller.state {
+        // Ready pods do not show that the controller can act: it may lack
+        // the rights, settings, or network access that cleanup needs.
         ControllerState::Ready => format!(
-            "{kind} controller {id} is ready. Check its logs to see why it has not removed \
-             the finalizers."
+            "{kind} controller {id} has ready pods but may be failing to remove the \
+             finalizers. Check its logs for errors such as missing permissions."
         ),
         ControllerState::NotReady(reason) => format!(
             "{kind} controller {id} is not ready ({reason}), so it cannot remove the finalizers. \
@@ -784,10 +786,9 @@ mod tests {
             not_ready.find("ScaledObject controller").unwrap() < not_ready.find("kubectl").unwrap(),
             "{not_ready}"
         );
-        assert!(
-            with(ControllerState::Ready)
-                .contains("ScaledObject controller Deployment.apps/keda-operator@keda is ready.")
-        );
+        assert!(with(ControllerState::Ready).contains(
+            "ScaledObject controller Deployment.apps/keda-operator@keda has ready pods but"
+        ));
         assert!(with(ControllerState::Missing).contains("is not on the cluster"));
         assert!(
             with(ControllerState::Unread("forbidden".into())).contains(

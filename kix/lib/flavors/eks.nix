@@ -1,12 +1,20 @@
 # Amazon EKS flavor.
 #
 # EKS provides a managed control plane, `aws-vpc-cni` (exclusive), CoreDNS,
-# and cloud load balancing via the in-tree controller or the AWS Load Balancer
-# Controller add-on (shadowable).
+# and cloud load balancing (shadowable). The EKS-run service controller builds
+# a classic load balancer for a `LoadBalancer` Service. The AWS Load Balancer
+# Controller is not an EKS add-on (only EKS Auto Mode includes it), so a
+# cluster that wants it installs it with Helm.
 #
-# EKS does not create a usable default StorageClass out of the box (the EBS CSI
-# driver is a separate add-on), so `storageClasses` is `absent` and clusters
-# declare their own storage class or import.
+# EKS creates a `gp2` StorageClass (`kubernetes.io/aws-ebs`,
+# `WaitForFirstConsumer`) but marks no class as the default, and it has no
+# `gp3` class. With the EBS CSI driver add-on installed, a claim on `gp2`
+# binds. `storageClasses` is `absent`, so clusters create their own class, or
+# import `gp2` and name it in the claim.
+#
+# The platform also has an `efs.csi.aws.com` CSIDriver object without an EFS
+# driver, and an APIService `v1.metrics.eks.amazonaws.com` that is not
+# `metrics.k8s.io`. Neither shows that EFS or the metrics API is available.
 #
 # EKS gives pods AWS identities through IAM roles for service accounts (IRSA)
 # by default, or through EKS Pod Identity when
@@ -51,11 +59,16 @@ in
       How pods on this EKS cluster assume AWS IAM roles from
       `kix.cloudIdentity.aws { roleArn = "..."; }`. `"irsa"` (IAM roles for
       service accounts) writes `eks.amazonaws.com/role-arn` on the
-      ServiceAccount. `"pod-identity"` (EKS Pod Identity) omits that
-      annotation; install the EKS Pod Identity Agent add-on and create an EKS
-      Pod Identity association in AWS to link the ServiceAccount to the role.
-      Both modes add `checksum/cloud-identity` to pod templates so changing the
-      role restarts pods.
+      ServiceAccount. An EKS Pod Identity association on the same
+      ServiceAccount overrides IRSA. `"pod-identity"` (EKS Pod Identity) omits
+      that annotation; install the EKS Pod Identity Agent add-on and create an
+      EKS Pod Identity association in AWS linking the ServiceAccount to
+      `roleArn`. Kix cannot create or inspect AWS associations, so pods receive
+      whichever role the association specifies. Run `kix list resources` to see
+      each ServiceAccount and its `roleArn`. Both modes add
+      `checksum/cloud-identity` to pod templates so changing `roleArn` restarts
+      pods, and `kix deploy` verifies that new pods receive the expected AWS
+      identity environment variables.
     '';
   };
 

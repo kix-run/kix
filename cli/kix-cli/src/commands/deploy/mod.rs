@@ -70,6 +70,11 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     // rather than `args.plan`.
     let flags = saved.as_ref().map_or(flags_of(&args.plan), |s| s.flags);
     let Some(mut p) = prepare(&args.plan, flags, ctx)? else {
+        // The build is empty, so Kix never connects and the log has no
+        // `kubernetes` line.
+        if args.log_format == LogFormat::Json {
+            super::deploy_log::JsonObserver::new().nothing_to_apply(0);
+        }
         return Ok(Exit::Success);
     };
     // A cluster that has never run a required stop must deploy it first,
@@ -124,11 +129,17 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     // A plan made from the local cache (`--offline`) has not read its Jobs,
     // so it decides once the run connects.
     if let Some(connected) = &p.connected
-        && !ctx
-            .runtime()?
-            .block_on(start(&connected.client, &p.checked, &connected.last_runs))
+        && let Some(unchanged) =
+            ctx.runtime()?
+                .block_on(start(&connected.client, &p.checked, &connected.last_runs))
     {
-        say_nothing_to_apply(&p.checked, active_hash.as_deref());
+        say_nothing_to_apply(
+            &p.checked,
+            unchanged,
+            active_hash.as_deref(),
+            args.log_format,
+            &connected.connection,
+        );
         return Ok(Exit::Success);
     }
 
@@ -360,31 +371,35 @@ pub(crate) fn run_planned(
     Ok(end)
 }
 
-/// Decide whether a deploy or a rollback of `checked` starts its run, and
-/// return true when it does ([`CheckedPlan::start`]). With nothing to do,
-/// say how many failed deploy records were marked Superseded; the caller
-/// says that nothing was applied. When only Jobs remain, say why the run
-/// still starts.
+/// Decide whether a deploy or a rollback of `checked` starts its run
+/// ([`CheckedPlan::start`]). Return `None` when it does, or the number of
+/// unchanged objects when there is nothing to do. With nothing to do, say
+/// how many failed deploy records were marked Superseded; the caller says
+/// that nothing was applied. When only Jobs remain, say why the run still
+/// starts.
 pub(crate) async fn start(
     client: &kube::Client,
     checked: &CheckedPlan,
     last_runs: &LastRuns,
-) -> bool {
+) -> Option<usize> {
     match checked.start(client, last_runs).await {
-        Start::Nothing { superseded } => {
+        Start::Nothing {
+            superseded,
+            unchanged,
+        } => {
             if superseded > 0 {
                 crate::say!(
                     "  {} Marked {superseded} earlier failed deployment record(s) Superseded (nothing left to change).",
                     output::dim("="),
                 );
             }
-            false
+            Some(unchanged)
         }
         Start::Run => {
             if checked.work(last_runs) == Work::JobsOnly {
                 say_failed_jobs(last_runs);
             }
-            true
+            None
         }
     }
 }
@@ -617,16 +632,30 @@ pub(super) fn refuse_namespaceless(
     ))
 }
 
-/// Say that the deploy has nothing to apply, and whether its build is the
-/// one the record `active_hash` names.
-fn say_nothing_to_apply(checked: &CheckedPlan, active_hash: Option<&str>) {
+/// Say that the deploy has nothing to apply, how many objects are
+/// unchanged, and whether its build is the one the record `active_hash`
+/// names. Under `--log-format json` the log still names the Kubernetes
+/// cluster and ends with a summary line, so a program reading it can tell
+/// this run from one that died before it printed anything.
+fn say_nothing_to_apply(
+    checked: &CheckedPlan,
+    unchanged: usize,
+    active_hash: Option<&str>,
+    log_format: LogFormat,
+    connection: &binding::Connection,
+) {
+    if log_format == LogFormat::Json {
+        let json = super::deploy_log::JsonObserver::new();
+        json.kubernetes(connection);
+        json.nothing_to_apply(unchanged);
+    }
     match (checked.activation_identity_hash(), active_hash) {
         (Some(new), Some(old)) if new == old => crate::say!(
-            "{} activation identical to active ({}...). Nothing to apply.",
+            "{} This build ({}...) matches the active deployment. Nothing to apply ({unchanged} unchanged).",
             output::dim("="),
             &new[..8.min(new.len())],
         ),
-        _ => crate::say!("Nothing to apply."),
+        _ => crate::say!("Nothing to apply ({unchanged} unchanged)."),
     }
 }
 
@@ -770,9 +799,15 @@ async fn run_deploy_async(
     // it has anything to do: it had not read its Jobs, and orphans another
     // Kix cluster deploys were still in its prune.
     if let Some(last_runs) = &offline_runs
-        && !start(target.client(), &checked, last_runs).await
+        && let Some(unchanged) = start(target.client(), &checked, last_runs).await
     {
-        say_nothing_to_apply(&checked, cached_baseline);
+        say_nothing_to_apply(
+            &checked,
+            unchanged,
+            cached_baseline,
+            options.log_format,
+            &connection,
+        );
         return Ok(RunEnd {
             succeeded: true,
             current: false,
@@ -830,10 +865,12 @@ async fn run_deploy_async(
         {
             Arc::new(StreamCliObserver {
                 verbose: global.verbose > 0,
+                cluster: cluster_name.to_string(),
             })
         }
         (None, None) => Arc::new(super::deploy_log::LineObserver {
             verbose: global.verbose > 0,
+            cluster: cluster_name.to_string(),
         }),
     };
 
