@@ -898,6 +898,87 @@ mod tests {
             );
         }
 
+        /// A repair that goes on past a failed object, as the operator's
+        /// does, repairs the other drifted object and reports the one whose
+        /// apply Kubernetes refused with a conflict.
+        #[tokio::test]
+        async fn a_repair_that_continues_repairs_past_a_conflict() {
+            let graph = build(&[config_map("web", "1"), config_map("calm", "1")]);
+            let owned = |mut m: Value| {
+                m["metadata"]["managedFields"] = json!([{
+                    "manager": crate::cluster::fieldsv1::KIX_FIELD_MANAGER,
+                    "operation": "Apply",
+                    "apiVersion": "v1",
+                    "fieldsV1": { "f:data": { "f:k": {} } },
+                }]);
+                m
+            };
+            let live: Vec<Value> = manifests(&graph).into_iter().map(owned).collect();
+            let (api, record) = cluster(&graph, &live).await;
+            let client = api.client();
+            let set = RevisionSet::of("a", &graph);
+            let store = Revisions::new(&client);
+            for revision in set.all() {
+                let entries: std::collections::BTreeMap<String, String> = revision
+                    .spec
+                    .objects
+                    .iter()
+                    .map(|o| (o.hash.clone(), "stale".to_string()))
+                    .collect();
+                if !entries.is_empty() {
+                    store.write_applied(&revision.name, &entries).await.unwrap();
+                }
+            }
+            let plan = LivePlan::sweep(&client, &record, &manifests(&graph), Some(set))
+                .await
+                .unwrap();
+            assert_eq!(written(&plan.plan), ["calm", "web"]);
+            api.fail_next("/api/v1/namespaces/app/configmaps/web", u32::MAX, 409);
+            let lock = crate::cluster::head::take(
+                &client,
+                crate::cluster::head::Request {
+                    cluster: "a".into(),
+                    holder: crate::cluster::head::Holder::operator("kix", None),
+                    purpose: crate::cluster::head::Purpose::Repair,
+                    activation: Some("a-cur".into()),
+                    expect: None,
+                },
+                crate::cluster::head::system_clock(),
+                &|_| {},
+            )
+            .await
+            .unwrap();
+            let lock = Arc::new(lock);
+            let config = SchedulerConfig {
+                on_error: crate::cluster::scheduler::OnErrorPolicy::Continue,
+                ..test_config()
+            };
+            let result = plan
+                .run(
+                    lock.clone(),
+                    false,
+                    config,
+                    Arc::new(crate::cluster::stream::NullObserver),
+                )
+                .await
+                .unwrap();
+            lock.release().await.unwrap();
+            assert_eq!((result.configured, result.failed), (1, 1));
+            assert_eq!(
+                result.failures[0].node,
+                crate::cluster::stream::NodeId::Resource(ResourceId::from_value(&config_map(
+                    "web", "1"
+                )))
+            );
+            assert!(
+                api.requests()
+                    .iter()
+                    .any(|r| r.starts_with("PATCH") && r.contains("/configmaps/calm?")),
+                "{:?}",
+                api.requests()
+            );
+        }
+
         fn test_config() -> SchedulerConfig {
             SchedulerConfig {
                 timeout: std::time::Duration::from_secs(5),

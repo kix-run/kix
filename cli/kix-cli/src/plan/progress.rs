@@ -150,6 +150,10 @@ pub fn print(event: PlanEvent<'_>) {
                 }
             }
         },
+        PlanEvent::FailedValuesUnknown(record) => crate::say!(
+            "    the build of {} is not on this machine. Kix takes in what it applied from its revisions, but the plan cannot tell the values it wrote from drift, so it lists them as drift.",
+            record.name,
+        ),
         PlanEvent::FailedUnresolved { records, cluster } => {
             let names = some_names(records.iter().map(|r| r.name.as_str()));
             warning(&format!(

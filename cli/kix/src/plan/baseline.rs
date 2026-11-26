@@ -544,10 +544,12 @@ pub struct FailedBaseline {
     /// The build behind each entry of `closures`, in the same order, for
     /// `status.orphansKeptFrom` when this plan keeps the orphans it found.
     pub sources: Vec<KeptOrphanSource>,
-    /// Records whose closure is not in this machine's store.
+    /// Records whose closure is not in this machine's store, of a Kix
+    /// cluster not read from revisions.
     pub unresolved: Vec<Record>,
     /// The package index of each folded-in record that has one, oldest
-    /// first.
+    /// first. A record of a Kix cluster read from revisions whose build is
+    /// not on this machine has an index here and no entry in `closures`.
     pub indexes: Vec<RecordPackageIndex>,
     /// The folded-in records in phase `Partial`, which a deploy with
     /// `--only` left partly deployed. A subset of `consumed`.
@@ -747,13 +749,21 @@ async fn load_failed(
         let closure = match (from_store, live) {
             (Ok(Some(closure)), _) => closure,
             (Ok(None) | Err(_), Some(live)) => live.closure_of(&hash),
-            // The record's revisions name what it applied, so the plan takes
-            // it in without its build.
+            // The one planner takes the record in from its revisions and the
+            // live objects, so the record is resolved. Its build would only
+            // tell the package diff which live values the record wrote.
             (Ok(None), None)
                 if tenancy.own_source() == tenancy::Source::Revisions
                     && matches!(record.revisions, Some(Ok(_))) =>
             {
-                Vec::new()
+                report(PlanEvent::FailedFolded(&record));
+                report(PlanEvent::FailedValuesUnknown(&record));
+                out.indexes.extend(tenancy.index_of(&record));
+                out.consumed.push(record.name.clone());
+                if record.partly_deployed().is_some() {
+                    out.partly_deployed.push(record.name.clone());
+                }
+                continue;
             }
             (Ok(None), None) => {
                 out.unresolved.push(record);
@@ -1258,7 +1268,10 @@ async fn of_live(
 }
 
 /// Read the [`Tenancy`] of `cluster` for a plan.
-async fn read_tenancy(opened: &OpenedRecords, cluster: &str) -> Result<Tenancy, PlanError> {
+pub(crate) async fn read_tenancy(
+    opened: &OpenedRecords,
+    cluster: &str,
+) -> Result<Tenancy, PlanError> {
     tenancy::read(opened, cluster)
         .await
         .map_err(|e| PlanError::ReadTenancy(Box::new(e)))
@@ -1450,6 +1463,73 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, PlanError::Tenancy(_)), "{err}");
         assert!(err.to_string().contains(&missing), "{err}");
+    }
+
+    /// A `Failed` record whose build is not on this machine is resolved
+    /// when its Kix cluster is read from revisions: the one planner takes it
+    /// in from its revisions, and the plan says it cannot tell the values
+    /// it wrote from drift. The same record of a Kix cluster read from
+    /// records is unresolved.
+    #[tokio::test]
+    async fn a_failed_record_with_revisions_needs_no_build() {
+        use crate::cluster::tenancy_fixture::{Rec, Written, state};
+        let recs = [
+            Rec {
+                name: "a-cur",
+                cluster: "a",
+                hash: "cur",
+                phase: PHASE_ACTIVE,
+                current: true,
+                objects: &["web"],
+                ..Rec::default()
+            },
+            Rec {
+                name: "a-stopped",
+                cluster: "a",
+                hash: "not-on-this-machine",
+                phase: PHASE_FAILED,
+                objects: &["web", "added"],
+                ..Rec::default()
+            },
+        ];
+        for (written, resolved) in [(Written::Revisions, true), (Written::Records, false)] {
+            let mut state = state(&recs, |_| written);
+            for record in &mut state.records {
+                record["metadata"]["labels"]["app.kubernetes.io/managed-by"] = json!("kix");
+            }
+            let api = FakeApi::new(state.all());
+            let client = api.client();
+            let discovery = discovery::discover_resources(&client).await.unwrap();
+            let opened = Records::open(&client, &discovery).unwrap();
+            let events = std::sync::Mutex::new(Vec::new());
+            let report = |e: PlanEvent<'_>| events.lock().unwrap().push(format!("{e:?}"));
+            let failed = load_failed(
+                opened.records().unwrap(),
+                &state.tenancy("a"),
+                None,
+                "a",
+                &report,
+                None,
+            )
+            .await;
+            let events = events.into_inner().unwrap();
+            let said = |event: &str| events.iter().any(|e| e.starts_with(event));
+            assert!(failed.closures.is_empty() && failed.sources.is_empty());
+            if resolved {
+                assert_eq!(failed.consumed, ["a-stopped"]);
+                assert!(failed.unresolved.is_empty());
+                assert!(
+                    said("FailedFolded") && said("FailedValuesUnknown"),
+                    "{events:?}"
+                );
+                assert!(!said("FailedUnresolved"), "{events:?}");
+            } else {
+                assert!(failed.consumed.is_empty());
+                assert_eq!(failed.unresolved.len(), 1);
+                assert!(said("FailedUnresolved"), "{events:?}");
+                assert!(!said("FailedValuesUnknown"), "{events:?}");
+            }
+        }
     }
 
     /// A Kix cluster read from revisions reads its kept orphans from the

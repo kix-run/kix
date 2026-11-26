@@ -844,6 +844,13 @@ pub struct Differences {
     pub earlier: Vec<super::document::EarlierDeployChange>,
 }
 
+/// A plan made again from the live cluster after a plan made offline was
+/// confirmed ([`Planner::recheck`]).
+pub struct Replanned {
+    pub checked: CheckedPlan,
+    pub connected: Connected,
+}
+
 /// Makes the plan of a deploy with `flags`, reporting what it finds to
 /// `report`.
 pub struct Planner<'a> {
@@ -915,6 +922,77 @@ impl<'a> Planner<'a> {
             None => Baseline::of_cache(&new_graph.cluster_name, self.report),
         };
         self.planned(build, baseline, client).await
+    }
+
+    /// Plan `build` again from the live cluster behind `client`, after
+    /// `confirmed`, the plan of `build` made offline (`--offline`), was
+    /// confirmed. `new_manifests` are the manifests that plan was made from,
+    /// with the values `--record-annotation` put on the record.
+    ///
+    /// Return `None` when the Kix cluster is not read from revisions: the
+    /// one planner does not plan it, and the offline plan runs as made.
+    /// Otherwise return the plan made from the live cluster, which the run
+    /// uses, or refuse when it writes or deletes other objects than
+    /// `confirmed` ([`super::offline::compare`]). The caller has already
+    /// run the target checks, and takes the deploy lock only after this
+    /// returns.
+    pub async fn recheck(
+        &self,
+        confirmed: &CheckedPlan,
+        build: &InstallableBuild,
+        new_manifests: &[Value],
+        client: Client,
+        connection: binding::Connection,
+    ) -> Result<Option<Replanned>, PlanError> {
+        let graph = build.graph();
+        let cluster = &graph.cluster_name;
+        // Ask first, so a Kix cluster read from records reads and reports
+        // nothing more than the offline path does.
+        let discovery = discovery::discover_resources(&client)
+            .await
+            .map_err(|e| PlanError::Discovery(Box::new(e)))?;
+        let opened = Records::open(&client, &discovery).map_err(PlanError::Domain)?;
+        let tenancy = super::baseline::read_tenancy(&opened, cluster).await?;
+        if tenancy.own_source() != crate::cluster::tenancy::Source::Revisions {
+            return Ok(None);
+        }
+        if let Some(settle) = &self.settle {
+            self.settle_lock(&client, graph, settle).await?;
+        }
+        let baseline = Baseline::of_cluster(&client, build, self.report).await?;
+        let Some(ledger) = ledger_of(&baseline)? else {
+            return Ok(None);
+        };
+        let head = read_head(&client, cluster).await?;
+        let live = read_live(&client, &listed_ids(new_manifests, Some(&ledger))).await?;
+        let mut checked = self
+            .check(
+                graph,
+                new_manifests,
+                cluster,
+                &baseline,
+                Some((&client, &live)),
+                Some(&ledger),
+            )
+            .await?;
+        super::offline::compare(
+            cluster,
+            &connection,
+            confirmed.objects(),
+            checked.objects(),
+            checked.shared_orphans(),
+        )
+        .map_err(PlanError::OfflinePlanDiffers)?;
+        let last_runs = checked.last_runs_from(&live);
+        Ok(Some(Replanned {
+            checked,
+            connected: Connected {
+                client,
+                connection,
+                last_runs,
+                head,
+            },
+        }))
     }
 
     /// Settle a lock another run holds on the Kix cluster of `graph`, saying

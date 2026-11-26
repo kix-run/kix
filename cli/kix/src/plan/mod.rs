@@ -16,6 +16,7 @@ pub mod file;
 pub mod fixtures;
 pub mod live;
 pub mod objects;
+pub mod offline;
 #[cfg(test)]
 mod only_tests;
 pub mod origin;
@@ -36,8 +37,8 @@ use diff::is_propagation_path;
 pub(crate) use diff::partition_propagation;
 pub use diff::{diff_garbage, diff_graphs};
 pub use planner::{
-    CheckedPlan, Connected, Differences, OldSide, Planned, Planner, Settle, Start, Target,
-    TargetChecks, Work, keep_held, keep_shared, kinds_leaving,
+    CheckedPlan, Connected, Differences, OldSide, Planned, Planner, Replanned, Settle, Start,
+    Target, TargetChecks, Work, keep_held, keep_shared, kinds_leaving,
 };
 #[cfg(test)]
 use redact::LAST_APPLIED;
@@ -104,6 +105,10 @@ pub enum PlanEvent<'a> {
     DeployInFlight(&'a Record),
     /// The build of a `Failed` or `Partial` record was folded into the plan.
     FailedFolded(&'a Record),
+    /// The plan takes in a `Failed` or `Partial` record from its revisions,
+    /// and its build is not on this machine. The package diff cannot tell
+    /// which live values that deploy wrote, so it lists them as drift.
+    FailedValuesUnknown(&'a Record),
     /// A rollback's current build failed to load or did not match the record,
     /// so the rollback compares against an empty build.
     ActiveBuildUnusable {
@@ -226,6 +231,10 @@ pub enum PlanError {
     Marker(MalformedMarker),
     #[error("{0}")]
     Unshown(objects::Unshown),
+    /// The plan `kix deploy --offline` made again from the live cluster
+    /// differs from the plan the person confirmed.
+    #[error("{0}")]
+    OfflinePlanDiffers(Box<offline::OfflinePlanDiffers>),
     #[error(
         "[K8031] cannot move {}: Kubernetes stores both API groups as the same object, \
          so applying the new group and deleting from the old group deletes that object \

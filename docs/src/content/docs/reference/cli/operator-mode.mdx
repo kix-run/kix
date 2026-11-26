@@ -48,7 +48,12 @@ yet; pull-based Git sync is planned.
   `KIX_REQUEUE_INTERVAL_SECS` environment variable). It only repairs records
   with `spec.source.path` set, so it ignores records created by `kix deploy`
   without `--operator`. Drift repair pauses while another operator-managed
-  Activation for the same Kix cluster is `Queued` or `Deploying`.
+  Activation for the same Kix cluster is `Queued` or `Deploying`. The
+  operator never takes fields from another field manager. When a resource
+  was changed by another manager, such as with `kubectl scale`, its apply
+  fails with a conflict. The operator reports the conflict in an Event and
+  its log, repairs every other resource, and skips only the resources that
+  depend on the failed one. It then tries again after 30 seconds.
 - **Deploying from Git today:** Run `kix deploy` (with or without `--operator`)
   from CI after a merge.
 

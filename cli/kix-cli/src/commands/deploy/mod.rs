@@ -360,6 +360,13 @@ pub(crate) fn run_planned(
 ) -> Result<RunEnd> {
     let cluster = p.build.graph().cluster_name.clone();
     let global = ctx.global.clone();
+    // A plan made offline is made again once the deploy connects, from the
+    // same manifests.
+    let offline_manifests = p.connected.is_none().then(|| p.new_manifests().to_vec());
+    let offline = offline_manifests.as_deref().map(|manifests| Offline {
+        build: &p.build,
+        manifests,
+    });
     let end = ctx.runtime()?.block_on(run_deploy_async(
         command,
         options,
@@ -368,6 +375,7 @@ pub(crate) fn run_planned(
         &cluster,
         receipt,
         p.connected,
+        offline,
         cached_baseline,
         previous,
         sops,
@@ -785,6 +793,13 @@ fn tui_height() -> Option<u16> {
     }
 }
 
+/// The build of a plan made offline (`--offline`), and the manifests the
+/// plan was made from, which the deploy plans again from once it connects.
+struct Offline<'a> {
+    build: &'a kix::build_source::InstallableBuild,
+    manifests: &'a [Value],
+}
+
 /// Execute the deploy plan in `checked` using the flags recorded when `checked`
 /// was built.
 #[allow(clippy::too_many_arguments)]
@@ -796,14 +811,14 @@ async fn run_deploy_async(
     cluster_name: &str,
     receipt: Option<Value>,
     connected: Option<Connected>,
+    offline: Option<Offline<'_>>,
     cached_baseline: Option<&str>,
     previous: Previous,
     sops: kix::build_source::SopsSources,
 ) -> Result<RunEnd> {
     // Reuse the pre-confirm client, which the plan ran the target checks
-    // through and read the Jobs with, or connect now, run the checks, filter
-    // orphans shared with other Kix clusters, and read the Jobs.
-    let expect = connected
+    // through and read the Jobs with, or connect now and run the checks.
+    let mut expect = connected
         .as_ref()
         .and_then(|c| c.head.as_ref())
         .map(|h| h.generation);
@@ -818,20 +833,57 @@ async fn run_deploy_async(
                 .run(&client, &connection)
                 .await
                 .map_err(|e| miette!("{e}"))?;
-            let (_, shared) =
-                kix::plan::keep_shared(&client, cluster_name, checked.orphans().to_vec())
+            // A Kix cluster read from revisions is planned again from the
+            // live cluster, and the run uses that plan if it matches the
+            // confirmed one. It binds the run to the lock generation it read.
+            let replanned = match &offline {
+                Some(offline) => {
+                    let report = |event: kix::plan::PlanEvent<'_>| plan::progress::print(event);
+                    kix::plan::Planner::new(checked.flags().clone(), &report)
+                        .settling(kix::plan::Settle {
+                            command: command.invocation(),
+                            purpose: command.purpose(),
+                        })
+                        .recheck(
+                            &checked,
+                            offline.build,
+                            offline.manifests,
+                            client.clone(),
+                            connection.clone(),
+                        )
+                        .await
+                        .map_err(|e| miette!("{e}"))?
+                }
+                None => None,
+            };
+            if let Some(replanned) = replanned {
+                checked = replanned.checked;
+                expect = replanned.connected.head.as_ref().map(|h| h.generation);
+                plan::print_shared(checked.shared_orphans());
+                plan::print_reruns(checked.plan(), &[RerunReason::LastRunFailed]);
+                crate::say!(
+                    "{} Planned again from the live cluster: it writes and deletes the objects you confirmed.",
+                    output::dim("="),
+                );
+                let c = replanned.connected;
+                (c.client, c.connection, Some(c.last_runs))
+            } else {
+                // Filter orphans shared with other Kix clusters, and read the Jobs.
+                let (_, shared) =
+                    kix::plan::keep_shared(&client, cluster_name, checked.orphans().to_vec())
+                        .await
+                        .map_err(|e| miette!("{e}"))?;
+                checked.keep_shared(&shared);
+                plan::print_shared(&shared);
+                // The plan read the cache, so it learns the last runs of its
+                // Jobs only now.
+                let last_runs = checked
+                    .read_last_runs(&client)
                     .await
                     .map_err(|e| miette!("{e}"))?;
-            checked.keep_shared(&shared);
-            plan::print_shared(&shared);
-            // The plan read the cache, so it learns the last runs of its
-            // Jobs only now.
-            let last_runs = checked
-                .read_last_runs(&client)
-                .await
-                .map_err(|e| miette!("{e}"))?;
-            plan::print_reruns(checked.plan(), &[RerunReason::LastRunFailed]);
-            (client, connection, Some(last_runs))
+                plan::print_reruns(checked.plan(), &[RerunReason::LastRunFailed]);
+                (client, connection, Some(last_runs))
+            }
         }
     };
 
