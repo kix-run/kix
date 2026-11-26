@@ -739,7 +739,7 @@ async fn run_reconcile(
     }
     let foreign = plan.foreign();
     if foreign.objects > 0 {
-        tracing::debug!(name, count = foreign.objects, clusters = ?foreign.clusters, "left out objects of other Kix clusters");
+        tracing::debug!(name, count = foreign.objects, clusters = ?foreign.clusters, "skipped live objects belonging to other Kix clusters");
     }
     if plan.unattributed() > 0 {
         tracing::info!(

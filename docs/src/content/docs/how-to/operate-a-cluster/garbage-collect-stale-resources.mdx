@@ -87,9 +87,9 @@ earlier deploy whose records
 Review the listed resources, then pass `--include unattributed` to check them
 against the active deployment's build and delete any not in it.
 
-Resources that Kix wrote that carry a Kix label but no `kix.run/identity-hash` are listed under
-"No Kix build annotation" and kept by default. Kix wrote them, but no build
-lists them. Include them only after checking each reported resource. `--include`
+Resources written by Kix that carry a Kix label without a `kix.run/identity-hash`
+annotation are listed under "No Kix build annotation" and kept by default,
+because Kix cannot match them to a build. Include them only after checking each reported resource. `--include`
 takes a comma-separated list, such as `--include unstamped,unattributed`:
 
 <Command
