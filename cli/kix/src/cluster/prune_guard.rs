@@ -12,10 +12,12 @@
 //! is left in place.
 //!
 //! `kix gc` and the operator's finalizer delete a whole ordered list, and both
-//! go through [`delete_in_order`]. It owns which objects are never deleted,
-//! what happens to a kind the cluster does not serve, and the wait for each
-//! deleted object to be gone, and returns one [`Removal`] per object for the
-//! caller to print or log.
+//! go through [`delete_in_order`]. It owns which objects are never deleted
+//! and the wait for each deleted object to be gone, and returns one
+//! [`Removal`] per object for the caller to print or log. Every prune path
+//! asks [`discovery::lookup_kind`] whether the cluster serves an object's
+//! kind, and reports an object of a kind it does not serve as
+//! [`Pruned::NotServed`].
 
 use std::time::Duration;
 
@@ -29,7 +31,7 @@ use tokio::sync::Mutex;
 
 use super::activation::{OpenedRecords, Records, RecordsError};
 use super::cancel::CancelToken;
-use super::discovery;
+use super::discovery::{self, KindLookup};
 use super::errors::FetchError;
 use super::graph::{DeleteOrder, Walked};
 use super::inventory::SharedOrphan;
@@ -60,6 +62,11 @@ pub enum Pruned {
     },
     /// Not on the cluster.
     Gone,
+    /// The cluster does not serve the object's kind, so the object cannot
+    /// exist ([`discovery::KindLookup::NotServed`]). This happens when a
+    /// deploy recorded an object it never created, or when its
+    /// CustomResourceDefinition was removed.
+    NotServed,
     /// Another Kix cluster's current build contains it, so it stays.
     Kept(SharedOrphan),
     /// It changed between the read and the delete, so it stays. The next
@@ -75,7 +82,10 @@ impl Pruned {
             Pruned::Changed(rid) => Some(format!(
                 "kept {rid}, changed since it was read; the next prune checks it again"
             )),
-            Pruned::Deleted { .. } | Pruned::AlreadyDeleting { .. } | Pruned::Gone => None,
+            Pruned::Deleted { .. }
+            | Pruned::AlreadyDeleting { .. }
+            | Pruned::Gone
+            | Pruned::NotServed => None,
         }
     }
 
@@ -86,7 +96,7 @@ impl Pruned {
             Pruned::Deleted { uid, .. } | Pruned::AlreadyDeleting { uid, .. } => {
                 Some(uid.as_deref())
             }
-            Pruned::Gone | Pruned::Kept(_) | Pruned::Changed(_) => None,
+            Pruned::Gone | Pruned::NotServed | Pruned::Kept(_) | Pruned::Changed(_) => None,
         }
     }
 }
@@ -97,6 +107,9 @@ pub enum PruneError {
     Kube(#[from] kube::Error),
     #[error("cannot tell whether another Kix cluster still deploys it: {0}")]
     Records(#[from] RecordsError),
+    /// Kix could not tell whether the cluster serves the object's kind.
+    #[error("not deleted because Kix could not check whether Kubernetes recognizes its kind: {0}")]
+    Discovery(#[from] FetchError),
 }
 
 /// Deletes orphans of one Kix cluster. See the module docs.
@@ -199,8 +212,6 @@ impl PruneGuard {
 pub enum Removal {
     /// `lifecycle::never_pruned` protects its kind, so no request was sent.
     NeverPruned,
-    /// The cluster serves no API for its group and kind, so it was not deleted.
-    UnknownKind,
     /// [`PruneGuard::delete`] returned this outcome. A `Deleted` or
     /// `AlreadyDeleting` object is gone by the time this is reported.
     Pruned(Pruned),
@@ -225,7 +236,7 @@ impl Removal {
     /// so what it depends on must stay too.
     pub fn still_live(&self) -> bool {
         match self {
-            Removal::NeverPruned | Removal::UnknownKind => false,
+            Removal::NeverPruned => false,
             Removal::Pruned(pruned) => matches!(pruned, Pruned::Kept(_) | Pruned::Changed(_)),
             Removal::Stuck(_)
             | Removal::HeldBack { .. }
@@ -338,9 +349,13 @@ pub async fn delete_in_order(
             if protected(&rid) {
                 return Removal::NeverPruned;
             }
-            let Some((ar, scope)) = discovery::find(discovery, &rid.group, &rid.kind) else {
-                return Removal::UnknownKind;
-            };
+            let (ar, scope) =
+                match discovery::lookup_kind(client, discovery, &rid.group, &rid.kind).await {
+                    Ok(KindLookup::Served(ar, scope)) => (ar, scope),
+                    Ok(KindLookup::NotServed) => return Removal::Pruned(Pruned::NotServed),
+                    Err(e) => return Removal::Failed(e.into()),
+                };
+            let (ar, scope) = (&ar, &scope);
             let pruned = match guard.delete(ar, scope, &rid, params).await {
                 Ok(pruned) => pruned,
                 Err(e) => return Removal::Failed(e),
@@ -583,7 +598,8 @@ mod tests {
     }
 
     /// `delete_in_order` keeps the given order, sends nothing for a protected
-    /// kind, reports a kind the cluster does not serve, and deletes through
+    /// kind, counts an object of a kind the cluster does not serve as gone
+    /// so it holds nothing back, and deletes through
     /// the API of the object's own group, though `/apis` lists another group
     /// that serves a `Job` kind first.
     #[tokio::test]
@@ -620,7 +636,8 @@ mod tests {
             Removal::Pruned(Pruned::Deleted { .. })
         ));
         assert!(matches!(removals[1].1, Removal::NeverPruned));
-        assert!(matches!(removals[2].1, Removal::UnknownKind));
+        assert!(matches!(removals[2].1, Removal::Pruned(Pruned::NotServed)));
+        assert!(!removals[2].1.still_live());
         assert!(matches!(removals[3].1, Removal::Pruned(Pruned::Gone)));
         assert!(api.names_of("batch/v1", "Job").is_empty());
         assert_eq!(api.names_of(&other_version, "Job"), vec!["x"]);

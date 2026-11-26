@@ -76,6 +76,27 @@ impl Line {
                 failed: r.failed,
                 cancelled: r.cancelled,
                 pruned: r.pruned,
+                nothing_to_apply: false,
+            },
+        }
+    }
+
+    /// Build the summary line of a deploy that stopped before it ran because
+    /// the plan applies and prunes nothing.
+    pub fn nothing_to_apply(elapsed_ms: u64) -> Line {
+        Line {
+            schema_version: SCHEMA_VERSION.to_string(),
+            elapsed_ms,
+            event: Event::Summary {
+                dry_run: false,
+                succeeded: true,
+                created: 0,
+                configured: 0,
+                unchanged: 0,
+                failed: 0,
+                cancelled: 0,
+                pruned: 0,
+                nothing_to_apply: true,
             },
         }
     }
@@ -86,7 +107,8 @@ impl Line {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     /// The Kubernetes cluster the deploy writes to. The first line of the
-    /// log.
+    /// log. A deploy whose build is empty never connects, so its log has
+    /// only the `summary` line.
     Kubernetes {
         /// The kubeconfig context, or `null` when the kubeconfig names none.
         context: Option<String>,
@@ -159,7 +181,7 @@ pub enum Event {
         resource: String,
         fields: Vec<FieldNotKept>,
     },
-    /// The counts the text summary line shows.
+    /// The counts the text summary line shows. The last line of the log.
     Summary {
         dry_run: bool,
         succeeded: bool,
@@ -169,6 +191,11 @@ pub enum Event {
         failed: usize,
         cancelled: usize,
         pruned: usize,
+        /// True when the plan had nothing to apply or prune, so the deploy
+        /// wrote nothing and the active deployment record stays current. The
+        /// log then holds no `plan` or `node` lines.
+        #[serde(default)]
+        nothing_to_apply: bool,
     },
 }
 

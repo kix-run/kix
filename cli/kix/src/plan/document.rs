@@ -762,6 +762,11 @@ pub struct UncheckedObject {
 pub enum UncheckedReason {
     /// Its kind comes from a CRD this deploy creates.
     CrdCreatedByThisDeploy,
+    /// Its kind comes from a CRD that is not on the cluster, and the build
+    /// declares it installed outside Kix with an import marker. Kix does
+    /// not create it, and the deploy waits for something else to install
+    /// it, such as an operator in the build or another tool.
+    CrdInstalledOutsideKix,
     /// Its kind's CRD is changed by this deploy, and the dry run checked
     /// the object against the CRD on the cluster now.
     CrdChangedByThisDeploy,

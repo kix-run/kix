@@ -204,6 +204,12 @@ impl JsonObserver {
         println!("{}", json_line(&Line::kubernetes(connection, elapsed_ms)));
     }
 
+    /// Print the summary line of a deploy that has nothing to apply.
+    pub fn nothing_to_apply(&self) {
+        let elapsed_ms = self.started_at.elapsed().as_millis() as u64;
+        println!("{}", json_line(&Line::nothing_to_apply(elapsed_ms)));
+    }
+
     /// Print the final summary line for the deploy run.
     pub fn summary(&self, counts: &DeployResult, dry_run: bool, succeeded: bool) {
         let elapsed_ms = self.started_at.elapsed().as_millis() as u64;
@@ -705,6 +711,35 @@ mod tests {
         assert_eq!(value["server"], "https://prod.example:6443");
         let line: Line = serde_json::from_str(&text).unwrap();
         assert_eq!(json_line(&line), text);
+    }
+
+    /// A deploy with nothing to apply still ends its log with a summary line
+    /// that says so, while a run that applied something says it did not.
+    #[test]
+    fn a_deploy_with_nothing_to_apply_ends_with_a_summary() {
+        let text = json_line(&Line::nothing_to_apply(3));
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["type"], "summary");
+        assert_eq!(value["succeeded"], true);
+        assert_eq!(value["nothing_to_apply"], true);
+        assert_eq!(value["created"], 0);
+        let ran = json_line(&Line::summary(&DeployResult::default(), false, true, 3));
+        let ran: serde_json::Value = serde_json::from_str(&ran).unwrap();
+        assert_eq!(ran["nothing_to_apply"], false);
+    }
+
+    /// A summary line written before `nothing_to_apply` existed still reads.
+    #[test]
+    fn a_summary_without_nothing_to_apply_reads() {
+        let text = r#"{"schema_version":"2026-11-25","elapsed_ms":1,"type":"summary","dry_run":false,"succeeded":true,"created":0,"configured":0,"unchanged":1,"failed":0,"cancelled":0,"pruned":0}"#;
+        let line: Line = serde_json::from_str(text).unwrap();
+        assert!(matches!(
+            line.event,
+            kix::cluster::deploy_log::Event::Summary {
+                nothing_to_apply: false,
+                ..
+            }
+        ));
     }
 
     /// Under `--prune`, each object is listed as one Kix will delete.

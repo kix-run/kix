@@ -167,6 +167,48 @@ example:
   cwd="kix-examples/"
 />
 
+## Remove everything a Kix cluster deployed
+
+Kix does not have a single uninstall command. To remove a Kix cluster from a
+Kubernetes cluster, deploy an empty set of packages with `--prune`, then delete
+the remaining cluster-level objects with `kubectl`.
+
+First, list the resources in the current build and note its `Namespace` and
+`CustomResourceDefinition` names, since the next step removes them from the
+build output:
+
+<Command commands={["kix list resources how-to-application"]} cwd="kix-examples/" />
+
+Next, remove every package from the cluster definition (keeping any flavor or
+platform import the definition still needs) and deploy with `--prune`:
+
+<Command commands={["kix deploy how-to-application --prune"]} cwd="kix-examples/" />
+
+Kix deletes every resource from the previous deployment except:
+
+- **Namespaces and CustomResourceDefinitions.** Kix never deletes these
+  automatically. Deleting a Namespace deletes everything inside it. Deleting a
+  CustomResourceDefinition deletes every custom resource of that kind across all
+  namespaces, so check first that no other Kix cluster or tool uses it.
+- **Runtime objects created by operators or workloads**, such as Secrets and
+  Leases. Because Kix did not deploy them, it does not track them. Deleting
+  their Namespace removes them.
+- **Shared resources still deployed by another Kix cluster.** Kix leaves these
+  in place for the other cluster.
+- **Activation records** (the cluster's deployment history). List them with
+  `kubectl get activations.kix.run -l kix.run/cluster=how-to-application`. If
+  the Kix operator manages the cluster, deleting the `Active` record makes the
+  operator delete that deployment's resources, as described in
+  [Let the operator perform cleanup](#let-the-operator-perform-cleanup).
+- **Resources from any flavor or platform import** you kept in the cluster
+  definition.
+- **Kix's own CustomResourceDefinitions** (`activations.kix.run` and
+  `packageinstances.kix.run`). Every Kix cluster on the same Kubernetes cluster
+  shares these two CRDs, so delete them only when no other Kix clusters remain.
+
+Delete the remaining records, Namespaces, and CustomResourceDefinitions you no
+longer need with `kubectl delete`.
+
 :::note[Configure the history window]
 See [Configure Activation retention](/docs/how-to/operate-a-cluster/configure-activation-retention/)
 for the retention rules and scheduling example.
