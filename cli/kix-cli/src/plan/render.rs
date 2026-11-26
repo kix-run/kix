@@ -694,7 +694,7 @@ fn left_behind_warning(p: &PruneEntry, left: &LeftBehind) -> String {
     };
     format!(
         "{resource} is no longer in the build, and this prune leaves {n} {kind} {objects} \
-         on the cluster. If this prune removes the controller that handles {kind}, nothing will clear \
+         on the cluster. If this prune removes the controller for {kind}, nothing will clear \
          finalizers on {those} or clean up external resources {they_manage}. Kix still \
          allows the deploy. If you no longer need {them}, delete {them} while the \
          controller is still running, before running `--prune`."
@@ -710,18 +710,23 @@ pub fn left_behind_after_prune(left: &[(String, LeftBehind)]) -> Option<String> 
     }
     let text = written(|out| {
         for (declarer, l) in left {
+            let kind = &l.kind;
             let n = l.count;
-            let objects = if n == 1 { "object" } else { "objects" };
             let held = l.with_finalizers;
+            let (objects, those, they_manage, them) = if n == 1 {
+                ("object", "that object", "it manages", "it")
+            } else {
+                ("objects", "those objects", "they manage", "them")
+            };
             writeln!(
                 out,
-                "{} {declarer} left the build, and the prune left {n} {} {objects} on the \
-                 cluster that Kix did not create ({held} with finalizers). Once the controller \
-                 that handles {} is gone, nothing clears their finalizers or cleans up what \
-                 they made outside the cluster.",
+                "{} {declarer} is no longer in the build, and this prune left {n} {kind} \
+                 {objects} on the cluster ({held} with finalizers). If this prune removed the \
+                 controller for {kind}, nothing will clear finalizers on {those} or clean up \
+                 external resources {they_manage}. If you no longer need {them}, make sure the \
+                 controller is running (deploy it again if needed) and delete {them} with \
+                 `kubectl`.",
                 output::yellow("!"),
-                l.kind,
-                l.kind,
             )?;
             for o in &l.objects {
                 writeln!(out, "    {}", left_object_detail(o))?;
@@ -1300,7 +1305,7 @@ mod tests {
                 "! CustomResourceDefinition.apiextensions.k8s.io/challenges.acme.cert-manager.io \
                  is no longer in the build, and this prune leaves 22 \
                  Challenge.acme.cert-manager.io objects on the cluster. If this prune removes \
-                 the controller that handles Challenge.acme.cert-manager.io, nothing will clear \
+                 the controller for Challenge.acme.cert-manager.io, nothing will clear \
                  finalizers on \
                  those objects or clean up external resources they manage. Kix still allows the \
                  deploy. If you no longer need them, delete them while the controller is still \
@@ -1350,9 +1355,13 @@ mod tests {
         let text = left_behind_after_prune(&left).unwrap();
         assert!(
             text.contains(
-                "CustomResourceDefinition.apiextensions.k8s.io/challenges.acme.cert-manager.io \
-                 left the build, and the prune left 1 Challenge.acme.cert-manager.io object on \
-                 the cluster that Kix did not create (1 with finalizers)."
+                "! CustomResourceDefinition.apiextensions.k8s.io/challenges.acme.cert-manager.io \
+                 is no longer in the build, and this prune left 1 \
+                 Challenge.acme.cert-manager.io object on the cluster (1 with finalizers). If \
+                 this prune removed the controller for Challenge.acme.cert-manager.io, nothing \
+                 will clear finalizers on that object or clean up external resources it \
+                 manages. If you no longer need it, make sure the controller is running \
+                 (deploy it again if needed) and delete it with `kubectl`."
             ),
             "{text}"
         );

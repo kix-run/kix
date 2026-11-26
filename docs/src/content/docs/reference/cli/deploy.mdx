@@ -375,11 +375,12 @@ reaches the deploy engine, the last JSON line is the `summary` object, with
 `succeeded` (which matches the exit status), `dry_run`, and the `created`,
 `configured`, `unchanged`, `failed`, `cancelled`, and `pruned` counts. Runs
 that reach the deploy engine also set `"nothing_to_apply": false` on `summary`.
-With `--prune`, `summary` also has `left_behind` when a CustomResourceDefinition
-left the build and objects of its kind that Kix did not create are still on
-the cluster after the prune: one `{ kind, count, with_finalizers, objects }`
-per kind, as in the plan's `left_behind`. The text output prints the same
-after its summary line.
+With `--prune`, `summary` also includes `left_behind` when the new build no
+longer declares a CustomResourceDefinition and custom resources of that kind
+remain on the cluster after pruning (omitted when none remain). Each entry is
+`{ kind, count, with_finalizers, objects }`, matching `left_behind` in the
+[`Plan` document](/docs/reference/cli/plan/#the-plan-document). Other log
+formats print a warning listing those objects after the summary line.
 When the plan has nothing to apply or prune, Kix writes only the `kubernetes`
 line and a `summary` line with `"nothing_to_apply": true`, `"succeeded": true`,
 and all counts set to `0` (or only that `summary` line when the build has no
