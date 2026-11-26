@@ -1,5 +1,5 @@
 # Swap fixture, first build: the consumer on the bare `clickhouse` package.
-# See the clickhouse-swap check in flake.nix (v2_discussions/148, phase 6).
+# See the clickhouse-swap check in flake.nix (discussions/148, phase 6).
 { kix, packages }:
 
 kix.buildCluster {

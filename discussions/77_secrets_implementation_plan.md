@@ -86,7 +86,7 @@ Create `clusters/test-secrets.nix`:
 
 ---
 
-## Pre-deploy decryptability assertion (design note — v2_discussions/105 §B6)
+## Pre-deploy decryptability assertion (design note — discussions/105 §B6)
 
 **Risk:** today, SOPS hydration runs lazily in `cli/kix/src/cluster/scheduler.rs`
 (see `secrets::hydrate_secrets` invoked per-wave around line 822). A missing
@@ -110,7 +110,7 @@ SOPS error message). No wave runs.
 - Call site in `cli/kix-cli/src/commands/deploy.rs::run_deploy_async`
   (around the existing pre-flight checks; before scheduler construction).
   On failure, render a structured diagnostic via the same channel as
-  scorecard findings (see v2_discussions/80 §5a) so `kix deploy --dry-run`
+  scorecard findings (see discussions/80 §5a) so `kix deploy --dry-run`
   surfaces the same error.
 - The SOPS source paths are already available without hydration — they're
   literal `/nix/store/...` paths in the `kix.dev/sops-source` annotation,

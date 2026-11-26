@@ -104,4 +104,4 @@ A: [Covered by Q13: the output of this round is the brief. Framework and page li
 
 ## Mid-session request
 
-Adam asked for this separate record of the questions and answers in `v2_discussions/`, alongside the brief itself.
+Adam asked for this separate record of the questions and answers in `discussions/`, alongside the brief itself.
