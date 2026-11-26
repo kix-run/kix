@@ -45,7 +45,7 @@ Confirm that your cluster runs Dataplane V2 and Workload Identity Federation:
 
 ### Size small Standard clusters
 
-Because both GKE flavors set `cluster.capabilities.multiNode = true`, `cluster.availability.default` is at least `"node"`. Packages that scale with availability run two or more replicas of each controller (for example, `cert-manager` and `external-secrets` each run six pods across three deployments). On a small cluster such as two 2-vCPU nodes, deploying several controllers can exhaust CPU requests and leave pods such as Velero's node agent `Pending`. Both `kix deploy` and `kix status` report the scheduler reason (`0/2 nodes are available: 2 Insufficient cpu`). Set `cluster.availability.default = "none";` across a small test cluster, or `availability = "none";` on individual instances, as shown in [Set the cluster availability level](/docs/how-to/platform-capabilities/set-the-cluster-availability-level/).
+Because both GKE flavors set `cluster.capabilities.multiNode = true` without `availabilityZones`, `cluster.availability.default` defaults to `"node"`. Packages that scale with availability run two or more replicas of each controller (for example, `cert-manager` and `external-secrets` each run six pods across three deployments). On a small cluster such as two 2-vCPU nodes, deploying several controllers can exhaust CPU requests and leave pods such as Velero's node agent `Pending`. Both `kix deploy` and `kix status` report the scheduler reason (`0/2 nodes are available: 2 Insufficient cpu`). Set `cluster.availability.default = "none";` across a small test cluster, or `availability = "none";` on individual instances, as shown in [Set the cluster availability level](/docs/how-to/platform-capabilities/set-the-cluster-availability-level/).
 
 ## Bind the definition and deploy
 
@@ -255,7 +255,7 @@ See [Network policy](/docs/explanation/network-policy/) for how Kix synthesizes 
 
 Live GKE testing covered a zonal GKE Standard 1.36 cluster (Container-Optimized OS, Dataplane V2, and Workload Identity Federation) and a regional GKE Autopilot 1.36 cluster. These configurations have not been tested yet:
 
-- **Private GKE clusters (private control-plane endpoint) and clusters without Konnectivity:** Admission webhook calls from the API server may arrive from an IP range, so the default `cluster.network.apiServer.sources` (`konnectivity-agent` pods) may not match them.
+- **Private GKE clusters (private control-plane endpoint) and clusters without Konnectivity:** Where the API server's webhook calls come from has not been checked on these clusters, so the default `cluster.network.apiServer.sources` (the `konnectivity-agent` pods) may not match them.
 - **Cloud DNS for GKE as cluster DNS:** The `gke` and `gke-autopilot` flavors include the `169.254.169.254/32` and `169.254.20.10/32` DNS peer rules documented by Google, though replacing `kube-dns` with Cloud DNS for GKE has not been tested under Dataplane V2 network policy.
 - **Metadata server TCP port 8080:** Kix opens TCP ports 80 and 8080 to `169.254.169.254/32` based on Google's documentation; only port 80 was observed in live tests.
 - **GPU node pools** (`cluster.capabilities.gpu = true`).

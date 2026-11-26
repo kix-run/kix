@@ -34,7 +34,7 @@ Because `kix.flavors.eks` leaves `cluster.capabilities.multiNode` unset, every b
 
 ### Size small node groups
 
-With `multiNode = true`, `cluster.availability.default` is at least `"node"`, so packages that scale with availability run two or more replicas of each controller (for example, `cert-manager` and `external-secrets` each run six pods across three deployments). On two 2-vCPU nodes, deploying several controllers can exhaust CPU requests and leave pods `Pending`. Both `kix deploy` and `kix status` print the scheduler reason (`0/2 nodes are available: 2 Insufficient cpu`). Set `cluster.availability.default = "none";` across a small test cluster, or `availability = "none";` on individual instances, as shown in [Set the cluster availability level](/docs/how-to/platform-capabilities/set-the-cluster-availability-level/).
+With `multiNode = true` and `availabilityZones` unset, `cluster.availability.default` defaults to `"node"`, so packages that scale with availability run two or more replicas of each controller (for example, `cert-manager` and `external-secrets` each run six pods across three deployments). On two 2-vCPU nodes, deploying several controllers can exhaust CPU requests and leave pods `Pending`. Both `kix deploy` and `kix status` print the scheduler reason (`0/2 nodes are available: 2 Insufficient cpu`). Set `cluster.availability.default = "none";` across a small test cluster, or `availability = "none";` on individual instances, as shown in [Set the cluster availability level](/docs/how-to/platform-capabilities/set-the-cluster-availability-level/).
 
 ### Bind the definition and deploy
 
@@ -130,7 +130,7 @@ Plain output prints each namespace, ServiceAccount name, `roleArn`, and subject 
   - Containers named in the pod annotation `eks.amazonaws.com/skip-containers` receive no identity variables in either mode and are skipped by this check.
 - **IAM permissions and trust errors.** Kix cannot verify whether AWS IAM accepts the role. A role that lacks permissions or trusts the wrong ServiceAccount name passes `kix deploy` and reports `ok` in `kix status`, while API calls fail in the pod logs (`Not authorized to perform sts:AssumeRoleWithWebIdentity` or `AccessDenied`). Inspect the workload's logs after deploying.
 - **Pod restarts and operator pods.** Changing `roleArn` updates `checksum/cloud-identity` on Kix-built pod templates and restarts those pods on deploy. Pods created by an operator (`cnpg-cluster`, `stackgres-cluster`) keep their old role until recreated; see each package's guide. Avoid changing `cert-manager`'s role while an ACME DNS-01 challenge is pending, which can leave the previous `_acme-challenge` TXT record in Route 53 until the controller has a working role again.
-- **AWS region and node credentials.** Both IRSA and Pod Identity inject `AWS_REGION` automatically. When you pass static AWS keys in a Secret instead, set `AWS_REGION` or `AWS_DEFAULT_REGION` explicitly (`external-dns` fails evaluation without one). Workloads with no cloud identity reach the node's IAM role only if the node group's EC2 metadata hop limit allows container access; with hop limit `1` on Amazon Linux 2023 node groups, pods receive no node credentials.
+- **AWS region and node credentials.** Both IRSA and Pod Identity inject `AWS_REGION` automatically. When you pass static AWS keys in a Secret instead, set `AWS_REGION` or `AWS_DEFAULT_REGION` explicitly (`external-dns` fails evaluation without one). Workloads with no cloud identity reach the node's IAM role only if the node group's instance metadata hop limit allows it; on the tested node group (hop limit `1`), pods received no node credentials.
 
 :::note[Reference]
 See [Cloud identities](/docs/reference/instances-and-composition/#cloud-identities) for the full `cloudIdentities` JSON schema, `CloudIdentityNotApplied` details, and operator-managed workloads.
@@ -165,7 +165,7 @@ See [Configure storage classes and PVCs](/docs/how-to/platform-capabilities/conf
 
 By default, the EKS service controller creates a classic Elastic Load Balancer (ELB) for Services with `type: LoadBalancer` and deletes it when the Service is removed. `kix deploy` waits until `status.loadBalancer.ingress` receives the load balancer address, and `kix status` reports the Service unready until then.
 
-The AWS Load Balancer Controller is not an EKS add-on on standard EKS clusters; install it [through the Kix Helm bridge](/docs/how-to/adopt-existing-resources/use-helm-charts-through-the-kix-helm-bridge/) or outside Kix if you need it.
+The AWS Load Balancer Controller is not an EKS add-on (only EKS Auto Mode includes it), so a cluster that wants it installs it with Helm.
 
 ## Turn on generated network policy
 
