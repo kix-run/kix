@@ -10,7 +10,7 @@
 | 1 | Stop recommending Cilium in the missing-enforcer error when `cluster.roles.cni.binding` is `"exclusive"`. Update validation check 12 (`[K1895]`) to honor `kix.run/operand-of` on a `NetworkPolicy` a package defines directly (AWS F17). Fix the `gke` and `k3s` flavor header comments and the "Network policy" docs page. | none | `fixed` |
 | 2 | CLI: fail `kix plan` immediately when a resource's kind is unserved and the build holds only a CRD reference with no CRD manifest (F5). Treat unserved kinds as already absent during prune (F29). | none | `fixed` |
 | 3 | Repair the enforcer envelope: add `selector`, `ingress`, and `egress` arguments to `mkPolicy` and `kix.operandPolicy`, migrate all in-tree callers, and restrict `entities` on `meta.network.intents` to the fixed list. Keep `spec` working on the Cilium renderer for now. Every cluster in `clusters/` must build identical manifests. | none | `added` |
-| 4 | Add `out.dnsPeers` to the `dns` role and read it in the Cilium renderer and `cilium` package. Audit all 11 `all-pods` callers and split out explicit node or API server rules where needed. Existing manifests must stay unchanged. | 3 | `added` |
+| 4 | Publish DNS peers in `meta.dnsPeers` on packages that claim the `dns` role. Add a `dnsPeers` argument to `kix.mkImport` that stores `meta.dnsPeers` in the import's metadata, and pass `peers` to `dnsPeers` in the flavors' `platform-dns` helper. Treat a pod peer without `namespace` as the provider instance's own namespace. Set `meta.dnsPeers = [ { podSelector."k8s-app" = "kube-dns"; } ]` on `coredns`, so it no longer has to run in `kube-system`. Read the provider's `meta.dnsPeers` without evaluating the instance in the Cilium renderer, which refuses `cidr` peers, and in the `cilium` package. Audit all 11 `all-pods` callers and split out explicit node or API server rules where needed. Existing manifests must stay unchanged. | 3 | `added` |
 | 5 | Skip default-deny in namespaces whose only instances are imports or inactive optional instances, and add `networkPolicy.platformNamespaces` (decision 5). | none | `silent` (minor release) |
 | 6 | Implement the standard `NetworkPolicy` renderer, the link-local exclusion on `world` rules, `cluster.network.apiServer`, `cluster.network.nodeCidrs`, unsupported-rule refusals, the `networkPolicyWidened` scorecard rule, the policy-kind validation check, the check 12 skip for policies that Kix generates for operator-created pods and platform intents (AWS F17), and the `kix deploy` API server IP check. Enable the standard renderer in `gke` and `gke-autopilot`, plus `k3s` and `kind` once live tests confirm stock enforcement. | 3, 4, 5 | `added` |
 | 7 | Add `egress` rules on cloud identity mechanisms, the `"node-local"` intent target, and `networkIntents` on bound identity values. | 3 | `fixed` (adds egress rules on Cilium clusters using cloud identity; no user action needed) |
@@ -40,9 +40,10 @@ are built. Test 10 can run immediately in a scratch namespace using an explicit
 `NetworkPolicy` manifest before any Kix changes are built.
 
 The live GKE tests already answered the platform questions in tests 5 (N1,
-webhook source) and 7 (N2, node kubelet egress), plus test 10 (N4, excluding
-the node range from `0.0.0.0/0` egress). Tests 1 through 9 still need to run
-against Kix once steps 6 and 7 land:
+webhook source), 7 (N2, node kubelet egress), and 9 (N5, Autopilot DNS via
+`169.254.20.10/32`), plus test 10 (N4, excluding the node range from
+`0.0.0.0/0` egress). Tests 1 through 9 still need to run against Kix once steps
+6 and 7 land:
 
 1. Deploy a cluster with `kix.flavors.gke`, `networkPolicy.enable = true`, and
    one `echo-server` instance in namespace `np`. Verify that `kix build`
@@ -70,8 +71,9 @@ against Kix once steps 6 and 7 land:
    the node range and verify that Prometheus scrapes `node-exporter` (N2).
 8. Empty the cluster definition and verify that `kix deploy --prune` finishes
    without errors.
-9. If a GKE Autopilot cluster is available, read `/etc/resolv.conf` inside a
-   pod, repeat test 2, and record which DNS peer matched.
+9. If a GKE Autopilot cluster is available, repeat test 2 with the
+   `gke-autopilot` flavor and verify that DNS resolves through
+   `169.254.20.10/32` (N5).
 10. Under default-deny egress, allow `0.0.0.0/0` except the node range on TCP
     10250 and record whether a node is still reachable.
 
