@@ -129,9 +129,9 @@ pub(crate) fn refuse_with_only(flags: &PlanFlags, cluster: &str) -> Result<()> {
     }
     Err(miette!(
         "`--only` does not combine with `--prune`. Nothing was planned or applied to \
-         the cluster. A deploy with `--only` leaves every object that left the build on the \
-         cluster, for the deploy that applies the rest of the build. Next: run the command \
-         again without `--prune`, then deploy the rest with `kix deploy {cluster} --prune`."
+         the cluster. A `--only` deploy updates selected instances without deleting removed \
+         resources. Next: run the command again without `--prune`, then deploy the full \
+         build with `kix deploy {cluster} --prune` to delete removed resources."
     ))
 }
 
@@ -861,15 +861,24 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
             .iter()
             .map(String::as_str)
             .partition(|name| failed.partly_deployed.iter().any(|p| p == name));
+        let count = |n: usize, one: &str, many: &str| {
+            if n == 1 {
+                one.to_string()
+            } else {
+                format!("{n} {many}")
+            }
+        };
         let what = match (partial.len(), stopped.len()) {
-            (0, 1) => "a failed deploy".to_string(),
-            (0, n) => format!("{n} failed deploys"),
-            (1, 0) => "a deploy with `--only`".to_string(),
-            (n, 0) => format!("{n} deploys with `--only`"),
-            (p, f) => format!("{f} failed deploy(s) and {p} deploy(s) with `--only`"),
+            (0, f) => count(f, "a failed deploy", "failed deploys"),
+            (p, 0) => count(p, "an earlier `--only` deploy", "earlier `--only` deploys"),
+            (p, f) => format!(
+                "{} and {}",
+                count(f, "1 failed deploy", "failed deploys"),
+                count(p, "1 `--only` deploy", "`--only` deploys"),
+            ),
         };
         crate::say!(
-            "  {} reconciling what {what} left behind ({})",
+            "  {} reconciling changes from {what} ({})",
             output::yellow("!"),
             failed.consumed.join(", "),
         );

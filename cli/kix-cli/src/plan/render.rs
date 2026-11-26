@@ -27,7 +27,7 @@ pub fn label_tag(labels: &[ChangeLabel]) -> String {
     } else if labels.contains(&ChangeLabel::DriftKept) {
         output::dim("(drift; deploy leaves this object alone)").into_owned()
     } else if labels.contains(&ChangeLabel::AppliedByEarlierDeploy) {
-        output::dim("(written by an earlier deploy that did not finish)").into_owned()
+        output::dim("(written by an earlier unfinished deploy)").into_owned()
     } else {
         String::new()
     }
@@ -74,10 +74,14 @@ fn write_left_alone(out: &mut String, plan: &Plan, markdown: bool) -> fmt::Resul
     )];
     lines.push(match left.total() {
         0 => format!(
-            "No other object of the build differs from the current deploy record. The current deploy record stays as it is until {rest} runs."
+            "No other resources differ from the active deployment. The active deployment record stays unchanged until you run {rest}."
+        ),
+        1 => format!(
+            "1 other resource change is outside this deploy ({} to create or update, {} removed from the build). Earlier `--only` runs may already have applied it. Run {rest} to deploy the full build.",
+            left.writes, left.orphans
         ),
         n => format!(
-            "{n} object(s) of the build that differ from the current deploy record are outside this deploy ({} to write, {} that left the build). An earlier deploy with `--only` may already have applied some of them. {rest} deploys the whole build.",
+            "{n} other resource changes are outside this deploy ({} to create or update, {} removed from the build). Earlier `--only` runs may already have applied some of them. Run {rest} to deploy the full build.",
             left.writes, left.orphans
         ),
     });
@@ -97,17 +101,29 @@ pub(crate) fn only_instances(
     code: &dyn Fn(&str) -> String,
 ) -> String {
     let list = |names: &[String]| names.iter().map(|n| code(n)).collect::<Vec<_>>().join(", ");
+    let count = |n: usize, kind: &str| {
+        if n == 1 {
+            format!("1 {kind} instance")
+        } else {
+            format!("{n} {kind} instances")
+        }
+    };
+    let needs = if named.len() + needed.len() == 1 {
+        "it needs"
+    } else {
+        "they need"
+    };
     match needed.len() {
         0 => format!(
-            "This deploy applies {} named instance(s) in full ({}), with the objects outside any instance that they depend on.",
-            named.len(),
+            "This partial deploy applies {} ({}) in full, along with any non-instance resources {needs}.",
+            count(named.len(), "selected"),
             list(named)
         ),
         _ => format!(
-            "This deploy applies {} named instance(s) ({}) and {} instance(s) they need ({}) in full, with the objects outside any instance that they depend on.",
-            named.len(),
+            "This partial deploy applies {} ({}) and {} ({}) in full, along with any non-instance resources {needs}.",
+            count(named.len(), "selected"),
             list(named),
-            needed.len(),
+            count(needed.len(), "required"),
             list(needed)
         ),
     }
@@ -481,11 +497,11 @@ fn write_earlier_deploys(out: &mut String, plan: &Plan, markdown: bool) -> fmt::
     }
     writeln!(out)?;
     let heading = format!(
-        "{} field(s) on the live cluster differ from the deployed build because a deploy that did not finish wrote them:",
+        "{} field(s) on the live cluster differ from the deployed build because an earlier unfinished deploy wrote them:",
         plan.earlier_deploys.len()
     );
     if markdown {
-        writeln!(out, "#### Written by earlier deploys")?;
+        writeln!(out, "#### Written by earlier unfinished deploys")?;
         writeln!(out)?;
         writeln!(out, "{heading}")?;
         writeln!(out)?;
@@ -499,12 +515,12 @@ fn write_earlier_deploys(out: &mut String, plan: &Plan, markdown: bool) -> fmt::
             None => String::new(),
         };
         let what = if e.partly_deployed {
-            "partly deployed with `--only`"
+            "partial deploy with `--only`"
         } else {
-            "stopped"
+            "failed deploy"
         };
         let line = format!(
-            "{}: {live} live{deployed}, applied by deploy record {} ({what})",
+            "{}: {live} live{deployed}, applied by deployment record {} ({what})",
             e.path.trim_start_matches("$."),
             e.record
         );
@@ -1716,10 +1732,10 @@ mod tests {
         let text = render_text(&plan);
         assert!(!text.contains("Drift:"), "{text}");
         assert!(
-            text.contains("ConfigMap/base-cfg@lab data.version: \"2\" live, \"1\" in deployed build, applied by deploy record lab-abc (partly deployed with `--only`)"),
+            text.contains("ConfigMap/base-cfg@lab data.version: \"2\" live, \"1\" in deployed build, applied by deployment record lab-abc (partial deploy with `--only`)"),
             "{text}"
         );
-        assert!(render_markdown(&plan).contains("#### Written by earlier deploys"));
+        assert!(render_markdown(&plan).contains("#### Written by earlier unfinished deploys"));
     }
 
     #[test]
@@ -1740,16 +1756,16 @@ mod tests {
         plan.only_needed = vec!["app/db".into()];
         let text = render_text(&plan);
         assert!(
-            text.contains("Only: This deploy applies 1 named instance(s) (app/web) and 1 instance(s) they need (app/db) in full"),
+            text.contains("Only: This partial deploy applies 1 selected instance (app/web) and 1 required instance (app/db) in full"),
             "{text}"
         );
         assert!(
-            text.contains("4 object(s) of the build that differ from the current deploy record are outside this deploy (3 to write, 1 that left the build). An earlier deploy with `--only` may already have applied some of them. `kix deploy c` deploys the whole build."),
+            text.contains("4 other resource changes are outside this deploy (3 to create or update, 1 removed from the build). Earlier `--only` runs may already have applied some of them. Run `kix deploy c` to deploy the full build."),
             "{text}"
         );
         let markdown = render_markdown(&plan);
         assert!(
-            markdown.starts_with("\n> This deploy applies 1 named instance(s) (`app/web`)"),
+            markdown.starts_with("\n> This partial deploy applies 1 selected instance (`app/web`)"),
             "{markdown}"
         );
     }

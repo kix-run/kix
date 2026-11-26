@@ -146,7 +146,7 @@ mod kept_garbage_tests {
         .unwrap_err()
         .to_string();
         assert!(
-            err.contains("Deployment record c-b holds the build from your local files, partly deployed: `kix deploy --only` applied app/api, web/shop. Run `kix deploy c` to deploy the rest of it."),
+            err.contains("Deployment record c-b already deployed part of your local build (`kix deploy --only` applied app/api, web/shop). Run `kix deploy c` to finish deploying it, then run `kix gc c` again."),
             "{err}"
         );
         let err = check_files_build("c", &active, Some("cccccccc3333"), &[partial])

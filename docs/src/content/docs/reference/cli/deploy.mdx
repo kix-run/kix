@@ -37,9 +37,9 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--plan <FILE>] [--prune | --skip-orphan-c
 | `--reconcile` | Re-apply every resource, including those whose identity hash matches the running activation. Use it to put back fields that were changed on the cluster. |
 | `--force-conflicts` | Take ownership of fields another field manager owns. Without it, a conflict is a refused write in the plan, naming the fields and their current owner, and under `--on-error stop` the deploy stops before applying anything. |
 | `--accept-migrations` | Proceed when the plan removes an object that holds data from a stateful package and adds another that holds data in its place. Without it such a deploy stops, even with `--yes`. Kix does not copy data. |
-| `--only <NAMESPACE/INSTANCE>` | Apply only this package instance and the objects it depends on, and leave the rest of the build for a later `kix deploy`. Repeatable. See [Deploy one instance at a time](#deploy-one-instance-at-a-time). Not with `--prune` or `--operator`. |
+| `--only <NAMESPACE/INSTANCE>` | Deploy only this package instance and the instances and resources it depends on, leaving the rest of the build for a later `kix deploy`. Repeatable. Cannot be combined with `--prune` or `--operator`. See [Deploy one instance at a time](#deploy-one-instance-at-a-time). |
 | `--offline` | Take the previous activation from the local cache instead of the cluster. The plan is computed offline, so it cannot see deploys that stopped part way or orphans that earlier deploys kept; the new Activation lists the builds those orphans came from again, so a later plain deploy can prune them. With `--dry-run` nothing contacts the cluster. Without `--dry-run`, the deploy refuses before applying anything when the cached build is not the Active build of the cluster in the current context: the cache is keyed by cluster name only, so another context's cluster of the same name can have written it. |
-| `--operator` | Hand the build to the Kix operator instead of applying it from this machine. Not with `--only`: the operator deploys whole builds. Fails with `[K7218]` if combined with `--timeout`, `--on-error continue`, `--reconcile`, `--skip-orphan-check`, `--force-conflicts`, `--log-format` (other than `pretty`), or `--group-by` (other than `package`), because operator mode uses fixed deploy settings and progress output. See [Operator mode](/docs/reference/cli/operator-mode/). |
+| `--operator` | Hand the build to the Kix operator instead of applying it from this machine. Cannot be combined with `--only`, because the operator always deploys the full build. Fails with `[K7218]` if combined with `--timeout`, `--on-error continue`, `--reconcile`, `--skip-orphan-check`, `--force-conflicts`, `--log-format` (other than `pretty`), or `--group-by` (other than `package`), because operator mode uses fixed deploy settings and progress output. See [Operator mode](/docs/reference/cli/operator-mode/). |
 | `--log-format <FORMAT>` | `pretty` (default): interactive progress, coloured when stdout is a terminal; falls back to `line` when stdin is not a terminal. `line`: one plain line per resource outcome. `json`: JSON deploy events, one per line, ending with a `summary` object; stdout holds only the events, and the plan and other text go to stderr. `tui`: a live dependency tree while deploying; falls back to `line` when the terminal is not interactive. |
 | `--group-by <GROUP>` | How `--log-format tui` groups the tree: `package` (default) or `namespace`. Execution order does not change. Other log formats ignore it. |
 | `--flake`, `--context`, `--override-input` | See [Global flags](/docs/reference/cli/global-flags/). Without `--dry-run`, `-o` accepts only `text`, and `--no-cache` has no effect; use `--log-format` to choose the deploy's output. |
@@ -64,13 +64,14 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
    Kubernetes cluster never enter the previous state. Neither do this
    cluster's resources that name only older builds; the plan says how many,
    and `kix gc --full-scan` finds them.
-3. Resources left by an earlier deploy that stopped part way, or that
-   `--only` left partly deployed, are folded into the plan: they are
-   re-applied or reported as orphans. An object counts as left behind only
-   when the cluster holds it with that deploy's record in its
-   `kix.run/activations` annotation, so an object the deploy never created
-   is not reported or deleted. A field such a deploy wrote is shown as
-   written by that deploy record, not as drift.
+3. Resources from an earlier deploy that stopped part way or ran with `--only`
+   are folded into the plan: they are re-applied or reported as orphans. Kix
+   counts a resource from an unfinished deploy as present on the cluster only
+   when the live object's `kix.run/activations` annotation names that
+   deployment record, so resources that deploy never created are neither
+   reported as orphans nor deleted. Fields written by an unfinished deploy
+   appear under `earlier_deploys` attributed to that deployment record instead
+   of appearing as drift.
 4. Sends every write and prune delete of the plan as a server-side dry run,
    the way [`kix plan`](/docs/reference/cli/plan/) does, and prints the
    result: the changed resources (with field changes under `-v`), the
@@ -382,7 +383,7 @@ any of these:
 | New build | The build's identity hash. A store path that moved, with the same manifests, still matches. |
 | Deployed build | The identity hash of the build the cluster runs: another deploy landed after the review. |
 | Lock generation | The generation of the cluster's [deploy lock](#the-deploy-lock): another run that wrote to the cluster ended after the review, such as a deploy with `--only` or a gc. A plan saved without it, by `--offline` or an older Kix, is not held to it. |
-| Planning flags | `--prune`, `--skip-orphan-check`, `--reconcile`, `--force-conflicts`, `--accept-migrations`, or `--only`. A flag given on the command line that the plan was made without is an error before the build. `--only` must name the same instances as the plan, or be left out on both: a plan of part of the build deploys only with the same `--only`, and a plan of the whole build only without it. |
+| Planning flags | `--prune`, `--skip-orphan-check`, `--reconcile`, `--force-conflicts`, `--accept-migrations`, or `--only`. Passing a flag on the command line that was not set when the plan was saved fails before building. `--only` must match the saved plan: pass the exact same `--only` instances for a partial plan, and omit `--only` for a full plan. |
 | Refusals | A conflict, by object, or an admission refusal, by object and reason, that the reviewed plan did not have. |
 | Reverted drift | A drifted field, by object and path, that the deploy would put back and the reviewed plan did not list. |
 | Prune deletes | An orphan the deploy would delete that the reviewed plan did not list. |
@@ -424,82 +425,88 @@ built outside the store with the same version print no note.
 
 ## Deploy one instance at a time
 
-A large upgrade changes many package instances at once. `--only` applies one
-instance, or a few, and the objects they depend on, so you can roll the
-upgrade out one instance at a time and check each one before the next:
+When an upgrade changes many package instances, pass `--only` to deploy one or
+more instances and their dependencies first so you can verify each step before
+deploying the rest:
 
 ```bash
-kix plan prod --only data/postgres          # what this step changes
+kix plan prod --only data/postgres          # preview this step
 kix deploy prod --only data/postgres
 kix deploy prod --only web/shop --only web/api
-kix deploy prod                             # the rest of the build
+kix deploy prod                             # deploy the rest of the build
 ```
 
-An instance is named `<namespace>/<instance>`, as the plan lists packages. A
-name the build has no instance for stops the command before anything is
-written, and the error lists the build's instances. A name without a
-namespace that matches an instance's name gets the full name as a
-suggestion.
+Pass each instance as `<namespace>/<instance>`, matching the package names in
+`kix plan`. If a name does not match any instance in the build, Kix stops
+before changing the cluster and lists the build's instances. If you omit the
+namespace and the name matches an instance, Kix suggests the full
+`<namespace>/<instance>` name.
 
-The deploy applies whole instances. It starts from the objects of the named
-instances and adds the objects they name in `kix.run/depends-on`, directly
-or through other objects. When that adds an object of another instance, the
-deploy applies every object of that instance too, its PackageInstance
-included, and then what those objects depend on, until nothing more is
-added. No instance is left half at the new build. Objects that belong to no
-instance, such as a Namespace or a CustomResourceDefinition, are added one
-at a time.
+`--only` always deploys whole package instances so no instance is split across
+builds. Kix starts with the resources in your selected instances and follows
+their `kix.run/depends-on` dependencies. Whenever a dependency belongs to
+another package instance, Kix includes that entire instance (including its
+`PackageInstance` object) and its dependencies as well. Resources outside any
+instance, such as `Namespace` and `CustomResourceDefinition` objects, are
+included individually when needed.
 
-The plan and the deploy show only what this deploy writes. A line names the
-instances it applies in full, split into the named ones and the ones they
-need, so you see the real size of the step. A second line counts the objects
-of the build that differ from the current deploy record and are outside this
-deploy: objects to write, and objects that left the build. An earlier deploy
-with `--only` may already have applied some of them, so the count can stay
-the same, or grow, from one step to the next. `kix plan --only` with
-the same names is the plan of `kix deploy --only`, and a saved plan records
-the names (see [Deploy a reviewed plan](#deploy-a-reviewed-plan)).
+Both `kix plan --only` and `kix deploy --only` show only the changes in the
+current step:
 
-A deploy with `--only` does not make its build the cluster's current one.
-The Active deployment record stays as it is. The new build's record is marked
-`Partial`, with `status.partial` naming every instance the deploy applied in
-full (named and needed). The next plan folds what a `Partial` record applied
-into its baseline, as it does for a `Failed` record. A later `--only` of the
-same build adds its instances to the list. Two deploys with `--only` of the
-same build run one after the other, because each holds the
-[deploy lock](#the-deploy-lock). When the build is the one the cluster
-already runs, its record stays `Active`. A deploy with `--only` raises the
-lock's generation when it ends, so a plan saved before it is refused, and
-leaves the record the lock names as current.
+- They list the selected instances alongside any required dependency instances
+  that will also be deployed in full.
+- They count the remaining changes compared with the active deployment:
+  resources still to create or update, and resources removed from the build.
+  Because that count compares the build against the active deployment record,
+  earlier `--only` runs may already have applied some of those changes.
+- Saved plans (`kix plan --only ... --out`) record the selected instances for
+  `kix deploy --plan` (see [Deploy a reviewed plan](#deploy-a-reviewed-plan)).
 
-A deploy with `--only` deletes nothing, does not record kept orphans, stamps
-no unchanged object with the new record, and writes no deploy receipt. It
-exits `0` when every object it selected was applied, and its last lines say
-which instances it applied, named and needed, that the Active record is
-unchanged, how many objects of the build were outside it, and the command
-that deploys the whole build. `kix status` notes each `Partial` record, and
-each `Failed` one. A deploy without `--only` of the same build
-then applies the rest, finishes as usual, marks the record `Active`, and
-marks the earlier records `Superseded`. Pass `--prune` to that deploy to
-delete the orphans.
+A `--only` run leaves the cluster's `Active` deployment record unchanged. Kix
+marks the new build's `Activation` record `Partial` and lists every deployed
+instance (selected and required) in `status.partial`. Repeated `--only` runs
+for the same build add their instances to `status.partial`. If the build you
+pass to `--only` is already the cluster's active build, its record stays
+`Active`.
 
-`kix deploy` deploys the build the project's files make now. When they no
-longer make the partly deployed build, it deploys the new build instead,
-and replaces or undoes what `--only` applied.
+Two `--only` runs of the same build run one after the other, because each
+holds the [deploy lock](#the-deploy-lock). A `--only` run raises the lock's
+generation when it ends, so a plan saved before it is refused, and it leaves
+the record the lock names as current unchanged.
 
-A failed object or an interrupt during a deploy with `--only` marks the
-record `Failed` with `status.failure`, as for any deploy, and removes
-`status.partial`. The next plan folds in what the record's build applied,
-so the next deploy, with `--only` or without, applies it again.
+During a `--only` run, Kix does not delete removed resources, update
+`status.orphansKeptFrom`, stamp unchanged resources with the new deployment
+record, or write a deploy receipt. When every selected resource succeeds, the
+command exits `0` and prints a summary of what was deployed, what remains, and
+the command to finish the rollout. `kix status` warns about any `Partial` or
+`Failed` deployment records on the cluster.
 
-`--only` needs a cluster that Kix has deployed before: the first deploy
-installs the kind of the deployment record, so it must be of the whole
-build. It is refused while the current deploy record is one the Kix operator
-deployed, because the operator repairs that build and would put back what
-`--only` applies; deploy the whole build first. `--only` does not combine with `--prune`, because a deploy with
-`--only` deletes nothing, or with `--operator`, because the operator deploys
-whole builds. It works with `--dry-run`, `--plan`, `--bundle`, `--on-error`,
-and `--yes`. `kix rollback` has no `--only`.
+When you are ready to finish, run `kix deploy <cluster>` without `--only` (add
+`--prune` to delete removed resources). Kix folds in the changes from earlier
+`Partial` runs, applies the rest of the build, marks the new record `Active`,
+and marks earlier records `Superseded`. If your project files have changed
+since the `--only` run, `kix deploy <cluster>` deploys the new build instead,
+updating or reverting what `--only` applied as needed.
+
+If a resource fails or the command is interrupted during `kix deploy --only`,
+Kix marks the record `Failed` with `status.failure` and clears
+`status.partial`. The next plan and deploy (with or without `--only`) include
+any changes that run applied.
+
+### Limits of `--only`
+
+- **First deploy**: `--only` requires a cluster that Kix has already deployed
+  in full, because the first deploy installs the `Activation` CRD and creates
+  the initial active deployment record.
+- **Operator-managed clusters**: `--only` is refused whenever the Kix operator
+  deployed the cluster's active deployment record, whether someone ran
+  `kix deploy --operator` or the record reached the operator another way (for
+  example, applied from Git). The operator reconciles the active build and
+  would revert partial changes. Deploy a full build first.
+- **Flag combinations**: `--only` cannot be combined with `--prune` (a partial
+  deploy never deletes resources) or `--operator` (the operator always deploys
+  full builds). It works with `--dry-run`, `--plan`, `--bundle`, `--on-error`,
+  and `--yes`. `kix rollback` does not support `--only`.
 
 ## Withdrawn releases
 

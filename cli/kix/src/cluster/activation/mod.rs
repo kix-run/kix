@@ -1241,7 +1241,7 @@ impl Records {
             }),
         )
         .await?;
-        tracing::info!(activation = %name, "marked as partly deployed");
+        tracing::info!(activation = %name, "marked as Partial");
         Ok(())
     }
 

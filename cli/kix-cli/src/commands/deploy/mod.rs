@@ -1252,9 +1252,9 @@ fn refuse_only_by_operator(args: &DeployArgs) -> Result<()> {
     }
     Err(miette!(
         "`kix deploy --operator` does not accept `--only`. Nothing was applied to the cluster. \
-         The Kix operator deploys whole builds. Next: remove `--operator` to deploy the \
-         instances from this machine, or remove `--only` to have the operator deploy the whole \
-         build."
+         The Kix operator always deploys the full build. Next: remove `--operator` to deploy \
+         the selected instances from this machine, or remove `--only` to deploy the full build \
+         with the operator."
     ))
 }
 

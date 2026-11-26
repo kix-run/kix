@@ -471,23 +471,27 @@ pub(super) fn partial_closing(r: &DeployResult, c: &PartialClosing<'_>) -> Strin
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "Deploy of part of '{cluster}' complete: {}",
+        "Partial deploy of '{cluster}' complete: {}",
         counts(r, false)
     );
     let _ = writeln!(out);
     let _ = writeln!(out, "  Cluster state:");
     let list = |names: &[String]| names.join(", ");
-    let _ = writeln!(out, "    - Applied in full, as named: {}.", list(c.only));
+    let _ = writeln!(
+        out,
+        "    - Applied selected instance(s) in full: {}.",
+        list(c.only)
+    );
     if !c.needed.is_empty() {
         let _ = writeln!(
             out,
-            "    - Applied in full, because the named instance(s) need them: {}.",
+            "    - Applied required dependency instance(s) in full: {}.",
             list(c.needed)
         );
     }
     let _ = writeln!(
         out,
-        "    - Applied the objects outside any instance that they depend on."
+        "    - Applied any non-instance resources those instances depend on."
     );
     let current = matches!(
         (c.record, c.previous),
@@ -497,19 +501,19 @@ pub(super) fn partial_closing(r: &DeployResult, c: &PartialClosing<'_>) -> Strin
         (Some(record), Previous::Active(_)) if current => {
             let _ = writeln!(
                 out,
-                "    - Deployment record {record} remains the Active deployment record, because this build is the one the cluster runs."
+                "    - Deployment record {record} remains the Active deployment record because this build is already active on the cluster."
             );
         }
         (Some(record), Previous::Active(previous)) => {
             let _ = writeln!(
                 out,
-                "    - Deployment record {record} is marked partly deployed, and {previous} remains the Active deployment record."
+                "    - Deployment record {record} is marked Partial, and {previous} remains the Active deployment record."
             );
         }
         (Some(record), _) => {
             let _ = writeln!(
                 out,
-                "    - Deployment record {record} is marked partly deployed, and the Active deployment record is unchanged."
+                "    - Deployment record {record} is marked Partial, and the Active deployment record is unchanged."
             );
         }
         (None, _) => {}
@@ -518,7 +522,7 @@ pub(super) fn partial_closing(r: &DeployResult, c: &PartialClosing<'_>) -> Strin
     if left.total() > 0 {
         let _ = writeln!(
             out,
-            "    - {} object(s) of this build that differ from the current deploy record were outside this deploy: {} to write and {} that left the build. An earlier deploy with `--only` may already have applied some of them.",
+            "    - {} other resource change(s) compared with the active deployment were outside this run: {} to create or update and {} removed from the build. Earlier `--only` runs for this build may already have applied some of them.",
             left.total(),
             left.writes,
             left.orphans
@@ -527,11 +531,11 @@ pub(super) fn partial_closing(r: &DeployResult, c: &PartialClosing<'_>) -> Strin
     let _ = writeln!(out);
     let _ = writeln!(out, "  Next:");
     if current {
-        let _ = write!(out, "    Nothing else of this build waits.");
+        let _ = write!(out, "    Nothing else in this build needs to be deployed.");
     } else {
         let _ = write!(
             out,
-            "    Deploy another instance with `kix deploy {cluster} --only <namespace>/<instance>`, or apply the rest of the build with `kix deploy {cluster}`."
+            "    Deploy another instance with `kix deploy {cluster} --only <namespace>/<instance>`, or deploy the rest of the build with `kix deploy {cluster}`."
         );
     }
     out

@@ -341,8 +341,8 @@ pub(super) fn check_files_build(
         .find_map(|r| Some((r, r.partly_deployed()?)))
         .map(|(r, p)| {
             format!(
-                "\n  Deployment record {} holds the build from your local files, partly deployed: \
-                 `kix deploy --only` applied {}. Run `kix deploy {cluster}` to deploy the rest of it.\n",
+                "\n  Deployment record {} already deployed part of your local build (`kix deploy --only` \
+                 applied {}). Run `kix deploy {cluster}` to finish deploying it, then run `kix gc {cluster}` again.\n",
                 r.name,
                 p.only.join(", "),
             )

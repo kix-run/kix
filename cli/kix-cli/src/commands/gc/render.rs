@@ -56,7 +56,7 @@ pub(super) fn print_held(held: &[HeldObject], cluster: &str) {
     }
     println!();
     println!(
-        "{} {} object(s) belong to a deploy that has not finished or been replaced:",
+        "{} {} object(s) belong to an unfinished deploy:",
         output::bold("Kept for an unfinished deploy:"),
         held.len(),
     );
@@ -70,7 +70,7 @@ pub(super) fn print_held(held: &[HeldObject], cluster: &str) {
     println!(
         "  {}",
         output::dim(&format!(
-            "A deploy that failed, deployed only some instances with `--only`, or is still running wrote these objects, so Kix cannot tell yet whether the cluster needs them. \
+            "Kept on the cluster because these objects belong to a deploy that failed, ran with `--only`, or is still in progress. \
              Run `kix deploy {cluster}` to finish or replace that deploy, then run `kix gc {cluster}` again."
         )),
     );

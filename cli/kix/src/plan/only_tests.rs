@@ -186,7 +186,7 @@ fn an_unknown_instance_is_refused_with_the_valid_names() {
     assert_eq!(e.unknown, ["kix-enterprise-test-data/shopp"]);
     let message = e.to_string();
     assert!(
-        message.contains("has no instance 'kix-enterprise-test-data/shopp'"),
+        message.contains("has no package instance 'kix-enterprise-test-data/shopp'"),
         "{message}"
     );
     assert!(message.contains(&format!("    {SHOP}\n")), "{message}");
