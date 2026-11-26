@@ -571,7 +571,7 @@ pub fn print_checked(checked: &CheckedPlan, fate: &str, verbose: bool) {
 
 /// Return what a run of a plan made with `flags` does with the orphans of
 /// `cluster`. `connected` says whether the plan has read the cluster.
-pub fn orphans_fate(flags: PlanFlags, connected: bool, cluster: &str) -> String {
+pub fn orphans_fate(flags: &PlanFlags, connected: bool, cluster: &str) -> String {
     match flags.prune {
         PrunePolicy::Skip => {
             "still on the cluster (`--skip-orphan-check`, not deleted)".to_string()

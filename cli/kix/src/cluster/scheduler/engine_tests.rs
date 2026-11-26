@@ -217,7 +217,7 @@ async fn run(
             plan,
             &[],
             &[],
-            PrunePolicy::WarnOnly,
+            Ending::Finalize(PrunePolicy::WarnOnly),
             config,
             observer,
         ),
@@ -243,7 +243,7 @@ async fn run_with_orphans(
             plan,
             orphans,
             old_manifests,
-            prune,
+            Ending::Finalize(prune),
             config,
             observer,
         ),
@@ -735,6 +735,93 @@ async fn a_run_that_attempted_everything_still_finalizes() {
         "expected a Degraded finalize: {calls:?}",
     );
     assert!(!calls.iter().any(|c| matches!(c, Call::Abort { .. })));
+}
+
+/// Run the plan of `manifests`, with `skip` unchanged, as a deploy with
+/// `--only` ([`Ending::Partial`]), with `orphans` passed as a whole build's
+/// run would pass them.
+async fn run_partial(
+    ops: &Arc<ScriptedOps>,
+    manifests: &[Value],
+    skip: &[&str],
+    orphans: &[ResourceId],
+) -> Result<DeployResult, DeployError> {
+    let mut cfg = config(quiet_watchdog());
+    cfg.on_error = OnErrorPolicy::Continue;
+    tokio::time::timeout(
+        secs(3600),
+        run_scripted(
+            ops.clone(),
+            plan_with_skips(manifests, skip),
+            orphans,
+            manifests,
+            Ending::Partial,
+            &cfg,
+            Arc::new(NullObserver),
+        ),
+    )
+    .await
+    .expect("engine parked")
+}
+
+/// A deploy with `--only` that applies its part ends by marking the record
+/// partly deployed. It stamps no unchanged object, deletes nothing, and
+/// does not finalize or abort.
+#[tokio::test(start_paused = true)]
+async fn a_partial_run_marks_the_record_and_nothing_else() {
+    let manifests = vec![m("Deployment", "a", &[]), m("ConfigMap", "b", &["a"])];
+    let ops = Arc::new(ScriptedOps::new());
+    let result = run_partial(&ops, &manifests, &["b"], &[rid("ConfigMap", "gone")])
+        .await
+        .unwrap();
+    assert_eq!((result.failed, result.cancelled, result.pruned), (0, 0, 0));
+    let calls = ops.calls();
+    assert!(calls.contains(&Call::EndPartial), "{calls:?}");
+    assert!(
+        !calls.iter().any(|c| matches!(
+            c,
+            Call::Finalize { .. } | Call::Abort { .. } | Call::Stamp(_) | Call::Delete(_)
+        )),
+        "{calls:?}"
+    );
+}
+
+/// A deploy with `--only` whose object fails marks the record Failed with
+/// the failure, as a run of the whole build that stops does.
+#[tokio::test(start_paused = true)]
+async fn a_partial_run_with_a_failure_aborts() {
+    let manifests = vec![m("Deployment", "a", &[]), m("Deployment", "b", &[])];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        rid("Deployment", "a"),
+        NodeScript::default().apply(Behaviour::Now(Err(ApplyFailure::Other("boom".into())))),
+    );
+    let result = run_partial(&ops, &manifests, &[], &[]).await.unwrap();
+    assert_eq!(result.failed, 1);
+    let calls = ops.calls();
+    assert!(
+        calls.iter().any(|c| matches!(c, Call::Abort { .. })),
+        "{calls:?}"
+    );
+    assert!(!calls.contains(&Call::EndPartial), "{calls:?}");
+    assert!(
+        !calls.iter().any(|c| matches!(c, Call::Finalize { .. })),
+        "{calls:?}"
+    );
+}
+
+/// A record that cannot be marked partly deployed fails the run, as a
+/// failed finalize does.
+#[tokio::test(start_paused = true)]
+async fn a_partial_run_whose_record_cannot_be_marked_fails() {
+    let manifests = vec![m("Deployment", "a", &[])];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.end_partial_behaviour(Behaviour::Now(Err("refused".into())));
+    let err = run_partial(&ops, &manifests, &[], &[]).await.unwrap_err();
+    assert!(
+        matches!(&err, DeployError::FinalizeFailed { message, .. } if message == "refused"),
+        "{err}"
+    );
 }
 
 /// A run that finishes never aborts. Finalize and abort are the two ends
@@ -3258,7 +3345,7 @@ fn check_case(case: Case) -> Result<(), proptest::test_runner::TestCaseError> {
             plan,
             &[],
             &[],
-            PrunePolicy::WarnOnly,
+            Ending::Finalize(PrunePolicy::WarnOnly),
             &cfg,
             rec.clone(),
         ),

@@ -1216,7 +1216,7 @@ fn plan_and_check(
         OldSide::Deployed => deployed(Some(honest)),
         OldSide::ObjectsOnly => deployed_objects(honest_manifests),
     };
-    let checked = match plan(&baseline, new, flags) {
+    let checked = match plan(&baseline, new, flags.clone()) {
         Ok(checked) => checked,
         Err(PlanError::Graph(_) | PlanError::Marker(_) | PlanError::AliasedMove(_)) => {
             return Ok(Outcome::PlanningRefused);

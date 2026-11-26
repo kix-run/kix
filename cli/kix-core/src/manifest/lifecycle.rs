@@ -56,6 +56,14 @@ pub const PHASE_DEGRADED: &str = "Degraded";
 /// re-apply what it may have changed and prune what it left behind, and
 /// supersedes it once that plan finalizes.
 pub const PHASE_FAILED: &str = "Failed";
+/// A deploy with `--only` applied every object it selected and stopped,
+/// leaving the rest of the build for a later deploy. `status.partial` names
+/// the instances it applied.
+///
+/// Never a current state, for the same reason as [`PHASE_FAILED`]. The next
+/// plan folds the record's build into its baseline as it does for a
+/// `Failed` record, and the deploy that finalizes supersedes it.
+pub const PHASE_PARTIAL: &str = "Partial";
 
 /// How kix treats a manifest. See the module docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

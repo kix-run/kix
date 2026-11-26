@@ -5,11 +5,23 @@ description: "Delete Kix-managed resources a cluster no longer declares, and ret
 
 import Command from '/src/components/Command.astro';
 
-`kix gc` removes what a cluster's build no longer contains. It has three
-modes: the default compares the last deployed build with a fresh one,
-`--full-scan` scans every Kix-managed resource of the named cluster, and `--operator`
-deletes Activation records and lets the Kix operator clean up after them.
-Every mode also retires old Superseded Activation records.
+`kix gc` removes what the deployed build no longer contains. It has three
+modes: the default deletes what earlier deploys kept, `--full-scan` scans
+every Kix-managed resource of the named cluster, and `--operator` deletes
+Activation records and lets the Kix operator clean up after them. Every mode
+also retires old Superseded Activation records.
+
+The default mode and `--full-scan` build the cluster from your files and
+first check that this is the build of the cluster's current deployment
+record, by identity hash. When it is not, `kix gc` stops with `[K6276]`,
+with or without `--dry-run`, before it lists or deletes anything and without
+retiring a record. The message names the build the cluster runs and the
+build the files make, and says when a record that `kix deploy --only` left
+partly deployed holds the files' build. Deploy the files with
+`kix deploy <cluster>` and run `kix gc` again, deploy and delete in one step
+with `kix deploy <cluster> --prune`, or check out the commit the cluster
+runs. A cluster with no current deployment record is not checked.
+`--operator` builds nothing and is not checked.
 
 This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 `cli/kix-cli/src/commands/gc/{mod,plan,render}.rs` when in doubt.
@@ -46,8 +58,8 @@ kix gc <CLUSTER> [-y] [--dry-run] [--full-scan [--include unstamped,unattributed
 
 | Mode | Old side | What is deleted |
 | --- | --- | --- |
-| Default | The build the cluster's Active record names, from this machine's cache of the last `kix deploy` or `kix rollback` when that is the same build, else from Kix's local store; and the builds the Active record lists under `status.orphansKeptFrom` | Resources whose kind, namespace, and name are absent from the fresh build. Exits with a message if the cluster has no Active record or its build is not on this machine. A cached build of another context's cluster of the same name is set aside with a warning. |
-| `--full-scan` | Every Kix-managed resource of the named cluster | Resources whose identity hash is not in the fresh build |
+| Default | The build the cluster's Active record names, from this machine's cache of the last `kix deploy` or `kix rollback` when that is the same build, else from Kix's local store; and the builds the Active record lists under `status.orphansKeptFrom` | Resources of the builds under `status.orphansKeptFrom` whose kind, namespace, and name are absent from the deployed build, which the files must make. Exits with a message if the cluster has no Active record or its build is not on this machine. A cached build of another context's cluster of the same name is set aside with a warning. |
+| `--full-scan` | Every Kix-managed resource of the named cluster | Resources whose identity hash is not in the deployed build, which the files must make |
 | `--operator` | Activation records | Retired records; the operator deletes their resources |
 
 Default mode, `--full-scan`, and the Kix operator inspect only objects carrying the label `app.kubernetes.io/managed-by=kix`. `kix gc` never lists or deletes unlabelled objects, such as resources applied with `kubectl`. See [Objects Kix did not apply](/docs/reference/cli/diff/#objects-kix-did-not-apply).
@@ -133,7 +145,7 @@ since it was listed.
 | Code | Meaning |
 | --- | --- |
 | `0` | Nothing to collect, everything planned was deleted, `--dry-run` printed the plan, or the prompt was declined |
-| `1` | A deletion failed or timed out; confirmation was needed on a non-interactive terminal; or a build or cluster error |
+| `1` | A deletion failed or timed out; confirmation was needed on a non-interactive terminal; the files make another build than the cluster runs (`[K6276]`); or a build or cluster error |
 
 :::tip[Use it in a task]
 See [Garbage-collect stale resources](/docs/how-to/operate-a-cluster/garbage-collect-stale-resources/)

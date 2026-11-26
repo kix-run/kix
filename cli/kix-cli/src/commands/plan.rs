@@ -116,7 +116,23 @@ pub(crate) fn flags_of(args: &PlanArgs) -> PlanFlags {
         reconcile: args.reconcile,
         force_conflicts: args.force_conflicts,
         accept_migrations: args.accept_migrations,
+        only: PlanFlags::only_of(&args.only),
     }
+}
+
+/// Refuse planning flags that a deploy with `--only` cannot carry out:
+/// `--prune`, because such a deploy leaves every orphan for the deploy that
+/// finishes the build.
+pub(crate) fn refuse_with_only(flags: &PlanFlags, cluster: &str) -> Result<()> {
+    if flags.only.is_empty() || flags.prune != PrunePolicy::Delete {
+        return Ok(());
+    }
+    Err(miette!(
+        "`--only` does not combine with `--prune`. Nothing was planned or applied to \
+         the cluster. A deploy with `--only` leaves every object that left the build on the \
+         cluster, for the deploy that applies the rest of the build. Next: run the command \
+         again without `--prune`, then deploy the rest with `kix deploy {cluster} --prune`."
+    ))
 }
 
 /// Select the baseline source (`OldSide`) for planning: the local cache under
@@ -142,6 +158,7 @@ pub(crate) fn prepare(
     flags: PlanFlags,
     ctx: &CommandContext,
 ) -> Result<Option<Planned>> {
+    refuse_with_only(&flags, &args.cluster)?;
     let build = new_build(args, ctx)?;
     output::clear_status_line();
     let graph = build.graph();
@@ -473,7 +490,9 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
         identity_hash: a.identity_hash.clone(),
         store_path: a.built_via.clone(),
     });
-    doc.flags = Some(p.checked.flags());
+    doc.flags = Some(p.checked.flags().clone());
+    doc.left_alone = p.checked.left_alone();
+    doc.only_needed = p.checked.needed().to_vec();
     doc.objects_digest = Some(kix::plan::objects::digest(p.checked.objects()));
     doc.objects = Some(p.checked.objects().clone());
     if !connected {
@@ -488,7 +507,10 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
         report,
     );
     doc.drift = match drift {
-        Some(drift) => Checked::found(drift),
+        Some(found) => {
+            doc.earlier_deploys = found.earlier;
+            Checked::found(found.drift)
+        }
         None => Checked::not_checked(NotCheckedReason::DeployedBuildUnavailable),
     };
     // A custom resource whose CRD this deploy changes was checked against the
@@ -740,23 +762,24 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
     // Where the extra work in this plan came from. Without this the reader
     // sees a deploy of an unchanged config proposing changes, and has no way
     // to tell why.
-    if !p.baseline.failed().is_empty() {
-        let names: Vec<&str> = p
-            .baseline
-            .failed()
+    let failed = p.baseline.failed();
+    if !failed.is_empty() {
+        let (partial, stopped): (Vec<&str>, Vec<&str>) = failed
             .consumed
             .iter()
             .map(String::as_str)
-            .collect();
+            .partition(|name| failed.partly_deployed.iter().any(|p| p == name));
+        let what = match (partial.len(), stopped.len()) {
+            (0, 1) => "a failed deploy".to_string(),
+            (0, n) => format!("{n} failed deploys"),
+            (1, 0) => "a deploy with `--only`".to_string(),
+            (n, 0) => format!("{n} deploys with `--only`"),
+            (p, f) => format!("{f} failed deploy(s) and {p} deploy(s) with `--only`"),
+        };
         crate::say!(
-            "  {} reconciling what {} left behind ({})",
+            "  {} reconciling what {what} left behind ({})",
             output::yellow("!"),
-            if names.len() == 1 {
-                "a failed deploy".to_string()
-            } else {
-                format!("{} failed deploys", names.len())
-            },
-            names.join(", "),
+            failed.consumed.join(", "),
         );
     }
 

@@ -51,8 +51,15 @@ impl Line {
     }
 
     /// Build the final summary line of the run. `succeeded` matches the process
-    /// exit status.
-    pub fn summary(r: &DeployResult, dry_run: bool, succeeded: bool, elapsed_ms: u64) -> Line {
+    /// exit status. `only` is the instances a deploy with `--only` applied in
+    /// full, empty for a deploy of the whole build.
+    pub fn summary(
+        r: &DeployResult,
+        dry_run: bool,
+        succeeded: bool,
+        only: &[String],
+        elapsed_ms: u64,
+    ) -> Line {
         Line {
             schema_version: SCHEMA_VERSION.to_string(),
             elapsed_ms,
@@ -65,6 +72,7 @@ impl Line {
                 failed: r.failed,
                 cancelled: r.cancelled,
                 pruned: r.pruned,
+                only: only.to_vec(),
             },
         }
     }
@@ -149,6 +157,13 @@ pub enum Event {
         failed: usize,
         cancelled: usize,
         pruned: usize,
+        /// The instances (`namespace/instance`) a deploy with `--only`
+        /// applied in full: the named ones and the ones they need. Such a
+        /// deploy leaves the cluster's current deploy
+        /// record as it was, and a later `kix deploy` applies the rest of
+        /// the build. Left out for a deploy of the whole build.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        only: Vec<String>,
     },
 }
 

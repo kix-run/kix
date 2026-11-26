@@ -194,12 +194,13 @@ impl JsonObserver {
         }
     }
 
-    /// Print the final summary line for the deploy run.
-    pub fn summary(&self, counts: &DeployResult, dry_run: bool, succeeded: bool) {
+    /// Print the final summary line for the deploy run. `only` is the
+    /// instances a deploy with `--only` applied.
+    pub fn summary(&self, counts: &DeployResult, dry_run: bool, succeeded: bool, only: &[String]) {
         let elapsed_ms = self.started_at.elapsed().as_millis() as u64;
         println!(
             "{}",
-            json_line(&Line::summary(counts, dry_run, succeeded, elapsed_ms))
+            json_line(&Line::summary(counts, dry_run, succeeded, only, elapsed_ms))
         );
     }
 }
@@ -650,7 +651,7 @@ mod tests {
         let lines: Vec<String> = every_event()
             .iter()
             .filter_map(|e| Line::of(e, 7))
-            .chain([Line::summary(&counts, true, false, 7)])
+            .chain([Line::summary(&counts, true, false, &[], 7)])
             .map(|line| json_line(&line))
             .collect();
         // Regenerate the fixture alongside the schemas with

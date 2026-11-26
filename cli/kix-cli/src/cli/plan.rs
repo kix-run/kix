@@ -77,6 +77,7 @@ pub struct PlanCommandArgs {
             "force_conflicts",
             "accept_migrations",
             "deployed_bundles",
+            "only",
         ]
     )]
     pub read_only: bool,
@@ -147,4 +148,14 @@ pub struct PlanArgs {
     /// Matched by the Activation record's identity hash; repeatable.
     #[arg(long = "deployed-bundle", value_name = "FILE", requires = "bundle")]
     pub deployed_bundles: Vec<std::path::PathBuf>,
+
+    /// Deploy only this package instance and the objects it depends on,
+    /// given as `<namespace>/<instance>` (repeatable).
+    ///
+    /// The cluster's current deploy record stays as it is, and orphans are
+    /// left in place. A later `kix deploy` without `--only` applies the rest
+    /// of the build. Needs a cluster that Kix has deployed before, and does
+    /// not combine with `--prune` or `--operator`.
+    #[arg(long, value_name = "NAMESPACE/INSTANCE")]
+    pub only: Vec<String>,
 }

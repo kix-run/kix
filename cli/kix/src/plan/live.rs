@@ -244,6 +244,8 @@ impl LivePlan {
                 // `kix deploy --operator` and `kix rollback --operator` write
                 // the index when they submit the record.
                 package_index: None,
+                // The operator deploys whole builds.
+                only: Vec::new(),
                 mark_failed_on_abort: false,
             },
             Default::default(),
@@ -255,7 +257,7 @@ impl LivePlan {
             &self.live,
             // The operator always prunes: its orphans are live objects of
             // its own Kix cluster that the build no longer contains.
-            PrunePolicy::Delete,
+            scheduler::Ending::Finalize(PrunePolicy::Delete),
             &config,
             observer,
         )

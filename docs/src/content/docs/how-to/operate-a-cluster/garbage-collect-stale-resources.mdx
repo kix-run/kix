@@ -6,9 +6,15 @@ description: "Remove resources no longer present in the cluster definition and r
 import Command from '/src/components/Command.astro';
 import gcPlan from '/src/command-output/how-to/application-gc/plan.json';
 
-Use `kix gc` to remove resources that an earlier Activation managed but the
-current cluster definition no longer contains. Every mode also applies the
+Use `kix gc` to remove resources that an earlier deploy left on the cluster
+and the deployed build no longer contains. Every mode also applies the
 Activation retention policy.
+
+Deploy first, then run `kix gc`. A deploy without `--prune` keeps what left
+the build and records where it came from, and `kix gc` deletes it. `kix gc`
+refuses with `[K6276]` when the build your files make is not the build the
+cluster runs, because it would delete objects the running build still uses.
+To deploy and delete in one step, run `kix deploy <cluster> --prune`.
 
 ## Review the normal garbage-collection plan
 
@@ -21,9 +27,10 @@ anything, add `--dry-run`:
 
 <Command commands={["kix gc how-to-application --dry-run"]} cwd="kix-examples/" />
 
-The normal mode compares the previously deployed Activation with a fresh build
-of the cluster. It prints the resources found by that comparison and the
-Activation records it plans to delete, then asks for confirmation.
+The normal mode builds the cluster from your files, checks that this is the
+build the cluster runs, and finds what earlier deploys kept. It prints those
+resources and the Activation records it plans to delete, then asks for
+confirmation.
 
 The normal mode can also find stale cluster-level resources that belong to no
 package. It currently deletes those after confirmation without listing them in
@@ -51,10 +58,10 @@ After reviewing the plan, pass `--yes` in automation:
 
 <Command {...gcPlan} />
 
-This performs the same comparison and deletion without asking for
-confirmation. The captured run follows an instance being renamed in the
-cluster definition, so the resources deployed under the old name are the ones
-Kix removes.
+This performs the same deletion without asking for confirmation. The
+captured run follows an instance being renamed in the cluster definition and
+deployed without `--prune`. That deploy kept the resources created under the
+old name, and `kix gc` removes them.
 
 ## Scan the live cluster for orphans
 

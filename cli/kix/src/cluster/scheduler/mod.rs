@@ -90,6 +90,18 @@ pub enum PrunePolicy {
     Delete,
 }
 
+/// How a run whose nodes all reached a verdict ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ending {
+    /// Stamp the unchanged objects with the run's record, handle the orphans
+    /// with this policy, and make the record current.
+    Finalize(PrunePolicy),
+    /// The plan holds only the part of the build that `kix deploy --only`
+    /// selected. Mark the record `Partial` and leave the previous record
+    /// current. Nothing is stamped, pruned, or superseded.
+    Partial,
+}
+
 /// Default for [`SchedulerConfig::concurrency`]: maximum nodes in flight.
 /// Bounds concurrent requests to keep the HTTP connection pool and the API
 /// server's rate limiter within safe limits on wide clusters.
@@ -227,7 +239,8 @@ enum Done {
 ///
 /// After every plan node reaches a terminal verdict, orphans are pruned in
 /// reverse-topological order of the old graph and the Activation CR is
-/// finalized.
+/// finalized. Under [`Ending::Partial`] the run instead marks the record
+/// `Partial` ([`super::ops::DeployRecord::end_partial`]).
 ///
 /// A dry run ([`Cluster::dry_run`]) sends every write with `dryRun=All`,
 /// writes no deployment record, and emits the same event stream for rendering.
@@ -239,10 +252,14 @@ pub(crate) async fn run_deploy(
     plan: DeployPlan,
     orphan_rids: &[ResourceId],
     old_manifests: &[Value],
-    prune: PrunePolicy,
+    ending: Ending,
     config: &SchedulerConfig,
     observer: Arc<dyn DeployObserver>,
 ) -> Result<DeployResult, DeployError> {
+    let prune = match ending {
+        Ending::Finalize(prune) => prune,
+        Ending::Partial => PrunePolicy::Skip,
+    };
     let mut run = Run::new(
         &cluster,
         &plan,
@@ -275,6 +292,9 @@ pub(crate) async fn run_deploy(
     run.close_out().await?;
     if run.stop_partial_closure().await {
         return Ok(run.result);
+    }
+    if ending == Ending::Partial {
+        return run.end_partial().await;
     }
     run.stamp_unchanged().await;
     let orphans_left = run.prune().await;
@@ -1306,6 +1326,35 @@ impl<'a> Run<'a> {
         })
     }
 
+    /// End a run of the part of a build that `kix deploy --only` selected.
+    /// A failed node marks the record `Failed` with the failure, as a run of
+    /// the whole build that stops does. Otherwise the record is marked
+    /// `Partial`. A record that could not be marked fails the run, as
+    /// a failed finalize does.
+    async fn end_partial(self) -> Result<DeployResult, DeployError> {
+        if self.result.failed > 0 {
+            let reason = format!("{} failed", self.result.failed);
+            self.emit(DeployEvent::Stopped {
+                reason: reason.clone(),
+            });
+            self.abort_record(&reason).await;
+            return Ok(self.result);
+        }
+        let Some(record) = &self.record else {
+            return Ok(self.result);
+        };
+        let failed =
+            match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, record.end_partial()).await {
+                Ok(Ok(())) => return Ok(self.result),
+                Ok(Err(e)) => e.to_string(),
+                Err(_) => format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs()),
+            };
+        Err(DeployError::FinalizeFailed {
+            message: failed,
+            partial: self.result,
+        })
+    }
+
     /// Finalize the Activation record unless the run was a no-op or a dry run.
     async fn finalize(self, orphans_left: bool) -> Result<DeployResult, DeployError> {
         let r = &self.result;
@@ -1496,7 +1545,7 @@ pub async fn run_scripted(
     plan: DeployPlan,
     orphan_rids: &[ResourceId],
     old_manifests: &[Value],
-    prune: PrunePolicy,
+    ending: Ending,
     config: &SchedulerConfig,
     observer: Arc<dyn DeployObserver>,
 ) -> Result<DeployResult, DeployError> {
@@ -1505,7 +1554,7 @@ pub async fn run_scripted(
         plan,
         orphan_rids,
         old_manifests,
-        prune,
+        ending,
         config,
         observer,
     )

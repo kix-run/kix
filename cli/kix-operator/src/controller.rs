@@ -49,7 +49,8 @@ use kix::cluster::stream::{DeployObserver, DeployResult};
 use kix::cluster::watchdog::StallPolicy;
 use kix::eval::store_graph::{KixPackageIndex, read_index};
 use kix::manifest::lifecycle::{
-    PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_QUEUED, PHASE_SUPERSEDED,
+    PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_PARTIAL, PHASE_QUEUED,
+    PHASE_SUPERSEDED,
 };
 use kix::manifest::types::ResourceId;
 use kix::plan::LastRuns;
@@ -300,9 +301,10 @@ pub async fn reconcile_activation(
     match phase {
         // A person asked to deploy this record again: `kix rollback
         // --operator` to an earlier record, or `kix deploy --operator` of a
-        // build whose deploy failed. Queue it and deploy it in this
-        // reconcile, as a new record that supersedes the current one.
-        s if s == PHASE_SUPERSEDED || s == PHASE_FAILED => match request {
+        // build whose deploy failed or that `kix deploy --only` partly
+        // deployed. Queue it and deploy it in this reconcile, as a new record
+        // that supersedes the current one.
+        s if s == PHASE_SUPERSEDED || s == PHASE_FAILED || s == PHASE_PARTIAL => match request {
             Some(request) => {
                 tracing::info!(name, phase, "Re-queueing activation for new spec.request");
                 ctx.records
@@ -314,8 +316,9 @@ pub async fn reconcile_activation(
                 queued.started_request = Some(request.to_string());
                 start_queued(&activation, &ctx, name, &cluster, &queued).await
             }
-            // Failed is terminal. The deploy that owned it has stopped, and
-            // the next one folds its closure into the plan and supersedes it.
+            // Failed and Partial are terminal. The deploy that owned the
+            // record has stopped, and the next one folds its closure into the
+            // plan and supersedes it.
             None => {
                 tracing::debug!(
                     name,
@@ -2198,6 +2201,25 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(after["status"]["startedRequest"], "r2");
         assert_eq!(after["status"]["failedAttempts"], 1, "{after}");
+    }
+
+    /// A request on a Partial record queues it again, as on a Failed
+    /// record, and drops its `status.partial`.
+    #[tokio::test]
+    async fn a_request_on_a_partial_record_queues_it_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut record = queued(dir.path(), Some(HERE), None);
+        record["spec"]["request"] = json!("r1");
+        record["status"] = json!({
+            "phase": PHASE_PARTIAL,
+            "partial": { "only": ["app/a"], "at": "2026-11-25T10:00:00Z" },
+        });
+        let api = FakeApi::new(vec![kube_system(HERE), record.clone()]);
+        let (result, after) = reconcile_on(&api, record).await;
+        assert!(result.is_err());
+        assert_eq!(after["status"]["startedRequest"], "r1");
+        assert_ne!(after["status"]["phase"], PHASE_PARTIAL, "{after}");
+        assert!(after["status"].get("partial").is_none(), "{after}");
     }
 
     /// Reconcile `record` on `api` with an operator that retries `retries`

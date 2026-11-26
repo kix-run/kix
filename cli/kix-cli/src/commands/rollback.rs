@@ -637,6 +637,7 @@ fn flags(prune: bool, force_conflicts: bool, accept_migrations: bool) -> PlanFla
         reconcile: false,
         force_conflicts,
         accept_migrations,
+        only: Vec::new(),
     }
 }
 

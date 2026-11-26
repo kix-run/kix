@@ -408,6 +408,99 @@ pub(crate) struct Closing<'a> {
     pub current: bool,
     /// Whether `--on-error continue` was set.
     pub on_error_continue: bool,
+    /// The instances `--only` named, empty for a deploy of the whole
+    /// build. The command to run again names them too.
+    pub only: &'a [String],
+}
+
+/// What the text that closes a deploy with `--only` needs besides the
+/// counts.
+pub(crate) struct PartialClosing<'a> {
+    pub cluster: &'a str,
+    /// This run's deployment record, when the build has one.
+    pub record: Option<&'a str>,
+    pub previous: &'a Previous,
+    /// The instances `--only` named.
+    pub only: &'a [String],
+    /// The instances the named ones need, which the run applied in full too.
+    pub needed: &'a [String],
+    /// What the run left for a later deploy of the whole build.
+    pub left_alone: kix::plan::document::LeftAlone,
+}
+
+/// Format the text that closes a deploy with `--only` that applied every
+/// object it selected: the counts, what it applied, that the cluster's
+/// current deploy record is unchanged, what is left, and how to apply it.
+pub(super) fn partial_closing(r: &DeployResult, c: &PartialClosing<'_>) -> String {
+    use std::fmt::Write;
+    let cluster = c.cluster;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "Deploy of part of '{cluster}' complete: {}",
+        counts(r, false)
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(out, "  Cluster state:");
+    let list = |names: &[String]| names.join(", ");
+    let _ = writeln!(out, "    - Applied in full, as named: {}.", list(c.only));
+    if !c.needed.is_empty() {
+        let _ = writeln!(
+            out,
+            "    - Applied in full, because the named instance(s) need them: {}.",
+            list(c.needed)
+        );
+    }
+    let _ = writeln!(
+        out,
+        "    - Applied the objects outside any instance that they depend on."
+    );
+    let current = matches!(
+        (c.record, c.previous),
+        (Some(record), Previous::Active(previous)) if record == previous
+    );
+    match (c.record, c.previous) {
+        (Some(record), Previous::Active(_)) if current => {
+            let _ = writeln!(
+                out,
+                "    - Deployment record {record} remains the Active deployment record, because this build is the one the cluster runs."
+            );
+        }
+        (Some(record), Previous::Active(previous)) => {
+            let _ = writeln!(
+                out,
+                "    - Deployment record {record} is marked partly deployed, and {previous} remains the Active deployment record."
+            );
+        }
+        (Some(record), _) => {
+            let _ = writeln!(
+                out,
+                "    - Deployment record {record} is marked partly deployed, and the Active deployment record is unchanged."
+            );
+        }
+        (None, _) => {}
+    }
+    let left = c.left_alone;
+    if left.total() > 0 {
+        let _ = writeln!(
+            out,
+            "    - {} object(s) of this build that differ from the current deploy record were outside this deploy: {} to write and {} that left the build. An earlier deploy with `--only` may already have applied some of them.",
+            left.total(),
+            left.writes,
+            left.orphans
+        );
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(out, "  Next:");
+    if current {
+        let _ = write!(out, "    Nothing else of this build waits.");
+    } else {
+        let _ = write!(
+            out,
+            "    Deploy another instance with `kix deploy {cluster} --only <namespace>/<instance>`, or apply the rest of the build with `kix deploy {cluster}`."
+        );
+    }
+    out
 }
 
 /// Format the text that closes a deploy that did not succeed: the counts,
@@ -416,7 +509,10 @@ pub(super) fn closing(r: &DeployResult, c: &Closing<'_>) -> String {
     use std::fmt::Write;
     let cluster = c.cluster;
     let noun = c.command.noun();
-    let again = format!("{} {cluster}", c.command.invocation());
+    let again = std::iter::once(format!("{} {cluster}", c.command.invocation()))
+        .chain(c.only.iter().map(|n| format!("--only {n}")))
+        .collect::<Vec<_>>()
+        .join(" ");
     let mut out = String::new();
     let failures = |out: &mut String| {
         if r.failures.is_empty() {

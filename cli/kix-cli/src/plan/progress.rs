@@ -120,17 +120,26 @@ pub fn print(event: PlanEvent<'_>) {
                 keys::ACTIVATIONS_CRD,
             );
         }
-        PlanEvent::FailedFolded(record) => {
-            crate::say!(
-                "  {} including resources from failed deployment {} ({}...)",
+        PlanEvent::FailedFolded(record) => match record.partly_deployed() {
+            Some(partial) => crate::say!(
+                "  {} including resources from partly deployed {} ({}...), which applied {}",
                 output::yellow("!"),
                 output::bold(&record.name),
                 short(record.identity_hash.as_deref().unwrap_or_default()),
-            );
-            if let Some(reason) = &record.failure_reason {
-                crate::say!("    it stopped because: {reason}");
+                partial.only.join(", "),
+            ),
+            None => {
+                crate::say!(
+                    "  {} including resources from failed deployment {} ({}...)",
+                    output::yellow("!"),
+                    output::bold(&record.name),
+                    short(record.identity_hash.as_deref().unwrap_or_default()),
+                );
+                if let Some(reason) = &record.failure_reason {
+                    crate::say!("    it stopped because: {reason}");
+                }
             }
-        }
+        },
         PlanEvent::FailedUnresolved { records, cluster } => {
             let names = some_names(records.iter().map(|r| r.name.as_str()));
             warning(&format!(

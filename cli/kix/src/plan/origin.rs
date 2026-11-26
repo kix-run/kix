@@ -35,6 +35,18 @@ pub enum ChangeLabel {
     /// leaves this object alone because its identity hash did not change, so
     /// the difference stays. `kix deploy --reconcile` applies it.
     DriftKept,
+    /// The live object differs from the deployed build here because a deploy
+    /// that did not finish wrote it: the live value is the one that deploy's
+    /// build has. The plan's `earlier_deploys` names the deploy record.
+    AppliedByEarlierDeploy,
+}
+
+/// A deploy record whose build a plan folded in: one that stopped, or one
+/// that `kix deploy --only` left partly deployed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FoldedBy {
+    pub record: String,
+    pub partly_deployed: bool,
 }
 
 /// A field where the live object differs from the deployed build.
@@ -45,6 +57,8 @@ pub(crate) struct Drifted {
     pub live: Option<Value>,
     /// Field managers other than Kix that own the field on the live object.
     pub managers: Vec<String>,
+    /// The folded deploy whose build has the live value, when one does.
+    pub by: Option<FoldedBy>,
 }
 
 /// The objects one resource's labels are computed from.
@@ -64,6 +78,10 @@ pub(crate) struct ThreeWay<'a> {
     /// A Secret: its `data` and `stringData` are hidden on at least one
     /// side, so drift in them cannot be judged and is not reported.
     pub secret: bool,
+    /// This resource's manifest in each folded build that has it. A live
+    /// value that differs from `deployed` and equals a folded build's value
+    /// is that deploy's write, not drift.
+    pub folded: &'a [(FoldedBy, &'a Value)],
 }
 
 impl ThreeWay<'_> {
@@ -85,6 +103,17 @@ impl ThreeWay<'_> {
             .filter(|d| d.kind != DiffKind::ExtraInB)
             .filter(|d| !(self.secret && is_secret_value_path(&d.path)))
             .collect();
+        // The folded deploy whose build holds each drifted live value, by an
+        // exact comparison of the value at the path.
+        let by: Vec<Option<&FoldedBy>> = drift
+            .iter()
+            .map(|d| {
+                self.folded
+                    .iter()
+                    .find(|(_, manifest)| value_at(manifest, &d.path) == d.b_value.as_ref())
+                    .map(|(by, _)| by)
+            })
+            .collect();
 
         let mut touched: BTreeSet<usize> = BTreeSet::new();
         let labels = changes
@@ -98,11 +127,14 @@ impl ThreeWay<'_> {
                 if is_intended {
                     labels.push(ChangeLabel::Intended);
                 }
-                let mut drifted = false;
+                let (mut drifted, mut earlier) = (false, false);
                 for (i, d) in drift.iter().enumerate() {
                     if overlaps(&d.path, &change.path) {
                         touched.insert(i);
-                        drifted = true;
+                        match by[i] {
+                            Some(_) => earlier = true,
+                            None => drifted = true,
+                        }
                     }
                 }
                 if drifted {
@@ -111,6 +143,9 @@ impl ThreeWay<'_> {
                     } else {
                         ChangeLabel::DriftKept
                     });
+                }
+                if earlier {
+                    labels.push(ChangeLabel::AppliedByEarlierDeploy);
                 }
                 labels
             })
@@ -143,6 +178,7 @@ impl ThreeWay<'_> {
                     deployed: shown(d.a_value.clone(), None),
                     live: shown(live, d.a_value.as_ref()),
                     managers,
+                    by: by[i].cloned(),
                 }
             })
             .collect();
@@ -192,6 +228,7 @@ pub fn label_live(diff: &mut super::PackageDiff, sides: &Sides) {
                 managed: sides.managed.get(rid),
                 applies,
                 secret: types::is_secret(live) || types::is_secret(new),
+                folded: &[],
             };
             let (mut l, _) = three.label(changes);
             if !sides.drifted.contains(rid) {
@@ -477,6 +514,7 @@ mod tests {
             managed: Some(&live),
             applies: true,
             secret: false,
+            folded: &[],
         };
         let (labels, drifted) = three.label(&diffs);
         let by_path: Vec<(&str, &Vec<ChangeLabel>)> =
@@ -493,6 +531,49 @@ mod tests {
         assert_eq!(drifted[0].managers, vec!["kubectl".to_string()]);
     }
 
+    /// A live value that a folded build has is that deploy's write. A value
+    /// no folded build has stays drift.
+    #[test]
+    fn a_value_a_folded_build_has_is_that_deploys_write() {
+        let deployed = deployment(1, "web:1");
+        let new = deployment(1, "web:2");
+        let live = deployment(3, "web:1");
+        let by = |record: &str| FoldedBy {
+            record: record.into(),
+            partly_deployed: true,
+        };
+        let other = deployment(4, "web:1");
+        let wrote = deployment(3, "web:1");
+        let folded = [(by("c-other"), &other), (by("c-partial"), &wrote)];
+        let three = ThreeWay {
+            deployed: Some(&deployed),
+            live: &live,
+            new: &new,
+            managed: None,
+            applies: true,
+            secret: false,
+            folded: &folded,
+        };
+        let diffs = changes(&live, &new);
+        let (labels, drifted) = three.label(&diffs);
+        let replicas = diffs
+            .iter()
+            .position(|d| d.path == "$.spec.replicas")
+            .unwrap();
+        assert_eq!(labels[replicas], vec![ChangeLabel::AppliedByEarlierDeploy]);
+        assert_eq!(drifted.len(), 1);
+        assert_eq!(drifted[0].by, Some(by("c-partial")));
+
+        let unmatched = [(by("c-other"), &other)];
+        let three = ThreeWay {
+            folded: &unmatched,
+            ..three
+        };
+        let (labels, drifted) = three.label(&diffs);
+        assert_eq!(labels[replicas], vec![ChangeLabel::RevertsDrift]);
+        assert_eq!(drifted[0].by, None);
+    }
+
     #[test]
     fn drift_on_an_object_the_deploy_skips_is_kept() {
         let deployed = deployment(1, "web:1");
@@ -504,6 +585,7 @@ mod tests {
             managed: None,
             applies: false,
             secret: false,
+            folded: &[],
         };
         let (labels, _) = three.label(&changes(&live, &deployed));
         assert_eq!(labels, vec![vec![ChangeLabel::DriftKept]]);
@@ -521,6 +603,7 @@ mod tests {
             managed: None,
             applies: true,
             secret: false,
+            folded: &[],
         };
         let (labels, _) = three.label(&changes(&live, &new));
         assert_eq!(
@@ -540,6 +623,7 @@ mod tests {
             managed: None,
             applies: true,
             secret: false,
+            folded: &[],
         };
         let (labels, drifted) = three.label(&changes(&live, &new));
         assert_eq!(labels, vec![vec![ChangeLabel::Intended]]);

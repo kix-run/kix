@@ -138,7 +138,7 @@ pub fn flags_for(
     file: &str,
     cluster: &str,
 ) -> Result<PlanFlags, String> {
-    let Some(planned) = reviewed.flags else {
+    let Some(planned) = reviewed.flags.clone() else {
         // A plan from `kix diff` or `kix plan --read-only`: no reviewer saw
         // what these flags would do.
         let refused: Vec<&str> = [
@@ -146,6 +146,7 @@ pub fn flags_for(
             (given.force_conflicts, "--force-conflicts"),
             (given.reconcile, "--reconcile"),
             (given.accept_migrations, "--accept-migrations"),
+            (!given.only.is_empty(), "--only"),
         ]
         .into_iter()
         .filter_map(|(set, flag)| set.then_some(flag))
@@ -159,8 +160,47 @@ pub fn flags_for(
                 refused.join(" ")
             ));
         }
-        return Ok(*given);
+        return Ok(given.clone());
     };
+    // A saved plan of part of a build deploys that part, and one of the
+    // whole build deploys all of it, so `--only` must name what the plan
+    // names, or nothing on both sides.
+    if given.only != planned.only {
+        let only = |names: &[String]| {
+            names
+                .iter()
+                .map(|n| format!("--only {n}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let (saved, next) = if planned.only.is_empty() {
+            (
+                "without `--only`, as a plan of the whole build".to_string(),
+                format!(
+                    "deploy it without `--only`, or save and review a plan with \
+                     `kix plan {cluster} {} --out {file}`",
+                    only(&given.only)
+                ),
+            )
+        } else {
+            (
+                format!("with `{}`", only(&planned.only)),
+                format!(
+                    "deploy it with `{}`, or save and review a plan with \
+                     `kix plan {cluster}{} --out {file}`",
+                    only(&planned.only),
+                    if given.only.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {}", only(&given.only))
+                    }
+                ),
+            )
+        };
+        return Err(format!(
+            "the plan was saved {saved}. Nothing was applied to the cluster. Next: {next}."
+        ));
+    }
     let mut contradicted = Vec::new();
     // The default policy takes the plan's. A policy asked for on the
     // command line must be the plan's.
@@ -474,7 +514,7 @@ fn describe_flags(flags: Option<&PlanFlags>) -> String {
     let Some(f) = flags else {
         return "no planning flags (a kix diff or kix plan --read-only)".into();
     };
-    let set: Vec<&str> = PlanFlags::prune_flag(f.prune)
+    let set: Vec<String> = PlanFlags::prune_flag(f.prune)
         .into_iter()
         .chain(
             [
@@ -485,6 +525,8 @@ fn describe_flags(flags: Option<&PlanFlags>) -> String {
             .into_iter()
             .filter_map(|(on, flag)| on.then_some(flag)),
         )
+        .map(str::to_string)
+        .chain(f.only.iter().map(|n| format!("--only {n}")))
         .collect();
     if set.is_empty() {
         "no planning flags".into()
@@ -534,6 +576,7 @@ mod tests {
             reconcile: false,
             force_conflicts: false,
             accept_migrations: false,
+            only: Vec::new(),
         });
         p.conflicts = Checked::found(Vec::new());
         p.admission = Checked::found(Vec::new());
@@ -713,7 +756,10 @@ mod tests {
     #[test]
     fn command_line_flags_must_agree_with_the_plan() {
         let none = plan().flags.unwrap();
-        assert_eq!(flags_for(&plan(), &none, "p.kixplan", "c"), Ok(none));
+        assert_eq!(
+            flags_for(&plan(), &none, "p.kixplan", "c"),
+            Ok(none.clone())
+        );
 
         let mut with_prune = plan();
         with_prune.flags.as_mut().unwrap().prune = PrunePolicy::Delete;
@@ -730,6 +776,41 @@ mod tests {
         };
         let err = flags_for(&plan(), &given, "p.kixplan", "c").unwrap_err();
         assert!(err.contains("--reconcile"), "{err}");
+    }
+
+    /// A saved plan of part of a build deploys only with the same `--only`,
+    /// and a saved plan of the whole build only without it.
+    #[test]
+    fn only_must_name_what_the_plan_names() {
+        let whole = plan().flags.unwrap();
+        let only = |names: &[&str]| PlanFlags {
+            only: names.iter().map(|n| n.to_string()).collect(),
+            ..whole.clone()
+        };
+        let mut partial = plan();
+        partial.flags = Some(only(&["app/web"]));
+
+        assert_eq!(
+            flags_for(&partial, &only(&["app/web"]), "p.kixplan", "c"),
+            Ok(only(&["app/web"]))
+        );
+        let err = flags_for(&partial, &whole, "p.kixplan", "c").unwrap_err();
+        assert!(err.contains("saved with `--only app/web`"), "{err}");
+        let err = flags_for(&partial, &only(&["app/db"]), "p.kixplan", "c").unwrap_err();
+        assert!(
+            err.contains("`kix plan c --only app/db --out p.kixplan`"),
+            "{err}"
+        );
+        let err = flags_for(&plan(), &only(&["app/web"]), "p.kixplan", "c").unwrap_err();
+        assert!(
+            err.contains("the plan was saved without `--only`, as a plan of the whole build."),
+            "{err}"
+        );
+
+        let mut diff = plan();
+        diff.flags = None;
+        let err = flags_for(&diff, &only(&["app/web"]), "p.kixplan", "c").unwrap_err();
+        assert!(err.contains("--only"), "{err}");
     }
 
     /// A prune policy given on the command line must be the plan's, and the

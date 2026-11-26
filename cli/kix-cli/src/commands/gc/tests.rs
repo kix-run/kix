@@ -653,3 +653,105 @@ mod live_order_tests {
         );
     }
 }
+
+/// Default mode and `--full-scan` call `files::refuse_other_build` before
+/// they list or delete anything, and before `--dry-run` decides what to
+/// print, so the same check covers all three.
+mod other_build_tests {
+    use super::super::files::refuse_other_build;
+    use kix::cluster::activation::Records;
+    use kix::cluster::fake_api::FakeApi;
+    use kix::manifest::keys;
+    use serde_json::{Value, json};
+
+    fn record(name: &str, hash: &str, status: Value) -> Value {
+        json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": {
+                "name": name,
+                "labels": {
+                    "app.kubernetes.io/managed-by": "kix",
+                    (keys::CLUSTER_LABEL): "lab",
+                },
+                "annotations": { (keys::IDENTITY_HASH): hash },
+            },
+            "status": status,
+        })
+    }
+
+    async fn check(api: &FakeApi, files: Option<&str>) -> Result<(), String> {
+        let client = api.client();
+        let discovery = kix::cluster::discovery::discover_resources(&client)
+            .await
+            .unwrap();
+        let opened = Records::open(&client, &discovery).unwrap();
+        refuse_other_build(opened.records(), "lab", files)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    const RUNS: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const FILES: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    /// Files that make another build than the current record's are refused,
+    /// naming both builds and the next steps.
+    #[tokio::test]
+    async fn files_of_another_build_are_refused() {
+        let api = FakeApi::new([record("lab-old", RUNS, json!({ "phase": "Active" }))]);
+        let err = check(&api, Some(FILES)).await.unwrap_err();
+        assert!(err.starts_with("[K6276] "), "{err}");
+        assert!(
+            err.contains("Nothing was deleted and no deployment record was retired."),
+            "{err}"
+        );
+        assert!(
+            err.contains("deployment record lab-old (build aaaaaaaaaaaa)"),
+            "{err}"
+        );
+        assert!(
+            err.contains("The files make:    build bbbbbbbbbbbb"),
+            "{err}"
+        );
+        assert!(
+            err.contains("`kix deploy lab`, then run `kix gc lab`"),
+            "{err}"
+        );
+        assert!(err.contains("`kix deploy lab --prune`"), "{err}");
+        assert!(
+            err.contains("Check out the commit the cluster runs"),
+            "{err}"
+        );
+        assert!(!err.contains("partly deployed"), "{err}");
+    }
+
+    /// A record `kix deploy --only` left partly deployed with the files'
+    /// build is named, with the command that applies the rest.
+    #[tokio::test]
+    async fn a_partly_deployed_build_of_the_files_is_named() {
+        let api = FakeApi::new([
+            record("lab-old", RUNS, json!({ "phase": "Active" })),
+            record(
+                "lab-new",
+                FILES,
+                json!({ "phase": "Partial", "partial": { "only": ["lab/mid"], "at": "2026-11-25T10:00:00Z" } }),
+            ),
+        ]);
+        let err = check(&api, Some(FILES)).await.unwrap_err();
+        assert!(
+            err.contains("Deployment record lab-new holds the files' build partly deployed: `kix deploy --only` applied lab/mid. `kix deploy lab` applies the rest of it."),
+            "{err}"
+        );
+    }
+
+    /// Files that make the current build pass, so gc deletes what earlier
+    /// deploys kept. A cluster with no current record passes too: the
+    /// default mode stops on it by itself.
+    #[tokio::test]
+    async fn the_running_build_and_no_record_pass() {
+        let api = FakeApi::new([record("lab-old", RUNS, json!({ "phase": "Active" }))]);
+        assert_eq!(check(&api, Some(RUNS)).await, Ok(()));
+        let empty = FakeApi::new([]);
+        assert_eq!(check(&empty, Some(FILES)).await, Ok(()));
+    }
+}

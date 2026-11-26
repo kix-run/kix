@@ -6,7 +6,8 @@
 //! - `ResourceIo` manages the objects of the plan (apply, read, recreate, wait
 //!   for readiness, refresh discovery, and prune).
 //! - `DeployRecord` manages the engine's view of the run's Activation record
-//!   (begin, checkpoint, stamp unchanged objects, abort, and finalize), built on
+//!   (begin, checkpoint, stamp unchanged objects, abort, finalize, and the
+//!   end of a partial deploy), built on
 //!   `activation::Records`.
 //! - `SecretHydrator` decrypts SOPS-backed Secret data before an apply.
 //!
@@ -194,6 +195,12 @@ pub(crate) trait DeployRecord: Send + Sync + 'static {
     /// panicked) so the next deploy can see that this closure was partially
     /// applied. Called at most once, and only after [`DeployRecord::begin`].
     async fn abort(&self, reason: &str) -> Result<(), RecordWriteError>;
+
+    /// End a run that applied the part of the build `kix deploy --only`
+    /// selected: mark the record `Partial`, leaving the previous record
+    /// current ([`super::activation::Records::end_partial`]). Called instead
+    /// of [`DeployRecord::finalize`], and only when every node succeeded.
+    async fn end_partial(&self) -> Result<(), RecordWriteError>;
 
     /// Finalize the Activation lifecycle by marking the new record Active (or
     /// Degraded) and the old one Superseded. Returns `Ok(None)` when there is

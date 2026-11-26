@@ -8,6 +8,7 @@ mod phase_tests {
             PHASE_QUEUED,
             PHASE_SUPERSEDED,
             PHASE_FAILED,
+            PHASE_PARTIAL,
             PHASE_DEPLOYING,
         ] {
             assert_eq!(
@@ -41,13 +42,17 @@ mod phase_tests {
             PHASE_DEGRADED,
             PHASE_SUPERSEDED,
             PHASE_FAILED,
+            PHASE_PARTIAL,
         ] {
             assert_eq!(
                 phase_on_abort(phase),
                 None,
                 "phase {phase:?} is not ours to fail",
             );
+            assert_eq!(phase_on_end_partial(phase), None, "phase {phase:?}");
         }
+        assert_eq!(phase_on_end_partial(PHASE_DEPLOYING), Some(PHASE_PARTIAL));
+        assert_eq!(phase_on_end_partial(""), Some(PHASE_PARTIAL));
     }
 
     #[test]
@@ -1043,5 +1048,177 @@ mod attempt_tests {
             .unwrap()
             .unwrap();
         assert_eq!(after.failed_attempts, 4);
+    }
+}
+
+mod partial_tests {
+    use super::super::*;
+    use crate::cluster::fake_api::FakeApi;
+
+    async fn records_with(api: &FakeApi) -> Records {
+        let client = api.client();
+        let discovery = crate::cluster::discovery::discover_resources(&client)
+            .await
+            .unwrap();
+        Records::open_installed(&client, &discovery).unwrap()
+    }
+
+    fn record(name: &str, status: Value) -> Value {
+        json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": crate::manifest::lifecycle::RECORD_KIND,
+            "metadata": {
+                "name": name,
+                "labels": {
+                    "app.kubernetes.io/managed-by": "kix",
+                    (keys::CLUSTER_LABEL): "c",
+                },
+                "annotations": { (keys::IDENTITY_HASH): format!("hash-{name}") },
+            },
+            "status": status,
+        })
+    }
+
+    fn status(api: &FakeApi, name: &str) -> Value {
+        api.object("Activation", name).unwrap()["status"].clone()
+    }
+
+    /// A deploy with `--only` of a build that is not current marks its
+    /// Deploying record Partial and names the instances, without a failure.
+    /// A second such deploy of the same build gets the first one's list from
+    /// `begin_deploy`, which clears it from the record while the run is in
+    /// flight.
+    #[tokio::test]
+    async fn a_partial_deploy_marks_its_record_partial_and_names_the_instances() {
+        let api = FakeApi::new([record("new", json!({ "phase": PHASE_DEPLOYING }))]);
+        let records = records_with(&api).await;
+        records
+            .end_partial("new", &["web/b".into(), "app/a".into()])
+            .await
+            .unwrap();
+        let after = status(&api, "new");
+        assert_eq!(after["phase"], PHASE_PARTIAL);
+        assert_eq!(after["partial"]["only"], json!(["app/a", "web/b"]));
+        assert!(after["partial"]["at"].is_string(), "{after}");
+        assert!(after.get("failure").is_none(), "{after}");
+
+        let earlier = records.begin_deploy("new", 1, None).await.unwrap();
+        assert_eq!(earlier, ["app/a", "web/b"]);
+        let during = status(&api, "new");
+        assert_eq!(during["phase"], PHASE_DEPLOYING);
+        assert!(during.get("partial").is_none(), "{during}");
+
+        let mut only = earlier;
+        only.extend(["app/a".to_string(), "db/c".to_string()]);
+        records.end_partial("new", &only).await.unwrap();
+        let read = records.get("new").await.unwrap().unwrap();
+        assert_eq!(read.phase, PHASE_PARTIAL);
+        let partial = read.partial.clone().unwrap();
+        assert_eq!(partial.only, ["app/a", "db/c", "web/b"]);
+        assert_eq!(read.stopped_at(), partial.at.as_deref());
+    }
+
+    /// A run that begins on a Partial record and stops ends `Failed` with
+    /// its failure and no `status.partial`, whether it deploys the whole
+    /// build or uses `--only`.
+    #[tokio::test]
+    async fn a_run_that_stops_on_a_partial_record_ends_failed() {
+        let partial = json!({ "only": ["lab/solo"], "at": "2026-11-25T10:00:00Z" });
+        let api = FakeApi::new([record(
+            "rec",
+            json!({ "phase": PHASE_PARTIAL, "partial": partial }),
+        )]);
+        let records = records_with(&api).await;
+        records.begin_deploy("rec", 1, None).await.unwrap();
+        records
+            .fail_deploy("rec", "Job/migrate failed")
+            .await
+            .unwrap();
+        let after = status(&api, "rec");
+        assert_eq!(after["phase"], PHASE_FAILED);
+        assert!(after.get("partial").is_none(), "{after}");
+        assert_eq!(after["failure"]["reason"], "Job/migrate failed");
+    }
+
+    /// A deploy with `--only` of the build that is current leaves its
+    /// record's phase alone and writes no `status.partial`.
+    #[tokio::test]
+    async fn a_partial_deploy_of_the_current_build_leaves_its_record() {
+        for phase in [PHASE_ACTIVE, PHASE_DEGRADED] {
+            let api = FakeApi::new([record("cur", json!({ "phase": phase }))]);
+            let records = records_with(&api).await;
+            records.end_partial("cur", &["app/a".into()]).await.unwrap();
+            let after = status(&api, "cur");
+            assert_eq!(after["phase"], phase);
+            assert!(after.get("partial").is_none(), "{after}");
+        }
+    }
+
+    /// The deploy that finishes the build clears `status.partial` and
+    /// makes the record current, and superseding a partly deployed record
+    /// clears it too.
+    #[tokio::test]
+    async fn finishing_or_superseding_a_partial_record_clears_it() {
+        let partial = json!({ "only": ["app/a"], "at": "2026-11-25T10:00:00Z" });
+        let api = FakeApi::new([
+            record("old", json!({ "phase": PHASE_ACTIVE })),
+            record(
+                "new",
+                json!({ "phase": PHASE_DEPLOYING, "partial": partial.clone() }),
+            ),
+            record(
+                "other",
+                json!({ "phase": PHASE_PARTIAL, "partial": partial }),
+            ),
+        ]);
+        let records = records_with(&api).await;
+        let old = records.get("old").await.unwrap();
+        records
+            .finalize_deploy(
+                "c",
+                "new",
+                old.as_ref(),
+                false,
+                None,
+                &["other".into()],
+                &[],
+            )
+            .await
+            .unwrap();
+        let new = status(&api, "new");
+        assert_eq!(new["phase"], PHASE_ACTIVE);
+        assert!(new.get("partial").is_none(), "{new}");
+        for name in ["old", "other"] {
+            let after = status(&api, name);
+            assert_eq!(after["phase"], PHASE_SUPERSEDED, "{name}");
+            assert!(after.get("partial").is_none(), "{name}: {after}");
+        }
+    }
+
+    /// Failed and Partial records fold into a plan oldest first. A Partial
+    /// record has no `status.failure.at`, so its `status.partial.at` orders
+    /// it. Records in other phases are left out.
+    #[tokio::test]
+    async fn stopped_records_are_ordered_by_when_they_stopped() {
+        let api = FakeApi::new([
+            record(
+                "late",
+                json!({ "phase": PHASE_FAILED, "failure": { "reason": "x", "at": "2026-11-25T12:00:00Z" } }),
+            ),
+            record(
+                "early",
+                json!({ "phase": PHASE_PARTIAL, "partial": { "only": ["app/a"], "at": "2026-11-25T09:00:00Z" } }),
+            ),
+            record("gone", json!({ "phase": PHASE_SUPERSEDED })),
+        ]);
+        let records = records_with(&api).await;
+        let names: Vec<String> = records
+            .stopped("c")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.name)
+            .collect();
+        assert_eq!(names, ["early", "late"]);
     }
 }

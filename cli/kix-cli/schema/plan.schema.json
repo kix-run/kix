@@ -118,6 +118,11 @@
           "const": "drift_kept",
           "description": "The live object differs from the deployed build here, and the deploy\nleaves this object alone because its identity hash did not change, so\nthe difference stays. `kix deploy --reconcile` applies it.",
           "type": "string"
+        },
+        {
+          "const": "applied_by_earlier_deploy",
+          "description": "The live object differs from the deployed build here because a deploy\nthat did not finish wrote it: the live value is the one that deploy's\nbuild has. The plan's `earlier_deploys` names the deploy record.",
+          "type": "string"
         }
       ]
     },
@@ -544,6 +549,38 @@
       ],
       "type": "object"
     },
+    "EarlierDeployChange": {
+      "description": "A field a deploy that did not finish wrote, which differs from the\ndeployed build.",
+      "properties": {
+        "deployed": {
+          "description": "The deployed value. Absent when the deployed manifest does not set\nthe field."
+        },
+        "live": {
+          "description": "The live value, which the build of `record` has."
+        },
+        "partly_deployed": {
+          "description": "`true` when that record is `Partial`, because `kix deploy --only`\napplied part of its build. `false` when it is `Failed`, because its\ndeploy stopped.",
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        },
+        "record": {
+          "description": "The deploy record whose deploy wrote it.",
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource",
+        "path",
+        "record",
+        "partly_deployed"
+      ],
+      "type": "object"
+    },
     "FieldChange": {
       "description": "One field change, old to new. A secret value reads\n[`super::SECRET_NOT_SHOWN`], or [`super::SECRET_CHANGED_NOT_SHOWN`] on the\nnew side when the old side differs; a value over\n[`super::MAX_SHOWN_VALUE_BYTES`] reads `\"(N bytes, not shown)\"`.",
       "properties": {
@@ -620,6 +657,28 @@
       },
       "required": [
         "version"
+      ],
+      "type": "object"
+    },
+    "LeftAlone": {
+      "description": "The changes of the build that a deploy with `--only` does not make.",
+      "properties": {
+        "orphans": {
+          "description": "Objects that left the build. This deploy neither deletes them nor\nrecords them as kept.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "writes": {
+          "description": "Objects of the build outside this deploy that differ from the\ncluster's current deploy record, so a deploy of the whole build\nwould write them. An earlier deploy with `--only` may already have\napplied some of them.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "writes",
+        "orphans"
       ],
       "type": "object"
     },
@@ -1040,6 +1099,13 @@
         "force_conflicts": {
           "type": "boolean"
         },
+        "only": {
+          "description": "The instances (`namespace/instance`) that `--only` names, sorted. The\ndeploy applies them and what they depend on, and leaves the rest of\nthe build for a later deploy. Left out when the deploy applies the\nwhole build.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "prune": {
           "$ref": "#/$defs/PrunePolicy",
           "description": "What the deploy does with orphans: `delete` with `--prune`, `skip`\nwith `--skip-orphan-check`, and `warn_only` otherwise."
@@ -1432,6 +1498,13 @@
       "minimum": 0,
       "type": "integer"
     },
+    "earlier_deploys": {
+      "description": "Fields where the live cluster differs from the deployed build because\na deploy that did not finish wrote them: the live value is the one\nthat deploy's build has. They are not drift, and `drift` leaves them\nout. Left out when there are none.",
+      "items": {
+        "$ref": "#/$defs/EarlierDeployChange"
+      },
+      "type": "array"
+    },
     "flags": {
       "anyOf": [
         {
@@ -1446,6 +1519,17 @@
     "kix": {
       "$ref": "#/$defs/KixBuild",
       "description": "The Kix that made the plan."
+    },
+    "left_alone": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LeftAlone"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "What a deploy with `--only` (`flags.only`) leaves for a later deploy\nof the whole build. `packages`, `objects`, and `prune` show only what\nthis deploy does. Left out for a deploy of the whole build."
     },
     "made_by": {
       "$ref": "#/$defs/MadeBy"
@@ -1485,6 +1569,13 @@
         "string",
         "null"
       ]
+    },
+    "only_needed": {
+      "description": "The instances that the instances in `flags.only` need, which a\ndeploy with `--only` applies in full too, sorted. Left out when\nthere are none.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     },
     "packages": {
       "$ref": "#/$defs/Packages"

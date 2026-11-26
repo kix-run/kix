@@ -29,6 +29,7 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs`,
 ```text
 kix plan <CLUSTER> [--prune | --skip-orphan-check] [--reconcile]
          [--force-conflicts] [--accept-migrations] [--offline]
+         [--only <NAMESPACE/INSTANCE>]...
          [--bundle <FILE> [--deployed-bundle <FILE>]...]
          [-o text|markdown] [--out <FILE>]
          [--flake <FLAKE>] [--context <CONTEXT>]
@@ -46,6 +47,7 @@ kix plan <CLUSTER> --read-only [--bundle <FILE>]
 | `--reconcile` | Plan a re-apply of every resource, including those whose identity hash matches the running activation. |
 | `--force-conflicts` | Plan the apply with forced field ownership. Fields another manager owns show as drift the deploy reverts instead of as conflicts. |
 | `--accept-migrations` | Accept the stateful migrations the plan lists, so they do not count as a reason the deploy would stop. |
+| `--only <NAMESPACE/INSTANCE>` | Plan the deploy of only this package instance and the objects it depends on, as [`kix deploy --only`](/docs/reference/cli/deploy/#deploy-one-instance-at-a-time) runs it. Repeatable. The deploy applies whole instances, adding any instance the named ones need. The plan shows only that part, names the instances named and needed, and counts the objects of the build outside it. Not with `--prune` or `--read-only`. |
 | `--offline` | Take the previous activation from the local cache and connect to nothing. The plan compares the cached build with the new one, and every write-path check reads `not_checked`. See [Offline plans](#offline-plans). |
 | `--read-only` | Read the live cluster instead of sending a dry run. See [Read-only plans](#read-only-plans). |
 | `--bundle <FILE>` | Read the build from a bundle written by `kix bundle` instead of building from the flake. Not with `--offline`. |
@@ -171,7 +173,10 @@ Its JSON Schema is `cli/kix-cli/schema/plan.schema.json`.
 | `cluster` | The name the build gives the Kix cluster. |
 | `build` | The build the plan is for: `{ store_path, identity_hash }`. `store_path` is the build's result directory, the path a deploy records as `kix.run/built-via`; it locates the build. `identity_hash` is the Activation record's `kix.run/identity-hash`, a hash of every rendered manifest and what is upstream of it; two builds with the same identity hash deploy the same objects. Present whether or not anything changes. |
 | `deployed` | The build the plan compares against: `{ activation, identity_hash, store_path }` from the cluster's current Activation record (the cached record with `--offline`). `null` on a first deploy. |
-| `flags` | The planning flags: `{ prune, reconcile, force_conflicts, accept_migrations }`. `prune` says what the deploy does with orphans: `delete` with `--prune`, `skip` with `--skip-orphan-check`, and `warn_only` otherwise. `null` from `kix plan --read-only` and `kix diff`. |
+| `flags` | The planning flags: `{ prune, reconcile, force_conflicts, accept_migrations, only }`. `prune` says what the deploy does with orphans: `delete` with `--prune`, `skip` with `--skip-orphan-check`, and `warn_only` otherwise. `only` lists the instances `--only` names, sorted, and is left out without `--only`. `null` from `kix plan --read-only` and `kix diff`. |
+| `left_alone` | With `--only`, `{ writes, orphans }`: how many objects of the build outside this deploy differ from the current deploy record, so a deploy of the whole build would write them (an earlier deploy with `--only` may already have applied some), and how many objects that left the build this deploy leaves alone. `packages`, `objects`, and `prune` show only what this deploy does. Left out without `--only`. |
+| `earlier_deploys` | Array of `{ resource, path, deployed, live, record, partly_deployed }`: each field where the live object differs from the deployed build and equals the value in the build of a deploy record the plan folds in (a `Failed` record, whose deploy stopped, or a `Partial` record, which `kix deploy --only` left partly deployed, `partly_deployed: true`). These fields are left out of `drift`. Omitted when empty. |
+| `only_needed` | With `--only`, the instances the named ones need, which the deploy applies in full too, sorted. Left out when there are none. |
 | `packages` | The package-grouped changes, described under [`kix diff`](/docs/reference/cli/diff/#json-and-yaml). |
 | `migrations` | Checked section of `{ slot, source, target, reason }`. |
 | `conflicts` | Checked section of `{ resource, owners, message }`, each owner `{ manager, fields }`. |
@@ -212,6 +217,7 @@ change:
 | `intended` | The deployed build and the new build differ here. |
 | `reverts_drift` | The live object differs from the deployed build here, and the deploy applies the object, so it puts the deployed value back. |
 | `drift_kept` | From `kix plan --read-only` only. The live object differs from the deployed build here, and the deploy leaves the object alone because its identity hash did not change. `kix deploy --reconcile` applies it. |
+| `applied_by_earlier_deploy` | From `kix plan` only. The live object differs from the deployed build here because a deploy that did not finish wrote it: a deploy that stopped, or one with `--only` that left its record partly deployed. The live value equals the value in that deploy's build. `earlier_deploys` names the deploy record. Such a field is not drift. |
 
 A change can carry both `intended` and a drift label when the commit changes
 a field that was also changed on the cluster. Without the deployed build,

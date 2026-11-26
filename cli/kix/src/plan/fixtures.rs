@@ -149,6 +149,7 @@ pub fn flags(extra: &[&str]) -> PlanFlags {
         reconcile: false,
         force_conflicts: false,
         accept_migrations: false,
+        only: Vec::new(),
     };
     let (mut prune, mut skip_orphan_check) = (false, false);
     for arg in extra {

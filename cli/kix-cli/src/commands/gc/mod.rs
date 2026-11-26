@@ -29,6 +29,7 @@
 //! Retiring old records bounds the size of the `kix.run/activations` annotation
 //! on managed resources, which the next deploy compacts.
 
+mod files;
 mod plan;
 mod render;
 #[cfg(test)]
@@ -147,6 +148,20 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         ));
     }
 
+    let new_activation_hash = lifecycle::record_of(
+        &new_graph
+            .resources
+            .values()
+            .map(|r| r.manifest.clone())
+            .collect::<Vec<_>>(),
+    )
+    .and_then(|m| keys::get(m, keys::IDENTITY_HASH).map(str::to_string));
+    ctx.runtime()?.block_on(files::refuse_other_build(
+        retirement.records.as_ref(),
+        &cluster,
+        new_activation_hash.as_deref(),
+    ))?;
+
     let new_hashes: HashSet<String> = new_graph.resources.keys().map(|p| store_hash(p)).collect();
     let new_ids: HashSet<String> = new_graph
         .resources
@@ -171,14 +186,6 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         &new_hashes,
         &new_ids,
     );
-    let new_activation_hash = lifecycle::record_of(
-        &new_graph
-            .resources
-            .values()
-            .map(|r| r.manifest.clone())
-            .collect::<Vec<_>>(),
-    )
-    .and_then(|m| keys::get(m, keys::IDENTITY_HASH).map(str::to_string));
 
     if garbage_manifests.is_empty() && kept_garbage.is_empty() && retirement.plan.retire.is_empty()
     {
@@ -491,6 +498,7 @@ async fn run_hard_async(
     // cluster, comparing pre-move live identity hashes against a current build
     // would flag almost every resource as garbage.
     let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
+    files::refuse_other_build(records.records(), cluster_name, build_hash).await?;
     // Scope the sweep to this Kix cluster so another Kix cluster's resources on
     // the same Kubernetes cluster are not flagged as garbage.
     let sweep = inventory::sweep_managed(

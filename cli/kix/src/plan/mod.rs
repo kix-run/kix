@@ -15,6 +15,8 @@ pub mod file;
 pub mod fixtures;
 pub mod live;
 pub mod objects;
+#[cfg(test)]
+mod only_tests;
 pub mod origin;
 #[cfg(test)]
 mod plan_bound_tests;
@@ -33,8 +35,8 @@ use diff::is_propagation_path;
 pub(crate) use diff::partition_propagation;
 pub use diff::{diff_garbage, diff_graphs};
 pub use planner::{
-    CheckedPlan, Connected, OldSide, Planned, Planner, Start, Target, TargetChecks, Work,
-    keep_shared,
+    CheckedPlan, Connected, Differences, OldSide, Planned, Planner, Start, Target, TargetChecks,
+    Work, keep_shared,
 };
 #[cfg(test)]
 use redact::LAST_APPLIED;
@@ -86,7 +88,7 @@ pub enum PlanEvent<'a> {
     /// Another deploy of the cluster may still be running, so the plan
     /// leaves the leftovers of failed deploys alone.
     DeployInFlight(&'a Record),
-    /// A failed deploy's build was folded into the plan.
+    /// The build of a `Failed` or `Partial` record was folded into the plan.
     FailedFolded(&'a Record),
     /// A rollback's current build failed to load or did not match the record,
     /// so the rollback compares against an empty build.
@@ -153,6 +155,11 @@ pub enum PlanError {
          Refusing to plan from a partial view; retry when the apiserver is healthy."
     )]
     Reconstruct(String),
+    #[error(
+        "cannot read which objects an earlier deploy that did not finish left on the cluster: {0}. \
+         Nothing was planned or applied to the cluster. Run the command again when the apiserver answers."
+    )]
+    FoldedLeftovers(Box<FetchError>),
     #[error("cannot check whether another Kix cluster deploys an orphan: {0}")]
     SharedOrphans(Box<FetchError>),
     #[error("{0}")]
@@ -170,6 +177,114 @@ pub enum PlanError {
         .0.join(", ")
     )]
     AliasedMove(Vec<String>),
+    #[error(
+        "`--only` needs a cluster that Kix has deployed in full before. Nothing was planned or \
+         applied to the cluster. Kix cluster '{0}' has no current deploy record, so a deploy of \
+         part of its build would leave nothing for the next deploy to finish from. \
+         Next: deploy the whole build with `kix deploy {0}`, then use `--only` for later upgrades."
+    )]
+    OnlyFirstDeploy(String),
+    #[error(
+        "`--only` cannot deploy part of the build of Kix cluster '{cluster}' while the Kix \
+         operator keeps its current deploy record {record} in place. Nothing was planned or \
+         applied to the cluster. The operator repairs the build of a record it deployed, so it \
+         would put back what this deploy applies and delete the objects it adds. Next: deploy \
+         the whole build, with `kix deploy {cluster}` or `kix deploy {cluster} --operator`."
+    )]
+    OnlyUnderOperator { cluster: String, record: String },
+    #[error("{0}")]
+    UnknownInstances(UnknownInstances),
+}
+
+/// Instances that `--only` names and the build does not have.
+#[derive(Debug)]
+pub struct UnknownInstances {
+    pub cluster: String,
+    /// The names given that match no instance, as given.
+    pub unknown: Vec<String>,
+    /// The instances of the build (`namespace/instance`), sorted.
+    pub valid: Vec<String>,
+}
+
+/// How many instance names an [`UnknownInstances`] error lists.
+const LISTED_INSTANCES: usize = 20;
+
+impl std::fmt::Display for UnknownInstances {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let unknown: Vec<String> = self
+            .unknown
+            .iter()
+            .map(|n| format!("'{}'", crate::text::printable_up_to(n, 200)))
+            .collect();
+        writeln!(
+            f,
+            "the build of Kix cluster '{}' has no instance {}. Nothing was planned or applied to the cluster.",
+            self.cluster,
+            unknown.join(", ")
+        )?;
+        for name in self.unknown.iter().filter(|n| !n.contains('/')) {
+            let matches: Vec<&str> = self
+                .valid
+                .iter()
+                .filter(|v| {
+                    v.split_once('/')
+                        .is_some_and(|(_, instance)| instance == name)
+                })
+                .map(String::as_str)
+                .collect();
+            if !matches.is_empty() {
+                writeln!(f, "  Did you mean {}?", matches.join(" or "))?;
+            }
+        }
+        writeln!(
+            f,
+            "  `--only` takes an instance as <namespace>/<instance>, as `kix plan` lists packages."
+        )?;
+        let listed = closest(&self.unknown, &self.valid, LISTED_INSTANCES);
+        if listed.is_empty() {
+            return write!(f, "  The build has no instances.");
+        }
+        if listed.len() < self.valid.len() {
+            writeln!(
+                f,
+                "  The closest of the build's {} instances:",
+                self.valid.len()
+            )?;
+        } else {
+            writeln!(f, "  The build's instances:")?;
+        }
+        let lines: Vec<String> = listed.iter().map(|n| format!("    {n}")).collect();
+        write!(f, "{}", lines.join("\n"))
+    }
+}
+
+/// Return up to `max` of `valid`, all of them when they fit, else the ones
+/// that share the longest start with any of `given`, in `valid`'s order.
+fn closest<'a>(given: &[String], valid: &'a [String], max: usize) -> Vec<&'a str> {
+    if valid.len() <= max {
+        return valid.iter().map(String::as_str).collect();
+    }
+    let shared = |name: &str| {
+        given
+            .iter()
+            .map(|g| {
+                g.chars()
+                    .zip(name.chars())
+                    .take_while(|(a, b)| a == b)
+                    .count()
+            })
+            .max()
+            .unwrap_or(0)
+    };
+    let mut ranked: Vec<(usize, usize)> = valid
+        .iter()
+        .enumerate()
+        .map(|(i, name)| (shared(name), i))
+        .collect();
+    ranked.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    let mut picked: Vec<usize> = ranked.into_iter().take(max).map(|(_, i)| i).collect();
+    picked.sort();
+    picked.into_iter().map(|i| valid[i].as_str()).collect()
 }
 
 pub struct PackageDiff {
@@ -320,6 +435,53 @@ impl PackageDiff {
             c.shared_kept.extend(kept);
         }
         self.shown.deletes.retain(|id, _| !ids.contains(id));
+    }
+
+    /// Keep only the writes of the objects in `ids`, for a deploy with
+    /// `--only` that writes nothing else. Removed packages and removed
+    /// objects go, since such a deploy deletes nothing, and so does the
+    /// record rotation, since its record does not become current.
+    pub(crate) fn retain_objects(&mut self, ids: &std::collections::HashSet<ResourceId>) {
+        self.shown.writes.retain(|(id, _), _| ids.contains(id));
+        self.shown.deletes.clear();
+        // An added package lists no objects, so its writes in `shown` say
+        // how many of its objects the deploy writes.
+        let mut written: HashMap<&str, usize> = HashMap::new();
+        for (key, _) in self.shown.writes.values() {
+            *written.entry(key.as_str()).or_default() += 1;
+        }
+        self.added
+            .retain_mut(|p| match written.get(p.key.as_str()) {
+                Some(&n) => {
+                    p.resource_count = n;
+                    true
+                }
+                None => false,
+            });
+        self.removed.clear();
+        self.activation = None;
+        let keep = |c: &mut PackageChangeDiff| {
+            c.resource_diffs.retain(|(id, _)| ids.contains(id));
+            c.dep_affected_resources.retain(|id| ids.contains(id));
+            c.added_resources.retain(|id| ids.contains(id));
+            c.removed_resources.clear();
+            c.shared_kept.clear();
+        };
+        for c in &mut self.changed {
+            keep(c);
+        }
+        self.changed.retain(PackageChangeDiff::any);
+        if let Some(c) = &mut self.cluster_level {
+            keep(c);
+        }
+        if !self
+            .cluster_level
+            .as_ref()
+            .is_some_and(PackageChangeDiff::any)
+        {
+            self.cluster_level = None;
+        }
+        self.labels.retain(|id, _| ids.contains(id));
     }
 
     /// Return an iterator over changed packages plus the cluster-level

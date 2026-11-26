@@ -25,6 +25,8 @@ pub fn label_tag(labels: &[ChangeLabel]) -> String {
         output::yellow("(reverts drift)").into_owned()
     } else if labels.contains(&ChangeLabel::DriftKept) {
         output::dim("(drift; deploy leaves this object alone)").into_owned()
+    } else if labels.contains(&ChangeLabel::AppliedByEarlierDeploy) {
+        output::dim("(written by an earlier deploy that did not finish)").into_owned()
     } else {
         String::new()
     }
@@ -37,11 +39,76 @@ pub fn render_text(plan: &Plan) -> String {
         write_being_deleted(out, plan)?;
         write_not_kept(out, plan)?;
         write_drift(out, plan)?;
+        write_earlier_deploys(out, plan, false)?;
         write_prune(out, plan)?;
         write_prune_waits(out, plan)?;
         write_not_checked(out, plan)?;
-        write_objects(out, plan)
+        write_objects(out, plan)?;
+        write_left_alone(out, plan, false)
     })
+}
+
+/// Write which instances a plan made with `--only` applies in full, named
+/// and needed by the named ones, and how many objects of the build that
+/// differ from the current deploy record it leaves out. Writes nothing for
+/// a plan of the whole build.
+fn write_left_alone(out: &mut String, plan: &Plan, markdown: bool) -> fmt::Result {
+    let (Some(left), Some(flags)) = (&plan.left_alone, &plan.flags) else {
+        return Ok(());
+    };
+    let code = |s: &str| {
+        if markdown {
+            format!("`{s}`")
+        } else {
+            s.to_string()
+        }
+    };
+    let rest = format!("`kix deploy {}`", plan.cluster);
+    writeln!(out)?;
+    let mut lines = vec![only_instances(
+        flags.only.as_slice(),
+        &plan.only_needed,
+        &code,
+    )];
+    lines.push(match left.total() {
+        0 => format!(
+            "No other object of the build differs from the current deploy record. The current deploy record stays as it is until {rest} runs."
+        ),
+        n => format!(
+            "{n} object(s) of the build that differ from the current deploy record are outside this deploy ({} to write, {} that left the build). An earlier deploy with `--only` may already have applied some of them. {rest} deploys the whole build.",
+            left.writes, left.orphans
+        ),
+    });
+    if markdown {
+        writeln!(out, "> {}", lines.join(" "))
+    } else {
+        writeln!(out, "{} {}", output::yellow("Only:"), lines[0])?;
+        writeln!(out, "  {}", lines[1])
+    }
+}
+
+/// Describe the instances a deploy with `--only` applies in full: those it
+/// names, and those they need. `code` formats one instance name.
+pub(crate) fn only_instances(
+    named: &[String],
+    needed: &[String],
+    code: &dyn Fn(&str) -> String,
+) -> String {
+    let list = |names: &[String]| names.iter().map(|n| code(n)).collect::<Vec<_>>().join(", ");
+    match needed.len() {
+        0 => format!(
+            "This deploy applies {} named instance(s) in full ({}), with the objects outside any instance that they depend on.",
+            named.len(),
+            list(named)
+        ),
+        _ => format!(
+            "This deploy applies {} named instance(s) ({}) and {} instance(s) they need ({}) in full, with the objects outside any instance that they depend on.",
+            named.len(),
+            list(named),
+            needed.len(),
+            list(needed)
+        ),
+    }
 }
 
 /// Return the text that `write` writes. Writing to a `String` cannot fail.
@@ -401,6 +468,51 @@ fn drift_detail(d: &kix::plan::document::DriftChange) -> String {
         "{}: {live} live{deployed}{by}",
         d.path.trim_start_matches("$."),
     )
+}
+
+/// Write the fields where the live cluster differs from the deployed build
+/// because a deploy that did not finish wrote them, with the deploy record
+/// that wrote each one. They are not drift.
+fn write_earlier_deploys(out: &mut String, plan: &Plan, markdown: bool) -> fmt::Result {
+    if plan.earlier_deploys.is_empty() {
+        return Ok(());
+    }
+    writeln!(out)?;
+    let heading = format!(
+        "{} field(s) on the live cluster differ from the deployed build because a deploy that did not finish wrote them:",
+        plan.earlier_deploys.len()
+    );
+    if markdown {
+        writeln!(out, "#### Written by earlier deploys")?;
+        writeln!(out)?;
+        writeln!(out, "{heading}")?;
+        writeln!(out)?;
+    } else {
+        writeln!(out, "{}", output::dim(&heading))?;
+    }
+    for e in &plan.earlier_deploys {
+        let (live, deployed) = compact_pair(e.live.as_ref(), e.deployed.as_ref());
+        let deployed = match deployed {
+            Some(v) => format!(", {v} in deployed build"),
+            None => String::new(),
+        };
+        let what = if e.partly_deployed {
+            "partly deployed with `--only`"
+        } else {
+            "stopped"
+        };
+        let line = format!(
+            "{}: {live} live{deployed}, applied by deploy record {} ({what})",
+            e.path.trim_start_matches("$."),
+            e.record
+        );
+        if markdown {
+            writeln!(out, "- `{}` {line}", e.resource)?;
+        } else {
+            writeln!(out, "  {} {} {line}", output::dim("·"), e.resource)?;
+        }
+    }
+    Ok(())
 }
 
 /// Return the live and deployed values for one line of text. Two strings of
@@ -802,6 +914,7 @@ pub fn render_markdown(plan: &Plan) -> String {
 }
 
 fn write_markdown(out: &mut String, plan: &Plan) -> fmt::Result {
+    write_left_alone(out, plan, true)?;
     write_warnings_markdown(out, plan)?;
     let conflicts = plan.conflicts.items();
     let refusals = plan.admission.items();
@@ -894,6 +1007,7 @@ fn write_markdown(out: &mut String, plan: &Plan) -> fmt::Result {
         writeln!(out)?;
     }
     write_drift_markdown(out, plan)?;
+    write_earlier_deploys(out, plan, true)?;
     if !plan.not_checked.is_empty() {
         writeln!(
             out,
@@ -1203,6 +1317,7 @@ mod tests {
 
         let mut forced = owned.clone();
         forced.flags = Some(kix::plan::document::PlanFlags {
+            only: Vec::new(),
             prune: kix::cluster::scheduler::PrunePolicy::WarnOnly,
             reconcile: false,
             force_conflicts: true,
@@ -1277,6 +1392,60 @@ mod tests {
             "1 object(s) not checked for drift: missing `{}` annotation",
             kix::manifest::keys::APPLIED_HASH
         )));
+    }
+
+    /// A field an earlier deploy wrote is listed with its record, apart
+    /// from the drift.
+    #[test]
+    fn fields_an_earlier_deploy_wrote_are_listed_with_its_record() {
+        let mut plan = plan_with(Vec::new());
+        plan.earlier_deploys = vec![kix::plan::document::EarlierDeployChange {
+            resource: "ConfigMap/base-cfg@lab".into(),
+            path: "$.data.version".into(),
+            deployed: Some(serde_json::json!("1")),
+            live: Some(serde_json::json!("2")),
+            record: "lab-abc".into(),
+            partly_deployed: true,
+        }];
+        let text = render_text(&plan);
+        assert!(!text.contains("Drift:"), "{text}");
+        assert!(
+            text.contains("ConfigMap/base-cfg@lab data.version: \"2\" live, \"1\" in deployed build, applied by deploy record lab-abc (partly deployed with `--only`)"),
+            "{text}"
+        );
+        assert!(render_markdown(&plan).contains("#### Written by earlier deploys"));
+    }
+
+    #[test]
+    fn a_plan_with_only_says_what_it_leaves() {
+        let mut plan = plan_with(Vec::new());
+        assert!(!render_text(&plan).contains("Only:"));
+        plan.flags = Some(kix::plan::document::PlanFlags {
+            prune: kix::cluster::scheduler::PrunePolicy::WarnOnly,
+            reconcile: false,
+            force_conflicts: false,
+            accept_migrations: false,
+            only: vec!["app/web".into()],
+        });
+        plan.left_alone = Some(kix::plan::document::LeftAlone {
+            writes: 3,
+            orphans: 1,
+        });
+        plan.only_needed = vec!["app/db".into()];
+        let text = render_text(&plan);
+        assert!(
+            text.contains("Only: This deploy applies 1 named instance(s) (app/web) and 1 instance(s) they need (app/db) in full"),
+            "{text}"
+        );
+        assert!(
+            text.contains("4 object(s) of the build that differ from the current deploy record are outside this deploy (3 to write, 1 that left the build). An earlier deploy with `--only` may already have applied some of them. `kix deploy c` deploys the whole build."),
+            "{text}"
+        );
+        let markdown = render_markdown(&plan);
+        assert!(
+            markdown.starts_with("\n> This deploy applies 1 named instance(s) (`app/web`)"),
+            "{markdown}"
+        );
     }
 
     #[test]
