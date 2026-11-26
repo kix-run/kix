@@ -32,12 +32,12 @@ pub struct GcArgs {
     pub timeout: Option<String>,
 
     /// Also judge objects that `--full-scan` only reports, as a
-    /// comma-separated list. `unstamped`: objects that carry the Kix label
-    /// but no `kix.run/identity-hash`, which Kix never applied.
+    /// comma-separated list. `unstamped`: objects Kix wrote that carry the
+    /// Kix label but no `kix.run/identity-hash`, so no build lists them.
     /// `unattributed`: Kix objects that name no deployment record on the
-    /// cluster, so Kix cannot tell which Kix cluster owns them. `copies`: objects another program,
-    /// usually an operator, copied with Kix's labels and annotations from an
-    /// object Kix made.
+    /// cluster, so Kix cannot tell which Kix cluster owns them. `copies`: objects Kix never wrote that
+    /// carry Kix's labels, which another program, usually an operator, copied
+    /// from an object Kix made.
     #[arg(
         long,
         value_enum,

@@ -737,8 +737,9 @@ async fn run_reconcile(
             }
         }
     }
-    for (owner, count) in plan.foreign() {
-        tracing::debug!(name, owner = %owner, count, "left out objects of another Kix cluster");
+    let foreign = plan.foreign();
+    if foreign.objects > 0 {
+        tracing::debug!(name, count = foreign.objects, clusters = ?foreign.clusters, "left out objects of other Kix clusters");
     }
     if plan.unattributed() > 0 {
         tracing::info!(

@@ -112,8 +112,10 @@ Kix sets the label `app.kubernetes.io/managed-by=kix` on every object it applies
 Even when an object carries `app.kubernetes.io/managed-by=kix`, Kix separates what it wrote from objects created by other tools or controllers:
 
 - **Managed objects** carry `kix.run/identity-hash` and a `managedFields` entry for the `kix` field manager.
-- **Unstamped objects** carry the label without `kix.run/identity-hash` (excluding controller-owned child objects and Service `Endpoints`, which Kix ignores). Kix never applied them.
-- **Copies** carry `kix.run/identity-hash` without a `kix` field-manager entry, because an operator copied Kix's labels and annotations onto a new object (such as a database operator's volume claim).
+- **Unstamped objects** carry the label and a `kix` field-manager entry, but no `kix.run/identity-hash` (excluding controller-owned child objects and Service `Endpoints`, which Kix ignores). Kix wrote them, but no build of Kix lists them.
+- **Copies** have no `kix` field-manager entry, because another program copied Kix's labels, and sometimes its annotations, onto a new object. Examples are a database operator's volume claim and the Events an operator posts about a custom resource.
+
+An object that Kubernetes serves under two API groups, such as an Event under both `v1` and `events.k8s.io/v1`, is read once, through the group Kix applied it with when there is one.
 
 [`kix gc --full-scan`](/docs/reference/cli/gc/) lists unstamped objects, copies, and unattributed objects (objects with no matching Activation record on the cluster) and keeps them unless you include them with `--include` (for example, `--include unstamped,copies,unattributed`).
 
