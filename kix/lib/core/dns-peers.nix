@@ -42,13 +42,13 @@ rec {
     in
     if !(builtins.isList peers) || peers == [ ] then
       fail {
-        message = "DNS provider `${provider}` sets `meta.dnsPeers` to ${builtins.toJSON peers}, which must be a non-empty list, so Kix could not build DNS egress rules.";
-        fix = "Set `meta.dnsPeers` on `${provider}` to a non-empty list of `{ namespace = \"...\"; podSelector = { ... }; }` or `{ cidr = \"...\"; }` entries, or leave `meta.dnsPeers` unset to allow `k8s-app = \"kube-dns\"` pods in `kube-system`.";
+        message = "DNS provider `${provider}` sets `dnsPeers` (`meta.dnsPeers`) to ${builtins.toJSON peers}, which is not a non-empty list. Kix could not build DNS egress network policies.";
+        fix = "On `${provider}`, set `dnsPeers` on `kix.mkImport` (or `meta.dnsPeers` in a package) to a non-empty list of `{ namespace = \"<namespace>\"; podSelector = { ... }; }` (`namespace` is optional) or `{ cidr = \"<cidr>\"; }` entries. Remove the setting (or set `dnsPeers = null`) to allow pods labeled `k8s-app = \"kube-dns\"` in `kube-system`.";
       }
     else if bad != [ ] then
       fail {
-        message = "DNS provider `${provider}` has invalid entries in `meta.dnsPeers`: ${builtins.toJSON bad}. Kix could not build DNS egress rules.";
-        fix = "Write each entry in `meta.dnsPeers` as either `{ namespace = \"<namespace>\"; podSelector = { ... }; }` (to match DNS pods by label; leave out `namespace` for the provider's own namespace) or `{ cidr = \"<cidr>\"; }` (to match an IP range), with no extra fields.";
+        message = "DNS provider `${provider}` has invalid entries in `dnsPeers` (`meta.dnsPeers`): ${builtins.toJSON bad}. Kix could not build DNS egress network policies.";
+        fix = "Write each entry in `dnsPeers` on `kix.mkImport` (or `meta.dnsPeers` in a package) as `{ namespace = \"<namespace>\"; podSelector = { ... }; }` (`namespace` is optional and defaults to the provider's namespace) or `{ cidr = \"<cidr>\"; }`, with no extra fields.";
       }
     else
       peers;

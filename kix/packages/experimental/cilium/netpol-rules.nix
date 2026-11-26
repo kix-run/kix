@@ -110,10 +110,10 @@ let
       if cidrPeers != [ ] then
         failWith {
           package = "cilium";
-          message = "The cluster's DNS peers (`meta.dnsPeers` of the `dns` provider) include IP ranges (${
+          message = "The cluster's DNS peers (`dnsPeers` or `meta.dnsPeers` on the `dns` provider) include IP ranges (${
             lib.concatMapStringsSep ", " (p: p.cidr) cidrPeers
-          }). The `cilium` enforcer writes the DNS egress rule as one Cilium rule, and Cilium refuses a rule that combines pod selectors with IP ranges, so Kix stopped evaluation.";
-          fix = "Replace the `{ cidr = ...; }` entries in the `dns` provider's `meta.dnsPeers` with pod selectors (`{ namespace = \"...\"; podSelector = { ... }; }`), or leave `meta.dnsPeers` unset to allow `k8s-app = \"kube-dns\"` pods in `kube-system`.";
+          }). The `cilium` enforcer supports only pod selectors for DNS peers because Cilium cannot combine pod selectors and IP ranges in one rule, so Kix stopped evaluation.";
+          fix = "In `dnsPeers` on `kix.mkImport` (or `meta.dnsPeers` in the `dns` package), replace `{ cidr = \"...\"; }` entries with pod selectors (`{ namespace = \"<namespace>\"; podSelector = { ... }; }`, where `namespace` is optional). Remove the setting (or set `dnsPeers = null`) to allow pods labeled `k8s-app = \"kube-dns\"` in `kube-system`.";
         }
       else
         {
