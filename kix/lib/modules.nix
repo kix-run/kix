@@ -709,11 +709,11 @@ in
         type = lib.types.nullOr lib.types.str;
         default = null;
         description = ''
-          Service network CIDR (for example, `"10.96.0.0/16"`). On platforms
-          where standard `NetworkPolicy` `ipBlock` rules match Service IPs
-          before translation (such as EKS), Kix excludes this range from
-          `world` egress rules and uses its first IPv4 address when
-          `cluster.network.apiServer.cidrs` is empty.
+          Service IP range in CIDR notation (for example, `"10.96.0.0/16"`). On
+          EKS (and other platforms where `ipBlock` rules match Service IPs),
+          standard `NetworkPolicy` generation excludes this range from `world`
+          egress rules and uses its first IPv4 address for API server egress
+          when `cluster.network.apiServer.cidrs` is empty.
         '';
       };
       nodeCidrs = lib.mkOption {
@@ -721,13 +721,13 @@ in
         default = [ ];
         example = [ "10.128.0.0/20" ];
         description = ''
-          IP ranges of the cluster's nodes. Standard `NetworkPolicy` can match
-          nodes only by IP range, so on GKE and EKS Kix uses these ranges to
-          build node rules (`host`, `remote-node`, `cluster`, and host-network
-          scrape targets). Where the node range holds only nodes (GKE), Kix also
-          excludes it from `world` egress rules. If this
-          list is empty and a policy targets nodes, evaluation fails. Ignored
-          when Cilium is the network policy enforcer.
+          IP ranges of the cluster's nodes. On GKE and EKS, Kix uses these
+          ranges in standard `NetworkPolicy` rules that target nodes (`host`,
+          `remote-node`, `cluster`, and host-network scrape targets), because
+          standard `NetworkPolicy` can match nodes only by IP address. On GKE,
+          where node ranges contain only nodes, Kix also excludes them from
+          `world` egress rules. If a policy targets nodes while this list is
+          empty, the build fails. Cilium ignores this option.
         '';
       };
       apiServer = {
@@ -736,38 +736,38 @@ in
           default = [ ];
           example = [ "10.0.0.2/32" ];
           description = ''
-            IP ranges that pods use to reach the Kubernetes API server in
+            IP ranges that pods dial to reach the Kubernetes API server in
             standard `NetworkPolicy` egress rules. On GKE, set the control
-            plane's endpoint `/32` addresses. On EKS, set the `kubernetes`
+            plane endpoint `/32` addresses. On EKS, set the `kubernetes`
             Service `/32` address, or set `cluster.network.serviceCidr` so Kix
-            can derive its first IPv4 address automatically. Required under
-            standard `NetworkPolicy` whenever a workload or rule needs API
-            server egress (such as any workload bound to a `Role` or
-            `ClusterRole`). Kix does not yet compare this value with the live
-            cluster, so a wrong address shows up as controllers that cannot
-            reach the API server. Ignored when Cilium is the network policy
-            enforcer.
+            uses its first IPv4 address automatically. When standard
+            `NetworkPolicy` generation is enabled and a workload or rule needs
+            API server egress (for example, any workload bound to a `Role` or
+            `ClusterRole`), the build fails if this list is empty (unless
+            `cluster.network.serviceCidr` is set on EKS). Kix does not check
+            this value against the live cluster, so a wrong address blocks pods
+            from reaching the API server. Cilium ignores this option.
           '';
         };
         port = lib.mkOption {
           type = lib.types.port;
           default = 443;
-          description = "TCP port of the Kubernetes API server used with `cluster.network.apiServer.cidrs`.";
+          description = "TCP port of the Kubernetes API server for standard `NetworkPolicy` egress rules.";
         };
         sources = lib.mkOption {
           type = lib.types.listOf (lib.types.attrsOf lib.types.anything);
           default = [ ];
           example = [ { cidr = "10.0.0.0/16"; } ];
           description = ''
-            Source peers from which the Kubernetes API server calls admission
-            webhooks and aggregated APIs in standard `NetworkPolicy` ingress
-            rules. Write each entry as `{ cidr = "..."; }` for an IP range or
-            `{ namespace = "..."; podSelector = { ... }; }` for proxy pods.
-            Defaults to the `konnectivity-agent` pods in `kube-system` on `gke`
-            and `gke-autopilot`; on `eks`, set the control plane's subnets.
-            Required under standard `NetworkPolicy` when any workload accepts
-            ingress from `apiserver`. Ignored when Cilium is the network policy
-            enforcer.
+            Addresses or pods from which the Kubernetes API server calls
+            admission webhooks and aggregated APIs in standard `NetworkPolicy`
+            ingress rules. Write each entry as `{ cidr = "..."; }` for an IP
+            range or `{ namespace = "..."; podSelector = { ... }; }` for proxy
+            pods. On `gke` and `gke-autopilot`, this defaults to the
+            `konnectivity-agent` pods in `kube-system`. On `eks`, set it to the
+            control plane subnets. When standard `NetworkPolicy` generation is
+            enabled and a workload accepts ingress from `apiserver`, the build
+            fails if this list is empty. Cilium ignores this option.
           '';
         };
       };
