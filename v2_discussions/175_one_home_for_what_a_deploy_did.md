@@ -452,7 +452,7 @@ Measured on `homelab-kind`, built from main with no deploy:
 | The build as JSON | 1.1 MB, and 113 KB after gzip |
 
 Limits, at about 1.5 MiB an object: about 20,000 instances in one record, and
-about 8,000 objects in one instance. The cluster's total size has no limit of
+about 6,500 objects in one instance, counting the applied hashes. The cluster's total size has no limit of
 its own. The build can refuse an instance that would pass the limit.
 
 How far one change spreads, counted by rebuilding the cluster with the change:
@@ -724,8 +724,9 @@ Part 1 changes nothing about the notes on objects, the package index, the
 baseline of a plan, or the prune guard between Kix clusters. Requirements 1
 and 2 of section 3 are not met until part 2.
 
-**Part 2: revisions.** Not started. Before any code: questions 1 to 4 of
-section 8.
+**Part 2: revisions.** In progress. `175a_revisions_build_notes.md` has the
+tests, the answers to questions 1 to 4 of section 8, decisions 13 to 16, and
+the order of the build.
 
 - The `PackageInstanceRevision` kind, the revision map on records, and the
   kept-orphans revision.
