@@ -50,6 +50,8 @@ in
   cluster.containerd.discardUnpackedLayers = lib.mkDefault false;
 
   cluster.capabilities = {
+    # A new AKS cluster's system node pool has three nodes by default.
+    multiNode = lib.mkDefault true;
     managedControlPlane = lib.mkDefault true;
     nodeAutoscaling = lib.mkDefault false; # available per node pool, off by default
     privilegedContainers = lib.mkDefault true;

@@ -733,7 +733,7 @@ in
     ++ [
       (res "NetworkPolicy" "a" "np" {
         apiVersion = "networking.k8s.io/v1";
-        metadata.labels."kix.run/derived" = "true";
+        metadata.labels.${kixKeys.derived} = "true";
         spec.podSelector.matchLabels.app = "nope";
       })
     ]

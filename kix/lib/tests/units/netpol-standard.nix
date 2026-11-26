@@ -6,6 +6,7 @@
 
 {
   lib,
+  kixKeys,
   publicKix,
   manifests,
   byName,
@@ -183,7 +184,7 @@ let
 
   policiesOf = cluster: ofKind "NetworkPolicy" (manifests cluster);
 
-  widenedOf = p: p.metadata.annotations."kix.run/network-policy-widened" or null;
+  widenedOf = p: p.metadata.annotations.${kixKeys.networkPolicyWidened} or null;
 in
 {
   # Every policy sets `policyTypes`, because a policy without it also
@@ -574,7 +575,7 @@ in
     (
       thrownHas "clusterwide" clusterwide
       && namespaced.kind == "NetworkPolicy"
-      && namespaced.labels."kix.run/policy-type" == "platform-intent"
+      && namespaced.labels.${kixKeys.policyType} == "platform-intent"
       && namespaced.spec.policyTypes == [ "Egress" ]
     )
     || throw "platform intent: ${builtins.toJSON namespaced}";
@@ -799,31 +800,105 @@ in
     )
     || throw "EKS network policy option: none fails ${toString (evalFails none)}, on fails ${toString (evalFails on)}";
 
-  # The scorecard reports each reason a policy is wider once, with a count,
-  # and each policy as a detail at `info`.
+  # A reason a cluster setting removes is a warning; a platform limit is an
+  # info finding, listed only under `kix check -v`. On EKS with every range
+  # set, only platform limits remain, so no warning shows; with
+  # `serviceCidr` unset, a `world` rule still warns. Raised to error, the rule
+  # fails only on the fixable reason.
   netpol-standard-widened-scorecard =
     let
-      cluster = eksCluster [
-        vpcCni
-        (withWeb { serviceType = "LoadBalancer"; })
-      ];
-      findings = builtins.filter (f: lib.hasSuffix "networkPolicyWidened" f.rule) (
-        cluster.scorecardReport.findings
-      );
-      summaries = builtins.filter (f: f.severity == "warning") findings;
-      details = builtins.filter (f: f.severity == "info") findings;
-      startup = lib.findFirst (f: lib.hasInfix "(pod-start-egress-open)" f.message) null summaries;
-      gke = gkeCluster [ (withWeb { }) ];
-      gkeFindings = builtins.filter (f: lib.hasSuffix "networkPolicyWidened" f.rule) (
-        gke.scorecardReport.findings
-      );
+      worldEgress = {
+        network.intents.api.egress = [
+          {
+            to = "world";
+            ports = [
+              {
+                port = 443;
+                protocol = "TCP";
+              }
+            ];
+          }
+        ];
+        serviceType = "LoadBalancer";
+      };
+      findingsOf =
+        cluster:
+        builtins.filter (f: lib.hasSuffix "networkPolicyWidened" f.rule) cluster.scorecardReport.findings;
+      eksWith =
+        network:
+        eksCluster [
+          vpcCni
+          { cluster.network = network; }
+          (withWeb worldEgress)
+        ];
+      complete = findingsOf (eksWith {
+        serviceCidr = "10.100.0.0/16";
+      });
+      noServiceCidr = findingsOf (eksWith {
+        apiServer.cidrs = [ "10.100.0.1/32" ];
+      });
+      warnings = builtins.filter (f: f.severity == "warning");
+      infos = builtins.filter (f: f.severity == "info");
+      startup = lib.findFirst (f: lib.hasInfix "(pod-start-egress-open)" f.message) null (infos complete);
+      asError =
+        modules:
+        eksCluster (
+          [
+            vpcCni
+            (withWeb worldEgress)
+            {
+              # Only this rule, raised to error, so another rule's error
+              # does not decide the outcome.
+              scorecard.rules.security.networkPolicyWidened =
+                (import ../../rules/security.nix { inherit lib; }).networkPolicyWidened;
+              scorecard.maxSeverity = "error";
+              scorecard.ruleOverrides.byRule."security.networkPolicyWidened".severity = "error";
+            }
+          ]
+          ++ modules
+        );
+      gkeFindings = findingsOf (gkeCluster [ (withWeb { }) ]);
     in
     (
-      startup != null
+      warnings complete == [ ]
+      && startup != null
       && lib.hasPrefix "2 network policies" startup.message
-      && builtins.any (f: f.resource == "NetworkPolicy/app-default-deny") details
-      && builtins.any (f: lib.hasInfix "(world-ingress-pods)" f.message) summaries
+      && builtins.any (f: lib.hasInfix "(world-ingress-pods)" f.message) (infos complete)
+      && builtins.any (f: f.resource == "NetworkPolicy/app-default-deny") (infos complete)
+      && map (f: lib.hasInfix "(world-egress-services)" f.message) (warnings noServiceCidr) == [ true ]
+      && !(evalFails (asError [ { cluster.network.serviceCidr = "10.100.0.0/16"; } ]))
+      && evalFails (asError [ { cluster.network.apiServer.cidrs = [ "10.100.0.1/32" ]; } ])
       && gkeFindings == [ ]
     )
-    || throw "widened findings: ${builtins.toJSON findings}; GKE ${builtins.toJSON gkeFindings}";
+    || throw "widened findings: complete ${builtins.toJSON complete}; no serviceCidr ${builtins.toJSON noServiceCidr}";
+
+  # The rule reads `fixable` alone: an unset `podCidr` on a platform whose pod
+  # range holds only pods is a warning, and the shared pod range is info.
+  netpol-standard-widened-fixable-field =
+    let
+      rule = (import ../../rules/security.nix { inherit lib; }).networkPolicyWidened;
+      policy = name: ids: {
+        kind = "NetworkPolicy";
+        metadata = {
+          inherit name;
+          namespace = "app";
+          annotations.${kixKeys.networkPolicyWidened} = ids;
+        };
+      };
+      findings = rule.check {
+        allResources = [
+          (policy "a" "world-egress-pods")
+          (policy "b" "world-egress-pod-subnets")
+        ];
+      };
+      summary = id: lib.findFirst (f: lib.hasInfix "(${id}):" f.message) null findings;
+      widening = import ../../plugins/netpol/widening.nix;
+    in
+    (
+      !((summary "world-egress-pods").detail or false)
+      && (summary "world-egress-pod-subnets").detail
+      && builtins.all (r: builtins.isBool r.fixable) (builtins.attrValues widening)
+      && !widening.node-range-pods.fixable
+    )
+    || throw "fixable field: ${builtins.toJSON findings}";
 }
