@@ -115,11 +115,11 @@ pub fn print(event: PlanEvent<'_>) {
                 .map(|t| format!(" (started at {})", t.to_rfc3339()))
                 .unwrap_or_default();
             warning(&format!(
-                "deployment record {}{since} is still in phase Deploying, and no run holds the cluster's deploy lock for it.",
+                "deployment record {}{since} is still in phase Deploying, and no run holds the deploy lock for it.",
                 output::bold(name),
             ));
             crate::esay!(
-                "  A run of an older Kix, which takes no deploy lock, may be deploying it now, or a run died before it could mark {name} Failed, such as one from before the cluster had a deploy lock. While {name} stays Deploying, this plan leaves out what earlier failed or partial deploys applied, and a new deploy does not clear {name}."
+                "  Either an older version of Kix (which does not use the deploy lock) is deploying now, or an earlier deploy stopped before marking {name} Failed. To avoid deleting resources an active deploy may still be applying, this plan leaves out resources from earlier failed or partial deploys, and a new deploy will not clear {name}."
             );
             crate::esay!(
                 "  If no older Kix is deploying this cluster, mark {name} Failed and run the command again:"

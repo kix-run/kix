@@ -1066,7 +1066,7 @@ pub(crate) fn lock_holder_line(lock: &kix::cluster::head::LockView) -> String {
     let mut line = format!("{}.", lock.describe());
     if lock.purpose != kix::cluster::head::Purpose::Repair {
         line.push_str(
-            " While that run holds the lock, this plan leaves out what earlier failed or partial deploys applied.",
+            " While that run holds the lock, this plan leaves out resources from earlier failed or partial deploys.",
         );
     }
     line

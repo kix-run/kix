@@ -280,24 +280,24 @@ them.
 ## The deploy lock
 
 The operator takes each Kix cluster's
-[deploy lock](/docs/reference/cli/deploy/#the-deploy-lock) before it changes
-the cluster: to deploy a queued or resumed record, to redeploy the current
-one, to correct drift, and to delete a deleted record's resources. It runs
-one of these at a time for each Kix cluster. When another run holds the lock,
-such as `kix deploy` without `--operator` from someone's machine, the
-operator logs who holds it and tries again 5 seconds later.
+[deploy lock](/docs/reference/cli/deploy/#the-deploy-lock) before making
+changes: deploying a queued or resumed record, redeploying the active record,
+repairing drift, or deleting resources when an `Activation` record is deleted.
+It runs at most one operation per Kix cluster at a time. If another run holds
+the lock (for example, a direct `kix deploy`), the operator logs the current
+holder and retries 5 seconds later.
 
-Drift repair holds the lock as `repair` and gives way: a run that wants the
-lock writes its id to the lock's `waiting` field, and the repair stops before
-its next write, or at its next renewal, and releases the lock. A repair does
-not raise the lock's generation and does not count as the cluster's last
-writer.
+Drift repair holds the lock with purpose `repair` and yields to other
+commands: when another run needs the lock, it writes its ID to
+`status.lock.waiting`, and the operator stops repairing before its next write
+(or at its next lock renewal) and releases the lock. Drift repair does not
+increment the lock generation or update the cluster's last writer.
 
-The operator's id on the lock (`kix-operator/<namespace>`) stays the same
-after its pod restarts, so a new pod takes over at once a lock its previous
-pod left, and continues the deploy of the same record. `kix deploy
---operator` and the other `--operator` commands only write requests on
-records, and take no lock.
+Because the operator's lock holder ID (`kix-operator/<namespace>`) stays
+constant across pod restarts, a restarted pod immediately reclaims any lock
+left by its previous pod and resumes deploying the same record. `--operator`
+CLI commands only write requests to `Activation` records and do not take the
+lock themselves.
 
 ## Waiting for the operator
 
@@ -331,12 +331,12 @@ A timeout ends the CLI only. The operator keeps working on the record.
   the `kix.run/operator-features` annotation on `activations.kix.run`.
   `kix deploy --operator` and `kix rollback --operator` check that annotation
   before changing anything and stop if either feature is missing. Upgrade the
-  operator before the first deploy by a new `kix`: an older operator deploys
-  without the deploy lock.
-- The operator's Kubernetes account can `create` CustomResourceDefinitions
-  (it creates `activationheads.kix.run` when the cluster does not have it)
-  and can `get`, `list`, `create`, and `update` `activationheads.kix.run`, the
-  objects that hold each Kix cluster's deploy lock. For example:
+  operator before deploying with the upgraded Kix, because an older operator
+  deploys without taking the deploy lock.
+- The operator's Kubernetes account can `get` and `create`
+  CustomResourceDefinitions (to install `activationheads.kix.run` if needed)
+  and can `get`, `list`, `create`, and `update` `activationheads.kix.run`,
+  which holds each Kix cluster's deploy lock. For example:
 
   ```yaml
   - apiGroups: ["apiextensions.k8s.io"]

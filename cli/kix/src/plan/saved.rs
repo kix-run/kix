@@ -323,7 +323,7 @@ pub fn compare(reviewed: &Plan, fresh: &Plan) -> Comparison {
                 mismatch(
                     Rule::Generation,
                     vec![format!(
-                        "the cluster's deploy lock is at generation {}, the plan was made at generation {}: another run changed the cluster since",
+                        "the cluster is at deploy lock generation {}, while the saved plan was made at generation {} (another run changed the cluster after the plan was saved)",
                         f.generation, r.generation
                     )],
                 );
@@ -912,7 +912,7 @@ mod tests {
         assert_eq!(rules(&stale), vec![Rule::Generation]);
         assert!(
             stale.mismatches[0].items[0]
-                .contains("generation 4, the plan was made at generation 3"),
+                .contains("generation 4, while the saved plan was made at generation 3"),
             "{:?}",
             stale.mismatches
         );

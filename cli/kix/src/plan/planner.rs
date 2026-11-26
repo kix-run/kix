@@ -615,7 +615,7 @@ async fn read_head(client: &Client, cluster: &str) -> Result<Option<HeadRead>, P
         Err(e) if errors::classify(&e) == errors::FailureClass::Forbidden => {
             tracing::warn!(
                 cluster,
-                "this account may not read the deploy lock; the plan binds to no generation"
+                "this account cannot read ActivationHead; skipping deploy lock check for this plan"
             );
             Ok(None)
         }

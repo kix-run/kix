@@ -91,14 +91,14 @@ pub async fn require_features(client: &Client) -> Result<()> {
         .collect::<Vec<_>>()
         .join(" and ");
     Err(miette!(
-        "[{HEAD_LOCK_ID}] the Kix operator on this cluster is older than Kix {version}\n  \
+        "[{HEAD_LOCK_ID}] the Kix operator on this cluster has not reported {listed} support on `{crd}`\n  \
          Nothing was applied to the cluster.\n\n  \
          Why:\n    \
          CustomResourceDefinition `{crd}` does not list {listed} in its `{key}` annotation. \
-         Kix {version} sends each `--operator` run through `spec.request` on the deployment record (`{requests}`), and expects the operator to take each Kix cluster's deploy lock before it changes the cluster (`{lock}`). \
-         The operator writes `{key}` when it starts, so it is either older than Kix {version}, still starting, or missing permission to patch `{crd}`.\n\n  \
+         `--operator` commands require an operator that reads `spec.request` (`{requests}`) and takes the cluster's deploy lock before making changes (`{lock}`). \
+         Because the operator writes `{key}` at startup, it is either older than Kix {version}, still starting, or missing permission to patch `{crd}`.\n\n  \
          Next:\n    \
-         Upgrade the Kix operator to Kix {version} or later, grant its Kubernetes account permission to patch CustomResourceDefinition `{crd}`, and restart it so it writes `{key}`. Then run the command again.",
+         Make sure the Kix operator is running Kix {version} or newer and its Kubernetes account can patch CustomResourceDefinition `{crd}`, then wait for it to start (or restart it) and run the command again.",
         key = kix::manifest::keys::OPERATOR_FEATURES,
         crd = kix::manifest::keys::ACTIVATIONS_CRD,
         requests = features::REQUESTS,

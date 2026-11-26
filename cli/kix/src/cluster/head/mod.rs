@@ -305,7 +305,7 @@ impl LockView {
         };
         if self.probably_dead {
             format!(
-                "{base}. That is longer than the {}s lease, so the run has probably stopped; the next deploy takes over the lock",
+                "{base}. Its {}s lease has expired, so that run has likely stopped; the next command that changes the cluster will take over the lock",
                 LEASE.as_secs()
             )
         } else {

@@ -32,9 +32,9 @@ kix migrate domain <CLUSTER> [--dry-run] [-y] [--flake <FLAKE>] [--context <CONT
 2. Prints the plan. A cluster with nothing under the old group reports
    "Nothing to do" and exits.
 3. Takes the cluster's
-   [deploy lock](/docs/reference/cli/deploy/#the-deploy-lock), and holds it
-   until the migration ends. When another run holds the lock and is still
-   running, the command stops having changed nothing.
+   [deploy lock](/docs/reference/cli/deploy/#the-deploy-lock) and holds it
+   until the migration finishes. If another active run holds the lock,
+   `kix migrate domain` stops without changing anything.
 4. Copies every Activation record to the new group with its spec, status, and
    history, and checks each copy by name and phase.
 5. Clears the operator finalizer from the old records, waits, and reads them

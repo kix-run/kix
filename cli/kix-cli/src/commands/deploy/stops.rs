@@ -140,7 +140,9 @@ fn render_older_kix(cluster: &str, refusal: &OlderKix, writer: Writer) -> String
         ),
         Writer::Gc => (
             "Garbage collection blocked",
-            format!("Next: run `kix gc {cluster}` from a commit that uses Kix {minor} or newer."),
+            format!(
+                "Next: switch to a commit that uses Kix {minor} or newer, or upgrade this project to Kix {minor} or newer with `kix upgrade`. Then run `kix gc {cluster}` again."
+            ),
         ),
     };
     let verb = match writer {
@@ -163,7 +165,7 @@ fn render_older_kix(cluster: &str, refusal: &OlderKix, writer: Writer) -> String
         "{blocked}: cluster {cluster} was last deployed with {last}, and this is Kix {running}.\n\
          {nothing} cluster {cluster}.\n\
          \n\
-         Kix {running} may not understand what Kix {newer} wrote to the cluster. Once Kix {minor} has deployed a cluster, only Kix {minor} or newer can deploy, roll back, or garbage-collect it.\n\
+         Kix {running} may not understand what Kix {newer} wrote to the cluster. Once Kix {minor} has changed a cluster, only Kix {minor} or newer can deploy, roll back, or garbage-collect it.\n\
          \n\
          {next}\n\
          {anyway}"
@@ -246,7 +248,7 @@ mod tests {
             "Deploy blocked: cluster prod was last deployed with Kix 0.9.1 (from commit abc1234), and this is Kix 0.8.4.\n\
              Nothing was applied to cluster prod.\n\
              \n\
-             Kix 0.8.4 may not understand what Kix 0.9.1 wrote to the cluster. Once Kix 0.9 has deployed a cluster, only Kix 0.9 or newer can deploy, roll back, or garbage-collect it.\n\
+             Kix 0.8.4 may not understand what Kix 0.9.1 wrote to the cluster. Once Kix 0.9 has changed a cluster, only Kix 0.9 or newer can deploy, roll back, or garbage-collect it.\n\
              \n\
              Next: switch to a commit that uses Kix 0.9 or newer, or upgrade this project to Kix 0.9 or newer with `kix upgrade`. Then run `kix deploy prod` again.\n\
              To deploy with Kix 0.8.4 anyway (for example, to downgrade from a broken release), set KIX_ALLOW_DOWNGRADE=0.9.1. Cluster prod's deployment record will note the downgrade from Kix 0.9.1.\n"
@@ -260,7 +262,7 @@ mod tests {
             "Rollback blocked: cluster prod was last deployed with Kix 0.9.1, and this is Kix 0.8.4.\n\
              Nothing was applied to cluster prod.\n\
              \n\
-             Kix 0.8.4 may not understand what Kix 0.9.1 wrote to the cluster. Once Kix 0.9 has deployed a cluster, only Kix 0.9 or newer can deploy, roll back, or garbage-collect it.\n\
+             Kix 0.8.4 may not understand what Kix 0.9.1 wrote to the cluster. Once Kix 0.9 has changed a cluster, only Kix 0.9 or newer can deploy, roll back, or garbage-collect it.\n\
              \n\
              Next: run `kix rollback prod` from a commit that uses Kix 0.9 or newer.\n\
              To roll back with Kix 0.8.4 anyway (for example, to downgrade from a broken release), set KIX_ALLOW_DOWNGRADE=0.9.1. Cluster prod's deployment record will note the downgrade from Kix 0.9.1.\n"
@@ -274,9 +276,9 @@ mod tests {
             "Garbage collection blocked: cluster prod was last deployed with Kix 0.9.1, and this is Kix 0.8.4.\n\
              Nothing was deleted from cluster prod.\n\
              \n\
-             Kix 0.8.4 may not understand what Kix 0.9.1 wrote to the cluster. Once Kix 0.9 has deployed a cluster, only Kix 0.9 or newer can deploy, roll back, or garbage-collect it.\n\
+             Kix 0.8.4 may not understand what Kix 0.9.1 wrote to the cluster. Once Kix 0.9 has changed a cluster, only Kix 0.9 or newer can deploy, roll back, or garbage-collect it.\n\
              \n\
-             Next: run `kix gc prod` from a commit that uses Kix 0.9 or newer.\n"
+             Next: switch to a commit that uses Kix 0.9 or newer, or upgrade this project to Kix 0.9 or newer with `kix upgrade`. Then run `kix gc prod` again.\n"
         );
     }
 

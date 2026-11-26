@@ -71,11 +71,13 @@ Back up or migrate the data first, then run the rollback again with
 The rollback waits up to 180 seconds for each resource to become ready and
 stops at the first failure.
 
-After you confirm, the rollback takes the cluster's
-[deploy lock](/docs/reference/cli/deploy/#the-deploy-lock), as `kix deploy`
-does: it refuses when another run holds the lock and is still running, or
-when another run changed the cluster since the plan. The target record
-becomes the one the cluster runs at the same single point as a deploy's.
+Before reading deployment records (and again after you confirm the plan),
+`kix rollback` checks and takes the cluster's
+[deploy lock](/docs/reference/cli/deploy/#the-deploy-lock) just like
+`kix deploy`. It stops without changing anything if another active run holds
+the lock or if another run modified the cluster after the plan was built. Once
+all resources are applied, Kix records the target deployment as active on
+`ActivationHead` in a single write before updating record phases.
 
 ## Examples
 
@@ -90,7 +92,7 @@ becomes the one the cluster runs at the same single point as a deploy's.
 | Code | Meaning |
 | --- | --- |
 | `0` | Rolled back, nothing to change, or the prompt was declined |
-| `1` | A resource failed, including a failed or timed-out prune delete; confirmation was needed on a non-interactive terminal; no target is available; the target build is not in the local store; another run holds the deploy lock or changed the cluster since the plan; or a cluster error |
+| `1` | A resource failed, including a failed or timed-out prune delete; confirmation was needed on a non-interactive terminal; no target is available; the target build is not in the local store; another run holds the deploy lock or modified the cluster after the plan was built; or a cluster error |
 
 :::tip[Use it in a task]
 See [Roll back an activation](/docs/how-to/operate-a-cluster/roll-back-an-activation/)

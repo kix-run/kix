@@ -21,19 +21,17 @@ use super::{PLURAL, STOP_AFTER};
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum WritesStopped {
     #[error(
-        "Kix stopped writing to the cluster: this run last renewed its deploy lock {seconds} seconds ago, and it sends no write once {} seconds have passed, so that a run taking the lock over cannot write at the same time",
+        "Kix stopped writing to the cluster because it could not renew its deploy lock for {seconds}s (writes stop after {}s so another run cannot write at the same time). Check your cluster connection and run the command again",
         STOP_AFTER.as_secs()
     )]
     Deadline { seconds: u64 },
     #[error(
-        "Kix stopped writing to the cluster: another run took over the deploy lock of Kix cluster {cluster}"
+        "Kix stopped writing to the cluster because another run took over the deploy lock on cluster {cluster}. Run `kix status {cluster}` to check the cluster before running the command again"
     )]
     TakenOver { cluster: String },
-    #[error(
-        "the Kix operator stopped its repair and gave the deploy lock to a run that is waiting for it"
-    )]
+    #[error("the Kix operator paused drift repair and gave the deploy lock to a waiting run")]
     Yielded,
-    #[error("Kix stopped writing to the cluster: this run already released its deploy lock")]
+    #[error("Kix stopped writing to the cluster because this run already released its deploy lock")]
     Released,
 }
 

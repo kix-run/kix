@@ -200,7 +200,7 @@ Kix does not write it, and the deploy goes on.
 
 - **`Queued` -> `Deploying` -> `Active` | `Degraded` | `Failed` | `Partial` -> `Superseded`**: `kix deploy` creates or updates the `Activation` record before applying the first wave. `Active` means every resource applied and became ready. `Degraded` means the deploy completed but one or more resources failed readiness; it remains the cluster's current activation. `Failed` means the deploy aborted before completion. `Partial` means `kix deploy --only` applied every selected resource and left the rest of the build for a later deploy (recorded in `status.partial`). After a `Failed` or `Partial` record, the next deploy uses the previous `Active` or `Degraded` activation as its primary diff baseline while also sweeping changes from that run.
 - **Operator requests (`--operator`)**: Each run of `kix deploy --operator` or `kix rollback --operator` writes a new token to `spec.request`, and the Kix operator copies it to `status.startedRequest` when work begins. If the record is `Superseded`, `Failed`, or `Partial` (for example, during `kix rollback --operator`, a retry of a failed deploy, or a full deploy after `kix deploy --only`), the operator sets `status.phase` back to `Queued` and deploys the build. During any new deploy or rollback, the cluster's existing `Active` or `Degraded` record remains current until the deploy finishes, when the operator marks it `Superseded`. If the deploy reaches `Failed` instead, that record remains current and the operator restores the cluster to match it. If the record is already `Active` or `Degraded` (when `kix deploy --operator` redeploys the current build), it keeps that phase while the operator applies the build again. Once per request, when the deploy starts, the operator reruns any Job marked `kix.run/rerun` whose last run failed. When the deploy finishes, the operator writes the token to `status.finishedRequest`. If redeploying the current build fails, the operator writes the token and failure reason to `status.failedRequest` instead of `status.finishedRequest`, and the record keeps its phase.
-- **Operator features (`kix.run/operator-features`)**: On startup, the Kix operator patches the `activations.kix.run` CustomResourceDefinition to set `kix.run/operator-features` to a comma-separated list of supported features: `requests`, for `spec.request` handling, and `head-lock`, for taking each Kix cluster's [deploy lock](#activationhead) before it changes the cluster. `kix deploy --operator` and `kix rollback --operator` read this annotation before changing the cluster and stop if either is missing, because an older operator ignores `spec.request` or deploys without the lock.
+- **Operator features (`kix.run/operator-features`)**: On startup, the Kix operator patches the `activations.kix.run` CustomResourceDefinition to set `kix.run/operator-features` to a comma-separated list of supported features: `requests` (handles `spec.request`) and `head-lock` (takes each Kix cluster's [deploy lock](#activationhead) before changing the cluster). `kix deploy --operator` and `kix rollback --operator` check this annotation before making changes and stop if either feature is missing, because an older operator ignores `spec.request` or deploys without the lock.
 - **In-cluster operator (`--operator`)**: When managed by `kix-operator`, the record carries the finalizer `kix.run/operator-gc`. Deleting an `Active`, `Deploying`, or `Degraded` `Activation` causes the operator to delete all resources owned by that activation except `Namespace` and `CustomResourceDefinition` objects. Deleting a `Superseded` record (for example, during `kix gc --operator`) simply removes the finalizer.
 
 ## ActivationHead
@@ -208,42 +208,42 @@ Kix does not write it, and the deploy goes on.
 `ActivationHead` (`activationheads.kix.run`, API version `kix.run/v1alpha1`)
 is a cluster-scoped custom resource. Each Kix cluster has one, named after
 the Kix cluster and labelled `kix.run/cluster`. It holds the cluster's
-[deploy lock](/docs/reference/cli/deploy/#the-deploy-lock), names the record
-the cluster runs, and names the Kix that wrote to the cluster last. An
-`Activation` record with no `kix.run/cluster` label uses the head named
-after the record itself.
+[deploy lock](/docs/reference/cli/deploy/#the-deploy-lock), names the active
+deployment record, and records the Kix version that last changed the cluster.
+An `Activation` record without a `kix.run/cluster` label uses an
+`ActivationHead` named after the record itself.
 
-Its CustomResourceDefinition is part of the Kix program, not of any build.
-`kix deploy`, `kix rollback`, `kix gc`, `kix migrate domain`, and the Kix
-operator create it when the cluster does not have it, before they take the
-lock. It carries no status subresource, and Kix replaces the whole object on
-every write with the `resourceVersion` it read, so Kubernetes refuses the
-second of two writers. Do not edit it: `kubectl get activationhead` shows
-it, and `kix status` reads it.
+Kix creates the `activationheads.kix.run` CustomResourceDefinition
+automatically before taking the lock in `kix deploy`, `kix rollback`,
+`kix gc`, `kix migrate domain`, and the Kix operator. The CRD has no status
+subresource. On every write, Kix replaces the whole object with the
+`resourceVersion` it read, so the Kubernetes API server rejects concurrent
+writes. Do not edit `ActivationHead` objects directly; inspect them with
+`kubectl get activationhead` or `kix status`.
 
 | Field | Meaning |
 | --- | --- |
-| `status.current` | The name of the `Activation` record the cluster runs. A deploy or rollback writes it at one point, after it has applied everything and before it sets the records' phases. |
-| `status.generation` | A number that rises each time a run that wrote to the cluster releases the lock: a deploy that finished or stopped, a deploy with `--only`, a gc. A plan binds to it, and a deploy refuses when it moved. The operator's drift repair does not raise it. |
-| `status.lock` | The run that holds the lock, or absent: `holder` (an id; the operator's stays the same after its pod restarts), `hint` (who and what, such as `kix deploy by ana@laptop, process 4242`), `activation` (the record it deploys), `purpose` (`deploy`, `rollback`, `gc`, `migrate`, `repair`, or `teardown`), `renewed` (RFC 3339, by the holder's clock), `durationSeconds` (the lease, 30), and `waiting` (the id of a run that asked the operator's repair to give way). |
-| `status.writer` | The Kix that last finished a write to the cluster: `version` and `program` (`cli` or `operator`). The checks for [required stops](/docs/reference/cli/deploy/#required-stops) and for [an older Kix](/docs/reference/cli/deploy/#deploys-by-an-older-kix) read it. Absent until a Kix with the lock writes, and after Kix rebuilt the head because an older Kix deployed; the checks then read the current record's receipt. |
+| `status.current` | Name of the active `Activation` record for the cluster. A deploy or rollback updates this field in a single write after applying all resources and before updating `Activation` record phases. |
+| `status.generation` | Counter that increments whenever a run that modified the cluster commits or releases the lock (including finished or stopped deploys, `--only` deploys, and `kix gc`), when a run takes over an expired lock, or when Kix repairs out-of-sync state. Plans record this number, and commands stop if it changed before they take the lock. Operator drift repair does not increment it. |
+| `status.lock` | Present while a run holds the lock: `holder` (run ID; the operator's ID stays constant across pod restarts), `hint` (human-readable caller, such as `kix deploy by ana@laptop, process 4242`), `activation` (record being deployed, if any), `purpose` (`deploy`, `rollback`, `gc`, `migrate`, `repair`, or `teardown`), `renewed` (RFC 3339 timestamp from the holder's clock), `durationSeconds` (lease duration: `30`), and `waiting` (ID of a run waiting for operator drift repair to yield). |
+| `status.writer` | Kix version that last modified the cluster: `version` and `program` (`cli` or `operator`). Used by the [required stops](/docs/reference/cli/deploy/#required-stops) and [older Kix](/docs/reference/cli/deploy/#deploys-by-an-older-kix) checks. Omitted before a lock-aware Kix writes to the cluster, or after Kix rebuilds `ActivationHead` following a deploy by an older Kix; in both cases, those checks fall back to the active record's deploy receipt. |
 
-The holder renews the lock every 10 seconds. A run that finds the lock held
-watches it for up to 30 seconds: it refuses when the holder renews, and takes
-the lock over when nothing does. Taking over the lock of a run that was
-deploying another record marks that record `Failed`.
+An active holder renews its lock every 10 seconds. When another run finds the
+lock held, it watches for up to 30 seconds: if the holder renews, the waiting
+run stops; if nothing renews for 30 seconds, the waiting run takes over the
+lock and marks any other record the stopped run was deploying as `Failed`.
 
-When the head and the records' phases disagree, Kix corrects one from the
-other the next time a run takes the lock. If the record `status.current`
-names is gone or `Superseded` while another record is `Active` or
-`Degraded`, an older Kix deployed after the head was written, and Kix
-rebuilds the head from the phases. A head with no `status`, as after a
-restore from a backup that leaves out `status`, is rebuilt the same way, and
-so is the head of a cluster deployed before the lock existed. If the record
-`status.current` names exists but has no current phase, a deploy stopped
-between its commit and its phase writes, and Kix sets the phases from the
-head. Setting the phases raises the generation, and so does rebuilding a
-head that had a `status`.
+If `ActivationHead` and the `Activation` record phases disagree, the next run
+that takes the lock reconciles them. When the `Activation` record named in
+`status.current` no longer exists or is in phase `Superseded` while another
+record is `Active` or `Degraded` (for example, after an older Kix deployed),
+or when `ActivationHead` has no `status` (such as on first creation or after
+restoring a backup without `status`), Kix rebuilds `ActivationHead` from the
+record phases. When the record named in
+`status.current` exists without an `Active` or `Degraded` phase (because a
+deploy stopped after updating `ActivationHead` and before updating record
+phases), Kix updates the record phases to match `ActivationHead`. Rebuilding
+an existing `status` or repairing phases increments `status.generation`.
 
 ## PackageInstance
 

@@ -13,6 +13,6 @@ vault/vaultwarden
 
 4 resources: 0 ok, 1 not ready, 1 missing, 2 not checked.
 Next: run `kix deploy shop --reconcile` to put back what is missing or changed. `kix plan shop --reconcile` shows what it would change first.
-kix deploy by ana@laptop, process 7 holds the deploy lock (deploy of shop-new), renewed 300s ago. That is longer than the 30s lease, so the run has probably stopped; the next deploy takes over the lock.
+kix deploy by ana@laptop, process 7 holds the deploy lock (deploy of shop-new), renewed 300s ago. Its 30s lease has expired, so that run has likely stopped; the next command that changes the cluster will take over the lock.
 
 This account may not list secrets, so Kix did not check objects of those kinds.

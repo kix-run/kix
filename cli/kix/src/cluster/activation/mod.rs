@@ -353,7 +353,7 @@ impl Records {
         if let Some(phase) = phase {
             self.patch_status(current, &json!({ "status": { "phase": phase } }))
                 .await?;
-            tracing::info!(activation = %current, phase, "repaired the phase from the deploy lock's record");
+            tracing::info!(activation = %current, phase, "repaired deployment record phase from ActivationHead");
         }
         for name in supersede {
             self.supersede(name).await?;

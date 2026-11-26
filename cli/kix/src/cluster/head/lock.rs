@@ -67,11 +67,11 @@ impl std::fmt::Display for Held {
         };
         let why = if self.repair {
             format!(
-                "The Kix operator is correcting drift on this cluster and did not stop within {} seconds of this run asking for the lock.",
+                "The Kix operator is repairing drift on this cluster and did not release the lock within {} seconds after this run asked for it.",
                 REPAIR_WAIT.as_secs()
             )
         } else {
-            "Only one run at a time may change a Kix cluster. The other run renewed its lock while this one watched, so it is still running.".to_string()
+            "Only one run can change a Kix cluster at a time. That run renewed its lock while Kix was watching, so it is still active.".to_string()
         };
         write!(
             f,
@@ -80,7 +80,7 @@ impl std::fmt::Display for Held {
              Why:\n    \
              {why}\n\n  \
              Next:\n    \
-             Wait for that run to finish, then run this command again. If that run has stopped, its lock expires {lease} seconds after its last renewal, and the next run takes it over.",
+             Wait for that run to finish, then run this command again. If that run stops unexpectedly, its lock expires {lease} seconds after its last renewal and the next run will take it over.",
             cluster = self.cluster,
             lease = LEASE.as_secs(),
         )
@@ -96,9 +96,9 @@ pub enum TakeError {
         "Kix cluster {cluster} changed after this plan was made (deploy lock generation {planned}, now {now}).\n  \
          Nothing was changed on the cluster.\n\n  \
          Why:\n    \
-         Another run changed the cluster, or Kix repaired its deployment records, between the plan you confirmed and the moment this run took the lock. The plan may no longer say what this run would do.\n\n  \
+         Another run changed the cluster, or Kix repaired its deployment records, before this run took the deploy lock. The plan may be out of date.\n\n  \
          Next:\n    \
-         Run the command again to see a fresh plan."
+         Run the command again to build a fresh plan."
     )]
     GenerationMoved {
         cluster: String,
@@ -108,7 +108,7 @@ pub enum TakeError {
     #[error(transparent)]
     Crd(#[from] CrdError),
     #[error(
-        "could not read or write the deploy lock of Kix cluster {cluster}: {}",
+        "cannot read or update deploy lock `ActivationHead` `{cluster}`: {}. Nothing was changed on the cluster. Check the cluster connection and ensure this account has `get`, `list`, `create`, and `update` permissions on `activationheads.kix.run`, then try again",
         describe(.source)
     )]
     Api {
@@ -549,7 +549,7 @@ async fn finish_take(
                 .fail_deploy(
                     name,
                     &format!(
-                        "the run that was deploying this record stopped renewing the deploy lock of Kix cluster {}, and {} took the lock over",
+                        "the previous deploy stopped renewing the deploy lock on cluster {}, and {} took over the lock",
                         request.cluster, request.holder.hint
                     ),
                 )
@@ -681,7 +681,7 @@ impl Inner {
             drop(lease);
             let reason = match loss {
                 Loss::TakenOver => "another run took over the deploy lock",
-                Loss::Yielded => "the repair gave the deploy lock to a waiting run",
+                Loss::Yielded => "drift repair gave the deploy lock to a waiting run",
             };
             tracing::warn!(cluster = %self.cluster, "{reason}");
             self.trip(reason);
@@ -965,11 +965,11 @@ impl Lock {
 #[derive(Debug, Error)]
 pub enum CommitError {
     #[error(
-        "another run took over the deploy lock of Kix cluster {cluster} before this run finished, so this run did not record its result on the lock"
+        "another run took over the deploy lock on cluster {cluster} before this run finished, so Kix could not record this run on `ActivationHead` `{cluster}`. Run `kix status {cluster}` to check the cluster"
     )]
     Lost { cluster: String },
     #[error(
-        "could not write the deploy lock of Kix cluster {cluster}: {}",
+        "could not update deploy lock `ActivationHead` `{cluster}`: {}",
         describe(.source)
     )]
     Api {

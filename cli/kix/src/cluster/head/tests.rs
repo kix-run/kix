@@ -586,7 +586,7 @@ fn a_read_says_when_the_holder_has_probably_died() {
     assert!(dead.probably_dead);
     assert!(
         dead.describe().ends_with(
-            "renewed 95s ago. That is longer than the 30s lease, so the run has probably stopped; the next deploy takes over the lock"
+            "renewed 95s ago. Its 30s lease has expired, so that run has likely stopped; the next command that changes the cluster will take over the lock"
         ),
         "{}",
         dead.describe()

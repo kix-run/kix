@@ -453,7 +453,7 @@ pub(super) async fn plan_records_with(
         .await
         .map_err(|e| {
             miette!(
-                "could not read the deploy lock of cluster {cluster}: {}",
+                "cannot read deploy lock `ActivationHead` `{cluster}`: {}. Nothing was deleted from cluster {cluster}. Check your cluster connection and grant this account `get` on `activationheads.kix.run` if needed, then run the command again.",
                 kix::cluster::errors::describe(&e)
             )
         })?;

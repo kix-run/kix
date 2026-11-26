@@ -185,7 +185,7 @@ impl Context {
 /// Release `lock`, logging a failure. The lock then expires after its lease.
 async fn release(lock: &Lock) {
     if let Err(e) = lock.release().await {
-        tracing::warn!(error = %e, "could not release the deploy lock; it expires after its lease");
+        tracing::warn!(error = %e, "could not release the deploy lock; its lease will expire automatically");
     }
 }
 
@@ -796,7 +796,7 @@ async fn run_reconcile(
     if yielded {
         tracing::info!(
             name,
-            "Gave the deploy lock to a waiting run; the repair runs again later"
+            "Yielded the deploy lock to a waiting run; drift repair will retry later"
         );
         return Ok(Action::requeue(QUEUED_REQUEUE_INTERVAL));
     }

@@ -65,7 +65,7 @@ pub(super) fn definition() -> Value {
                 "storage": true,
                 "schema": { "openAPIV3Schema": {
                     "type": "object",
-                    "description": "Which deploy record a Kix cluster runs, which Kix wrote to it last, and who holds its deploy lock. Kix writes it; do not edit it.",
+                    "description": "Tracks a Kix cluster's active deployment record, the Kix version that last changed the cluster, and the current deploy lock holder. Managed by Kix; do not edit.",
                     "properties": {
                         "status": {
                             "type": "object",
@@ -113,7 +113,7 @@ fn established(crd: &DynamicObject) -> bool {
 #[derive(Debug, thiserror::Error)]
 pub enum CrdError {
     #[error(
-        "[K9557] Kix could not read or create the CustomResourceDefinition {name}, which holds each Kix cluster's deploy lock: {}. Grant this account `get` and `create` on customresourcedefinitions, or have someone who may create it run the command once",
+        "[K9557] cannot read or create CustomResourceDefinition `{name}` for the deploy lock: {}. Nothing was changed on the cluster. Grant this account `get` and `create` on `customresourcedefinitions` (or have an account with those permissions create `{name}` once, and grant this account `get`, `list`, `create`, and `update` on `{name}`)",
         crate::cluster::errors::describe(.source)
     )]
     Api {
@@ -122,7 +122,7 @@ pub enum CrdError {
         source: kube::Error,
     },
     #[error(
-        "Kix created the CustomResourceDefinition {name}, but Kubernetes did not serve it within {} seconds. Run the command again",
+        "created CustomResourceDefinition `{name}`, but the Kubernetes API server did not start serving it within {} seconds. Nothing else was changed on the cluster. Wait a moment and run the command again",
         ESTABLISH_WAIT.as_secs()
     )]
     NotEstablished { name: String },

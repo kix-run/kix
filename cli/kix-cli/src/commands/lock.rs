@@ -36,12 +36,20 @@ pub(crate) async fn take(
 
 /// Say that another run holds the deploy lock and that this one watches it.
 pub(crate) fn say_watching(other: &head::LockState) {
-    let view = LockView::of(other, chrono::Utc::now());
+    let mut view = LockView::of(other, chrono::Utc::now());
+    view.probably_dead = false;
+    let waiting = if other.purpose == Purpose::Repair {
+        "Waiting for the Kix operator to pause drift repair and release the lock...".to_string()
+    } else {
+        format!(
+            "Waiting up to {}s to see whether that run is still active...",
+            head::LEASE.as_secs()
+        )
+    };
     eprintln!(
-        "{} {}. Waiting up to {}s to see whether it is still running...",
+        "{} {}. {waiting}",
         output::yellow("Locked:"),
         view.describe(),
-        head::LEASE.as_secs()
     );
 }
 
@@ -72,11 +80,11 @@ pub(crate) async fn release(lock: &Lock) {
     match lock.release().await {
         Ok(()) => {}
         Err(head::CommitError::Lost { cluster }) => eprintln!(
-            "{} another run took over the deploy lock of Kix cluster {cluster} before this run released it, so this run has no lock to release. That run holds the lock now, or has released it.",
+            "{} could not release the deploy lock on cluster {cluster} because another run already took it over. Run `kix status {cluster}` to check the cluster before running another command.",
             output::yellow("warning:"),
         ),
         Err(e @ head::CommitError::Api { .. }) => eprintln!(
-            "{} {e}. The lock expires {} seconds after this run's last renewal, and the next run takes it over.",
+            "{} {e}. Kix left the deploy lock in place; its lease expires {} seconds after the last renewal, and the next command that changes the cluster will take it over.",
             output::yellow("warning:"),
             head::LEASE.as_secs()
         ),
