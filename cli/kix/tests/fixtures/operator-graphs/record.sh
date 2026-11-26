@@ -2,7 +2,8 @@
 # Write the build of each test cluster named below as a fixture for the
 # `operator_graphs` tests in `src/cluster/graph.rs`. Each fixture keeps what
 # the delete order reads: kind, name, namespace, the identity hash and
-# `kix.run/depends-on`, a binding's subjects and roleRef, and a workload's
+# `kix.run/depends-on`, a binding's subjects and roleRef, the Service each
+# webhook of a webhook configuration calls, and a workload's
 # serviceAccountName. CustomResourceDefinitions are left out to keep the files
 # small, since no edge that the tests check passes through one.
 #
@@ -38,6 +39,12 @@ for m in json.load(sys.stdin):
     for field in ("subjects", "roleRef"):
         if field in m:
             out[field] = m[field]
+    if "webhooks" in m:
+        out["webhooks"] = [
+            {"clientConfig": {"service": w["clientConfig"]["service"]}}
+            for w in m["webhooks"]
+            if "service" in w.get("clientConfig", {})
+        ]
     path = templates.get(m["kind"])
     if path and m["apiVersion"] in ("apps/v1", "batch/v1"):
         spec = m

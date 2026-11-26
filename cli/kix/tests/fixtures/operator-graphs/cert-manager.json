@@ -8,7 +8,18 @@
     "kix.run/identity-hash": "abzkzkw61rxl635d0qx2cpjy3g8304iw"
    },
    "name": "cert-manager-webhook"
-  }
+  },
+  "webhooks": [
+   {
+    "clientConfig": {
+     "service": {
+      "name": "cert-manager-webhook",
+      "namespace": "cert-manager",
+      "path": "/mutate"
+     }
+    }
+   }
+  ]
  },
  {
   "apiVersion": "admissionregistration.k8s.io/v1",
@@ -19,7 +30,18 @@
     "kix.run/identity-hash": "6xz72pq1jya6lpbdbzxmx7d8hb2v2svm"
    },
    "name": "cert-manager-webhook"
-  }
+  },
+  "webhooks": [
+   {
+    "clientConfig": {
+     "service": {
+      "name": "cert-manager-webhook",
+      "namespace": "cert-manager",
+      "path": "/validate"
+     }
+    }
+   }
+  ]
  },
  {
   "apiVersion": "apps/v1",

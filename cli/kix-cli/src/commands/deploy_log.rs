@@ -213,13 +213,19 @@ impl JsonObserver {
         );
     }
 
-    /// Print the final summary line for the deploy run.
-    pub fn summary(&self, counts: &DeployResult, dry_run: bool, succeeded: bool) {
+    /// Print the final summary line for the deploy run, with the objects
+    /// of kinds that left the build that the prune left on the cluster.
+    pub fn summary(
+        &self,
+        counts: &DeployResult,
+        dry_run: bool,
+        succeeded: bool,
+        left_behind: Vec<kix::plan::document::LeftBehind>,
+    ) {
         let elapsed_ms = self.started_at.elapsed().as_millis() as u64;
-        println!(
-            "{}",
-            json_line(&Line::summary(counts, dry_run, succeeded, elapsed_ms))
-        );
+        let line =
+            Line::summary(counts, dry_run, succeeded, elapsed_ms).with_left_behind(left_behind);
+        println!("{}", json_line(&line));
     }
 }
 
@@ -740,6 +746,41 @@ mod tests {
         let ran = json_line(&Line::summary(&DeployResult::default(), false, true, 3));
         let ran: serde_json::Value = serde_json::from_str(&ran).unwrap();
         assert_eq!(ran["nothing_to_apply"], false);
+    }
+
+    /// The summary names the objects a prune left behind, and leaves the
+    /// field out when there are none.
+    #[test]
+    fn the_summary_names_what_the_prune_left_behind() {
+        let left = kix::plan::document::LeftBehind {
+            kind: "Challenge.acme.cert-manager.io".into(),
+            count: 1,
+            with_finalizers: 1,
+            objects: vec![kix::plan::document::LeftObject {
+                resource: "Challenge.acme.cert-manager.io/c@app".into(),
+                finalizers: vec!["acme.cert-manager.io/finalizer".into()],
+            }],
+        };
+        let line =
+            Line::summary(&DeployResult::default(), false, true, 3).with_left_behind(vec![left]);
+        let value: serde_json::Value = serde_json::from_str(&json_line(&line)).unwrap();
+        assert_eq!(
+            value["left_behind"][0]["kind"],
+            "Challenge.acme.cert-manager.io"
+        );
+        assert_eq!(value["left_behind"][0]["with_finalizers"], 1);
+        assert_eq!(
+            value["left_behind"][0]["objects"][0]["finalizers"][0],
+            "acme.cert-manager.io/finalizer"
+        );
+        let plain: serde_json::Value = serde_json::from_str(&json_line(&Line::summary(
+            &DeployResult::default(),
+            false,
+            true,
+            3,
+        )))
+        .unwrap();
+        assert!(plain.get("left_behind").is_none());
     }
 
     /// A summary line written before `nothing_to_apply` existed still reads.

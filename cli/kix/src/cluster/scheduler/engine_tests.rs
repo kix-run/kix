@@ -2317,9 +2317,10 @@ async fn stuck_prune_deletes_wait_together() {
     assert!(waited < secs(200), "waited {waited:?}");
 }
 
-/// A stuck orphan whose kind names a controller says whether the controller
-/// runs, and the controller is kept. A stuck orphan that depends on the same
-/// workload through `requires:` names no controller.
+/// A stuck orphan whose kind names a controller is deleted in the
+/// foreground, says whether the controller runs, and the controller is kept.
+/// A stuck orphan that depends on the same workload through `requires:` is
+/// deleted in the background and names no controller.
 #[tokio::test(start_paused = true)]
 async fn a_stuck_prune_names_the_controller() {
     use crate::cluster::readiness::{Deletion, Stuck};
@@ -2376,6 +2377,18 @@ async fn a_stuck_prune_names_the_controller() {
     .unwrap();
 
     assert_eq!((result.pruned, result.failed), (0, 2));
+    // Only the object whose kind names a controller waits for what the
+    // controller made for it.
+    let mut propagations = ops.propagations();
+    propagations.sort_by(|a, b| a.0.name.cmp(&b.0.name));
+    assert!(
+        matches!(
+            propagations.as_slice(),
+            [(cr, kube::api::PropagationPolicy::Foreground), (plain, kube::api::PropagationPolicy::Background)]
+                if cr.name == "cr" && plain.name == "plain"
+        ),
+        "{propagations:?}"
+    );
     let message_of = |name: &str| {
         result
             .failures
@@ -3771,6 +3784,15 @@ async fn a_slow_prune_delete_is_reported_while_it_waits() {
         })
         .collect();
     assert!(!waits.is_empty(), "no waiting line for the delete");
+    // The wait reads the object every few seconds, so it is never a stall.
+    assert!(
+        !rec.0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e, DeployEvent::Stalled { .. })),
+        "a delete wait that reads the object was reported as a stall"
+    );
     assert!(
         waits
             .iter()
@@ -3829,4 +3851,67 @@ async fn an_applied_node_that_is_not_ready_is_counted_as_written() {
 
     assert_eq!(result.failed, 3, "{result:?}");
     assert_eq!(result.failed_after_apply, 1, "{result:?}");
+}
+
+/// A fresh deploy of the rendered external-secrets build finishes. The
+/// webhook pods become ready only once the cert-controller runs, because the
+/// cert-controller writes their certificate, and the cert-controller requires
+/// the webhook configurations. An apply dependency from a configuration to the
+/// webhook's Service, which waits on the webhook pods, would close that loop
+/// through readiness, and the deploy would hang.
+#[tokio::test(start_paused = true)]
+async fn a_fresh_external_secrets_deploy_finishes() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/operator-graphs/external-secrets.json");
+    let manifests: Vec<Value> =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let webhook = ResourceId::new(
+        "apps",
+        "Deployment",
+        "external-secrets",
+        "external-secrets-webhook",
+    );
+    let cert_controller = ResourceId::new(
+        "apps",
+        "Deployment",
+        "external-secrets",
+        "external-secrets-cert-controller",
+    );
+    let certificate = Gate::new();
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        webhook.clone(),
+        NodeScript::default().ready(Behaviour::Gate(certificate.clone(), Ready::Ready)),
+    );
+    let watcher = {
+        let ops = ops.clone();
+        tokio::spawn(async move {
+            while !ops
+                .calls()
+                .contains(&Call::ApplyStart(cert_controller.clone()))
+            {
+                tokio::time::sleep(secs(1)).await;
+            }
+            certificate.open();
+        })
+    };
+    let cfg = config(StallPolicy {
+        warn_after: secs(30),
+        abort_after: Some(secs(600)),
+    });
+    let result = run(
+        &ops,
+        plan_of(&manifests),
+        &cfg,
+        Arc::new(Recorder::default()),
+    )
+    .await;
+    watcher.abort();
+    let result = result.expect("the deploy finishes");
+    assert_eq!(
+        (result.failed, result.cancelled),
+        (0, 0),
+        "{:?}",
+        result.failures
+    );
 }

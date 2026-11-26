@@ -380,7 +380,14 @@ does not become ready, Kix counts it in `failed` rather than `created` or
 number of `failed` objects whose new manifest Kix applied before they failed
 readiness. Text output shows this count as `1 failed (1 applied but not ready)`.
 Runs that reach the deploy engine also set `"nothing_to_apply": false` on
-`summary`. When the plan has nothing to apply or prune, Kix writes only the
+`summary`.
+With `--prune`, `summary` also includes `left_behind` when the new build no
+longer declares a CustomResourceDefinition and custom resources of that kind
+remain on the cluster after pruning (omitted when none remain). Each entry is
+`{ kind, count, with_finalizers, objects }`, matching `left_behind` in the
+[`Plan` document](/docs/reference/cli/plan/#the-plan-document). Other log
+formats print a warning listing those objects after the summary line.
+When the plan has nothing to apply or prune, Kix writes only the
 `kubernetes` line and a `summary` line with `"nothing_to_apply": true`,
 `"succeeded": true`, `unchanged` set to the number of unchanged objects, and
 all other counts set to `0`. If the build has no resources, Kix does not

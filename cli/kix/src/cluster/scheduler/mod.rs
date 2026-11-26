@@ -1147,7 +1147,13 @@ impl<'a> Run<'a> {
         // one only, so many stuck objects make one explanation.
         let mut explained = false;
         let controllers = Arc::new(order.controllers().clone());
+        let propagations: HashMap<ResourceId, kube::api::PropagationPolicy> = order
+            .ids()
+            .iter()
+            .map(|rid| (rid.clone(), order.propagation(rid)))
+            .collect();
         let start = |rid: &ResourceId| {
+            let propagation = propagations[rid].clone();
             let (resources, observer, progress, cancel, controllers) = (
                 resources.clone(),
                 observer.clone(),
@@ -1157,16 +1163,18 @@ impl<'a> Run<'a> {
             );
             let rid = rid.clone();
             async move {
-                let deleted =
-                    match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, resources.prune(&rid))
-                        .await
-                    {
-                        Ok(outcome) => outcome.map_err(|e| e.to_string()),
-                        Err(_) => Err(format!(
-                            "no answer within {}s",
-                            INLINE_BEST_EFFORT_TIMEOUT.as_secs()
-                        )),
-                    };
+                let deleted = match tokio::time::timeout(
+                    INLINE_BEST_EFFORT_TIMEOUT,
+                    resources.prune(&rid, propagation),
+                )
+                .await
+                {
+                    Ok(outcome) => outcome.map_err(|e| e.to_string()),
+                    Err(_) => Err(format!(
+                        "no answer within {}s",
+                        INLINE_BEST_EFFORT_TIMEOUT.as_secs()
+                    )),
+                };
                 match deleted {
                     Ok(kept @ (Pruned::Kept(_) | Pruned::Changed(_))) => Pruning::Kept(kept),
                     Ok(pruned) => match pruned.deleting() {
@@ -1401,8 +1409,13 @@ async fn wait_gone(
     let node = NodeId::Resource(rid.clone());
     progress.set_phase(&node, Phase::Deletion);
     let last = std::sync::Mutex::new(String::new());
+    // Each read of the object counts as activity, as a readiness poll does.
+    // The wait has its own budget, so the watchdog's stall warning would only
+    // repeat a wait that the `Waiting` events already describe, such as a
+    // foreground delete whose owned objects Kubernetes is still removing.
     let on_status = |status: &str| {
         progress.set_status(&node, status);
+        progress.touch();
         let Ok(mut last) = last.lock() else {
             return;
         };
@@ -1410,7 +1423,6 @@ async fn wait_gone(
             return;
         }
         *last = status.to_string();
-        progress.touch();
         observer.on_event(&DeployEvent::NodeStateChanged {
             node: NodeId::Resource(rid.clone()),
             kind: TransitionKind::Delete,

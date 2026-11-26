@@ -875,6 +875,12 @@ async fn run_deploy_async(
     };
 
     let record = checked.activation_name().map(str::to_string);
+    // What the prune will delete, read before the run takes the plan, so the
+    // summary can say which objects of a kind that left the build it left.
+    let leaving = (checked.flags().prune == PrunePolicy::Delete)
+        .then(|| (checked.kinds_leaving(), checked.orphans().to_vec()))
+        .filter(|(kinds, _)| !kinds.is_empty());
+    let left_client = target.client().clone();
     let (result, end) = run_plan(checked, target, receipt, config, observer, cluster_name).await;
 
     // Drop the TUI before printing the summary so it lands in normal scrollback.
@@ -884,8 +890,24 @@ async fn run_deploy_async(
         Ok(r) => r,
         Err(e) => e.partial(),
     };
+    let left: Vec<(String, kix::plan::document::LeftBehind)> = match leaving {
+        Some((kinds, orphans)) => {
+            let deleting = orphans.into_iter().collect();
+            let mut found = super::plan::left_behind(&left_client, &kinds, &deleting).await;
+            kinds
+                .iter()
+                .filter_map(|(declarer, _)| Some((declarer.display_id(), found.remove(declarer)?)))
+                .collect()
+        }
+        None => Vec::new(),
+    };
     match &json_log {
-        Some(json) => json.summary(counts, false, end.succeeded),
+        Some(json) => json.summary(
+            counts,
+            false,
+            end.succeeded,
+            left.iter().map(|(_, l)| l.clone()).collect(),
+        ),
         None if end.succeeded => {
             println!();
             println!("{}", summary_line(counts, command, true));
@@ -907,6 +929,12 @@ async fn run_deploy_async(
             println!();
             println!("{}", observer::closing(counts, &closing));
         }
+    }
+    if json_log.is_none()
+        && let Some(text) = plan::render::left_behind_after_prune(&left)
+    {
+        println!();
+        print!("{text}");
     }
     // The event stream already reports failed nodes and cancellation.
     if let Err(e) = &result
