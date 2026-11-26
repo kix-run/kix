@@ -26,11 +26,13 @@ kix.buildCluster {
     kix.modules.experimental.monitoring
 
     {
+      # region:gkeNetworkPolicy
       networkPolicy.enable = true;
       cluster.network = {
         apiServer.cidrs = [ "10.0.0.2/32" ];
         nodeCidrs = [ "10.128.0.0/20" ];
       };
+      # endregion:gkeNetworkPolicy
 
       instances.np.echo-server = {
         package = packages.echo-server;
