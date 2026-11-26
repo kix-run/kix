@@ -440,7 +440,15 @@ pub struct DeployResult {
     /// spec, and they never became ready.
     pub failed_after_apply: usize,
     pub cancelled: usize,
+    /// Orphans this run deleted.
     pub pruned: usize,
+    /// Orphans the prune found already gone, so it deleted nothing.
+    pub already_gone: usize,
+    /// Orphans of this Kix cluster the prune left on the cluster without
+    /// a failure of their own: held back by an object whose delete failed
+    /// or by a dependency cycle. An orphan held back by an object another
+    /// Kix cluster deploys is not counted, because that cluster keeps it.
+    pub kept: usize,
     /// Every node counted in `failed`, in the order it failed, for the text
     /// that closes a run.
     pub failures: Vec<NodeFailure>,

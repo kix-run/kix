@@ -708,7 +708,67 @@ in
       serviceCidr = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        description = "Service network CIDR (e.g. '10.96.0.0/16').";
+        description = ''
+          Service IP range in CIDR notation (for example, `"10.96.0.0/16"`). On
+          EKS, standard `NetworkPolicy` generation excludes this range from
+          outbound `world` rules, and uses its first IPv4 address for API server
+          egress when `cluster.network.apiServer.cidrs` is empty.
+        '';
+      };
+      nodeCidrs = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [ "10.128.0.0/20" ];
+        description = ''
+          IP ranges of the cluster's nodes. Standard `NetworkPolicy` generation
+          uses these ranges for rules targeting nodes (`host`, `remote-node`,
+          `cluster`, and host-network scrape targets); if a policy targets nodes
+          while this list is empty, the build fails. On GKE, Kix also excludes
+          these ranges from outbound `world` rules. On EKS, nodes share VPC
+          subnets with VPC endpoints, load balancers, and databases, so outbound
+          `world` rules keep these ranges. Cilium ignores this option.
+        '';
+      };
+      apiServer = {
+        cidrs = lib.mkOption {
+          type = lib.types.listOf lib.types.str;
+          default = [ ];
+          example = [ "10.0.0.2/32" ];
+          description = ''
+            IP ranges that pods dial to reach the Kubernetes API server in
+            standard `NetworkPolicy` egress rules. On GKE, set the control
+            plane endpoint `/32` addresses (and update them if you rotate the
+            control plane IP). On EKS, set `cluster.network.serviceCidr` so Kix
+            derives the `kubernetes` Service `/32` address automatically, or set
+            that `/32` address here. If a policy needs API server egress (such
+            as for a workload bound to a `Role` or `ClusterRole`) and Kix has no
+            API server address, the build fails. Kix does not check this address
+            against the live cluster, so `kix plan` and `kix deploy` succeed
+            even when it is wrong; existing connections stay open until pods
+            restart, when they can no longer reach the API server. Cilium
+            ignores this option.
+          '';
+        };
+        port = lib.mkOption {
+          type = lib.types.port;
+          default = 443;
+          description = "TCP port of the Kubernetes API server for standard `NetworkPolicy` egress rules. Cilium ignores this option.";
+        };
+        sources = lib.mkOption {
+          type = lib.types.listOf (lib.types.attrsOf lib.types.anything);
+          default = [ ];
+          example = [ { cidr = "10.0.0.0/16"; } ];
+          description = ''
+            IP ranges or pods from which the Kubernetes API server calls
+            admission webhooks and aggregated APIs in standard `NetworkPolicy`
+            ingress rules. Each entry is `{ cidr = "..."; }` for an IP range or
+            `{ namespace = "..."; podSelector = { ... }; }` for proxy pods.
+            Defaults to the `konnectivity-agent` pods in `kube-system` on `gke`
+            and `gke-autopilot`. On `eks`, set this to the control plane
+            subnets. If a policy accepts ingress from `apiserver` while this
+            list is empty, the build fails. Cilium ignores this option.
+          '';
+        };
       };
       dnsUpstream = lib.mkOption {
         type = lib.types.listOf lib.types.str;

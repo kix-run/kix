@@ -51,7 +51,7 @@ indexmap = { version = "2", features = ["serde"] }
 # K8s
 # gzip: ask the apiserver for compressed answers. It compresses only large
 # ones. A kubeconfig cluster with `disable-compression: true` turns it off.
-kube = { version = "5.0", features = [
+kube = { version = "5.2", features = [
   "runtime",
   "client",
   "unstable-runtime",

@@ -14,9 +14,14 @@ Writing default-deny Kubernetes network policies by hand is tedious and fragile.
 
 ## Which policy objects Kix writes
 
-To generate network policies, your cluster must include an instance whose package claims the `network-policy-enforcer` role. Setting `networkPolicy.enable = true` without an enforcer instance fails evaluation. Today, `packages.experimental.cilium` is the only enforcer package: Kix generates Cilium policy resources only and cannot emit standard Kubernetes `NetworkPolicy` objects or policies for other CNIs such as Calico.
+To generate network policies, your cluster must have an active network policy enforcer (the `network-policy-enforcer` role). Setting `networkPolicy.enable = true` without one fails the build. The enforcer determines which policy resources Kix writes:
 
-On platforms that own the pod network (`cluster.roles.cni.binding = "exclusive"`, such as GKE Dataplane V2, EKS with the Amazon VPC CNI, and k3s with Flannel), Kix cannot install Cilium. None of the three serves `CiliumNetworkPolicy`: GKE Dataplane V2 always enforces standard `NetworkPolicy`, the Amazon VPC CNI enforces it only after enforcement is turned on in the add-on (`enableNetworkPolicy`, which is off by default), and k3s enforces it with its embedded network policy controller unless started with `--disable-network-policy`. Setting `networkPolicy.enable = true` on these clusters fails evaluation and tells you to set `networkPolicy.enable = false` until Kix supports that pod network.
+- **Cilium (`packages.experimental.cilium`):** Kix writes `CiliumNetworkPolicy` and `CiliumClusterwideNetworkPolicy` objects (`cilium.io/v2`).
+- **GKE and EKS (`platform-network-policy`):** Kix writes standard Kubernetes `NetworkPolicy` objects (`networking.k8s.io/v1`). The `gke` and `gke-autopilot` flavors include this enforcer automatically for GKE Dataplane V2. On `eks`, turn on `enableNetworkPolicy` in the Amazon VPC CNI add-on configuration first, then set `cluster.flavor.eks.networkPolicy = "vpc-cni"`. Leaving `cluster.flavor.eks.networkPolicy` at its default `"none"` while `networkPolicy.enable = true` fails the build.
+
+On other platforms that manage their own pod network (`cluster.roles.cni.binding = "exclusive"`, such as AKS or k3s with Flannel), Kix cannot install Cilium alongside the built-in CNI and does not generate policies for that CNI. Setting `networkPolicy.enable = true` on those clusters fails the build and tells you to set `networkPolicy.enable = false`.
+
+The rest of this section describes Cilium policies. See [Standard NetworkPolicy](#standard-networkpolicy) for how Kix generates standard `NetworkPolicy` objects on GKE and EKS.
 
 Most generated policies are namespaced `CiliumNetworkPolicy` objects (`apiVersion: cilium.io/v2`). Kix writes cluster-wide `CiliumClusterwideNetworkPolicy` objects in three cases:
 
@@ -71,6 +76,53 @@ If your cluster relies on existing `CiliumClusterwideNetworkPolicy` rules applie
 
 Every policy Kix generates carries the label `kix.run/derived: "true"` in `kix build <cluster>` output, so you can check Kix's generated coverage before deleting existing policies.
 
+## Standard NetworkPolicy
+
+On GKE and EKS, Kix builds firewall rules from the same service connections and intents, and writes standard Kubernetes `NetworkPolicy` objects (`networking.k8s.io/v1`). Every policy sets `spec.policyTypes` explicitly, and each `<namespace>-default-deny` policy uses `podSelector: {}` with no allow rules for the enforced directions. Kubernetes has no cluster-wide `NetworkPolicy` kind, so `networkPolicy.platformIntents` entries with `scope = "clusterwide"` fail the build.
+
+Standard `NetworkPolicy` has no built-in selectors for cluster nodes, the Kubernetes API server, or external addresses. Kix represents those targets with CIDR blocks (`ipBlock`), and each cloud CNI matches `ipBlock` rules differently against pod, node, and Service IPs. Depending on the platform and which `cluster.network` options you set, each rule has one of three outcomes:
+
+- **Exact:** Allows only the intended peers and ports.
+- **Wider:** Allows extra pod, node, or Service traffic (or brief outbound traffic during pod startup), because a CIDR rule matches in-cluster IPs or `NetworkPolicy` cannot select a single node.
+- **Build error:** Stops the build and names the `cluster.network` option you must set so Kix knows the target IP range.
+
+| Rule | Standard `NetworkPolicy` representation | GKE Dataplane V2 | EKS with Amazon VPC CNI |
+| --- | --- | --- | --- |
+| Pods by label, default deny, DNS, StatefulSet peers, callers | Pod and namespace selectors; DNS peers by selector or IP range | Exact | Exact |
+| API server egress | `ipBlock` for `cluster.network.apiServer.cidrs` on TCP `cluster.network.apiServer.port` | Exact once `cidrs` is set; fails the build when empty | Exact; uses the first IPv4 address of `cluster.network.serviceCidr` when `cidrs` is empty, or fails the build if both are unset |
+| Admission webhook and aggregated API ingress (`from = "apiserver"`) | Peers from `cluster.network.apiServer.sources` | Exact; defaults to `konnectivity-agent` pods in `kube-system` | Fails the build when `sources` is empty; wider (`apiserver-sources-pods`) when set to CIDR ranges because `ipBlock` also matches pods in those ranges |
+| External egress (`to = "world"`) | `0.0.0.0/0` and `::/0`, always excluding link-local `169.254.0.0/16` and `fe80::/10` | Exact once `cluster.network.nodeCidrs` is set (excluded from `0.0.0.0/0` and `::/0`); wider (`world-egress-nodes`) when empty | Wider: pods and nodes share VPC subnets with VPC endpoints, load balancers, and databases, so Kix keeps those subnets (`world-egress-pod-subnets`, `world-egress-node-subnets`) and ignores `podCidr` and `nodeCidrs` here; also wider (`world-egress-services`) until `serviceCidr` is set |
+| External ingress (`LoadBalancer` target ports and `from = "world"`) | `0.0.0.0/0` and `::/0`, excluding link-local ranges | Wider (`world-ingress-nodes`): also accepts traffic from cluster nodes | Wider (`world-ingress-pods`, `world-ingress-nodes`): also accepts traffic from pods and cluster nodes |
+| Node rules (`host`, `remote-node`, and host-network scrape targets) | `ipBlock` for `cluster.network.nodeCidrs` | Fails the build when `nodeCidrs` is empty; exact when targeting all nodes, or wider (`host-all-nodes`) when targeting `host` without `remote-node` | Fails the build when `nodeCidrs` is empty; wider (`node-range-pods`) because `ipBlock` also matches pods in `nodeCidrs`, plus `host-all-nodes` when targeting `host` without `remote-node` |
+| `cluster` entity | All pods, cluster nodes, and the API server | Exact once `nodeCidrs` and the API server option for that direction are set; fails the build when unset | Requires `nodeCidrs` and the API server option for that direction; inherits any widening from those rules |
+| `all-pods` intent | `namespaceSelector: {}` and `podSelector: {}` | Exact: matches pods in all namespaces (Cilium maps `all-pods` to its `cluster` entity, which also includes nodes and the API server) | Exact: matches pods in all namespaces |
+| Every egress policy | `policyTypes` includes `Egress` | Exact | Wider (`pod-start-egress-open`): in VPC CNI standard mode, new pods can send outbound traffic for about one second before egress rules take effect |
+
+When a generated `NetworkPolicy` allows broader traffic than intended, Kix lists the reason codes in its `kix.run/network-policy-widened` annotation. During `kix check`, the `security.networkPolicyWidened` scorecard rule groups affected policies by reason:
+
+- **Warnings (fixable by configuration):** Reasons you can resolve by setting a `cluster.network` option, such as an unset `cluster.network.serviceCidr` on EKS or `cluster.network.nodeCidrs` on GKE.
+- **`info` findings (platform limits and per-policy details):** Platform limits that no Kix setting can narrow, plus a per-policy breakdown naming each affected `NetworkPolicy`. Run `kix check -v` to list them.
+
+If you raise `security.networkPolicyWidened` to `"error"` (with `scorecard.maxSeverity = "error"`), the build fails only on warnings you can fix in `cluster.network`. Platform limits remain at `info` and do not fail the build. You can also disable the rule under `scorecard.ruleOverrides`.
+
+### Known limits by platform
+
+These limits come from how each cloud CNI enforces `NetworkPolicy`. No Kix setting changes them, so `kix check` lists them only with `-v`.
+
+| Platform | Limit |
+| --- | --- |
+| GKE and GKE Autopilot | External ingress rules (`LoadBalancer` Services and `from = "world"`) also accept traffic from cluster nodes, because nodes forward load balancer traffic (`world-ingress-nodes`). |
+| GKE and GKE Autopilot | Local-node (`host`) rules allow every node in `cluster.network.nodeCidrs`, because `NetworkPolicy` cannot select only the node a pod runs on (`host-all-nodes`). |
+| EKS with the VPC CNI | External egress rules (`to = "world"`) also allow pods to reach pods and nodes in the cluster, because VPC subnets hold pods and nodes alongside VPC endpoints, load balancers, and databases (`world-egress-pod-subnets`, `world-egress-node-subnets`). |
+| EKS with the VPC CNI | External ingress rules (`LoadBalancer` Services and `from = "world"`) also accept traffic from pods and cluster nodes (`world-ingress-pods`, `world-ingress-nodes`). |
+| EKS with the VPC CNI | CIDR rules for cluster nodes and for incoming API server calls also match pods whose IPs fall in those subnets (`node-range-pods`, `apiserver-sources-pods`). |
+| EKS with the VPC CNI | New pods can send outbound traffic for about one second before egress rules take effect (`pod-start-egress-open`). Turning on `strict` mode in the Amazon VPC CNI add-on closes this window, but blocks all traffic for pods without a `NetworkPolicy`, including pods in `kube-system`. |
+| EKS with the VPC CNI | Local-node (`host`) rules allow every node in `cluster.network.nodeCidrs` (`host-all-nodes`). |
+
+Kix requires `cluster.network` address options only when a generated policy needs them. For example, a GKE cluster whose workloads have no `RoleBinding`, `ClusterRoleBinding`, or `apiserver` egress intent builds without `cluster.network.apiServer.cidrs`, and a cluster with no node rules or host-network scrape targets builds without `cluster.network.nodeCidrs`.
+
+Keep `cluster.network` IP ranges in sync with your live cluster. `kix build`, `kix check`, `kix plan`, and `kix deploy` do not verify `cluster.network.apiServer.cidrs` against the live cluster, so a wrong IP address deploys without error. Existing TCP connections stay open when the updated policy applies, hiding the mistake until a pod restarts and can no longer reach the API server. On GKE, rotating the control plane IP changes the API server endpoint address; update `cluster.network.apiServer.cidrs` whenever you rotate it.
+
 ## Default-deny baseline and paired rules
 
 With `networkPolicy.defaultDeny = true` (the default when network policy is enabled), Kix emits a baseline default-deny policy in every Kix-managed namespace for the configured `networkPolicy.directions` (`"both"`, `"ingress"`, or `"egress"`). Nothing in those namespaces can dial out or accept traffic unless a specific rule allows it.
@@ -79,6 +131,10 @@ For every service dependency in the graph, Kix opens a narrow path on both ends:
 
 - **Caller egress:** A policy in the calling workload's namespace allowing egress to the target Service's pod selector and numeric ports, plus egress to the cluster DNS provider.
 - **Callee ingress:** A paired policy in the target Service's namespace (`emit.inNamespace`) allowing ingress from the caller's pod selector and namespace on those ports. Kix writes this policy whenever it deploys the target pods. For an imported Service (`kix.mkImport`), Kix writes it only if `<namespace>-default-deny` already isolates the target namespace. Otherwise, such as in `kube-system` on a cloud flavor, Kix omits the ingress policy so it does not block other traffic to pods managed outside Kix, while still writing the caller's egress rule.
+
+Every workload also depends on each generated or package-defined network policy that selects its pods, unless the policy already depends on the workload. This covers any `NetworkPolicy` or `CiliumNetworkPolicy` in the workload's namespace whose selector matches its pod labels (including `<namespace>-default-deny`), as well as any matching `CiliumClusterwideNetworkPolicy`. Workloads with `hostNetwork: true` are excluded because network policies do not apply to host-network pods. `kix deploy` applies matching policies before the workload, and pruning deletes them after the workload. When you prune custom resources and their operator together, the operator keeps its API server access and other network policies until it finishes removing finalizers.
+
+References inside a network policy's `spec` (such as a workload's `out.selector` for the pods it selects or for allowed peers) do not record a dependency. Policies that read a workload's selector, such as Prometheus scrape policies and webhook API server ingress policies, are still applied before the workloads they select and deleted after them. If a policy must wait for another resource, list that resource in `requires`.
 
 Because Kix compiles the whole cluster at once, it knows the pod labels, namespaces, and container ports of both the caller and the callee. The enforcer package (such as `packages.experimental.cilium`, which claims the `network-policy-enforcer` role) supplies the policy builder (`out.netpol.mkPolicy`). If `networkPolicy.enable = true` is set without an enforcer in the cluster, evaluation fails immediately rather than generating policies that nothing would enforce.
 
@@ -95,12 +151,14 @@ Beyond cross-package Service references, Kix automatically derives rules for fou
 
 1. **DNS egress:** Every workload with an egress policy gets a rule allowing DNS queries to the cluster's [DNS peers](#dns-peers), and any workload that connects to a Service is ordered after the DNS provider during deploy.
 2. **Kubernetes API server egress:** During instance evaluation, Kix walks the instance's `RoleBinding` and `ClusterRoleBinding` resources. If a workload's `ServiceAccount` is bound to a role, Kix emits an egress rule allowing that workload to reach `kube-apiserver`.
-3. **External ingress and exposure:** A workload fronted by a `LoadBalancer` Service (unless served by an internal provider load-balancer class) gets an ingress rule from `world`. Similarly, `kix.expose` automatically emits an ingress rule on the backend admitting the configured Ingress or Gateway controller's pods.
+3. **External ingress and exposure:** When an external `LoadBalancer` Service (one whose `loadBalancerClass` does not come from `kix.providedLoadBalancerClass`) selects a workload's pods, Kix allows external ingress (`world`) to that workload on the Service's target ports. Other workloads in the same package instance, including `NodePort` backends, receive no external ingress rule unless `meta.network.intents` declares `from = "world"`. Similarly, `kix.expose` adds an ingress rule on the backend allowing traffic from the cluster's Ingress or Gateway controller pods.
 4. **StatefulSet peer traffic and metric scrapes:** `StatefulSet` workloads receive self-ingress and self-egress rules so peer replicas can form a cluster. At the cluster level, Kix joins each Prometheus or VMAgent custom resource with the `ServiceMonitor` and `PodMonitor` objects it selects, opening scrape egress from the monitoring server and scrape ingress on each target's numeric pod ports.
 
 ### DNS peers
 
 The DNS egress rule allows UDP and TCP port 53 to the cluster's DNS peers. By default, these are pods labeled `k8s-app: kube-dns` in `kube-system`, where kubeadm, kind, k3s, RKE2, and EKS run CoreDNS. A package that claims the `dns` role can override this list in `meta.dnsPeers`, and a `dns` import (`kix.mkImport`, such as a flavor's `platform-dns`) accepts the same list as `dnsPeers`. Each entry selects either pods by label in one namespace (`{ namespace; podSelector; }`, where `namespace` defaults to the provider's namespace) or an IP range (`{ cidr; }`). `packages.experimental.coredns` declares its own pods in `meta.dnsPeers`, so generated policies reach it in whichever namespace it runs. The `gke` and `gke-autopilot` flavors set `dnsPeers` on `platform-dns` to `kube-dns`, `node-local-dns`, `169.254.169.254/32`, and `169.254.20.10/32`, covering standard `kube-dns`, NodeLocal DNSCache, and Cloud DNS.
+
+Kix reads `dnsPeers` from the cluster's active `dns` provider. If no `dns` provider is active (for example, when no workload references a Service, leaving a flavor's optional `platform-dns` import inactive) and the cluster declares a single `dns` import, Kix still uses that import's `dnsPeers`.
 
 Because Cilium cannot combine pod selectors and IP ranges in a single DNS rule, the `cilium` enforcer accepts only pod selector entries and fails evaluation when `dnsPeers` or `meta.dnsPeers` includes `{ cidr; }`.
 
@@ -118,7 +176,7 @@ Different network facts become available at different stages of evaluation. Kix 
 | **Instance phase** (post-fixpoint processor) | All resources belonging to one package instance | API server egress (from the `ServiceAccount` to `RoleBinding` walk), `LoadBalancer` world ingress, and policies for custom resources that declare `factBehavior.endpoint = "terminate"` |
 | **Cluster phase** (whole-cluster processor) | All active instances, namespaces, and monitors | Per-namespace default-deny walls, Prometheus and VMAgent scrape policies, and `networkPolicy.platformIntents` |
 
-Running the workload phase *before* the workload resource is sealed is critical for rollout safety. Kix splices the generated policies into the workload's `requires` list before computing its store hash. As a result, `kix deploy` applies the `CiliumNetworkPolicy` resources and waits for them to become ready before applying the Deployment itself, ensuring pods never start in a window where their firewall rules are missing.
+Running the workload phase *before* the workload resource is sealed is critical for rollout safety. Kix splices the generated policies into the workload's `requires` list before computing its store hash. As a result, `kix deploy` applies the `CiliumNetworkPolicy` resources and waits for them to become ready before applying the Deployment itself, ensuring pods never start in a window where their firewall rules are missing. On GKE and EKS, `kix deploy` still applies each standard `NetworkPolicy` before its workload. Because Kubernetes `NetworkPolicy` objects report no readiness status, `kix deploy` cannot wait for the CNI to enforce a policy before pods start.
 
 ## Declarative intents and operand policies
 

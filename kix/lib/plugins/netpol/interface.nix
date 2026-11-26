@@ -17,7 +17,7 @@ let
 
     apiServerEgressRule = "rule. egress to kube-apiserver";
 
-    mkExternalIngressRule = "{ entities } -> rule. ingress from external sources";
+    mkExternalIngressRule = "{ entities, ports ? [ ] } -> rule. ingress from external sources on these pod ports (Service ports, whose `targetPort` is read), or on every port when `ports` is empty";
 
     mkExternalEgressRule = "{ entities } -> rule. egress to external destinations";
 

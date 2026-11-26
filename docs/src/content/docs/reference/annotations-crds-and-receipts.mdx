@@ -27,7 +27,7 @@ Most `kix.run/*` metadata is stamped automatically by resource builders (`scope.
 | `kix.run/kubernetes-uid` | `Activation` resources of a definition that sets `cluster.kubernetes.uid` | The UID of the Kubernetes cluster's `kube-system` Namespace the build was bound to. While any record carries it, the Kubernetes cluster refuses definitions that do not set the UID. See [Bind a cluster definition to its Kubernetes cluster](/docs/how-to/operate-a-cluster/bind-a-cluster-definition-to-its-kubernetes-cluster/). |
 | `kix.run/consumer` | `Namespace` resources in consumer clusters | Names the consumer cluster (built with `kix.interface`) that owns the namespace, allowing platform network policies to select consumer pods. |
 | `kix.run/derived` | Derived network policies | `"true"` on network policy resources synthesized by Kix's network policy plugin. (Derived `PodDisruptionBudget` objects do not carry this label.) |
-| `kix.run/policy-type` | Derived network policies | Rule category that produced a derived network policy (`"default-deny"`, `"caller-ingress"`, `"scrape"`, `"cr-operand"`, `"apiserver-supplement"`, `"external-ingress-supplement"`, `"gateway"`, `"ingress-controller"`, or `"operator-managed-workload"`). Basic per-workload egress and ingress policies carry `kix.run/derived: "true"` without `kix.run/policy-type`. |
+| `kix.run/policy-type` | Derived network policies | Rule category that produced a derived network policy (`"default-deny"`, `"caller-ingress"`, `"scrape"`, `"cr-operand"`, `"apiserver-supplement"`, `"external-ingress-supplement"`, `"gateway"`, `"ingress-controller"`, `"operator-managed-workload"`, or `"platform-intent"`). Basic per-workload egress and ingress policies carry `kix.run/derived: "true"` without `kix.run/policy-type`. |
 | `kix.run/db-cluster` | `stackgres-database` and `cnpg-database` resources | Name of the target PostgreSQL cluster resource that the database belongs to. |
 | `pod-security.kubernetes.io/enforce` | `Namespace` resources | Pod Security Admission level (`privileged`, `baseline`, or `restricted`) set from `namespaces.<name>.podSecurity`, package `meta.podSecurity`, or a platform interface. |
 
@@ -110,6 +110,7 @@ Generated from the experimental attribute-set form of [`kix.untrackedRef`](/docs
 | Annotation | Meaning |
 | --- | --- |
 | `kix.run/operand-of` | `"<group>/<Kind>/<name>"` of the operator custom resource whose runtime pods a `Service`, `NetworkPolicy`, or `PodDisruptionBudget` selects. |
+| `kix.run/network-policy-widened` | Comma-separated reason codes (such as `world-egress-services` or `pod-start-egress-open`) added to a generated `NetworkPolicy` when it allows broader traffic than intended, such as CIDR rules matching in-cluster IPs or brief outbound traffic during pod startup. Written by the standard `NetworkPolicy` enforcer and checked by the [`security.networkPolicyWidened`](/docs/reference/scorecard-and-rules/#built-in-security-rules) scorecard rule, which warns when a `cluster.network` setting can narrow the rule and reports platform limits at `info`. |
 | `kix.run/monitors-external-service` | `"true"` on a `ServiceMonitor` or `VMServiceScrape` that intentionally targets a Service outside the Kix build. |
 | `kix.run/role` | Reserved key (`kix.keys.role`); not currently stamped by built-in builders or packages. |
 

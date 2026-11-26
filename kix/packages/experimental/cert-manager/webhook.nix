@@ -141,6 +141,30 @@ in
     };
   };
 
+  # The API server calls the webhook on `webhook.securePort`. Package
+  # intents in `meta` cannot read config and apply to every workload of the
+  # package, so the rule is built here, over the webhook's pods and port.
+  # Null when the cluster has no network policy enforcer.
+  webhookIngressPolicy = kix.operandPolicy {
+    inherit scope;
+    name = "${name}-webhook-apiserver-ingress";
+    selector = self.webhookDeployment.out.selector;
+    ingress =
+      (scope.networkPolicyEnforcer.netpol.translateIntentRules {
+        intents.webhook.ingress = [
+          {
+            from = "apiserver";
+            ports = [
+              {
+                port = securePort;
+                protocol = "TCP";
+              }
+            ];
+          }
+        ];
+      }).ingressRules;
+  };
+
   webhookDeployment =
     {
       name = "${name}-webhook";

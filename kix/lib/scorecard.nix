@@ -188,7 +188,10 @@ let
     }:
     {
       rule = ruleName;
-      inherit severity level;
+      # A finding marked `detail` backs up another finding of the same rule,
+      # so it is reported as `info`, which `kix check` lists only with `-v`.
+      severity = if finding.detail or false then "info" else severity;
+      inherit level;
       namespace = namespaceName;
       instance = instanceName;
       resource = resourceName;
@@ -395,6 +398,9 @@ rec {
       # Map of "<namespace>/<name>" to `{ creatorNamed; }` for external names
       # declared with `kix.untrackedRef`, collected before string context is stripped.
       externalNames ? { },
+      # Manifests the cluster processors derive, such as default-deny and
+      # scrape network policies, which `allResources` does not hold.
+      derivedResources ? [ ],
     }:
     let
       clusterRules = builtins.filter (r: (r.rule.level or "") == "cluster") (flattenRules rules);
@@ -413,6 +419,7 @@ rec {
             allResources
             clusterConfig
             externalNames
+            derivedResources
             ;
         };
         applies = checkAppliesTo rule ctx;

@@ -53,40 +53,40 @@ rec {
     else
       peers;
 
-  # Return the DNS peers of the cluster's `dns` role provider
-  # (`{ ns; inst; meta; }` from `findRoleProvider`), with a pod peer's
-  # missing `namespace` set to the provider's, or `defaultDnsPeers` when no
-  # instance claims the role or the provider declares none.
+  # Return the DNS peers that `source` (`{ ns; inst; meta; }`, or null)
+  # declares in `meta.dnsPeers`, with a pod peer's missing `namespace` set to
+  # the source's, or `defaultDnsPeers` when there is no source or it
+  # declares none. `eval/cluster.nix` picks the source and computes the
+  # peers once for the cluster.
   dnsPeersOf =
-    findRoleProvider:
+    source:
     let
-      provider = findRoleProvider "dns";
-      declared = if provider == null then null else provider.meta.dnsPeers or null;
+      declared = if source == null then null else source.meta.dnsPeers or null;
       withNamespace =
         p:
         if builtins.isAttrs p && p ? podSelector && !(p ? namespace) then
-          p // { namespace = provider.ns; }
+          p // { namespace = source.ns; }
         else
           p;
     in
     if declared == null then
       defaultDnsPeers
     else
-      checkDnsPeers "${provider.ns}/${provider.inst}" (
+      checkDnsPeers "${source.ns}/${source.inst}" (
         if builtins.isList declared then map withNamespace declared else declared
       );
 
-  # Return the enforcer's `out` with its rules built for the cluster's DNS
-  # peers (`dnsPeersOf`), or null for a null `enforcerOut`. Every reader of
-  # the enforcer (package scopes and the netpol plugin) goes through this,
-  # so all of them see one DNS rule.
+  # Return the enforcer's `out` with its rules built for `dnsPeers`, or null
+  # for a null `enforcerOut`. Every reader of the enforcer (package scopes
+  # and the netpol plugin) goes through this with the cluster's peers, so
+  # all of them see one DNS rule.
   bindDnsPeers =
-    findRoleProvider: enforcerOut:
+    dnsPeers: enforcerOut:
     if enforcerOut == null || !(enforcerOut.netpol ? withDnsPeers) then
       enforcerOut
     else
       enforcerOut
       // {
-        netpol = enforcerOut.netpol.withDnsPeers (dnsPeersOf findRoleProvider);
+        netpol = enforcerOut.netpol.withDnsPeers dnsPeers;
       };
 }

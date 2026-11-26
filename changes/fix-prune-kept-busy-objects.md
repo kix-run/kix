@@ -1,0 +1,6 @@
++++
+kind = "error"
+id = "K6315"
+cli = ["kix deploy --prune", "kix rollback --prune", "kix gc"]
++++
+If `kix deploy --prune`, `kix rollback --prune`, or `kix gc` exits 1 with `[K6315]`, resolve what blocked the deletion and run `kix deploy --prune` or `kix gc` again to delete the remaining objects. Update any scripts that check the exit status of those commands or read `pruned` in `--log-format json`. These commands now exit 1 and print `[K6315]` when objects scheduled for deletion in this cluster remain on the cluster. Previously they exited 0, for example leaving an operator stack behind when one of its custom resources changed during deletion. Kix also retries when an object changes between Kix's pre-delete check and the delete request, such as when a controller updates `status`. Kix re-reads and checks the object up to 5 times before leaving it in place and failing with `[K6315]`. Objects still deployed by another Kix cluster stay on the cluster as before and do not fail the run. Text summaries count objects held back by an undeleted dependent or a dependency cycle as `left on the cluster`, and the JSON `summary` event records that count as `kept`. `pruned` now counts only objects deleted during the run, leaving out objects that were already gone.

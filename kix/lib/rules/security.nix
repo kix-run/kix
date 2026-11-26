@@ -9,6 +9,7 @@ let
   inherit (import ../core/util.nix { inherit lib; }) listOr attrsOr;
   inherit (import ../core/pod-spec.nix { inherit lib; }) podSpecOf;
   workloadKinds = import ../core/workload-kinds.nix { inherit lib; };
+  widening = import ../plugins/netpol/widening.nix;
 
   getPodSpec = podSpecOf;
 
@@ -435,5 +436,73 @@ in
         [ { message = "namespace '${namespaceName}' has workloads but no network policy"; } ]
       else
         [ ];
+  };
+
+  # Report generated NetworkPolicies that admit traffic their rules did not
+  # ask for. The standard enforcer marks each such policy with
+  # `kix.run/network-policy-widened`. The rule reports each reason once with
+  # a count, at the rule's severity when a cluster setting removes it
+  # (`fixable` in widening.nix) and at info when it is a platform limit, and
+  # each policy as an info detail that `kix check -v` lists.
+  networkPolicyWidened = {
+    description = "Generated NetworkPolicy objects should allow only the intended traffic";
+    level = "cluster";
+    severity = "warning";
+    tags = [
+      "security"
+      "network"
+    ];
+    check =
+      {
+        allResources,
+        derivedResources ? [ ],
+        ...
+      }:
+      let
+        widenedIds =
+          r:
+          let
+            v = r.metadata.annotations.${kixKeys.networkPolicyWidened} or "";
+          in
+          if v == "" then [ ] else lib.splitString "," v;
+        policies = builtins.filter (r: (r.kind or "") == "NetworkPolicy" && widenedIds r != [ ]) (
+          allResources ++ derivedResources
+        );
+        byId = builtins.zipAttrsWith (_: ps: ps) (
+          builtins.concatMap (p: map (id: { ${id} = p; }) (widenedIds p)) policies
+        );
+        describe =
+          id:
+          widening.${id} or {
+            summary = "Annotation `${kixKeys.networkPolicyWidened}` contains unknown reason code `${id}`. Kix kept the policy and could not check whether a cluster setting narrows it.";
+            fix = "If you set `${kixKeys.networkPolicyWidened}` directly on a `NetworkPolicy`, remove `${id}`.";
+            fixable = false;
+            detail = "unknown reason code in `${kixKeys.networkPolicyWidened}`";
+          };
+        count = n: if n == 1 then "1 network policy" else "${toString n} network policies";
+      in
+      lib.mapAttrsToList (
+        id: ps:
+        let
+          d = describe id;
+        in
+        {
+          # A platform limit is reported at info whatever the rule's
+          # severity, so raising the rule to error fails only on reasons a
+          # cluster setting removes.
+          detail = !(d.fixable or false);
+          message = "${count (builtins.length ps)} (${id}): ${d.summary}${
+            lib.optionalString (d.fix != "") " ${d.fix}"
+          }";
+        }
+      ) byId
+      ++ map (p: {
+        detail = true;
+        namespace = p.metadata.namespace or null;
+        resource = "NetworkPolicy/${p.metadata.name}";
+        message = "allows broader traffic than intended: ${
+          lib.concatMapStringsSep "; " (id: "${(describe id).detail} (${id})") (widenedIds p)
+        }.";
+      }) policies;
   };
 }

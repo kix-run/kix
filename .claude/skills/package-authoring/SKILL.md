@@ -580,7 +580,12 @@ Mandatory:
    so the kind deploy runs under default deny, and the bring-up, build, and
    deploy commands in the header (`clusters/test-clickhouse.nix:13-21`,
    `clusters/test-keycloak.nix:1-15`). A dependency from an unmerged change
-   is a `kix.mkImport` stand-in; note the merge order.
+   is a `kix.mkImport` stand-in; note the merge order. If the package's
+   network intents target `host`, `remote-node`, `cluster`, or the API server,
+   also test it with standard `NetworkPolicy`: add it to
+   `clusters/test-netpol-gke.nix` or `clusters/test-netpol-eks.nix`, run
+   `kix check`, and inspect the generated policies and any
+   `security.networkPolicyWidened` findings.
 4. Nothing in `flake.nix`: `clusters/test-<pkg>.nix` registers itself under
    the key `<pkg>`. A cluster kept in a directory, such as
    `clusters/test-<pkg>/kind.nix`, needs a line under `clusters` there.

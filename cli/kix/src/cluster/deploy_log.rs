@@ -84,6 +84,7 @@ impl Line {
                 failed_after_apply: r.failed_after_apply,
                 cancelled: r.cancelled,
                 pruned: r.pruned,
+                kept: r.kept,
                 only: only.to_vec(),
                 nothing_to_apply: false,
                 left_behind: Vec::new(),
@@ -117,6 +118,7 @@ impl Line {
                 failed_after_apply: 0,
                 cancelled: 0,
                 pruned: 0,
+                kept: 0,
                 only: Vec::new(),
                 nothing_to_apply: true,
                 left_behind: Vec::new(),
@@ -217,7 +219,13 @@ pub enum Event {
         #[serde(default)]
         failed_after_apply: usize,
         cancelled: usize,
+        /// Orphans this run deleted. An orphan already gone is not counted.
         pruned: usize,
+        /// Orphans of this Kix cluster the prune left on the cluster, held
+        /// back by an object whose delete failed or by a dependency cycle.
+        /// The `prune_kept` lines name them.
+        #[serde(default)]
+        kept: usize,
         /// The instances (`namespace/instance`) a deploy with `--only`
         /// applied in full: the named ones and the ones they need. Such a
         /// deploy leaves the cluster's current deploy

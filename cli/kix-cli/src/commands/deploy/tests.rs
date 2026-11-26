@@ -387,6 +387,53 @@ mod run_end_tests {
         );
     }
 
+    /// A prune that left this cluster's orphans on the cluster fails the
+    /// run and says how many, while a prune that found some already gone
+    /// succeeds.
+    #[test]
+    fn a_prune_that_leaves_orphans_on_the_cluster_fails() {
+        let left = DeployResult {
+            unchanged: 4,
+            pruned: 202,
+            kept: 11,
+            ..DeployResult::default()
+        };
+        assert_eq!(
+            RunEnd::of(&Ok(left.clone())),
+            RunEnd {
+                succeeded: false,
+                current: true,
+            }
+        );
+        let text = super::observer::closing(
+            &left,
+            &Closing {
+                command: Command::Deploy,
+                cluster: "prod",
+                record: Some("prod-8a1f3c20"),
+                previous: Previous::Active("prod-4be1c09a".into()),
+                interrupted: None,
+                current: true,
+                on_error_continue: false,
+                only: &[],
+            },
+        );
+        assert!(
+            text.starts_with("[K6315] Deploy of 'prod' left 11 object(s) on the cluster: "),
+            "{text}"
+        );
+        assert!(
+            text.contains("202 pruned, 11 left on the cluster"),
+            "{text}"
+        );
+        assert!(text.contains("`kix gc prod`"), "{text}");
+        let gone = DeployResult {
+            already_gone: 202,
+            ..DeployResult::default()
+        };
+        assert!(RunEnd::of(&Ok(gone)).succeeded);
+    }
+
     #[test]
     fn the_summary_line_names_a_failed_run() {
         let counts = DeployResult {
