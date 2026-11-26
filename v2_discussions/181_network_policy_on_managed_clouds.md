@@ -16,11 +16,11 @@ the cluster installs.
 Every platform claim below is marked with its evidence:
 
 - **V (Fn):** verified on a live cluster. `Fn` cites a finding in the
-  2026-11-25 GKE test report, and `N1`, `N2`, `N3`, `N4`, and `N5` cite the
-  "Network policy facts for the design" section of that report. `AWS Fn` cites a
-  finding in the EKS test report from the same day, and `AWS Q1` to `AWS Q8`
-  cite the numbered answers in the "Network policy facts for the design" section
-  of the EKS test report.
+  2026-11-25 GKE test report, and `N1`, `N2`, `N3`, `N4`, `N5`, and `N6` cite
+  the "Network policy facts for the design" section of that report. `AWS Fn`
+  cites a finding in the EKS test report from the same day, and `AWS Q1` to
+  `AWS Q8` cite the numbered answers in the "Network policy facts for the
+  design" section of the EKS test report.
 - **D [ref]:** documented by the vendor as of 2026-11-25 (links in `181b_network_policy_platform_facts.md`).
 - **A:** unverified assumption.
 
@@ -216,10 +216,12 @@ endpoints such as STS, load balancers, and databases. `podStartsBeforePolicy`
 declares that a new pod starts before its policies take effect, so the scorecard
 rule can report that startup window. The `platformNetworkPolicy` helper defaults
 `podStartsBeforePolicy` to `false`, and the `gke` and `gke-autopilot` flavors do
-not set it, so Kix reports no startup window on GKE. No live test has measured
-whether a new pod on GKE Dataplane V2 has a window before its policies take
-effect (**A**), so the value stays `false` until GKE test 11 in `181a` measures
-it. On `eks`, the flavor sets `ipBlockSelectsPods = true` (V, AWS Q3),
+not set it, so Kix reports no startup window on GKE. Live testing on GKE
+Standard with Dataplane V2 verified `podStartsBeforePolicy = false`: five fresh
+pods under default-deny egress called an outside address every 100 ms from
+container start, and every pod had 0 successes in 100 requests, with the first
+request already blocked about 0.01 s after start (V, N6). On `eks`, the flavor
+sets `ipBlockSelectsPods = true` (V, AWS Q3),
 `ipBlockSelectsNodes = true` (V, AWS Q3 and AWS F18),
 `ipBlockSeesServiceAddress = true` (V, AWS Q1),
 `nodeRangeHoldsOnlyNodes = false`, and `podStartsBeforePolicy = true` (about
