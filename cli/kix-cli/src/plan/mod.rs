@@ -546,7 +546,8 @@ pub fn render_never_pruned(kept: &[ResourceId], from: KeptFrom) -> String {
     let count = kept.len();
     let what = match from {
         KeptFrom::LeftTheBuild => format!("{count} left the build, never deleted automatically"),
-        KeptFrom::FullScan => format!("{count} never deleted automatically"),
+        KeptFrom::FullScan if count == 1 => "1 object, never deleted automatically".to_string(),
+        KeptFrom::FullScan => format!("{count} objects, never deleted automatically"),
     };
     let _ = writeln!(out, "{} ({what}):", output::bold("Kept on the cluster"));
     for rid in kept {
@@ -974,7 +975,10 @@ mod never_pruned_tests {
             "{left}"
         );
         let scan = render_never_pruned(std::slice::from_ref(&ns), KeptFrom::FullScan);
-        assert!(scan.contains("(1 never deleted automatically)"), "{scan}");
+        assert!(
+            scan.contains("(1 object, never deleted automatically)"),
+            "{scan}"
+        );
         assert!(!scan.contains("left the build"), "{scan}");
     }
 }
