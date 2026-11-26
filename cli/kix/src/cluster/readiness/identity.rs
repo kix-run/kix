@@ -108,7 +108,14 @@ pub(crate) fn classify_pod_identity(pod: &Value, expected: &IdentityEnv) -> Opti
             .flatten()
             .filter_map(|e| {
                 let key = e.get("name").and_then(Value::as_str)?;
-                Some((key, e.get("value").and_then(Value::as_str)))
+                // `None` stands for a value from `valueFrom`, which Kix cannot
+                // read. An entry with neither field holds the empty string.
+                let value = match e.get("value").and_then(Value::as_str) {
+                    Some(v) => Some(v),
+                    None if e.get("valueFrom").is_some() => None,
+                    None => Some(""),
+                };
+                Some((key, value))
             })
             .collect();
         let missing: Vec<&str> = expected
@@ -151,25 +158,25 @@ pub(crate) fn classify_pod_identity(pod: &Value, expected: &IdentityEnv) -> Opti
             let also = if missing.is_empty() {
                 String::new()
             } else {
-                format!(", and it is missing {}", quoted_list(&missing))
+                format!(" and is missing {}", quoted_list(&missing))
             };
             let exempt = expected
                 .skip
                 .as_ref()
                 .map(|s| {
                     format!(
-                        " If the container should keep its own credentials, list it in the pod annotation `{}` instead.",
+                        " If this container should keep its own credentials, add its name to the pod annotation `{}` and deploy again.",
                         s.annotation
                     )
                 })
                 .unwrap_or_default();
             Some((
                 format!(
-                    "container `{name}` sets `{key}` to {got} itself, but the cloud identity in the definition is `{want}`{also}. {} does not replace a variable that a container already sets",
+                    "container `{name}` already sets `{key}` to {got} (expected `{want}`){also}. {} does not overwrite a container's existing environment variables",
                     expected.description
                 ),
                 Some(format!(
-                    "Remove `{key}` from the `env` of container `{name}`, then deploy again.{exempt}"
+                    "Remove `{key}` from `env` on container `{name}`, then deploy again.{exempt}"
                 )),
             ))
         } else if !missing.is_empty() {
@@ -297,12 +304,12 @@ mod tests {
         let message = classify_pod_identity(&p, &irsa()).expect("refused");
         assert!(
             message.contains(
-                "container `worker` sets `AWS_ROLE_ARN` to `arn:aws:iam::111122223333:role/other` itself, but the cloud identity in the definition is `arn:aws:iam::111122223333:role/worker`"
+                "container `worker` already sets `AWS_ROLE_ARN` to `arn:aws:iam::111122223333:role/other` (expected `arn:aws:iam::111122223333:role/worker`)"
             ),
             "{message}"
         );
         assert!(
-            message.ends_with("Remove `AWS_ROLE_ARN` from the `env` of container `worker`, then deploy again. If the container should keep its own credentials, list it in the pod annotation `eks.amazonaws.com/skip-containers` instead."),
+            message.ends_with("Remove `AWS_ROLE_ARN` from `env` on container `worker`, then deploy again. If this container should keep its own credentials, add its name to the pod annotation `eks.amazonaws.com/skip-containers` and deploy again."),
             "{message}"
         );
         assert!(!message.contains("Delete the association"), "{message}");
@@ -370,7 +377,7 @@ mod tests {
         ]));
         let message = classify_pod_identity(&p, &irsa()).expect("refused");
         assert!(
-            message.contains("sets `AWS_ROLE_ARN` to `arn:aws:iam::111122223333:role/sidecar` itself, but the cloud identity in the definition is `arn:aws:iam::111122223333:role/worker`, and it is missing `AWS_WEB_IDENTITY_TOKEN_FILE`"),
+            message.contains("already sets `AWS_ROLE_ARN` to `arn:aws:iam::111122223333:role/sidecar` (expected `arn:aws:iam::111122223333:role/worker`) and is missing `AWS_WEB_IDENTITY_TOKEN_FILE`"),
             "{message}"
         );
         assert!(message.contains("Remove `AWS_ROLE_ARN`"), "{message}");
