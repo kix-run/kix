@@ -1,21 +1,60 @@
 # Change records
 
-Each change that a Kix user can see gets one file here, usually named after
-the branch: `changes/<name>.md`. Replace any `/` in the branch name with `-`,
-because a folder here means a released version. A file per change means
-parallel branches never edit the same file. At release, the files move to
-`changes/<version>/`, and `CHANGELOG.md` gets a section written from them.
-Kix also ships them with each release as `kix-<version>-changes.json`.
+Every change that a Kix user can see gets one file in `changes/`.
 
-A pull request that changes `cli/` or `kix/` must add or change a record,
-unless it has the `no-changelog` label because nothing a user sees changes.
-The Changelog workflow checks this, and checks every record's format.
+## When you need a record
 
-## Format
+If your pull request changes `cli/` or `kix/`, you must add or change a record in `changes/`. When nothing a user sees changes, add the `no-changelog` label to the pull request instead.
 
-A TOML header between `+++` lines, then one paragraph for users. The
-paragraph becomes one bullet in `CHANGELOG.md`, so it takes no list and no
-code block.
+The Changelog workflow checks this requirement and checks every record's format.
+
+## How to write a record
+
+1. Create `changes/<name>.md`, usually named after your branch. Replace any `/` in the branch name with `-`, because a folder in `changes/` means a released version. Using one file per change keeps parallel branches from editing the same file.
+2. Add a TOML header between `+++` lines. Set `kind` and any [header fields](#common-header-fields) that apply.
+3. Write one paragraph for users below the closing `+++`. This paragraph becomes one bullet in `CHANGELOG.md`, so do not use lists or code blocks.
+4. Run `scripts/change-records.py check` to validate your record.
+
+```markdown
++++
+kind = "added"
+packages = ["echo-server"]
++++
+`echo-server` adds a `replicas` option.
+```
+
+## Which kind to choose
+
+For an ordinary feature, update, or bug fix, use `added`, `changed`, or `fixed`.
+
+The `kind` picks the heading in `CHANGELOG.md`, and headings appear in `CHANGELOG.md` in the order below. See `CLAUDE.md` § Versioning and breaking changes for what counts as breaking.
+
+| Kind | `CHANGELOG.md` heading | Breaking |
+| --- | --- | --- |
+| `error` | Breaking (shows an error) | yes (requires [`id`](#error-ids)) |
+| `silent` | Breaking (no error) | yes |
+| `note` | Upgrade notes | no |
+| `security` | Security | no |
+| `added` | Added | no |
+| `changed` | Changed | no |
+| `fixed` | Fixed | no |
+
+## Common header fields
+
+Only `kind` is required. The other valid fields are `packages`, `library`, and `cli` below, plus `id`, `state`, `required-stop`, `touches-data`, `cve`, and `workaround` under [Rare cases](#rare-cases). Any other field is an error.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `kind` | string | Required. One of the values in [Which kind to choose](#which-kind-to-choose). |
+| `packages` | list of strings | Packages the change touches. Use the folder name for packages under `kix/packages/stable/`, or `experimental/<name>` for packages under `kix/packages/experimental/`. Leave this field out when the change is not about particular packages. |
+| `library` | list of strings | Symbols in the Kix library, such as `kix.contracts.redis`, or `kix.contracts.experimental.<name>` for an experimental contract. |
+| `cli` | list of strings | `kix` commands or flags removed or changed, written as a user types them: `--old-flag`, `kix oldcmd`. |
+
+## Rare cases
+
+### Error IDs
+
+A record with `kind = "error"` requires the `id` field (`string`). For other kinds, `id` is optional. Each `id` is `K` followed by four digits and must be unique across `changes/`.
 
 ```markdown
 +++
@@ -27,59 +66,53 @@ id = "K0001"
 `replicas` instead.
 ```
 
-Only `kind` is required. Any field not listed here is an error.
+To add an error ID:
+
+1. Run `scripts/change-records.py next-id` to print an ID no record uses. It picks one at random so branches worked on at the same time do not pick the same ID.
+2. Set `id` in the record's TOML header.
+3. Put the ID on the error that refuses the old form:
+   - **In the Kix library:** set the `id` field of `scope.fail` or `kix.fail`, such as `scope.fail { id = "K0001"; message = "replicaCount was removed."; ... }`. Kix prints it as `[K0001]` at the start of the error.
+   - **Elsewhere:** start the error message with the ID in brackets, such as `[K0001] ...`.
+
+`scripts/change-records.py check` fails until a file under `kix/` or `cli/` carries the ID. People search `CHANGELOG.md` for the ID, and tools match on it.
+
+### Experimental packages and contracts
+
+A record is experimental when it meets all four conditions:
+
+- Names at least one package or library symbol
+- Starts every package in `packages` with `experimental/`
+- Starts every symbol in `library` with `kix.contracts.experimental.`
+- Sets neither `cli` nor `state`
+
+An experimental `error` or `silent` record is listed in `CHANGELOG.md` under `Breaking in experimental packages and contracts`, after the two breaking headings. It does not raise the minor version.
+
+### Cluster state, required stops, and stored data
+
+| Field | Type | Allowed with | Meaning |
+| --- | --- | --- | --- |
+| `state` | bool | any `kind` | The change touches cluster state: Activation records, `kix.run/*` annotations, PackageInstance, or Kix's CRDs. |
+| `required-stop` | bool | `state = true` | Clusters must be deployed with this release before upgrading further. This should be rare. |
+| `touches-data` | bool | `kind = "silent"` | The change moves or reinterprets stored data. |
+
+### Security records
+
+Two optional fields apply only when `kind = "security"`:
 
 | Field | Type | Meaning |
-|---|---|---|
-| `kind` | string | One of the kinds below |
-| `packages` | list of strings | The packages the change touches: a folder name under `kix/packages/stable/`, or `experimental/<name>` for a folder under `kix/packages/experimental/`. Leave it out when the change is not about particular packages |
-| `library` | list of strings | Library symbols, such as `kix.contracts.redis`. An experimental contract is `kix.contracts.experimental.<name>` |
-| `cli` | list of strings | CLI commands or flags removed or changed, as a user types them: `--old-flag`, `kix oldcmd` |
-| `state` | bool | The change touches cluster state: Activation records, `kix.run/*` annotations, PackageInstance, or Kix's CRDs |
-| `touches-data` | bool | The change moves or reinterprets stored data. Only with `kind = "silent"` |
-| `required-stop` | bool | Clusters must be deployed with this release before upgrading further. Only with `state = true`. This should be rare |
-| `id` | string | `K` and four digits. Required for `kind = "error"`, optional otherwise. Unique across `changes/` |
-| `cve` | list of strings | CVE ids. Only with `kind = "security"` |
-| `workaround` | string | How to get the fix without upgrading. Only with `kind = "security"`. Leave it out when there is no workaround, such as a fix that only a new image carries |
+| --- | --- | --- |
+| `cve` | list of strings | CVE IDs. |
+| `workaround` | string | How to get the fix without upgrading. Leave this field out when there is no workaround, such as a fix that only a new image carries. |
 
-## Kinds
+## How releases use change records
 
-The kind picks the `CHANGELOG.md` heading. Headings appear in this order.
-`CLAUDE.md` § Versioning and breaking changes says what counts as breaking.
+At release:
 
-| Kind | Heading | Breaking |
-|---|---|---|
-| `error` | Breaking (shows an error) | yes |
-| `silent` | Breaking (no error) | yes |
-| `note` | Upgrade notes | no |
-| `security` | Security | no |
-| `added` | Added | no |
-| `changed` | Changed | no |
-| `fixed` | Fixed | no |
+- The files in `changes/` move to `changes/<version>/`.
+- `CHANGELOG.md` gets a section written from them.
+- Kix ships the records with each release as `kix-<version>-changes.json`.
 
-A record is experimental when it names at least one package or library
-symbol, every package it names starts with `experimental/`, every library
-symbol starts with `kix.contracts.experimental.`, and it sets neither `cli`
-nor `state`. An experimental `error` or `silent` record is listed under
-"Breaking in experimental packages and contracts", after the two breaking
-headings, and does not raise the minor version.
-
-A release with any other `error` or `silent` record raises the minor version.
-Otherwise it is a patch release.
-
-## Ids
-
-An `error` record needs an id. `scripts/change-records.py next-id` prints
-an id no record uses. It picks one at random, so that branches worked on at
-the same time do not pick the same id.
-
-The error that refuses the old form carries the id. In the Kix library it is
-the `id` field of `scope.fail` or `kix.fail`, such as `scope.fail { id =
-"K0001"; message = "replicaCount was removed."; ... }`, and Kix prints it as
-`[K0001]` at the start of the error. Elsewhere the message starts with the id
-in brackets, such as `[K0001] ...`. The check fails until a file under
-`kix/` or `cli/` carries it. People search `CHANGELOG.md` for the id, and
-tools match on it.
+A release with any non-experimental `error` or `silent` record raises the minor version. Otherwise, it is a patch release.
 
 ## Commands
 
@@ -92,4 +125,8 @@ scripts/change-records.py json --version 0.10.0  # the release asset
 scripts/change-records.py release 0.10.0         # used by the release skill
 ```
 
-The tests: `cd scripts && python3 -m unittest -v change_records.test_change_records`.
+Run the unit tests with:
+
+```bash
+cd scripts && python3 -m unittest -v change_records.test_change_records
+```
