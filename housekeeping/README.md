@@ -1,26 +1,26 @@
 # Housekeeping
 
-This folder is the open working log of problems noticed and left unfixed while working on Kix: rough edges, stale docs, slow commands, confusing names, and bugs someone stepped around.
+This folder tracks unfixed problems noticed while developing Kix: rough edges, stale docs, slow commands, confusing names, and bugs someone worked around.
 
 ## Why there are so many files
 
-Kix is developed largely by AI coding agents, directed and reviewed by its two maintainers. When an agent's session ends, its memory goes with it, so anything unrecorded is lost. Agents add an entry for every problem they notice and do not fix, whether or not it relates to the work in hand.
+Kix is developed largely by AI coding agents, directed and reviewed by its two maintainers. Agents keep no memory between sessions, so anything they do not write down is lost. They add a file for every problem they notice and do not fix, even when it is unrelated to their current task. Putting one problem in each file prevents merge conflicts across parallel branches.
 
-When a problem is fixed, its file is deleted, in the same commit as the fix where there is one. The folder is the list of problems still open, and Git history keeps the closed ones. Since the folder began on 18 September 2026, 524 entries have been deleted; as of 26 November 2026, 537 are open.
+When a problem is fixed, its file is deleted, usually in the same commit. Only open problems stay in this folder, and Git history keeps the closed ones. Since the folder started on 18 September 2026, 524 entries have been deleted. As of 26 November 2026, 537 remain open.
 
-## How to read it
+## How to read the entries
 
-Each file records one problem under `YYYY-MM-DD-short-slug.md`, using the date it was noticed. Its first line states the problem in one sentence, with the path or subsystem it is about.
+Each entry is named `YYYY-MM-DD-short-slug.md` for the date the problem was noticed. Its first line names the affected path or subsystem and states the problem in one sentence.
 
-From the repository root, `head -qn1 housekeeping/*.md` prints a one-line index, and `grep -ril <keyword> housekeeping/` searches by keyword.
+From the repository root, run `head -qn1 housekeeping/*.md` to list the first line of every file, or `grep -ril <keyword> housekeeping/` to search by keyword.
 
-- Entries record current problems only, with no priority, owner, or promise of a fix. Missing features go in `ROADMAP.md`, and designs still being discussed go in `v2_discussions/`.
-- When an agent meets the same problem again, it adds `Hit again <date> while <what it was doing>` to the existing entry. How often a problem comes back is the signal the maintainers most want.
-- Entries waiting for a decision carry a line starting with `Decision required from`.
-- Maintainers review entries in batches in `housekeeping/reviews/`, because the right fix for several related entries often differs from the fix any one of them suggests.
+- Entries record current problems only, with no priority, owner, or promise of a fix. Missing features go in [`ROADMAP.md`](../ROADMAP.md), and open design discussions go in [`v2_discussions/`](../v2_discussions/).
+- When an agent runs into the same problem again, it adds `Hit again <date> while <what it was doing>` to the existing entry. Repeat hits show the maintainers which problems come up most often.
+- Entries that need a maintainer's decision before they can be fixed include a `Decision required from` line.
+- Periodic batch reviews in [`housekeeping/reviews/`](reviews/) group entries by shared cause, since one underlying fix often resolves many entries at once.
 
-## Issues and contributions
+## Reporting bugs and contributing
 
-Bugs that affect people using Kix belong in [GitHub Issues](https://github.com/kix-run/kix/issues). Questions and feedback go to GitHub Discussions.
+If you hit a bug while using Kix, open an issue in [GitHub Issues](https://github.com/kix-run/kix/issues). Ask questions and share feedback in [GitHub Discussions](https://github.com/kix-run/kix/discussions).
 
-`housekeeping/` is the working log of the people and agents changing the code. If you spot a problem while working in the repository and leave it unfixed, add an entry here rather than opening an issue; [`CLAUDE.housekeeping.md`](../CLAUDE.housekeeping.md) covers the format and rules.
+If you notice a problem while working on this repository and leave it unfixed, add a file here instead of opening a GitHub issue. See [`CLAUDE.housekeeping.md`](../CLAUDE.housekeeping.md) for the format and rules.
