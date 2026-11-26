@@ -68,6 +68,18 @@ deployed build is not on this machine at all, `kix gc` builds your local files
 and proceeds only when they produce that exact build; otherwise it stops,
 deletes nothing, and prints both build hashes.
 
+Both the default mode and `--full-scan` keep resources belonging to an
+unfinished deploy of this cluster, including a failed deploy, a partial
+[`kix deploy --only`](/docs/reference/cli/deploy/#deploy-one-instance-at-a-time)
+run, or a deploy that is queued or running. `kix gc` identifies these
+resources from the `Activation` records in their `kix.run/activations`
+annotation and lists them under **Kept for an unfinished deploy**, grouped by
+deployment record. Run `kix deploy <cluster>` to finish or replace that
+deploy, then run `kix gc <cluster>` again. If the active deployment's build
+is not on this machine and your local files match a `Partial` deployment
+record from `kix deploy --only`, `kix gc` names that record in its error
+message.
+
 Default mode, `--full-scan`, and the Kix operator inspect only objects carrying the label `app.kubernetes.io/managed-by=kix`. `kix gc` never lists or deletes unlabelled objects, such as resources applied with `kubectl`. See [Objects Kix did not apply](/docs/reference/cli/diff/#objects-kix-did-not-apply).
 
 `--full-scan` judges the resources of the cluster you name. Each resource Kix

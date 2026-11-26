@@ -104,7 +104,14 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         );
         return Ok(());
     };
-    let graph = active_build(args, ctx, &cluster, active)?;
+    let stopped = match &retirement.records {
+        Some(records) => ctx
+            .runtime()?
+            .block_on(records.stopped(&cluster))
+            .map_err(|e| miette!("{e}"))?,
+        None => Vec::new(),
+    };
+    let graph = active_build(args, ctx, &cluster, active, &stopped)?;
 
     let hashes: HashSet<String> = graph.resources.keys().map(|p| store_hash(p)).collect();
     let ids: HashSet<String> = graph
@@ -166,6 +173,10 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
             graph.kubernetes_uid.as_deref(),
         ))
         .map_err(|e| miette!("{e}"))?;
+    let (ordered_rids, held) = ctx
+        .runtime()?
+        .block_on(kix::plan::keep_held(&client, &cluster, ordered_rids))
+        .map_err(|e| miette!("{e}"))?;
     let (ordered_rids, shared) = ctx
         .runtime()?
         .block_on(kix::plan::keep_shared(&client, &cluster, ordered_rids))
@@ -193,6 +204,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         print_record_plan(&retirement, &policy);
         print_never_pruned(&kept, KeptFrom::LeftTheBuild);
         print_shared(&shared);
+        print_held(&held, &cluster);
     }
     if ordered_rids.is_empty() && retirement.plan.retire.is_empty() {
         return Ok(());
@@ -241,6 +253,7 @@ fn active_build(
     ctx: &CommandContext,
     cluster: &str,
     active: &Record,
+    stopped: &[Record],
 ) -> Result<StoreGraph> {
     let (dir, warning) =
         baseline::active_build_dir(cluster, store::load_activation_path(cluster), Some(active));
@@ -262,7 +275,7 @@ fn active_build(
     }
     let graph = files_build(args, ctx, cluster)?;
     let built = build_hash(&graph);
-    check_files_build(cluster, active, built.as_deref())?;
+    check_files_build(cluster, active, built.as_deref(), stopped)?;
     Ok(graph)
 }
 
@@ -298,11 +311,31 @@ fn build_hash(graph: &StoreGraph) -> Option<String> {
 
 /// Refuse to collect garbage against a build from the current files that is
 /// not the build `active` names. `built` is that build's identity hash.
-pub(super) fn check_files_build(cluster: &str, active: &Record, built: Option<&str>) -> Result<()> {
+/// `stopped` is the cluster's Failed and Partial records. When one of them
+/// is a deploy with `--only` of the files' build, the refusal says so.
+pub(super) fn check_files_build(
+    cluster: &str,
+    active: &Record,
+    built: Option<&str>,
+    stopped: &[Record],
+) -> Result<()> {
     let active_hash = active.identity_hash.as_deref();
     if built.is_some() && built == active_hash {
         return Ok(());
     }
+    let partial = stopped
+        .iter()
+        .filter(|r| built.is_some() && r.identity_hash.as_deref() == built)
+        .find_map(|r| Some((r, r.partly_deployed()?)))
+        .map(|(r, p)| {
+            format!(
+                "\n  Deployment record {} already deployed part of your local build (`kix deploy --only` \
+                 applied {}). Run `kix deploy {cluster}` to finish deploying it, then run `kix gc {cluster}` again.\n",
+                r.name,
+                p.only.join(", "),
+            )
+        })
+        .unwrap_or_default();
     let short = |h: Option<&str>| match h {
         Some(h) => h[..8.min(h.len())].to_string(),
         None => "unknown".to_string(),
@@ -311,7 +344,7 @@ pub(super) fn check_files_build(cluster: &str, active: &Record, built: Option<&s
         "local files for '{cluster}' do not match the active deployment on the cluster\n  \
          Nothing was deleted.\n\n  \
          Active on cluster:        {} (build {})\n  \
-         Built from local files:   build {}\n\n  \
+         Built from local files:   build {}\n{partial}\n  \
          Why:\n    \
          `kix gc` keeps every resource in the active deployment's build and only deletes leftover objects outside it. That deployed build is not in Kix's local store on this machine, and your local files produce a different build, so Kix cannot tell which resources the cluster still needs.\n\n  \
          Next (choose one):\n    \
@@ -414,16 +447,23 @@ async fn clear_kept(
 fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::Mutating)?;
     let global = ctx.global.clone();
-    let active = ctx.runtime()?.block_on(async {
+    let (active, stopped) = ctx.runtime()?.block_on(async {
         match open_records(&global).await? {
-            Some(records) => records.active(&cluster).await.map_err(|e| miette!("{e}")),
-            None => Ok(None),
+            Some(records) => {
+                let active = records.active(&cluster).await.map_err(|e| miette!("{e}"))?;
+                let stopped = records
+                    .stopped(&cluster)
+                    .await
+                    .map_err(|e| miette!("{e}"))?;
+                Ok::<_, miette::Report>((active, stopped))
+            }
+            None => Ok((None, Vec::new())),
         }
     })?;
     // With no Active record the cluster runs no build, so the build from the
     // current files is the only one to compare with.
     let graph = match &active {
-        Some(active) => active_build(args, ctx, &cluster, active)?,
+        Some(active) => active_build(args, ctx, &cluster, active, &stopped)?,
         None => files_build(args, ctx, &cluster)?,
     };
 
@@ -561,7 +601,11 @@ async fn run_hard_async(
         );
     }
 
-    let (mut garbage, shared) = judge_hard(&live, expected_hashes, expected_ids, &tenancy);
+    let plan::Judged {
+        mut garbage,
+        shared,
+        held,
+    } = judge_hard(&live, expected_hashes, expected_ids, &tenancy);
 
     // Plan Superseded Activation record retirement. Any listing failure is
     // returned as an error rather than treated as an empty list.
@@ -578,6 +622,9 @@ async fn run_hard_async(
     if !shared.is_empty() {
         crate::say!();
         print_shared(&shared);
+    }
+    if !output::quiet() {
+        print_held(&held, cluster_name);
     }
 
     // Hard GC has examined all cluster objects when no resource kinds were

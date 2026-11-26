@@ -125,10 +125,10 @@ async fn read_cluster(
     let mut notes = BTreeMap::new();
     if let Some(records) = opened.records() {
         for view in &observation.clusters {
-            notes.insert(
-                view.cluster.clone(),
-                interface_notes(records, &view.cluster, &view.record).await?,
-            );
+            let mut cluster_notes = interface_notes(records, &view.cluster, &view.record).await?;
+            let shown = view.failed.as_ref().map(|f| f.record.name.as_str());
+            cluster_notes.extend(stopped_notes(records, &view.cluster, &view.record, shown).await?);
+            notes.insert(view.cluster.clone(), cluster_notes);
         }
     }
     if let Some(sp) = &spinner {
@@ -178,6 +178,53 @@ fn age(at: &str) -> String {
             format_duration(chrono::Utc::now().signed_duration_since(t))
         ),
         Err(_) => at.to_string(),
+    }
+}
+
+/// Return a line for each `Partial` or `Failed` deploy record of `cluster`
+/// except `shown`, the failed deploy the status reports in its own section.
+/// `active` is the record the cluster runs.
+async fn stopped_notes(
+    records: &Records,
+    cluster: &str,
+    active: &Record,
+    shown: Option<&str>,
+) -> Result<Vec<String>> {
+    let stopped = records.stopped(cluster).await.map_err(|e| miette!("{e}"))?;
+    Ok(stopped
+        .iter()
+        .filter(|r| Some(r.name.as_str()) != shown)
+        .map(|r| stopped_note(cluster, r, &active.name))
+        .collect())
+}
+
+/// Return the note for the `Partial` or `Failed` deploy record `record` of
+/// `cluster`, while the cluster runs record `active`.
+fn stopped_note(cluster: &str, record: &Record, active: &str) -> String {
+    let build = match record.identity_hash.as_deref() {
+        Some(hash) => format!("build {}", &hash[..12.min(hash.len())]),
+        None => "build unknown".to_string(),
+    };
+    let name = &record.name;
+    match record.partly_deployed() {
+        Some(partial) => format!(
+            "Deployment record {name} ({build}) is in phase Partial: `kix deploy --only` applied {}, \
+             while {active} remains the active deployment. Run `kix deploy {cluster}` to deploy \
+             the rest of that build, or to replace it if your local files have changed.",
+            partial.only.join(", ")
+        ),
+        None => {
+            let reason = record
+                .failure_reason
+                .as_deref()
+                .and_then(|r| r.lines().next())
+                .unwrap_or("no reason recorded");
+            format!(
+                "Deployment record {name} ({build}) failed ({reason}), while {active} remains \
+                 the active deployment. The next `kix deploy {cluster}` will reconcile any \
+                 resources that {name} applied."
+            )
+        }
     }
 }
 

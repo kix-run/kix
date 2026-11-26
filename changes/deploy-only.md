@@ -1,0 +1,5 @@
++++
+kind = "added"
+state = true
++++
+You can now roll out an upgrade one package instance at a time with `kix deploy <cluster> --only <namespace>/<instance>` (repeatable). Each run deploys every resource in the selected instances, every instance they depend on, and any other resources they need. `kix plan <cluster> --only <namespace>/<instance>` previews that step, lists the selected and required instances, and counts the remaining changes in the build. The cluster's active deployment record stays unchanged while Kix sets the new deployment record's `status.phase` to `Partial` and lists the deployed instances in `status.partial`. Run `kix deploy <cluster>` without `--only` to deploy the rest of the build. `kix status` now warns about each `Partial` and `Failed` deployment record on the cluster. `--only` requires a cluster that Kix has already deployed in full and whose active deployment is not managed by the Kix operator, and it cannot be combined with `--prune` or `--operator`.

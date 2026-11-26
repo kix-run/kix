@@ -31,7 +31,7 @@
 //! which plans from a sweep of the live objects it makes itself without
 //! holding the plan to a package diff.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use kube::client::Client;
@@ -41,10 +41,11 @@ use serde_json::Value;
 use crate::manifest::kinds::{self, GroupKind};
 
 use super::baseline::Baseline;
-use super::document::{DriftChange, Objects, PlanFlags, WriteChange};
+use super::document::{DriftChange, LeftAlone, Objects, PlanFlags, WriteChange};
 use super::objects;
+use super::origin::FoldedBy;
 use super::server::Overlay;
-use super::{PackageDiff, PlanError, PlanEvent, diff_graphs};
+use super::{PackageDiff, PlanError, PlanEvent, UnknownInstances, diff_graphs};
 use crate::build_source::InstallableBuild;
 use crate::build_source::SopsSources;
 use crate::cluster::activation::{KeptOrphanSource, KeptOrphans, OpenedRecords, Record, Records};
@@ -64,7 +65,7 @@ use crate::cluster::ops::ResourceIo;
 use crate::cluster::ops::{Cluster, DryRun, KubeResources, RecordConfig};
 use crate::cluster::preview::{DryRunAnswer, DryRunOutcome, PruneAnswer};
 use crate::cluster::scheduler::{
-    self, DeployError, DeployPlan, LastRuns, PrunePolicy, SchedulerConfig,
+    self, DeployError, DeployPlan, Ending, LastRuns, PrunePolicy, SchedulerConfig,
 };
 use crate::cluster::stream::{DeployObserver, DeployResult, NodeId};
 use crate::eval::package_index::RecordPackageIndex;
@@ -163,6 +164,12 @@ pub struct CheckedPlan {
     /// What the checks a run makes when it connects after the plan
     /// (`--offline`) read from the new build.
     target_checks: TargetChecks,
+    /// What a plan made with `--only` leaves for a later deploy, or `None`
+    /// for a plan of the whole build.
+    left_alone: Option<LeftAlone>,
+    /// The instances that the instances `--only` names need, which a plan
+    /// made with `--only` applies in full too. Empty otherwise.
+    needed: Vec<String>,
 }
 
 /// What a run of a [`CheckedPlan`] would do ([`CheckedPlan::work`]).
@@ -275,8 +282,44 @@ impl TargetChecks {
 
 impl CheckedPlan {
     /// Return the flags that the plan was made and checked with.
-    pub fn flags(&self) -> PlanFlags {
-        self.flags
+    pub fn flags(&self) -> &PlanFlags {
+        &self.flags
+    }
+
+    /// Return what a plan made with `--only` leaves for a later deploy of
+    /// the whole build, or `None` for a plan of the whole build.
+    pub fn left_alone(&self) -> Option<LeftAlone> {
+        self.left_alone
+    }
+
+    /// Return the instances that a plan made with `--only` applies in full
+    /// because the named ones need them, sorted.
+    pub fn needed(&self) -> &[String] {
+        &self.needed
+    }
+
+    /// Return every instance a plan made with `--only` applies in full: the
+    /// named ones and the ones they need, sorted.
+    pub fn applied_instances(&self) -> Vec<String> {
+        let mut all: Vec<String> = self
+            .flags
+            .only
+            .iter()
+            .chain(&self.needed)
+            .cloned()
+            .collect();
+        all.sort();
+        all.dedup();
+        all
+    }
+
+    /// Return how a run of the plan ends once every node has a verdict.
+    fn ending(&self) -> Ending {
+        if self.flags.only.is_empty() {
+            Ending::Finalize(self.flags.prune)
+        } else {
+            Ending::Partial
+        }
     }
 
     pub fn plan(&self) -> &DeployPlan {
@@ -482,7 +525,7 @@ impl CheckedPlan {
             self.plan.clone(),
             &self.orphans,
             &self.old_manifests,
-            self.flags.prune,
+            self.ending(),
             &config,
             observer,
         )
@@ -513,6 +556,8 @@ impl CheckedPlan {
         Result<DeployResult, DeployError>,
         Option<Vec<KeptOrphanSource>>,
     ) {
+        let ending = self.ending();
+        let only = self.applied_instances();
         let (cluster, record) = Cluster::new(
             KubeResources::new(
                 target.client,
@@ -532,6 +577,7 @@ impl CheckedPlan {
                 consumed_failed: self.consumed_failed,
                 kept_orphans: self.kept_orphans,
                 package_index: Some(self.package_index),
+                only,
                 mark_failed_on_abort: true,
             },
             target.sops,
@@ -541,7 +587,7 @@ impl CheckedPlan {
             self.plan,
             &self.orphans,
             &self.old_manifests,
-            self.flags.prune,
+            ending,
             &config,
             observer,
         )
@@ -685,12 +731,13 @@ impl Planned {
     }
 
     /// Replace the package diff's entries with what the apiserver answered
-    /// in a dry run (`Overlay`), and return the drift the deploy reverts.
-    /// `None` when the deployed build's manifests are not known (the old
+    /// in a dry run (`Overlay`), and return the drift the deploy reverts and
+    /// the values deploys that did not finish wrote, which the plan folded
+    /// in. `None` when the deployed build's manifests are not known (the old
     /// side was rebuilt from the live objects), so a commit's change and
     /// drift look the same; a first deploy has no deployed build and every
     /// change is intended.
-    pub fn overlay(&mut self, answers: &[DryRunAnswer]) -> Option<Vec<DriftChange>> {
+    pub fn overlay(&mut self, answers: &[DryRunAnswer]) -> Option<Differences> {
         let baseline = &self.baseline;
         let first_deploy = baseline.active_hash().is_none() && baseline.active_manifests.is_empty();
         let deployed = (baseline.active_graph().is_some() || first_deploy).then(|| {
@@ -701,14 +748,42 @@ impl Planned {
                 .collect()
         });
         let known = deployed.is_some();
-        let drift = Overlay {
+        let failed = baseline.failed();
+        let mut folded: HashMap<ResourceId, Vec<(FoldedBy, &Value)>> = HashMap::new();
+        for (closure, source) in failed.closures.iter().zip(&failed.sources) {
+            let by = FoldedBy {
+                record: source.activation.clone(),
+                partly_deployed: failed.partly_deployed.contains(&source.activation),
+            };
+            for manifest in closure {
+                folded
+                    .entry(ResourceId::from_value(manifest))
+                    .or_default()
+                    .push((by.clone(), manifest));
+            }
+        }
+        let found = Overlay {
             new_graph: self.build.graph(),
             deployed,
+            folded,
         }
         .apply(&mut self.checked.pkg_diff, answers);
         self.checked.relabel_reverted_writes();
-        known.then_some(drift)
+        known.then_some(Differences {
+            drift: found.drift,
+            earlier: found.earlier,
+        })
     }
+}
+
+/// The fields where the live cluster differs from the deployed build, from
+/// [`Planned::overlay`].
+#[derive(Debug, Default)]
+pub struct Differences {
+    /// Drift the deploy reverts.
+    pub drift: Vec<DriftChange>,
+    /// Values that deploys the plan folded in wrote.
+    pub earlier: Vec<super::document::EarlierDeployChange>,
 }
 
 /// Makes the plan of a deploy with `flags`, reporting what it finds to
@@ -719,7 +794,10 @@ pub struct Planner<'a> {
 }
 
 impl<'a> Planner<'a> {
-    pub fn new(flags: PlanFlags, report: &'a dyn Fn(PlanEvent<'_>)) -> Self {
+    /// Make a planner for `flags`. [`PlanFlags::only`] is sorted and holds
+    /// each name once, whatever the caller passed.
+    pub fn new(mut flags: PlanFlags, report: &'a dyn Fn(PlanEvent<'_>)) -> Self {
+        flags.only = PlanFlags::only_of(&flags.only);
         Planner { flags, report }
     }
 
@@ -802,14 +880,20 @@ impl<'a> Planner<'a> {
     async fn planned(
         &self,
         build: InstallableBuild,
-        baseline: Baseline,
+        mut baseline: Baseline,
         client: Option<(Client, binding::Connection)>,
     ) -> Result<Planned, PlanError> {
         let new_graph = build.graph();
         let new_manifests = manifests_of(new_graph);
+        if let Some((client, _)) = &client {
+            baseline
+                .read_folded_leftovers(client, &new_manifests)
+                .await?;
+        }
         // A half-applied closure is not a previous intended state, so
         // pairing against it would invent migrations nobody declared.
-        let migration_pairs = detect_migration_pairs(&new_manifests, &baseline.active_manifests);
+        let mut migration_pairs =
+            detect_migration_pairs(&new_manifests, &baseline.active_manifests);
         let read = match client {
             Some((client, connection)) => {
                 let live = read_live(&client, &new_manifests).await?;
@@ -826,6 +910,20 @@ impl<'a> Planner<'a> {
                 read.as_ref().map(|(client, _, live)| (client, live)),
             )
             .await?;
+        // A deploy with `--only` makes only the migrations whose new object
+        // it writes. It deletes no old object.
+        if checked.left_alone.is_some() {
+            let written: HashSet<&ResourceId> = checked
+                .plan
+                .nodes()
+                .iter()
+                .filter_map(|n| match &n.id {
+                    NodeId::Resource(rid) if n.action.written().is_some() => Some(rid),
+                    _ => None,
+                })
+                .collect();
+            migration_pairs.retain(|pair| written.contains(&pair.target));
+        }
         let connected = read.map(|(client, connection, live)| Connected {
             last_runs: checked.last_runs_from(&live),
             client,
@@ -940,15 +1038,33 @@ impl<'a> Planner<'a> {
         baseline: &Baseline,
         read: Option<(&Client, &LiveObjects)>,
     ) -> Result<CheckedPlan, PlanError> {
+        let partial = !self.flags.only.is_empty();
+        if partial {
+            match baseline.active() {
+                None => return Err(PlanError::OnlyFirstDeploy(cluster.to_string())),
+                // The operator repairs the build of a record it deployed on
+                // every requeue, so it would put back what this deploy
+                // applies and delete the objects it adds.
+                Some(active) if active.operator_driven => {
+                    return Err(PlanError::OnlyUnderOperator {
+                        cluster: cluster.to_string(),
+                        record: active.name.clone(),
+                    });
+                }
+                Some(_) => {}
+            }
+        }
         let client = read.map(|(client, _)| client);
         let changes = self.changes(new_manifests, baseline, read.map(|(_, live)| live));
+        // A deploy with `--only` leaves every orphan alone, so it does not
+        // ask which ones another Kix cluster deploys.
         let (orphans, shared_orphans) = match client {
-            Some(client) => keep_shared(client, cluster, changes.orphans).await?,
-            None => (changes.orphans, Vec::new()),
+            Some(client) if !partial => keep_shared(client, cluster, changes.orphans).await?,
+            _ => (changes.orphans, Vec::new()),
         };
         let resource_graph =
             ResourceGraph::from_manifests(new_manifests).map_err(PlanError::Graph)?;
-        let plan = DeployPlan::from_graph_and_changes(&resource_graph, &changes.actions)
+        let mut plan = DeployPlan::from_graph_and_changes(&resource_graph, &changes.actions)
             .map_err(PlanError::Marker)?;
 
         let record = lifecycle::record_of(new_manifests);
@@ -967,6 +1083,35 @@ impl<'a> Planner<'a> {
             return Err(PlanError::AliasedMove(aliased));
         }
 
+        // `--only` narrows the plan to the instances it names and what they
+        // depend on. What the plan shows and what the run writes are both
+        // that part, so the objects check below holds them to each other.
+        let (orphans, shared_orphans, kept_orphans, consumed_failed, selection) = if partial {
+            let selection = select_only(
+                &self.flags.only,
+                new_graph,
+                cluster,
+                &mut plan,
+                &mut pkg_diff,
+                orphans.len(),
+            )?;
+            (
+                Vec::new(),
+                Vec::new(),
+                Default::default(),
+                Vec::new(),
+                Some(selection),
+            )
+        } else {
+            (
+                orphans,
+                shared_orphans,
+                changes.kept_orphans,
+                baseline.failed().consumed.clone(),
+                None,
+            )
+        };
+
         let listed_deletes: &[ResourceId] = match client {
             Some(_) => &orphans,
             None => &[],
@@ -982,23 +1127,133 @@ impl<'a> Planner<'a> {
         .map_err(PlanError::Unshown)?;
 
         Ok(CheckedPlan {
-            flags: self.flags,
+            flags: self.flags.clone(),
             plan,
             orphans,
             shared_orphans,
-            kept_orphans: changes.kept_orphans,
+            kept_orphans,
             pkg_diff,
             objects,
             activation_name,
             activation_identity_hash,
             record: record.cloned(),
-            consumed_failed: baseline.failed().consumed.clone(),
+            consumed_failed,
             cluster: cluster.to_string(),
             old_manifests: baseline.manifests(),
             package_index: RecordPackageIndex::of(new_graph),
             target_checks: TargetChecks::of(new_graph),
+            left_alone: selection.as_ref().map(|s| s.left_alone),
+            needed: selection.map(|s| s.needed).unwrap_or_default(),
         })
     }
+}
+
+/// What [`select_only`] chose and left out.
+struct Selection {
+    /// The instances the named ones need, which the deploy applies in full
+    /// too, sorted.
+    needed: Vec<String>,
+    left_alone: LeftAlone,
+}
+
+/// Narrow `plan` and `pkg_diff` to the instances `only` names in the build
+/// `graph` of Kix cluster `cluster`, and return what the narrowed plan
+/// applies besides them and what it leaves out of the whole build's plan,
+/// which deletes `orphans` objects.
+///
+/// An instance is its PackageInstance and every object the build's package
+/// index lists under it. The PackageInstance depends only on its namespace
+/// and its kind's CRD, so the package index names the instance's objects.
+/// The selection starts from the named instances' objects and adds what
+/// they depend on. Whenever it holds an object of an instance, it takes
+/// every object of that instance, so no instance is left half at the new
+/// build. An object outside every instance, such as a Namespace or a CRD,
+/// is taken alone.
+fn select_only(
+    only: &[String],
+    graph: &StoreGraph,
+    cluster: &str,
+    plan: &mut DeployPlan,
+    pkg_diff: &mut PackageDiff,
+    orphans: usize,
+) -> Result<Selection, PlanError> {
+    let mut members: BTreeMap<String, Vec<NodeId>> = BTreeMap::new();
+    for p in graph.packages.values() {
+        let ids = p
+            .resource_paths
+            .iter()
+            .chain([&p.store_path])
+            .filter_map(|path| graph.resources.get(path))
+            .map(|node| NodeId::Resource(ResourceId::from_value(&node.manifest)));
+        members
+            .entry(format!("{}/{}", p.namespace, p.instance_name))
+            .or_default()
+            .extend(ids);
+    }
+    let mut instances_of: HashMap<&NodeId, Vec<&str>> = HashMap::new();
+    for (key, ids) in &members {
+        for id in ids {
+            instances_of.entry(id).or_default().push(key);
+        }
+    }
+    // The objects that go with each object: those of every instance that
+    // lists it.
+    let together: HashMap<NodeId, Vec<NodeId>> = instances_of
+        .iter()
+        .map(|(id, keys)| {
+            let ids = keys
+                .iter()
+                .flat_map(|k| members[*k].iter().cloned())
+                .collect();
+            ((*id).clone(), ids)
+        })
+        .collect();
+
+    let unknown: Vec<String> = only
+        .iter()
+        .filter(|name| members.get(name.as_str()).is_none_or(Vec::is_empty))
+        .cloned()
+        .collect();
+    if !unknown.is_empty() {
+        return Err(PlanError::UnknownInstances(UnknownInstances {
+            cluster: cluster.to_string(),
+            unknown,
+            valid: members.keys().cloned().collect(),
+        }));
+    }
+    let roots: HashSet<NodeId> = only
+        .iter()
+        .flat_map(|name| members[name.as_str()].iter().cloned())
+        .collect();
+    let left = plan.retain_closure(&roots, |id| together.get(id).map_or(&[][..], Vec::as_slice));
+    let writes = left
+        .iter()
+        .filter_map(|n| n.action.written())
+        .filter(|m| !lifecycle::is_record(m))
+        .count();
+    let kept: HashSet<ResourceId> = plan
+        .nodes()
+        .iter()
+        .filter_map(|n| match &n.id {
+            NodeId::Resource(rid) => Some(rid.clone()),
+            NodeId::Synthetic(_) => None,
+        })
+        .collect();
+    let needed = members
+        .iter()
+        .filter(|(key, ids)| {
+            !only.contains(key)
+                && ids
+                    .iter()
+                    .any(|id| matches!(id, NodeId::Resource(rid) if kept.contains(rid)))
+        })
+        .map(|(key, _)| key.clone())
+        .collect();
+    pkg_diff.retain_objects(&kept);
+    Ok(Selection {
+        needed,
+        left_alone: LeftAlone { writes, orphans },
+    })
 }
 
 /// List each kind of `manifests` on the cluster behind `client`, once.
@@ -1059,6 +1314,28 @@ pub async fn keep_shared(
     inventory::split_shared_orphans_live(client, &discovery, &records, orphans, cluster)
         .await
         .map_err(|e| PlanError::SharedOrphans(Box::new(e)))
+}
+
+/// Split `candidates` into the ones `kix gc` may delete and the ones a
+/// pending record of Kix cluster `cluster` names: a deploy that is queued,
+/// deploying, failed, or partly deployed
+/// ([`crate::cluster::tenancy::Tenancy::pending_records_of`]). Reads each
+/// candidate, then the records.
+pub async fn keep_held(
+    client: &Client,
+    cluster: &str,
+    candidates: Vec<ResourceId>,
+) -> Result<(Vec<ResourceId>, Vec<inventory::HeldObject>), PlanError> {
+    if candidates.is_empty() {
+        return Ok((candidates, Vec::new()));
+    }
+    let discovery = discovery::discover_resources(client)
+        .await
+        .map_err(|e| PlanError::Discovery(Box::new(e)))?;
+    let records = Records::open(client, &discovery).map_err(PlanError::Domain)?;
+    inventory::split_held_live(client, &discovery, &records, candidates, cluster)
+        .await
+        .map_err(|e| PlanError::HeldObjects(Box::new(e)))
 }
 
 /// Return each CustomResourceDefinition that an orphan of `old_manifests`
@@ -1439,7 +1716,7 @@ mod tests {
             checked.plan().clone(),
             &[],
             &[],
-            PrunePolicy::WarnOnly,
+            scheduler::Ending::Finalize(PrunePolicy::WarnOnly),
             &config,
             std::sync::Arc::new(crate::cluster::stream::NullObserver),
         )
@@ -1513,6 +1790,7 @@ mod tests {
             reconcile: false,
             force_conflicts: false,
             accept_migrations: false,
+            only: Vec::new(),
         };
         Planner::new(flags, &report)
             .note_unbound(&api.client(), &connection, &graph, &baseline)
@@ -1569,6 +1847,7 @@ mod tests {
             reconcile: false,
             force_conflicts: false,
             accept_migrations: false,
+            only: Vec::new(),
         };
         let new_manifests = manifests_of(build.graph());
         let checked = futures::executor::block_on(Planner::new(flags, &|_| {}).check(

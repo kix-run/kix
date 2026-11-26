@@ -17,7 +17,7 @@ use kube::api::DynamicObject;
 
 use super::activation::{OpenedRecords, Record, RecordsError};
 use crate::manifest::keys;
-use crate::manifest::lifecycle::PHASE_SUPERSEDED;
+use crate::manifest::lifecycle::{PHASE_ACTIVE, PHASE_DEGRADED, PHASE_SUPERSEDED};
 
 /// Which Activation records on this Kubernetes cluster belong to which Kix
 /// cluster, keyed by identity hash.
@@ -39,6 +39,10 @@ pub struct Tenancy {
     /// Hashes in `others` whose record is not Superseded (builds another
     /// cluster runs, is deploying, or left partially applied).
     pub(crate) others_current: HashSet<String>,
+    /// Map from identity hash to record name for each record of this
+    /// cluster whose deploy has neither become current nor been superseded:
+    /// one that is queued, deploying, failed, or partly deployed.
+    pub(crate) own_pending: HashMap<String, String>,
 }
 
 impl Tenancy {
@@ -49,6 +53,7 @@ impl Tenancy {
             own: HashSet::new(),
             others: HashMap::new(),
             others_current: HashSet::new(),
+            own_pending: HashMap::new(),
         }
     }
 
@@ -90,6 +95,14 @@ impl Tenancy {
             if !cluster.is_empty() && owner == Some(cluster) {
                 tenancy.own.insert(hash.to_string());
                 tenancy.own.extend(kept.map(str::to_string));
+                if !matches!(
+                    parsed.phase.as_str(),
+                    PHASE_SUPERSEDED | PHASE_ACTIVE | PHASE_DEGRADED
+                ) {
+                    tenancy
+                        .own_pending
+                        .insert(hash.to_string(), parsed.name.clone());
+                }
                 continue;
             }
             if parsed.phase != PHASE_SUPERSEDED {
@@ -166,6 +179,22 @@ impl Tenancy {
     }
 }
 
+impl Tenancy {
+    /// Return the sorted names of this cluster's pending records that `obj`
+    /// names: records whose deploy is queued, deploying, failed, or partly
+    /// deployed. Such a deploy wrote the object, or is about to, so gc must
+    /// not judge it against the current record's build alone. The current
+    /// record is left out, because gc compares with its build.
+    pub fn pending_records_of(&self, obj: &DynamicObject) -> Vec<String> {
+        let mut records: Vec<String> = named_hashes(obj)
+            .filter_map(|h| self.own_pending.get(h).cloned())
+            .collect();
+        records.sort();
+        records.dedup();
+        records
+    }
+}
+
 /// Return an iterator over the record identity hashes `obj` names: every entry
 /// of `kix.run/activations` plus its own `kix.run/identity-hash`. A record in
 /// its first wave is not yet stamped with its own hash in `kix.run/activations`,
@@ -203,7 +232,7 @@ pub async fn read(records: &OpenedRecords, cluster: &str) -> Result<Tenancy, Rec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::lifecycle::{PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING};
+    use crate::manifest::lifecycle::{PHASE_DEPLOYING, PHASE_FAILED, PHASE_PARTIAL};
     use serde_json::json;
 
     fn record(cluster: Option<&str>, hash: Option<&str>, phase: &str) -> DynamicObject {
@@ -291,6 +320,48 @@ mod tests {
         // Without the list, the retired build's objects name no record.
         let t = Tenancy::from_records(&[record(Some("a"), Some("a2"), PHASE_ACTIVE)], "a");
         assert!(!t.knows("a1"));
+    }
+
+    /// An object a failed, partly deployed, or deploying record of this
+    /// cluster names belongs to that pending record. The current record,
+    /// a Superseded one, and another cluster's failed record make no object
+    /// pending.
+    #[test]
+    fn objects_of_pending_records_name_those_records() {
+        let named = |name: &str, phase: &str, cluster: &str, hash: &str| {
+            let mut r = record(Some(cluster), Some(hash), phase);
+            r.metadata.name = Some(name.into());
+            r
+        };
+        let t = Tenancy::from_records(
+            &[
+                named("a-cur", PHASE_ACTIVE, "a", "cur"),
+                named("a-old", PHASE_SUPERSEDED, "a", "old"),
+                named("a-failed", PHASE_FAILED, "a", "fail"),
+                named("a-only", PHASE_PARTIAL, "a", "part"),
+                named("a-run", PHASE_DEPLOYING, "a", "run"),
+                named("b-failed", PHASE_FAILED, "b", "bfail"),
+            ],
+            "a",
+        );
+        let obj = |activations: &str| -> DynamicObject {
+            serde_json::from_value(json!({
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "name": "c",
+                    "namespace": "d",
+                    "annotations": { (keys::ACTIVATIONS): activations },
+                },
+            }))
+            .unwrap()
+        };
+        assert_eq!(t.pending_records_of(&obj("cur,fail")), ["a-failed"]);
+        assert_eq!(
+            t.pending_records_of(&obj("part,run,old")),
+            ["a-only", "a-run"]
+        );
+        assert!(t.pending_records_of(&obj("cur,old,bfail")).is_empty());
     }
 
     /// An empty cluster name, as the operator uses for a record that names

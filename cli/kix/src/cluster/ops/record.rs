@@ -51,6 +51,10 @@ pub(crate) struct RecordConfig {
     /// `status.packageIndex`. `None` for the operator, which holds no build
     /// graph. The CLI wrote the index when it submitted the record.
     pub(crate) package_index: Option<RecordPackageIndex>,
+    /// The instances (`namespace/instance`) a deploy with `--only` selected,
+    /// which [`DeployRecord::end_partial`] writes to `status.partial`. Empty
+    /// for a run of the whole build.
+    pub(crate) only: Vec<String>,
     /// Whether [`DeployRecord::abort`] should mark the record Failed.
     ///
     /// True for the CLI, which owns the run end to end. False for the
@@ -74,6 +78,10 @@ pub(crate) struct ActivationRecord {
     /// The `status.orphansKeptFrom` that [`DeployRecord::finalize`] wrote,
     /// for the caller's GC roots. `None` until a finalize succeeds.
     recorded_kept: std::sync::Mutex<Option<Vec<KeptOrphanSource>>>,
+    /// The instances that earlier deploys with `--only` of the same build
+    /// applied, read from the record's `status.partial` when the run began.
+    /// [`DeployRecord::end_partial`] adds them to this run's.
+    earlier_only: std::sync::Mutex<Vec<String>>,
 }
 
 impl ActivationRecord {
@@ -83,6 +91,7 @@ impl ActivationRecord {
             config,
             pending: AtomicBool::new(false),
             recorded_kept: std::sync::Mutex::new(None),
+            earlier_only: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -156,14 +165,21 @@ impl ActivationRecord {
             }
         }
 
-        if let Err(e) = records
+        match records
             .begin_deploy(name, 1, self.config.package_index.as_ref())
             .await
         {
+            Ok(earlier) => {
+                if let Ok(mut guard) = self.earlier_only.lock() {
+                    *guard = earlier;
+                }
+            }
             // 404 when the CRD is served but the record does not exist yet
             // (either the up-front create failed or the operator's record was
             // deleted).
-            tracing::debug!(activation = %name, error = %e, "could not mark the record Deploying");
+            Err(e) => {
+                tracing::debug!(activation = %name, error = %e, "could not mark the record Deploying");
+            }
         }
         true
     }
@@ -298,6 +314,23 @@ impl DeployRecord for ActivationRecord {
         }
     }
 
+    async fn end_partial(&self) -> Result<(), RecordWriteError> {
+        let Some((name, records)) = self.named_records().await? else {
+            return Ok(());
+        };
+        let mut only = self
+            .earlier_only
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        only.extend(self.config.only.iter().cloned());
+        match tokio::time::timeout(BEST_EFFORT_TIMEOUT, records.end_partial(name, &only)).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(RecordWriteError::Records(e)),
+            Err(_) => Err(RecordWriteError::NoAnswer(BEST_EFFORT_TIMEOUT)),
+        }
+    }
+
     async fn finalize(
         &self,
         had_failures: bool,
@@ -348,6 +381,14 @@ mod tests {
     use crate::cluster::fake_api::FakeApi;
 
     async fn record(api: &FakeApi, name: Option<&str>) -> ActivationRecord {
+        record_with_only(api, name, Vec::new()).await
+    }
+
+    async fn record_with_only(
+        api: &FakeApi,
+        name: Option<&str>,
+        only: Vec<String>,
+    ) -> ActivationRecord {
         let client = api.client();
         let discovery = discovery::discover_resources(&client).await.unwrap();
         ActivationRecord::new(
@@ -365,6 +406,7 @@ mod tests {
                 consumed_failed: Vec::new(),
                 kept_orphans: KeptOrphans::default(),
                 package_index: None,
+                only,
                 mark_failed_on_abort: true,
             },
         )
@@ -468,5 +510,34 @@ mod tests {
         );
         named.checkpoint(2, 0, true).await.unwrap();
         assert_eq!(wave(&api)["status"], "Complete");
+    }
+
+    /// A second deploy with `--only` of a Partial record's build clears
+    /// `status.partial` while it runs, and ends `Partial` again with the
+    /// instances of both deploys.
+    #[tokio::test]
+    async fn a_second_partial_run_adds_its_instances_to_the_first() {
+        let api = FakeApi::new([serde_json::json!({
+            "apiVersion": crate::manifest::keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": { "name": "act" },
+            "status": {
+                "phase": "Partial",
+                "partial": { "only": ["app/a"], "at": "2026-11-25T10:00:00Z" },
+            },
+        })]);
+        let status = |api: &FakeApi| api.object("Activation", "act").unwrap()["status"].clone();
+        let run = record_with_only(&api, Some("act"), vec!["web/b".into()]).await;
+        run.begin().await.unwrap();
+        let during = status(&api);
+        assert_eq!(during["phase"], "Deploying");
+        assert!(during.get("partial").is_none(), "{during}");
+        run.end_partial().await.unwrap();
+        let after = status(&api);
+        assert_eq!(after["phase"], "Partial");
+        assert_eq!(
+            after["partial"]["only"],
+            serde_json::json!(["app/a", "web/b"])
+        );
     }
 }

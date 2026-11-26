@@ -207,6 +207,7 @@ pub enum Call {
     Abort {
         reason: String,
     },
+    EndPartial,
 }
 
 #[derive(Clone, Debug)]
@@ -230,6 +231,7 @@ pub struct ScriptedOps {
     gone: Mutex<HashMap<ResourceId, GoneScript>>,
     finalize: Mutex<Behaviour<Result<Option<Finalized>, String>>>,
     abort: Mutex<Behaviour<Result<(), String>>>,
+    end_partial: Mutex<Behaviour<Result<(), String>>>,
     log: Mutex<Vec<Logged>>,
     /// The propagation policy of each [`ResourceIo::prune`] call, in order.
     propagations: Mutex<Vec<(ResourceId, kube::api::PropagationPolicy)>>,
@@ -262,6 +264,7 @@ impl ScriptedOps {
             gone: Mutex::new(HashMap::new()),
             finalize: Mutex::new(Behaviour::Now(Ok(None))),
             abort: Mutex::new(Behaviour::Now(Ok(()))),
+            end_partial: Mutex::new(Behaviour::Now(Ok(()))),
             log: Mutex::new(Vec::new()),
             propagations: Mutex::new(Vec::new()),
             applies_now: AtomicUsize::new(0),
@@ -347,6 +350,11 @@ impl ScriptedOps {
 
     pub fn abort_behaviour(&self, b: Behaviour<Result<(), String>>) -> &Self {
         *self.abort.lock().unwrap() = b;
+        self
+    }
+
+    pub fn end_partial_behaviour(&self, b: Behaviour<Result<(), String>>) -> &Self {
+        *self.end_partial.lock().unwrap() = b;
         self
     }
 
@@ -671,6 +679,12 @@ impl DeployRecord for ScriptedOps {
             reason: reason.to_string(),
         });
         let b = self.abort.lock().unwrap().clone();
+        b.run().await.map_err(RecordWriteError::Scripted)
+    }
+
+    async fn end_partial(&self) -> Result<(), RecordWriteError> {
+        self.record(Call::EndPartial);
+        let b = self.end_partial.lock().unwrap().clone();
         b.run().await.map_err(RecordWriteError::Scripted)
     }
 }

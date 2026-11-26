@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 
 use crate::eval::package_index::RecordPackageIndex;
 use crate::manifest::keys;
-use crate::manifest::lifecycle::{PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED};
+use crate::manifest::lifecycle::{
+    PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_PARTIAL,
+};
 use kube::api::DynamicObject;
 use serde_json::Value;
 
@@ -31,6 +33,9 @@ pub struct Record {
     /// `status.failure.at` (RFC 3339), also used as the retention sort key when
     /// a failed record has no `deployed-at` timestamp.
     pub failed_at: Option<String>,
+    /// `status.partial`: which instances `kix deploy --only` applied of this
+    /// record's build. Set exactly when the phase is `Partial`.
+    pub partial: Option<PartialDeploy>,
     /// `metadata.creationTimestamp`, used as the age of a `Deploying` or
     /// `Queued` record.
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -88,6 +93,46 @@ pub struct Record {
     pub deployed_from: Option<String>,
 }
 
+/// What `kix deploy --only` applied of a record's build, read from
+/// `status.partial`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PartialDeploy {
+    /// The instances (`namespace/instance`) that deploys with `--only`
+    /// applied, sorted.
+    pub only: Vec<String>,
+    /// When the last of those deploys ended (RFC 3339).
+    pub at: Option<String>,
+}
+
+impl PartialDeploy {
+    fn of(obj: &DynamicObject) -> Option<Self> {
+        let partial = obj.data.pointer(&format!("/status/{PARTIAL_FIELD}"))?;
+        if !partial.is_object() {
+            return None;
+        }
+        let mut only: Vec<String> = partial
+            .get("only")
+            .and_then(Value::as_array)
+            .map(|names| {
+                names
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        only.sort();
+        only.dedup();
+        Some(PartialDeploy {
+            only,
+            at: partial
+                .get("at")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        })
+    }
+}
+
 /// A request the operator could not finish on a current record, read from
 /// `status.failedRequest`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,6 +163,9 @@ pub(crate) const FINISHED_REQUEST_FIELD: &str = "finishedRequest";
 /// The `status` field that holds the last request the operator could not
 /// finish on a current record, with the reason.
 pub(crate) const FAILED_REQUEST_FIELD: &str = "failedRequest";
+/// The `status` field that names the instances a deploy with `--only`
+/// applied of the record's build.
+pub(crate) const PARTIAL_FIELD: &str = "partial";
 /// The `status` field that counts the failed runs of the operator's current
 /// deploy.
 pub(crate) const FAILED_ATTEMPTS_FIELD: &str = "failedAttempts";
@@ -151,6 +199,7 @@ impl Record {
             previous_activation: status("/status/previousActivation"),
             failure_reason: status("/status/failure/reason"),
             failed_at: status("/status/failure/at"),
+            partial: PartialDeploy::of(obj),
             created_at: obj
                 .metadata
                 .creation_timestamp
@@ -231,14 +280,33 @@ impl Record {
     /// Return the timestamp used to order this record during retention checks.
     ///
     /// Uses `kix.run/deployed-at` when present, falling back to
-    /// `status.failure.at` and then `metadata.creationTimestamp` for records
+    /// [`Record::stopped_at`] and then `metadata.creationTimestamp` for records
     /// that never completed a deploy so they are not immediately retired as
     /// [`super::RetireReason::UnknownAge`].
     pub(super) fn retention_time(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        [&self.deployed_at, &self.failed_at]
+        [self.deployed_at.as_deref(), self.stopped_at()]
             .into_iter()
-            .find_map(|at| at.as_deref().and_then(parse_time))
+            .find_map(|at| at.and_then(parse_time))
             .or(self.created_at)
+    }
+
+    /// Return what `kix deploy --only` applied of the record's build when
+    /// the record is `Partial`, and `None` in any other phase.
+    pub fn partly_deployed(&self) -> Option<&PartialDeploy> {
+        if self.phase == PHASE_PARTIAL {
+            self.partial.as_ref()
+        } else {
+            None
+        }
+    }
+
+    /// Return when the record's deploy stopped without making it current:
+    /// `status.failure.at`, or `status.partial.at` for a deploy with
+    /// `--only`.
+    pub(super) fn stopped_at(&self) -> Option<&str> {
+        self.failed_at
+            .as_deref()
+            .or_else(|| self.partial.as_ref().and_then(|p| p.at.as_deref()))
     }
 }
 
@@ -463,12 +531,24 @@ pub(super) fn phase_on_begin(current: &str) -> Option<&'static str> {
 ///
 /// Transitions only records in `Deploying` or with an empty phase (when the
 /// deploy aborted between creating the record and marking it `Deploying`).
-/// Leaves `Active`, `Degraded`, `Queued`, `Superseded`, and `Failed` records
-/// untouched.
+/// Leaves `Active`, `Degraded`, `Queued`, `Superseded`, `Failed`, and
+/// `Partial` records untouched.
 pub(super) fn phase_on_abort(current: &str) -> Option<&'static str> {
     match current {
-        PHASE_DEPLOYING => Some(PHASE_FAILED),
-        "" => Some(PHASE_FAILED),
+        PHASE_DEPLOYING | "" => Some(PHASE_FAILED),
+        _ => None,
+    }
+}
+
+/// Return the phase a record should transition to when a deploy with
+/// `--only` applies everything it selected, or `None` to leave its phase
+/// unchanged.
+///
+/// Transitions the same records as [`phase_on_abort`]. A record that is
+/// current keeps its phase, because the build is the one the cluster runs.
+pub(super) fn phase_on_end_partial(current: &str) -> Option<&'static str> {
+    match current {
+        PHASE_DEPLOYING | "" => Some(PHASE_PARTIAL),
         _ => None,
     }
 }

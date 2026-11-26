@@ -94,7 +94,7 @@ fn plan_save_writes_the_plan_file() {
     );
     assert!(doc.build.identity_hash.is_some());
     assert_eq!(
-        doc.flags.map(|f| f.prune),
+        doc.flags.as_ref().map(|f| f.prune),
         Some(kix::cluster::scheduler::PrunePolicy::WarnOnly)
     );
     // A first deploy writes every object of the build, each as added.

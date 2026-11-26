@@ -1158,6 +1158,13 @@
           "description": "True when the plan had nothing to apply or prune, so the deploy\nwrote nothing and the active deployment record stays current. The\nlog then holds no `plan` or `node` lines.",
           "type": "boolean"
         },
+        "only": {
+          "description": "The instances (`namespace/instance`) a deploy with `--only`\napplied in full: the named ones and the ones they need. Such a\ndeploy leaves the cluster's current deploy\nrecord as it was, and a later `kix deploy` applies the rest of\nthe build. Left out for a deploy of the whole build.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "pruned": {
           "description": "Orphans this run deleted. An orphan already gone is not counted.",
           "format": "uint",

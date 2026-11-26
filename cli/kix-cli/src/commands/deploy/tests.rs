@@ -274,7 +274,7 @@ mod run_end_tests {
             DeployPlan::applying(manifests),
             orphans,
             old,
-            settings.prune,
+            scheduler::Ending::Finalize(settings.prune),
             &settings.config,
             Arc::new(NullObserver),
         )
@@ -415,6 +415,7 @@ mod run_end_tests {
                 interrupted: None,
                 current: true,
                 on_error_continue: false,
+                only: &[],
             },
         );
         assert!(
@@ -479,6 +480,7 @@ mod run_end_tests {
             interrupted,
             current: false,
             on_error_continue: false,
+            only: &[],
         };
         let text = super::observer::closing(
             &counts,
@@ -547,6 +549,7 @@ mod run_end_tests {
             interrupted: None,
             current: false,
             on_error_continue: false,
+            only: &[],
         };
         let text = super::observer::closing(&counts, &closing);
         assert!(!text.contains("marked Failed"), "{text}");
@@ -814,5 +817,153 @@ mod operator_flag_tests {
             let argv = [&["--operator"][..], extra].concat();
             assert_eq!(refusal(&argv), None, "{extra:?}");
         }
+    }
+}
+
+mod only_flag_tests {
+    use crate::cli::{Cli, Command};
+    use clap::Parser;
+
+    fn deploy_args(extra: &[&str]) -> crate::cli::DeployArgs {
+        let argv = [&["kix", "deploy", "c"][..], extra].concat();
+        let Command::Deploy(args) = Cli::try_parse_from(argv).expect("args parse").command else {
+            unreachable!()
+        };
+        args
+    }
+
+    /// `--only` is repeatable, and the flags hold each name once, sorted.
+    #[test]
+    fn only_names_each_instance_once() {
+        let args = deploy_args(&["--only", "web/b", "--only", "app/a", "--only", "web/b"]);
+        assert_eq!(super::flags_of(&args.plan).only, ["app/a", "web/b"]);
+        assert!(super::flags_of(&deploy_args(&[]).plan).only.is_empty());
+    }
+
+    /// `--only` with `--prune` is refused before anything is built, with the
+    /// command that prunes once the rest of the build is applied.
+    #[test]
+    fn only_with_prune_is_refused() {
+        let args = deploy_args(&["--only", "app/a", "--prune"]);
+        let err = crate::commands::plan::refuse_with_only(&super::flags_of(&args.plan), "c")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("does not combine with `--prune`"), "{err}");
+        assert!(err.contains("`kix deploy c --prune`"), "{err}");
+        for extra in [
+            &["--only", "app/a"][..],
+            &["--prune"],
+            &["--only", "app/a", "--skip-orphan-check"],
+        ] {
+            let args = deploy_args(extra);
+            assert!(
+                crate::commands::plan::refuse_with_only(&super::flags_of(&args.plan), "c").is_ok(),
+                "{extra:?}"
+            );
+        }
+    }
+
+    /// The operator deploys whole builds, so `--operator --only` is refused.
+    #[test]
+    fn only_with_the_operator_is_refused() {
+        let err = super::refuse_only_by_operator(&deploy_args(&["--operator", "--only", "app/a"]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("does not accept `--only`"), "{err}");
+        assert!(super::refuse_only_by_operator(&deploy_args(&["--operator"])).is_ok());
+    }
+
+    /// `kix plan --read-only` plans no deploy, so it takes no `--only`.
+    #[test]
+    fn a_read_only_plan_takes_no_only() {
+        let err = match Cli::try_parse_from(["kix", "plan", "c", "--read-only", "--only", "app/a"])
+        {
+            Ok(_) => panic!("must not parse"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    /// `kix rollback` offers no `--only`.
+    #[test]
+    fn rollback_takes_no_only() {
+        assert!(Cli::try_parse_from(["kix", "rollback", "c", "--only", "app/a"]).is_err());
+    }
+}
+
+mod partial_closing_tests {
+    use super::super::observer::{PartialClosing, Previous, partial_closing};
+    use kix::cluster::stream::DeployResult;
+    use kix::plan::document::LeftAlone;
+
+    /// The text that closes a deploy with `--only` names what it applied,
+    /// says the Active record is unchanged, counts what waits, and gives the
+    /// command that applies the rest.
+    #[test]
+    fn a_partial_deploy_says_what_waits_and_how_to_finish() {
+        let only = ["app/a".to_string()];
+        let needed = ["app/b".to_string()];
+        let previous = Previous::Active("c-old".into());
+        let text = partial_closing(
+            &DeployResult {
+                created: 2,
+                configured: 1,
+                ..DeployResult::default()
+            },
+            &PartialClosing {
+                cluster: "c",
+                record: Some("c-new"),
+                previous: &previous,
+                only: &only,
+                needed: &needed,
+                left_alone: LeftAlone {
+                    writes: 5,
+                    orphans: 2,
+                },
+            },
+        );
+        assert!(
+            text.starts_with("Partial deploy of 'c' complete: 2 created, 1 configured"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Applied selected instance(s) in full: app/a."),
+            "{text}"
+        );
+        assert!(
+            text.contains("Applied required dependency instance(s) in full: app/b."),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "c-new is marked Partial, and c-old remains the Active deployment record"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("7 other resource change(s) compared with the active deployment were outside this run: 5 to create or update and 2 removed from the build."), "{text}");
+        assert!(
+            text.contains("deploy the rest of the build with `kix deploy c`"),
+            "{text}"
+        );
+
+        // The build the cluster already runs.
+        let previous = Previous::Active("c-new".into());
+        let text = partial_closing(
+            &DeployResult::default(),
+            &PartialClosing {
+                cluster: "c",
+                record: Some("c-new"),
+                previous: &previous,
+                only: &only,
+                needed: &[],
+                left_alone: LeftAlone::default(),
+            },
+        );
+        assert!(
+            text.contains("c-new remains the Active deployment record"),
+            "{text}"
+        );
+        assert!(!text.contains("outside this run"), "{text}");
+        assert!(!text.contains("dependency instance"), "{text}");
     }
 }

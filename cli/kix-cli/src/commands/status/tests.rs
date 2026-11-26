@@ -645,6 +645,93 @@ fn an_object_that_left_the_build_and_is_being_deleted_is_listed() {
     assert_eq!(other.exit(), Exit::Success);
 }
 
+/// `kix status` notes every Partial record, with its instances and build,
+/// and every Failed record, with the reason its deploy stopped, except the
+/// failed deploy its own section reports.
+#[tokio::test]
+async fn failed_and_partial_records_are_noted() {
+    use kix::cluster::fake_api::FakeApi;
+    use kix::manifest::keys;
+    let record = |name: &str, at: &str, status: serde_json::Value| {
+        serde_json::json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": {
+                "name": name,
+                "labels": {
+                    "app.kubernetes.io/managed-by": "kix",
+                    (keys::CLUSTER_LABEL): "prod",
+                },
+                "annotations": { (keys::IDENTITY_HASH): format!("{name}-0123456789abcdef") },
+                "creationTimestamp": at,
+            },
+            "status": status,
+        })
+    };
+    let api = FakeApi::new([
+        record(
+            "new",
+            "2026-11-25T10:00:00Z",
+            serde_json::json!({ "phase": "Partial", "partial": { "only": ["web/shop", "app/api"], "at": "2026-11-25T10:00:00Z" } }),
+        ),
+        record(
+            "broken",
+            "2026-11-25T09:00:00Z",
+            serde_json::json!({
+                "phase": "Failed",
+                "failure": { "reason": "Job/migrate@app failed\n  details", "at": "2026-11-25T09:00:00Z" },
+            }),
+        ),
+        record(
+            "old",
+            "2026-11-25T08:00:00Z",
+            serde_json::json!({ "phase": "Failed", "failure": { "reason": "interrupted", "at": "2026-11-25T08:00:00Z" } }),
+        ),
+    ]);
+    let client = api.client();
+    let discovery = kix::cluster::discovery::discover_resources(&client)
+        .await
+        .unwrap();
+    let records = Records::open_installed(&client, &discovery).unwrap();
+    let active = Record {
+        name: "prod-old".into(),
+        ..Record::default()
+    };
+    let notes = stopped_notes(&records, "prod", &active, None)
+        .await
+        .unwrap();
+    assert_eq!(notes.len(), 3, "{notes:?}");
+    assert!(
+        notes[0].starts_with("Deployment record old (build old-01234567) failed (interrupted)"),
+        "{notes:?}"
+    );
+    assert!(
+        notes[1].starts_with(
+            "Deployment record broken (build broken-01234) failed (Job/migrate@app failed)"
+        ),
+        "{notes:?}"
+    );
+    let partial = &notes[2];
+    assert!(
+        partial.starts_with("Deployment record new (build new-01234567) is in phase Partial: `kix deploy --only` applied app/api, web/shop, while prod-old remains the active deployment."),
+        "{partial}"
+    );
+    assert!(
+        partial.contains("Run `kix deploy prod` to deploy the rest of that build"),
+        "{partial}"
+    );
+    assert!(
+        partial.contains("or to replace it if your local files have changed."),
+        "{partial}"
+    );
+
+    let notes = stopped_notes(&records, "prod", &active, Some("broken"))
+        .await
+        .unwrap();
+    assert_eq!(notes.len(), 2, "{notes:?}");
+    assert!(notes.iter().all(|n| !n.contains("broken")), "{notes:?}");
+}
+
 /// A deploy that failed after the current one is the headline, its own
 /// objects are checked, and the command exits 2 even when every object of
 /// the current deploy is fine.

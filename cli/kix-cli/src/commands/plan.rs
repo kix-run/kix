@@ -116,7 +116,23 @@ pub(crate) fn flags_of(args: &PlanArgs) -> PlanFlags {
         reconcile: args.reconcile,
         force_conflicts: args.force_conflicts,
         accept_migrations: args.accept_migrations,
+        only: PlanFlags::only_of(&args.only),
     }
+}
+
+/// Refuse planning flags that a deploy with `--only` cannot carry out:
+/// `--prune`, because such a deploy leaves every orphan for the deploy that
+/// finishes the build.
+pub(crate) fn refuse_with_only(flags: &PlanFlags, cluster: &str) -> Result<()> {
+    if flags.only.is_empty() || flags.prune != PrunePolicy::Delete {
+        return Ok(());
+    }
+    Err(miette!(
+        "`--only` does not combine with `--prune`. Nothing was planned or applied to \
+         the cluster. A `--only` deploy updates selected instances without deleting removed \
+         resources. Next: run the command again without `--prune`, then deploy the full \
+         build with `kix deploy {cluster} --prune` to delete removed resources."
+    ))
 }
 
 /// Select the baseline source (`OldSide`) for planning: the local cache under
@@ -142,6 +158,7 @@ pub(crate) fn prepare(
     flags: PlanFlags,
     ctx: &CommandContext,
 ) -> Result<Option<Planned>> {
+    refuse_with_only(&flags, &args.cluster)?;
     let build = new_build(args, ctx)?;
     output::clear_status_line();
     let graph = build.graph();
@@ -520,7 +537,9 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
         identity_hash: a.identity_hash.clone(),
         store_path: a.built_via.clone(),
     });
-    doc.flags = Some(p.checked.flags());
+    doc.flags = Some(p.checked.flags().clone());
+    doc.left_alone = p.checked.left_alone();
+    doc.only_needed = p.checked.needed().to_vec();
     doc.objects_digest = Some(kix::plan::objects::digest(p.checked.objects()));
     doc.objects = Some(p.checked.objects().clone());
     if !connected {
@@ -535,7 +554,10 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
         report,
     );
     doc.drift = match drift {
-        Some(drift) => Checked::found(drift),
+        Some(found) => {
+            doc.earlier_deploys = found.earlier;
+            Checked::found(found.drift)
+        }
         None => Checked::not_checked(NotCheckedReason::DeployedBuildUnavailable),
     };
     // A custom resource whose CRD this deploy changes was checked against the
@@ -806,23 +828,33 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
     // Say where the extra work in this plan came from before the changes and
     // orphans it explains. Without this the reader sees a deploy of an
     // unchanged config proposing changes, and has no way to tell why.
-    if !p.baseline.failed().is_empty() {
-        let names: Vec<&str> = p
-            .baseline
-            .failed()
+    let failed = p.baseline.failed();
+    if !failed.is_empty() {
+        let (partial, stopped): (Vec<&str>, Vec<&str>) = failed
             .consumed
             .iter()
             .map(String::as_str)
-            .collect();
-        crate::say!(
-            "  {} reconciling what {} left behind ({})",
-            output::yellow("!"),
-            if names.len() == 1 {
-                "a failed deploy".to_string()
+            .partition(|name| failed.partly_deployed.iter().any(|p| p == name));
+        let count = |n: usize, one: &str, many: &str| {
+            if n == 1 {
+                one.to_string()
             } else {
-                format!("{} failed deploys", names.len())
-            },
-            names.join(", "),
+                format!("{n} {many}")
+            }
+        };
+        let what = match (partial.len(), stopped.len()) {
+            (0, f) => count(f, "a failed deploy", "failed deploys"),
+            (p, 0) => count(p, "an earlier `--only` deploy", "earlier `--only` deploys"),
+            (p, f) => format!(
+                "{} and {}",
+                count(f, "1 failed deploy", "failed deploys"),
+                count(p, "1 `--only` deploy", "`--only` deploys"),
+            ),
+        };
+        crate::say!(
+            "  {} reconciling changes from {what} ({})",
+            output::yellow("!"),
+            failed.consumed.join(", "),
         );
     }
 
@@ -908,6 +940,7 @@ mod tests {
             reconcile: false,
             force_conflicts: false,
             accept_migrations: false,
+            only: Vec::new(),
         });
         doc.prune = Checked::found(entries);
         let text = plan::render::render_text(&doc);

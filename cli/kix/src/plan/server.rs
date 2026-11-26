@@ -18,8 +18,8 @@ use crate::manifest::lifecycle;
 use crate::manifest::types::{self, ResourceId};
 use serde_json::Value;
 
-use super::document::{BeingDeleted, DriftChange, FieldNotKept};
-use super::origin::{ChangeLabel, ThreeWay};
+use super::document::{BeingDeleted, DriftChange, EarlierDeployChange, FieldNotKept};
+use super::origin::{ChangeLabel, FoldedBy, ThreeWay};
 use super::{CLUSTER_LEVEL_KEY, PackageChangeDiff, PackageDiff, partition_propagation};
 
 /// Metadata the apiserver maintains on every write. A dry-run apply returns
@@ -138,17 +138,26 @@ pub(crate) struct Overlay<'a> {
     /// The deployed build's manifests, when the deployed build is known.
     /// Without them no field change is labelled and drift is not reported.
     pub deployed: Option<HashMap<ResourceId, &'a Value>>,
+    /// Each resource's manifest in the builds of the folded deploy records.
+    pub folded: HashMap<ResourceId, Vec<(FoldedBy, &'a Value)>>,
+}
+
+/// The fields where the live cluster differs from the deployed build, as
+/// [`Overlay::apply`] sorts them.
+#[derive(Debug, Default)]
+pub(crate) struct Differences {
+    /// Drift the deploy reverts.
+    pub drift: Vec<DriftChange>,
+    /// Values a folded deploy wrote.
+    pub earlier: Vec<EarlierDeployChange>,
 }
 
 impl Overlay<'_> {
     /// Replace each answered object's entry in `diff` with the server's
     /// answer, label every field change when the deployed build is known,
-    /// and return the drift the deploy reverts.
-    pub(crate) fn apply(
-        &self,
-        diff: &mut PackageDiff,
-        answers: &[DryRunAnswer],
-    ) -> Vec<DriftChange> {
+    /// and return the drift the deploy reverts and the values folded
+    /// deploys wrote.
+    pub(crate) fn apply(&self, diff: &mut PackageDiff, answers: &[DryRunAnswer]) -> Differences {
         let membership = membership(self.new_graph);
         let new_by_rid: HashMap<ResourceId, &Value> = self
             .new_graph
@@ -156,7 +165,7 @@ impl Overlay<'_> {
             .values()
             .map(|n| (ResourceId::from_value(&n.manifest), &n.manifest))
             .collect();
-        let mut drift = Vec::new();
+        let mut found = Differences::default();
         let mut labelled = Vec::new();
         diff.labelled = self.deployed.is_some();
 
@@ -214,17 +223,30 @@ impl Overlay<'_> {
                                 managed: Some(&live),
                                 applies: true,
                                 secret: types::is_secret(&live) || types::is_secret(new),
+                                folded: self.folded.get(rid).map_or(&[], Vec::as_slice),
                             };
                             let (labels, drifted) = three.label(&real);
                             labelled.push((rid.clone(), labels));
-                            drift.extend(drifted.into_iter().map(|d| DriftChange {
-                                resource: rid.display_id(),
-                                path: d.path,
-                                deployed: d.deployed,
-                                live: d.live,
-                                managers: d.managers,
-                                reverted: true,
-                            }));
+                            for d in drifted {
+                                match d.by {
+                                    Some(by) => found.earlier.push(EarlierDeployChange {
+                                        resource: rid.display_id(),
+                                        path: d.path,
+                                        deployed: d.deployed,
+                                        live: d.live,
+                                        record: by.record,
+                                        partly_deployed: by.partly_deployed,
+                                    }),
+                                    None => found.drift.push(DriftChange {
+                                        resource: rid.display_id(),
+                                        path: d.path,
+                                        deployed: d.deployed,
+                                        live: d.live,
+                                        managers: d.managers,
+                                        reverted: true,
+                                    }),
+                                }
+                            }
                         }
                         entry.resource_diffs.push((rid.clone(), real));
                     } else if recreated {
@@ -244,7 +266,7 @@ impl Overlay<'_> {
             label_build_changes(diff);
         }
         prune_empty(diff);
-        drift
+        found
     }
 }
 
@@ -561,8 +583,9 @@ mod tests {
         let overlay = Overlay {
             new_graph: &new_graph,
             deployed: Some(deployed),
+            folded: HashMap::new(),
         };
-        let drift = overlay.apply(&mut diff, &answers);
+        let drift = overlay.apply(&mut diff, &answers).drift;
         assert!(drift.is_empty());
         let web = &diff.changed[0];
         assert!(web.resource_diffs.is_empty(), "{:?}", web.resource_diffs);
@@ -601,6 +624,7 @@ mod tests {
         Overlay {
             new_graph: &new_graph,
             deployed: None,
+            folded: HashMap::new(),
         }
         .apply(&mut diff, &answers);
         let web = &diff.changed[0];
@@ -690,8 +714,10 @@ mod tests {
         let drift = Overlay {
             new_graph: &new_graph,
             deployed: Some(deployed),
+            folded: HashMap::new(),
         }
-        .apply(&mut diff, &answers);
+        .apply(&mut diff, &answers)
+        .drift;
         assert_eq!(drift.len(), 1);
         assert_eq!(drift[0].path, "$.data.x");
         assert_eq!(drift[0].live, Some(json!("hand-edited")));
@@ -707,6 +733,57 @@ mod tests {
     }
 
     /// Return the object lists of a plan's `packages` section grouped by bucket.
+    /// A live value a folded deploy's build has is listed as that deploy's
+    /// write, labelled so, and kept out of the drift.
+    #[test]
+    fn a_value_a_folded_deploy_wrote_is_not_drift() {
+        let old = vec![configmap(
+            "app",
+            "a",
+            &"a".repeat(32),
+            json!({"version": "1"}),
+        )];
+        let partial = configmap("app", "a", &"b".repeat(32), json!({"version": "2"}));
+        let new = vec![configmap(
+            "app",
+            "a",
+            &"c".repeat(32),
+            json!({"version": "3"}),
+        )];
+        let new_graph = StoreGraph::synthesize(&new, &StoreGraph::empty("c"));
+        let old_graph = StoreGraph::synthesize(&old, &new_graph);
+        let mut diff = super::super::diff_graphs(&old_graph, &new_graph);
+        let answers = vec![applied("a", Some(served(&partial)), served(&new[0]))];
+        let by = FoldedBy {
+            record: "c-partial".into(),
+            partly_deployed: true,
+        };
+        let found = Overlay {
+            new_graph: &new_graph,
+            deployed: Some(old.iter().map(|m| (ResourceId::from_value(m), m)).collect()),
+            folded: [(rid("a"), vec![(by, &partial)])].into_iter().collect(),
+        }
+        .apply(&mut diff, &answers);
+        assert!(found.drift.is_empty(), "{:?}", found.drift);
+        assert_eq!(found.earlier.len(), 1, "{:?}", found.earlier);
+        let e = &found.earlier[0];
+        assert_eq!(e.path, "$.data.version");
+        assert_eq!(
+            (e.deployed.clone(), e.live.clone()),
+            (Some(json!("1")), Some(json!("2")))
+        );
+        assert_eq!((e.record.as_str(), e.partly_deployed), ("c-partial", true));
+        let (id, _) = &diff.changed[0].resource_diffs[0];
+        assert!(
+            diff.labels[id]
+                .iter()
+                .any(|l| l.contains(&ChangeLabel::AppliedByEarlierDeploy)
+                    && !l.contains(&ChangeLabel::RevertsDrift)),
+            "{:?}",
+            diff.labels[id]
+        );
+    }
+
     fn objects(p: &super::super::document::Packages) -> Vec<(String, Vec<String>)> {
         let mut out = Vec::new();
         for c in p.changed.iter().chain(p.cluster_level.iter()) {
@@ -770,6 +847,7 @@ mod tests {
                     .map(|m| (ResourceId::from_value(m), m))
                     .collect(),
             ),
+            folded: HashMap::new(),
         }
         .apply(&mut plan_side, &answers);
         let plan_doc = Plan::new(

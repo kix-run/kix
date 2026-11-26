@@ -452,7 +452,8 @@
 - [ ] Strip dependency context — remove a resource from the DAG without deleting it (e.g. `builtins.unsafeDiscardStringContext` on a specific dep reference) to unlink a broken dependency and allow the rest of the graph to deploy
 - [ ] Force-override a single resource — bypass the content-addressed pipeline for one resource (pin its manifest directly) when the DSL can't express what you need right now
 - [ ] Skip a package from the cluster build — `exclude = [ "package-name" ];` at the cluster level to drop a package entirely without editing its definition
-- [ ] Partial deploy — deploy a subset of the graph (e.g. only one wave or one namespace) when a broken package blocks the full rollout
+- [x] Partial deploy — `kix deploy <cluster> --only <namespace>/<instance>` (repeatable; also on `kix plan`) applies the named instances and the objects they depend on, so a large upgrade can roll out one instance at a time. The new build's record ends in its own phase, `Partial`, with `status.partial` naming the instances, and the next plan folds what it applied into its baseline as for a `Failed` record; the Active record stays current, nothing is pruned, stamped, or superseded. A plain `kix deploy` applies the rest and finalizes. Refused on a first deploy, with `--prune`, and with `--operator`; `kix rollback` has no `--only`.
+- [ ] Partial deploy by wave or namespace — select by a wave or a namespace instead of naming instances
 - [ ] Escape-hatch annotations — mark resources with `kix.run/unmanaged: "true"` so kix-diff ignores them, allowing manual hotfixes to coexist temporarily
 - [ ] Audit trail for escape hatches — any break-glass action should be visible in the build output / diff summary so it doesn't silently become permanent
 

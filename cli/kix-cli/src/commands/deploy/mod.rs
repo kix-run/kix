@@ -62,13 +62,16 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
         };
     }
     if args.operator {
+        refuse_only_by_operator(args)?;
         refuse_ignored_by_operator(args)?;
         return run_operator(args, ctx);
     }
 
     // When `--plan` is set, use the planning flags recorded in the saved plan
     // rather than `args.plan`.
-    let flags = saved.as_ref().map_or(flags_of(&args.plan), |s| s.flags);
+    let flags = saved
+        .as_ref()
+        .map_or_else(|| flags_of(&args.plan), |s| s.flags.clone());
     let Some(mut p) = prepare(&args.plan, flags, ctx)? else {
         // The build is empty, so Kix never connects and the log has no
         // `kubernetes` line.
@@ -441,11 +444,18 @@ pub(crate) async fn run_plan(
     cluster: &str,
 ) -> (Result<DeployResult, scheduler::DeployError>, RunEnd) {
     crate::interrupt::cancel_on_interrupt(&config.cancel);
+    let partial = !checked.flags().only.is_empty();
     let (result, kept) = checked.run(target, receipt, config, observer).await;
     if let Some(recorded) = kept {
         kix::plan::baseline::sync_kept_roots(cluster, &recorded);
     }
     let end = RunEnd::of(&result);
+    // A deploy with `--only` never makes its record current, so this
+    // machine keeps the build it had as the cluster's build.
+    let end = RunEnd {
+        current: end.current && !partial,
+        ..end
+    };
     (result, end)
 }
 
@@ -876,6 +886,10 @@ async fn run_deploy_async(
     };
 
     let record = checked.activation_name().map(str::to_string);
+    let only = checked.flags().only.clone();
+    let needed = checked.needed().to_vec();
+    let applied = checked.applied_instances();
+    let left_alone = checked.left_alone();
     // What the prune will delete, read before the run takes the plan, so the
     // summary can say which objects of a kind that left the build it left.
     let leaving = (checked.flags().prune == PrunePolicy::Delete)
@@ -907,8 +921,26 @@ async fn run_deploy_async(
             counts,
             false,
             end.succeeded,
+            &applied,
             left.iter().map(|(_, l)| l.clone()).collect(),
         ),
+        None if end.succeeded && !only.is_empty() => {
+            println!();
+            println!(
+                "{}",
+                observer::partial_closing(
+                    counts,
+                    &observer::PartialClosing {
+                        cluster: cluster_name,
+                        record: record.as_deref(),
+                        previous: &previous,
+                        only: &only,
+                        needed: &needed,
+                        left_alone: left_alone.unwrap_or_default(),
+                    }
+                )
+            );
+        }
         None if end.succeeded => {
             println!();
             println!("{}", summary_line(counts, command, true));
@@ -926,6 +958,7 @@ async fn run_deploy_async(
                 interrupted,
                 current: end.current,
                 on_error_continue: options.on_error == OnError::Continue,
+                only: &only,
             };
             println!();
             println!("{}", observer::closing(counts, &closing));
@@ -1088,6 +1121,19 @@ fn ignored_by_operator(args: &DeployArgs) -> Vec<&'static str> {
     .into_iter()
     .filter_map(|(given, flag)| given.then_some(flag))
     .collect()
+}
+
+/// Refuse `kix deploy --operator --only`: the operator deploys whole builds.
+fn refuse_only_by_operator(args: &DeployArgs) -> Result<()> {
+    if args.plan.only.is_empty() {
+        return Ok(());
+    }
+    Err(miette!(
+        "`kix deploy --operator` does not accept `--only`. Nothing was applied to the cluster. \
+         The Kix operator always deploys the full build. Next: remove `--operator` to deploy \
+         the selected instances from this machine, or remove `--only` to deploy the full build \
+         with the operator."
+    ))
 }
 
 /// Refuse `kix deploy --operator` with a flag the operator would not carry

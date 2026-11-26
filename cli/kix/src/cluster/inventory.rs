@@ -397,6 +397,16 @@ impl SharedOrphan {
     }
 }
 
+/// An object that a pending record of its own Kix cluster names
+/// ([`Tenancy::pending_records_of`]), so `kix gc` leaves it alone until a
+/// deploy finishes or replaces that record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldObject {
+    pub rid: ResourceId,
+    /// The names of those records, sorted.
+    pub records: Vec<String>,
+}
+
 /// Split orphan candidates into those to prune and those still deployed by
 /// another Kix cluster, using `live` objects already in memory. Kinds
 /// protected by [`never_pruned`] stay in the prune list so the prune step can
@@ -457,11 +467,61 @@ pub(crate) async fn split_shared_orphans_live(
     if orphans.is_empty() {
         return Ok((orphans, Vec::new()));
     }
-    let ar_by_kind: std::collections::HashMap<&str, &(ApiResource, Scope)> = discovery
+    let live = read_candidates(client, discovery, &orphans).await?;
+    let tenancy = tenancy::read(records, cluster)
+        .await
+        .map_err(FetchError::RecordsError)?;
+    Ok(split_by_lookup(orphans, |rid| live.get(rid), &tenancy))
+}
+
+/// Fetch each candidate from the cluster and split out the ones a pending
+/// record of Kix cluster `cluster` names ([`Tenancy::pending_records_of`]). A candidate that is gone or whose
+/// kind is not served stays in the first list. Any other GET failure is an
+/// error.
+pub(crate) async fn split_held_live(
+    client: &Client,
+    discovery: &[(ApiResource, Scope)],
+    records: &OpenedRecords,
+    candidates: Vec<ResourceId>,
+    cluster: &str,
+) -> Result<(Vec<ResourceId>, Vec<HeldObject>), FetchError> {
+    if candidates.is_empty() {
+        return Ok((candidates, Vec::new()));
+    }
+    let live = read_candidates(client, discovery, &candidates).await?;
+    let tenancy = tenancy::read(records, cluster)
+        .await
+        .map_err(FetchError::RecordsError)?;
+    let mut rest = Vec::new();
+    let mut held = Vec::new();
+    for rid in candidates {
+        let records = live
+            .get(&rid)
+            .map(|o| tenancy.pending_records_of(o))
+            .unwrap_or_default();
+        if records.is_empty() {
+            rest.push(rid);
+        } else {
+            held.push(HeldObject { rid, records });
+        }
+    }
+    Ok((rest, held))
+}
+
+/// Read each of `candidates` the cluster serves, except kinds that are never
+/// pruned, keyed by the candidate's `ResourceId` so an object read from
+/// `default` for a cluster-scoped candidate still matches. A candidate that
+/// is gone is left out. Any other GET failure is an error.
+async fn read_candidates(
+    client: &Client,
+    discovery: &[(ApiResource, Scope)],
+    candidates: &[ResourceId],
+) -> Result<HashMap<ResourceId, DynamicObject>, FetchError> {
+    let ar_by_kind: HashMap<&str, &(ApiResource, Scope)> = discovery
         .iter()
         .map(|pair| (pair.0.kind.as_str(), pair))
         .collect();
-    let gets = orphans
+    let gets = candidates
         .iter()
         .filter(|rid| !never_pruned(rid.group_kind()))
         .filter_map(|rid| {
@@ -478,18 +538,11 @@ pub(crate) async fn split_shared_orphans_live(
                 Ok::<_, FetchError>(obj.map(|o| (rid.clone(), o)))
             })
         });
-    // Key by the candidate's `ResourceId` so an object read from `default` for
-    // a cluster-scoped candidate still matches.
-    let live: std::collections::HashMap<ResourceId, DynamicObject> =
-        futures::future::try_join_all(gets)
-            .await?
-            .into_iter()
-            .flatten()
-            .collect();
-    let tenancy = tenancy::read(records, cluster)
-        .await
-        .map_err(FetchError::RecordsError)?;
-    Ok(split_by_lookup(orphans, |rid| live.get(rid), &tenancy))
+    Ok(futures::future::try_join_all(gets)
+        .await?
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
 /// What [`LiveObjects::get`] knows about one object.
@@ -1280,6 +1333,83 @@ mod tests {
             .unwrap();
         let record_list = requests.iter().position(|r| *r == records).unwrap();
         assert!(last_object_list < record_list, "{requests:#?}");
+    }
+
+    /// Soft gc reads each candidate and keeps the ones a failed or partly
+    /// deployed record of its cluster names. A candidate only the current
+    /// or a Superseded record names, and one that is gone, may be deleted.
+    #[tokio::test]
+    async fn candidates_a_pending_record_names_are_held() {
+        use crate::cluster::fake_api::FakeApi;
+        use crate::manifest::lifecycle::{PHASE_FAILED, PHASE_PARTIAL};
+        let record = |name: &str, hash: &str, phase: &str| {
+            json!({
+                "apiVersion": keys::API_VERSION,
+                "kind": "Activation",
+                "metadata": {
+                    "name": name,
+                    "labels": {
+                        "app.kubernetes.io/managed-by": "kix",
+                        (keys::CLUSTER_LABEL): "a",
+                    },
+                    "annotations": { (keys::IDENTITY_HASH): hash },
+                },
+                "status": { "phase": phase },
+            })
+        };
+        let cm = |name: &str, activations: &str| {
+            json!({
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "name": name,
+                    "namespace": "app",
+                    "labels": { "app.kubernetes.io/managed-by": "kix" },
+                    "annotations": { (keys::ACTIVATIONS): activations },
+                },
+            })
+        };
+        let api = FakeApi::new([
+            record("a-cur", "cur", lifecycle::PHASE_ACTIVE),
+            record("a-old", "old", lifecycle::PHASE_SUPERSEDED),
+            record("a-failed", "fail", PHASE_FAILED),
+            record("a-only", "part", PHASE_PARTIAL),
+            cm("stale", "old,cur"),
+            cm("from-failed", "old,fail"),
+            cm("from-only", "part"),
+        ]);
+        let client = api.client();
+        let discovery = discover_resources(&client).await.unwrap();
+        let records = activation::Records::open(&client, &discovery).unwrap();
+        let rid = |name: &str| ResourceId::new("", "ConfigMap", "app", name);
+        let (rest, held) = split_held_live(
+            &client,
+            &discovery,
+            &records,
+            vec![
+                rid("stale"),
+                rid("from-failed"),
+                rid("from-only"),
+                rid("gone"),
+            ],
+            "a",
+        )
+        .await
+        .unwrap();
+        assert_eq!(rest, vec![rid("stale"), rid("gone")]);
+        assert_eq!(
+            held,
+            vec![
+                HeldObject {
+                    rid: rid("from-failed"),
+                    records: vec!["a-failed".into()],
+                },
+                HeldObject {
+                    rid: rid("from-only"),
+                    records: vec!["a-only".into()],
+                },
+            ]
+        );
     }
 
     /// Build an object read through `api_version` with uid `uid`.

@@ -124,18 +124,33 @@ pub(super) fn may_clear_kept(
         && active.identity_hash.as_deref() == build_hash
 }
 
+/// What [`judge_hard`] found.
+#[derive(Default)]
+pub(super) struct Judged {
+    pub garbage: Vec<GarbageEntry>,
+    /// Orphans another Kix cluster's current record still names.
+    pub shared: Vec<inventory::SharedOrphan>,
+    /// Objects a pending record of this Kix cluster names.
+    pub held: Vec<inventory::HeldObject>,
+}
+
 /// Classify `live` objects against `expected_hashes` and `expected_ids`,
-/// returning garbage entries and orphans shared with other Kix clusters.
+/// the objects of the build gc compares with.
 ///
-/// Activation records are skipped here and handled by the retention policy.
+/// An object outside that build is kept, not garbage, when a record of this
+/// Kix cluster names it, such as a failed or partly deployed deploy that
+/// wrote it, or when another Kix cluster's current
+/// record names it. Activation records are skipped here and handled by the
+/// retention policy.
 pub(super) fn judge_hard(
     live: &[kube::api::DynamicObject],
     expected_hashes: &HashSet<String>,
     expected_ids: &HashSet<String>,
     tenancy: &kix::cluster::tenancy::Tenancy,
-) -> (Vec<GarbageEntry>, Vec<inventory::SharedOrphan>) {
+) -> Judged {
     let mut garbage: Vec<GarbageEntry> = Vec::new();
     let mut shared: Vec<inventory::SharedOrphan> = Vec::new();
+    let mut held: Vec<inventory::HeldObject> = Vec::new();
     for obj in live {
         if kix::manifest::lifecycle::lifecycle_of_live(obj)
             == kix::manifest::lifecycle::Lifecycle::Record
@@ -178,6 +193,15 @@ pub(super) fn judge_hard(
             None => GarbageReason::NoIdentityHash,
         };
 
+        let records = tenancy.pending_records_of(obj);
+        if !records.is_empty() {
+            held.push(inventory::HeldObject {
+                rid: kix::cluster::drift::resource_id(obj),
+                records,
+            });
+            continue;
+        }
+
         let others = tenancy.still_deployed_by_others(obj);
         if !others.is_empty()
             && !lifecycle::never_pruned(kix::cluster::drift::resource_id(obj).group_kind())
@@ -206,7 +230,11 @@ pub(super) fn judge_hard(
             deleting: kix::cluster::readiness::deletion_reason(obj),
         });
     }
-    (garbage, shared)
+    Judged {
+        garbage,
+        shared,
+        held,
+    }
 }
 
 /// Split out the unstamped objects that `--include unstamped` covers, unless

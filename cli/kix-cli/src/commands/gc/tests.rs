@@ -95,21 +95,64 @@ mod kept_garbage_tests {
             identity_hash: Some("aaaaaaaa1111".into()),
             ..Default::default()
         };
-        assert!(check_files_build("c", &active, Some("aaaaaaaa1111")).is_ok());
+        assert!(check_files_build("c", &active, Some("aaaaaaaa1111"), &[]).is_ok());
 
-        let err = check_files_build("c", &active, Some("bbbbbbbb2222"))
+        let err = check_files_build("c", &active, Some("bbbbbbbb2222"), &[])
             .unwrap_err()
             .to_string();
         assert!(err.contains("Nothing was deleted"), "{err}");
         assert!(err.contains("c-a (build aaaaaaaa)"), "{err}");
         assert!(err.contains("build bbbbbbbb"), "{err}");
-        assert!(check_files_build("c", &active, None).is_err());
+        assert!(!err.contains("--only"), "{err}");
+        assert!(check_files_build("c", &active, None, &[]).is_err());
 
         let unhashed = Record {
             identity_hash: None,
             ..active
         };
-        assert!(check_files_build("c", &unhashed, None).is_err());
+        assert!(check_files_build("c", &unhashed, None, &[]).is_err());
+    }
+
+    /// When a deploy with `--only` left the files' build partly deployed,
+    /// the refusal names that record and what it applied.
+    #[test]
+    fn the_refusal_names_a_partial_deploy_of_the_files_build() {
+        let active = Record {
+            name: "c-a".into(),
+            identity_hash: Some("aaaaaaaa1111".into()),
+            ..Default::default()
+        };
+        let partial: Record = Record::of(
+            &serde_json::from_value(serde_json::json!({
+                "apiVersion": kix::manifest::keys::API_VERSION,
+                "kind": "Activation",
+                "metadata": {
+                    "name": "c-b",
+                    "annotations": { (kix::manifest::keys::IDENTITY_HASH): "bbbbbbbb2222" },
+                },
+                "status": {
+                    "phase": "Partial",
+                    "partial": { "only": ["app/api", "web/shop"], "at": "2026-11-25T10:00:00Z" },
+                },
+            }))
+            .unwrap(),
+        );
+        let err = check_files_build(
+            "c",
+            &active,
+            Some("bbbbbbbb2222"),
+            std::slice::from_ref(&partial),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("Deployment record c-b already deployed part of your local build (`kix deploy --only` applied app/api, web/shop). Run `kix deploy c` to finish deploying it, then run `kix gc c` again."),
+            "{err}"
+        );
+        let err = check_files_build("c", &active, Some("cccccccc3333"), &[partial])
+            .unwrap_err()
+            .to_string();
+        assert!(!err.contains("c-b"), "{err}");
     }
 
     /// Verify that `may_clear_kept` permits clearing only when the build hash
@@ -510,6 +553,61 @@ mod hard_scope_tests {
         .unwrap()
     }
 
+    fn record_in(cluster: &str, name: &str, hash: &str, phase: &str) -> DynamicObject {
+        let mut r = record(cluster, hash);
+        r.metadata.name = Some(name.into());
+        r.data["status"]["phase"] = json!(phase);
+        r
+    }
+
+    /// A full scan compares with the current record's build, but an object
+    /// that a failed deploy or a deploy with `--only` wrote carries that
+    /// record's hash, not the current build's. It is kept and listed under
+    /// the record, not deleted, while an object only a Superseded record
+    /// names is still garbage.
+    #[test]
+    fn hard_gc_keeps_what_failed_and_partial_deploys_wrote() {
+        use kix::manifest::lifecycle::{PHASE_FAILED, PHASE_PARTIAL, PHASE_SUPERSEDED};
+        let tenancy = Tenancy::fixture(
+            &[
+                record_in("a", "a-cur", "cur", PHASE_ACTIVE),
+                record_in("a", "a-old", "old", PHASE_SUPERSEDED),
+                record_in("a", "a-failed", "fail", PHASE_FAILED),
+                record_in("a", "a-only", "part", PHASE_PARTIAL),
+            ],
+            "a",
+        );
+        let objects = [
+            live("ConfigMap", "current", Some("h-cur"), "old,cur"),
+            live("ConfigMap", "stale", Some("h-old"), "old"),
+            live("ConfigMap", "from-failed", Some("h-f"), "cur,fail"),
+            live("ConfigMap", "from-only", Some("h-p"), "part"),
+            live("ConfigMap", "both", Some("h-b"), "fail,part"),
+        ];
+        let expected: HashSet<String> = ["h-cur".to_string()].into();
+        let judged = judge_hard(&objects, &expected, &HashSet::new(), &tenancy);
+        assert_eq!(names(&judged.garbage), vec!["stale"]);
+        let held: Vec<(&str, Vec<&str>)> = judged
+            .held
+            .iter()
+            .map(|h| {
+                (
+                    h.rid.name.as_str(),
+                    h.records.iter().map(String::as_str).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            held,
+            vec![
+                ("from-failed", vec!["a-failed"]),
+                ("from-only", vec!["a-only"]),
+                ("both", vec!["a-failed", "a-only"]),
+            ]
+        );
+        assert!(judged.shared.is_empty());
+    }
+
     fn names(entries: &[GarbageEntry]) -> Vec<&str> {
         let mut v: Vec<&str> = entries.iter().map(|g| g.id.name.as_str()).collect();
         v.sort();
@@ -536,7 +634,9 @@ mod hard_scope_tests {
         assert_eq!(sweep.unattributed.len(), 1);
 
         let expected: HashSet<String> = ["h-cur".to_string()].into();
-        let (garbage, shared) = judge_hard(&sweep.managed, &expected, &HashSet::new(), &tenancy);
+        let plan::Judged {
+            garbage, shared, ..
+        } = judge_hard(&sweep.managed, &expected, &HashSet::new(), &tenancy);
         assert_eq!(names(&garbage), vec!["a-stale"]);
         assert_eq!(shared.len(), 1);
         assert_eq!(shared[0].rid.name, "shared");
@@ -544,7 +644,7 @@ mod hard_scope_tests {
 
         let mut with_flag = sweep.managed.clone();
         with_flag.extend(sweep.unattributed);
-        let (garbage, _) = judge_hard(&with_flag, &expected, &HashSet::new(), &tenancy);
+        let garbage = judge_hard(&with_flag, &expected, &HashSet::new(), &tenancy).garbage;
         assert_eq!(names(&garbage), vec!["a-stale", "leftover"]);
     }
 
@@ -585,11 +685,11 @@ mod hard_scope_tests {
         let scoped = sweep();
         assert_eq!(scoped.copies.len(), 1);
         let judged = judged_objects(scoped, false, false);
-        let (garbage, _) = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
+        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
         assert!(garbage.is_empty());
 
         let judged = judged_objects(sweep(), false, true);
-        let (garbage, _) = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
+        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
         assert_eq!(names(&garbage), vec!["web-x-guest"]);
     }
 
@@ -630,7 +730,7 @@ mod hard_scope_tests {
             .collect();
         let expected: HashSet<String> = ["h-cur".to_string()].into();
         let judged = judged_objects(sweep, true, true);
-        let (garbage, _) = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
+        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
 
         let (held, rest) = hold_back_unstamped(garbage, &copies, false);
         assert_eq!(names(&rest), vec!["db.1a2b"]);
@@ -645,7 +745,7 @@ mod hard_scope_tests {
             true,
             true,
         );
-        let (garbage, _) = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
+        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
         let (held, rest) = hold_back_unstamped(garbage, &copies, true);
         assert!(held.is_empty());
         assert_eq!(names(&rest), vec!["unannotated"]);
@@ -674,12 +774,14 @@ mod hard_scope_tests {
         let scoped = sweep();
         assert_eq!(scoped.unattributed.len(), 2);
         let judged = judged_objects(scoped, false, false);
-        let (garbage, shared) = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
+        let plan::Judged {
+            garbage, shared, ..
+        } = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
         assert!(garbage.is_empty());
         assert!(shared.is_empty());
 
         let judged = judged_objects(sweep(), true, false);
-        let (garbage, _) = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
+        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
         assert_eq!(names(&garbage), vec!["b-web", "leftover"]);
     }
 
@@ -700,12 +802,13 @@ mod hard_scope_tests {
         let deployment = stamped("Deployment", "web2", "baseline");
         let tenancy = kix::cluster::tenancy::Tenancy::fixture(&[], "a");
 
-        let (garbage, _) = judge_hard(
+        let garbage = judge_hard(
             &[record, deployment],
             &HashSet::new(),
             &HashSet::new(),
             &tenancy,
-        );
+        )
+        .garbage;
         let packages: Vec<(Option<&str>, Option<&str>)> = garbage
             .iter()
             .map(|g| (g.package_namespace.as_deref(), g.package.as_deref()))

@@ -244,7 +244,7 @@ pub(crate) fn detect_changes(
     actions
 }
 
-/// Fold the closures of partially applied `Failed` deploys into a change plan.
+/// Fold the closures of `Failed` and `Partial` deploys into a change plan.
 ///
 /// When a prior deploy stopped mid-wave, it may have created or modified some
 /// resources before aborting without updating the `Active` record. Diffing

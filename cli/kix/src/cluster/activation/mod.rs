@@ -4,9 +4,11 @@
 //! module manages its state machine:
 //!
 //! A deploy creates a `Deploying` record before applying resources. Completion
-//! moves it to `Active` or `Failed`. A later deploy supersedes the current
-//! record, and garbage collection removes superseded records after their
-//! resources are pruned.
+//! moves it to `Active` or `Degraded`, a deploy that stops moves it to
+//! `Failed`, and a deploy with `--only` that applies everything it selected
+//! moves it to `Partial`. A later deploy supersedes the current record, and
+//! garbage collection removes superseded records after their resources are
+//! pruned.
 //!
 //! The record is created at the start of the deploy and re-asserted in the
 //! final wave. Because its spec lists every `PackageInstance`, its identity
@@ -32,7 +34,8 @@ use crate::eval::package_index::{self, RecordPackageIndex};
 use crate::legacy_domain::{self, LegacyDomainError};
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{
-    PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_QUEUED, PHASE_SUPERSEDED,
+    PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_PARTIAL, PHASE_QUEUED,
+    PHASE_SUPERSEDED,
 };
 use kube::{
     api::{Api, DeleteParams, DynamicObject, ListParams, Patch, PatchParams, Preconditions},
@@ -43,8 +46,8 @@ use serde_json::{Value, json};
 use thiserror::Error;
 
 pub use record::{
-    FailedRequest, KeptOrphanSource, PinnedInterface, Record, WaveRecord, WaveStatus,
-    current_record, new_request,
+    FailedRequest, KeptOrphanSource, PartialDeploy, PinnedInterface, Record, WaveRecord,
+    WaveStatus, current_record, new_request,
 };
 pub use retention::{
     DEFAULT_KEEP_MAX, DEFAULT_KEEP_MIN, RetentionPolicy, RetireReason, Retired, Retirement,
@@ -54,9 +57,9 @@ pub use retention::{
 pub(crate) use record::KeptOrphans;
 
 use record::{
-    FAILED_ATTEMPTS_FIELD, FAILED_REQUEST_FIELD, FINISHED_REQUEST_FIELD, REQUEST_FIELD,
-    STARTED_REQUEST_FIELD, is_current_phase, phase_on_abort, phase_on_begin, read_phase,
-    sort_newest_first,
+    FAILED_ATTEMPTS_FIELD, FAILED_REQUEST_FIELD, FINISHED_REQUEST_FIELD, PARTIAL_FIELD,
+    REQUEST_FIELD, STARTED_REQUEST_FIELD, is_current_phase, phase_on_abort, phase_on_begin,
+    phase_on_end_partial, read_phase, sort_newest_first,
 };
 
 #[cfg(test)]
@@ -363,20 +366,28 @@ impl Records {
     /// diffing. A `Degraded` activation completed with some resource failures
     /// but remains the most recent description of intended state.
     ///
-    /// Excludes `Failed` (which stopped mid-deploy and does not represent the
-    /// full running closure) and `Deploying` (which is still in flight).
+    /// Excludes `Failed` and `Partial` (which stopped part way and do not
+    /// represent the full running closure) and `Deploying` (which is still in
+    /// flight).
     pub async fn active(&self, cluster: &str) -> Result<Option<Record>, RecordsError> {
         let items = self.list_of(cluster).await?;
         Ok(current_of(&items, cluster).map(Record::of))
     }
 
-    /// List all `Failed` records for `cluster`, sorted oldest first so they
+    /// List the records of `cluster` whose deploy stopped without making
+    /// them current, `Failed` and `Partial` ones, sorted oldest first so they
     /// fold into the baseline in the order they accumulated.
-    pub async fn failed(&self, cluster: &str) -> Result<Vec<Record>, RecordsError> {
-        let mut records = self.in_phase(cluster, PHASE_FAILED).await?;
+    pub async fn stopped(&self, cluster: &str) -> Result<Vec<Record>, RecordsError> {
+        let mut records: Vec<Record> = self
+            .list_of(cluster)
+            .await?
+            .iter()
+            .filter(|item| matches!(read_phase(item), PHASE_FAILED | PHASE_PARTIAL))
+            .map(Record::of)
+            .collect();
         records.sort_by(|a, b| {
-            a.failed_at
-                .cmp(&b.failed_at)
+            a.stopped_at()
+                .cmp(&b.stopped_at())
                 .then_with(|| a.name.cmp(&b.name))
         });
         Ok(records)
@@ -585,10 +596,14 @@ impl Records {
         Ok(())
     }
 
-    /// Mark a record Superseded (status.phase only).
+    /// Mark a record Superseded, and clear the `status.partial` that a
+    /// `Partial` record has.
     pub async fn supersede(&self, name: &str) -> Result<(), RecordsError> {
-        self.patch_status(name, &json!({ "status": { "phase": PHASE_SUPERSEDED } }))
-            .await?;
+        self.patch_status(
+            name,
+            &json!({ "status": { "phase": PHASE_SUPERSEDED, PARTIAL_FIELD: null } }),
+        )
+        .await?;
         tracing::info!(activation = %name, "marked as Superseded");
         Ok(())
     }
@@ -727,8 +742,9 @@ impl Records {
     }
 
     /// Queue record `name` again for the operator's `request`, record that
-    /// the operator started it, and clear the count of failed attempts. The
-    /// operator then deploys the record as it deploys a new one.
+    /// the operator started it, and clear the count of failed attempts and
+    /// the `status.partial` of a `Partial` record. The operator then deploys
+    /// the record as it deploys a new one.
     pub async fn requeue(&self, name: &str, request: &str) -> Result<(), RecordsError> {
         self.patch_status(
             name,
@@ -736,6 +752,7 @@ impl Records {
                 "phase": PHASE_QUEUED,
                 STARTED_REQUEST_FIELD: request,
                 FAILED_ATTEMPTS_FIELD: null,
+                PARTIAL_FIELD: null,
             } }),
         )
         .await
@@ -894,6 +911,8 @@ impl Records {
         if let Some(receipt) = receipt {
             status.insert(keys::RECEIPT_FIELD.to_string(), receipt.clone());
         }
+        // The whole build is deployed now.
+        status.insert(PARTIAL_FIELD.to_string(), Value::Null);
         // Write null when empty so a same-name redeploy clears any previous list.
         status.insert(
             keys::ORPHANS_KEPT_FROM_FIELD.to_string(),
@@ -929,6 +948,12 @@ impl Records {
     /// the record is already current (see [`phase_on_begin`]), in which case
     /// only the wave counters and failure field are reset.
     ///
+    /// Also clears `status.partial`, since the record now describes this
+    /// run, and returns the instances it named. A run with `--only` passes
+    /// them to [`Records::end_partial`], so a second such deploy of the same
+    /// build adds to the list. A run that stops ends `Failed` with no
+    /// `status.partial`.
+    ///
     /// Then writes `package_index` to `status.packageIndex` with a patch of
     /// its own. The index only helps a later diff group objects, so a failure
     /// to write it, or an index over [`package_index::MAX_BYTES`], logs a
@@ -939,17 +964,27 @@ impl Records {
         activation_name: &str,
         total_waves: usize,
         package_index: Option<&RecordPackageIndex>,
-    ) -> Result<(), RecordsError> {
-        let current = self.phase_of(activation_name).await?;
+    ) -> Result<Vec<String>, RecordsError> {
+        let item = self
+            .api()
+            .get(activation_name)
+            .await
+            .map_err(RecordsError::on("get", activation_name))?;
+        let current = read_phase(&item);
+        let earlier_only = Record::of(&item)
+            .partial
+            .map(|p| p.only)
+            .unwrap_or_default();
 
         let mut status = serde_json::Map::new();
-        if let Some(phase) = phase_on_begin(&current) {
+        if let Some(phase) = phase_on_begin(current) {
             status.insert("phase".to_string(), json!(phase));
         }
         status.insert("totalWaves".to_string(), json!(total_waves));
         status.insert("waves".to_string(), json!([]));
         // Clear any failure status from a prior attempt on the same record.
         status.insert("failure".to_string(), Value::Null);
+        status.insert(PARTIAL_FIELD.to_string(), Value::Null);
 
         self.patch_status(activation_name, &json!({ "status": status }))
             .await?;
@@ -957,7 +992,7 @@ impl Records {
         if let Some(index) = package_index {
             self.write_package_index(activation_name, index).await;
         }
-        Ok(())
+        Ok(earlier_only)
     }
 
     /// Write `index` to the record's `status.packageIndex`, warning instead
@@ -1049,6 +1084,46 @@ impl Records {
         self.patch_status(activation_name, &status_patch).await?;
 
         tracing::info!(activation = %activation_name, reason, "marked as Failed");
+        Ok(())
+    }
+
+    /// End a deploy with `--only` that applied every object it selected of
+    /// record `name`'s build. `only` names the instances it applied, joined
+    /// with those that [`Records::begin_deploy`] returned.
+    ///
+    /// When the run moved the record to `Deploying`, mark it `Partial` with
+    /// `status.partial` naming the instances. The next plan folds what the
+    /// record applied into its baseline, so the next deploy applies the rest
+    /// of the build. A record that is current, because the build is the one
+    /// the cluster runs, keeps its phase, as [`phase_on_end_partial`]
+    /// decides.
+    pub(crate) async fn end_partial(
+        &self,
+        name: &str,
+        only: &[String],
+    ) -> Result<(), RecordsError> {
+        let current = self.phase_of(name).await?;
+        let Some(phase) = phase_on_end_partial(&current) else {
+            tracing::debug!(activation = %name, phase = %current, "partial deploy of a record that is not Deploying; phase left as is");
+            return Ok(());
+        };
+        let mut names = only.to_vec();
+        names.sort();
+        names.dedup();
+        self.patch_status(
+            name,
+            &json!({
+                "status": {
+                    "phase": phase,
+                    PARTIAL_FIELD: {
+                        "only": names,
+                        "at": chrono::Utc::now().to_rfc3339(),
+                    },
+                },
+            }),
+        )
+        .await?;
+        tracing::info!(activation = %name, "marked as Partial");
         Ok(())
     }
 

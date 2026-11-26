@@ -113,6 +113,63 @@ pub struct Plan {
     /// there are none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<crate::eval::library_record::LibraryRecord>,
+    /// What a deploy with `--only` (`flags.only`) leaves for a later deploy
+    /// of the whole build. `packages`, `objects`, and `prune` show only what
+    /// this deploy does. Left out for a deploy of the whole build.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left_alone: Option<LeftAlone>,
+    /// The instances that the instances in `flags.only` need, which a
+    /// deploy with `--only` applies in full too, sorted. Left out when
+    /// there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub only_needed: Vec<String>,
+    /// Fields where the live cluster differs from the deployed build because
+    /// a deploy that did not finish wrote them: the live value is the one
+    /// that deploy's build has. They are not drift, and `drift` leaves them
+    /// out. Left out when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub earlier_deploys: Vec<EarlierDeployChange>,
+}
+
+/// A field a deploy that did not finish wrote, which differs from the
+/// deployed build.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct EarlierDeployChange {
+    pub resource: String,
+    pub path: String,
+    /// The deployed value. Absent when the deployed manifest does not set
+    /// the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployed: Option<Value>,
+    /// The live value, which the build of `record` has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<Value>,
+    /// The deploy record whose deploy wrote it.
+    pub record: String,
+    /// `true` when that record is `Partial`, because `kix deploy --only`
+    /// applied part of its build. `false` when it is `Failed`, because its
+    /// deploy stopped.
+    pub partly_deployed: bool,
+}
+
+/// The changes of the build that a deploy with `--only` does not make.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LeftAlone {
+    /// Objects of the build outside this deploy that differ from the
+    /// cluster's current deploy record, so a deploy of the whole build
+    /// would write them. An earlier deploy with `--only` may already have
+    /// applied some of them.
+    pub writes: usize,
+    /// Objects that left the build. This deploy neither deletes them nor
+    /// records them as kept.
+    pub orphans: usize,
+}
+
+impl LeftAlone {
+    /// Return the number of changes left for a later deploy.
+    pub fn total(&self) -> usize {
+        self.writes + self.orphans
+    }
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -217,7 +274,7 @@ impl DeployedBuild {
 }
 
 /// The planning flags of `kix plan` and `kix deploy`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PlanFlags {
     /// What the deploy does with orphans: `delete` with `--prune`, `skip`
     /// with `--skip-orphan-check`, and `warn_only` otherwise.
@@ -227,9 +284,23 @@ pub struct PlanFlags {
     pub reconcile: bool,
     pub force_conflicts: bool,
     pub accept_migrations: bool,
+    /// The instances (`namespace/instance`) that `--only` names, sorted. The
+    /// deploy applies them and what they depend on, and leaves the rest of
+    /// the build for a later deploy. Left out when the deploy applies the
+    /// whole build.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub only: Vec<String>,
 }
 
 impl PlanFlags {
+    /// Return `names` as [`PlanFlags::only`] holds them: sorted, each once.
+    pub fn only_of(names: &[String]) -> Vec<String> {
+        let mut only = names.to_vec();
+        only.sort();
+        only.dedup();
+        only
+    }
+
     /// Return the [`PrunePolicy`] that the CLI flags `--prune` and
     /// `--skip-orphan-check` ask for. The CLI refuses both together.
     pub fn prune_policy_of(prune: bool, skip_orphan_check: bool) -> PrunePolicy {
@@ -867,6 +938,9 @@ impl Plan {
             not_checked: Vec::new(),
             readiness: Checked::not_checked(NotCheckedReason::NotPreviewable),
             warnings: Vec::new(),
+            left_alone: None,
+            only_needed: Vec::new(),
+            earlier_deploys: Vec::new(),
         }
     }
 
@@ -1148,8 +1222,9 @@ mod tests {
                 reconcile: false,
                 force_conflicts: false,
                 accept_migrations: false,
+                only: Vec::new(),
             };
-            let json = serde_json::to_value(flags).unwrap();
+            let json = serde_json::to_value(&flags).unwrap();
             assert_eq!(
                 json,
                 serde_json::json!({
@@ -1161,6 +1236,31 @@ mod tests {
             );
             assert_eq!(serde_json::from_value::<PlanFlags>(json).unwrap(), flags);
         }
+    }
+
+    /// `--only` is one more flag in a saved plan, left out when not given,
+    /// so a plan written before it existed reads as a deploy of the whole
+    /// build.
+    #[test]
+    fn only_is_left_out_of_the_flags_unless_given() {
+        let flags = PlanFlags {
+            prune: PrunePolicy::WarnOnly,
+            reconcile: false,
+            force_conflicts: false,
+            accept_migrations: false,
+            only: PlanFlags::only_of(&["web/b".into(), "app/a".into(), "web/b".into()]),
+        };
+        assert_eq!(flags.only, ["app/a", "web/b"]);
+        let json = serde_json::to_value(&flags).unwrap();
+        assert_eq!(json["only"], serde_json::json!(["app/a", "web/b"]));
+        assert_eq!(serde_json::from_value::<PlanFlags>(json).unwrap(), flags);
+        let whole = PlanFlags {
+            only: Vec::new(),
+            ..flags
+        };
+        let json = serde_json::to_value(&whole).unwrap();
+        assert!(json.get("only").is_none(), "{json}");
+        assert_eq!(serde_json::from_value::<PlanFlags>(json).unwrap(), whole);
     }
 
     #[test]

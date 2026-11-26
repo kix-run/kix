@@ -215,16 +215,18 @@ impl JsonObserver {
 
     /// Print the final summary line for the deploy run, with the objects
     /// of kinds that left the build that the prune left on the cluster.
+    /// `only` is the instances a deploy with `--only` applied.
     pub fn summary(
         &self,
         counts: &DeployResult,
         dry_run: bool,
         succeeded: bool,
+        only: &[String],
         left_behind: Vec<kix::plan::document::LeftBehind>,
     ) {
         let elapsed_ms = self.started_at.elapsed().as_millis() as u64;
-        let line =
-            Line::summary(counts, dry_run, succeeded, elapsed_ms).with_left_behind(left_behind);
+        let line = Line::summary(counts, dry_run, succeeded, only, elapsed_ms)
+            .with_left_behind(left_behind);
         println!("{}", json_line(&line));
     }
 }
@@ -691,7 +693,7 @@ mod tests {
         let lines: Vec<String> = every_event()
             .iter()
             .filter_map(|e| Line::of(e, 7))
-            .chain([Line::summary(&counts, true, false, 7)])
+            .chain([Line::summary(&counts, true, false, &[], 7)])
             .map(|line| json_line(&line))
             .collect();
         // Regenerate the fixture alongside the schemas with
@@ -743,7 +745,13 @@ mod tests {
         assert_eq!(value["nothing_to_apply"], true);
         assert_eq!(value["created"], 0);
         assert_eq!(value["unchanged"], 9);
-        let ran = json_line(&Line::summary(&DeployResult::default(), false, true, 3));
+        let ran = json_line(&Line::summary(
+            &DeployResult::default(),
+            false,
+            true,
+            &[],
+            3,
+        ));
         let ran: serde_json::Value = serde_json::from_str(&ran).unwrap();
         assert_eq!(ran["nothing_to_apply"], false);
     }
@@ -761,8 +769,8 @@ mod tests {
                 finalizers: vec!["acme.cert-manager.io/finalizer".into()],
             }],
         };
-        let line =
-            Line::summary(&DeployResult::default(), false, true, 3).with_left_behind(vec![left]);
+        let line = Line::summary(&DeployResult::default(), false, true, &[], 3)
+            .with_left_behind(vec![left]);
         let value: serde_json::Value = serde_json::from_str(&json_line(&line)).unwrap();
         assert_eq!(
             value["left_behind"][0]["kind"],
@@ -777,6 +785,7 @@ mod tests {
             &DeployResult::default(),
             false,
             true,
+            &[],
             3,
         )))
         .unwrap();

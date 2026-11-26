@@ -62,8 +62,15 @@ impl Line {
     }
 
     /// Build the final summary line of the run. `succeeded` matches the process
-    /// exit status.
-    pub fn summary(r: &DeployResult, dry_run: bool, succeeded: bool, elapsed_ms: u64) -> Line {
+    /// exit status. `only` is the instances a deploy with `--only` applied in
+    /// full, empty for a deploy of the whole build.
+    pub fn summary(
+        r: &DeployResult,
+        dry_run: bool,
+        succeeded: bool,
+        only: &[String],
+        elapsed_ms: u64,
+    ) -> Line {
         Line {
             schema_version: SCHEMA_VERSION.to_string(),
             elapsed_ms,
@@ -78,6 +85,7 @@ impl Line {
                 cancelled: r.cancelled,
                 pruned: r.pruned,
                 kept: r.kept,
+                only: only.to_vec(),
                 nothing_to_apply: false,
                 left_behind: Vec::new(),
             },
@@ -111,6 +119,7 @@ impl Line {
                 cancelled: 0,
                 pruned: 0,
                 kept: 0,
+                only: Vec::new(),
                 nothing_to_apply: true,
                 left_behind: Vec::new(),
             },
@@ -217,6 +226,13 @@ pub enum Event {
         /// The `prune_kept` lines name them.
         #[serde(default)]
         kept: usize,
+        /// The instances (`namespace/instance`) a deploy with `--only`
+        /// applied in full: the named ones and the ones they need. Such a
+        /// deploy leaves the cluster's current deploy
+        /// record as it was, and a later `kix deploy` applies the rest of
+        /// the build. Left out for a deploy of the whole build.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        only: Vec<String>,
         /// True when the plan had nothing to apply or prune, so the deploy
         /// wrote nothing and the active deployment record stays current. The
         /// log then holds no `plan` or `node` lines.

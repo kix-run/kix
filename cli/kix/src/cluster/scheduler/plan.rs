@@ -264,6 +264,47 @@ impl DeployPlan {
         &self.nodes
     }
 
+    /// Keep only the nodes of `roots`, every node they depend on, and the
+    /// nodes `together` names for each node kept, repeated until no node is
+    /// added, with the edges between them. `together` returns the nodes that
+    /// must go with a node, such as the other objects of its instance.
+    /// Return the nodes left out.
+    pub(crate) fn retain_closure<'a>(
+        &mut self,
+        roots: &HashSet<NodeId>,
+        together: impl Fn(&NodeId) -> &'a [NodeId],
+    ) -> Vec<PlanNodeEntry> {
+        let mut predecessors: HashMap<&NodeId, Vec<&NodeId>> = HashMap::new();
+        for (dependent, predecessor) in &self.edges {
+            predecessors.entry(dependent).or_default().push(predecessor);
+        }
+        let mut kept: HashSet<NodeId> = HashSet::new();
+        let mut queue: VecDeque<NodeId> = roots.iter().cloned().collect();
+        while let Some(id) = queue.pop_front() {
+            if kept.contains(&id) {
+                continue;
+            }
+            queue.extend(
+                predecessors
+                    .get(&id)
+                    .into_iter()
+                    .flatten()
+                    .map(|p| (*p).clone()),
+            );
+            queue.extend(together(&id).iter().cloned());
+            kept.insert(id);
+        }
+        let (nodes, left): (Vec<PlanNodeEntry>, Vec<PlanNodeEntry>) =
+            std::mem::take(&mut self.nodes)
+                .into_iter()
+                .partition(|n| kept.contains(&n.id));
+        self.nodes = nodes;
+        self.edges.retain(|(dependent, predecessor)| {
+            kept.contains(dependent) && kept.contains(predecessor)
+        });
+        left
+    }
+
     /// Build a test plan that applies every manifest as a new object.
     #[cfg(any(test, feature = "test-util"))]
     pub fn applying(manifests: &[Value]) -> Self {

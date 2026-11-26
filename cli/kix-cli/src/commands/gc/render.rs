@@ -1,5 +1,6 @@
 //! Render `kix gc` plans, record retirement summaries, and confirmation prompts.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 
 use miette::{IntoDiagnostic, Result};
@@ -8,6 +9,7 @@ use crate::cli::GcArgs;
 use crate::exit::{Exit, Stopped};
 use crate::output;
 use kix::cluster::activation::{Record, RetentionPolicy, RetireReason};
+use kix::cluster::inventory::HeldObject;
 use kix::manifest::types::{ResourceId, to_manifest_value};
 
 use super::plan::{GarbageEntry, RecordRetirement};
@@ -36,6 +38,41 @@ pub(super) fn print_unstamped(unstamped: &[GarbageEntry]) {
             "Kept on the cluster because Kix cannot match them to a build. \
              Review these objects, then pass `--include unstamped` to delete them."
         ),
+    );
+}
+
+/// Print the objects that a pending deploy record of `cluster` names, which
+/// gc keeps, grouped by those records.
+pub(super) fn print_held(held: &[HeldObject], cluster: &str) {
+    if held.is_empty() {
+        return;
+    }
+    let mut by_records: BTreeMap<String, Vec<&ResourceId>> = BTreeMap::new();
+    for h in held {
+        by_records
+            .entry(h.records.join(", "))
+            .or_default()
+            .push(&h.rid);
+    }
+    println!();
+    println!(
+        "{} {} object(s) belong to an unfinished deploy:",
+        output::bold("Kept for an unfinished deploy:"),
+        held.len(),
+    );
+    for (records, mut ids) in by_records {
+        ids.sort();
+        println!("  Deployment record {records}:");
+        for rid in ids {
+            println!("    {} {rid}", output::yellow("="));
+        }
+    }
+    println!(
+        "  {}",
+        output::dim(&format!(
+            "Kept on the cluster because these objects belong to a deploy that failed, ran with `--only`, or is still in progress. \
+             Run `kix deploy {cluster}` to finish or replace that deploy, then run `kix gc {cluster}` again."
+        )),
     );
 }
 
