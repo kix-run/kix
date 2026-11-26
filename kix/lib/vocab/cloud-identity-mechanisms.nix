@@ -95,9 +95,9 @@ let
           AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE = null;
         };
         podEnvFix = "Create an EKS Pod Identity association in AWS linking this ServiceAccount to the configured IAM role (Kix does not create it), and check that the EKS Pod Identity Agent add-on is running. Then restart the workload's pods.";
-        # AWS documents no opt-out for Pod Identity. The EKS webhook reads
-        # this annotation for IRSA, and not checking a container it names
-        # cannot fail a pod that got its identity.
+        # AWS does not document this annotation for Pod Identity. On a live
+        # EKS 1.37 cluster, the webhook left a container it names without
+        # the Pod Identity variables and token mount, as it does for IRSA.
         podEnvSkip = {
           annotation = "eks.amazonaws.com/skip-containers";
           separator = ",";
