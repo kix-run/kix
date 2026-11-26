@@ -683,7 +683,7 @@ fn left_behind(plan: &Plan) -> Vec<(&PruneEntry, &LeftBehind)> {
 
 /// Return the warning for objects of a kind that stay on the cluster after
 /// the kind's definition leaves the build.
-fn left_behind_warning(p: &PruneEntry, left: &LeftBehind) -> String {
+fn left_behind_warning(plan: &Plan, p: &PruneEntry, left: &LeftBehind) -> String {
     let resource = &p.resource;
     let kind = &left.kind;
     let n = left.count;
@@ -692,9 +692,19 @@ fn left_behind_warning(p: &PruneEntry, left: &LeftBehind) -> String {
     } else {
         ("objects", "those objects", "they manage", "them")
     };
+    // A read-only plan deletes nothing and has no prune policy, so it says
+    // what a prune would do.
+    let pruning = plan
+        .flags
+        .is_some_and(|f| f.prune == kix::cluster::scheduler::PrunePolicy::Delete);
+    let (leaves, removes) = if pruning {
+        ("this prune leaves", "this prune removes")
+    } else {
+        ("`kix deploy --prune` would leave", "that prune removes")
+    };
     format!(
-        "{resource} is no longer in the build, and this prune leaves {n} {kind} {objects} \
-         on the cluster. If this prune removes the controller for {kind}, nothing will clear \
+        "{resource} is no longer in the build, and {leaves} {n} {kind} {objects} \
+         on the cluster. If {removes} the controller for {kind}, nothing will clear \
          finalizers on {those} or clean up external resources {they_manage}. Kix still \
          allows the deploy. If you no longer need {them}, delete {them} while the \
          controller is still running, before running `--prune`."
@@ -762,7 +772,7 @@ fn write_left_behind(out: &mut String, plan: &Plan) -> fmt::Result {
             out,
             "{} {}",
             output::yellow("!"),
-            output::yellow(&left_behind_warning(p, left))
+            output::yellow(&left_behind_warning(plan, p, left))
         )?;
         for o in &left.objects {
             writeln!(out, "    {}", left_object_detail(o))?;
@@ -993,7 +1003,7 @@ fn write_markdown(out: &mut String, plan: &Plan) -> fmt::Result {
         }
     }
     for (p, left) in left_behind(plan) {
-        writeln!(out, ":warning: {}", left_behind_warning(p, left))?;
+        writeln!(out, ":warning: {}", left_behind_warning(plan, p, left))?;
         writeln!(out)?;
         for o in &left.objects {
             writeln!(out, "- `{}`", left_object_detail(o))?;
@@ -1299,6 +1309,12 @@ mod tests {
             None,
         );
         plan.prune = Checked::found(vec![crd, plain]);
+        plan.flags = Some(kix::plan::document::PlanFlags {
+            prune: kix::cluster::scheduler::PrunePolicy::Delete,
+            reconcile: false,
+            force_conflicts: false,
+            accept_migrations: false,
+        });
         let text = render_text(&plan);
         assert!(
             text.contains(
@@ -1331,6 +1347,17 @@ mod tests {
         assert!(
             markdown.contains("- `Challenge.acme.cert-manager.io/dns01-1@dnstest (finalizers:"),
             "{markdown}"
+        );
+
+        // A read-only plan has no prune policy and says what a prune would do.
+        plan.flags = None;
+        let text = render_text(&plan);
+        assert!(
+            text.contains(
+                "is no longer in the build, and `kix deploy --prune` would leave 22 \
+                 Challenge.acme.cert-manager.io objects on the cluster. If that prune removes"
+            ),
+            "{text}"
         );
     }
 

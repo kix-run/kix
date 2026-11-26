@@ -207,7 +207,16 @@ pub(super) fn compare(args: &Comparison, ctx: &mut CommandContext) -> Result<Exi
             // The current record's package index places each live object where
             // the deployed build put it. Without one, the new build does.
             let deployed = current.and_then(|record| record.package_index);
+            let before_set_aside = live.manifests.clone();
             live.set_aside_left_earlier(&new_graph, deployed.as_ref());
+            let spinner = output::spinner("Listing objects a prune would leave behind...");
+            live.left_behind = ctx.runtime()?.block_on(left_behind_of(
+                &global,
+                &before_set_aside,
+                &live.orphans,
+                &new_graph,
+            ));
+            clear_spinner(&spinner);
             (
                 StoreGraph::synthesize_placed(
                     &live.manifests,
@@ -351,7 +360,11 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
             doc.prune = Checked::found(
                 live.orphans
                     .iter()
-                    .map(|rid| super::plan::prune_entry(rid, PrunePolicy::WarnOnly, None))
+                    .map(|rid| {
+                        let mut entry = super::plan::prune_entry(rid, PrunePolicy::WarnOnly, None);
+                        entry.left_behind = live.left_behind.get(rid).cloned();
+                        entry
+                    })
                     .collect(),
             );
             doc
@@ -444,6 +457,10 @@ struct LiveSide {
     orphans: Vec<ResourceId>,
     /// The Kubernetes cluster the objects were read from.
     connection: Connection,
+    /// For each orphan that declares a kind the build no longer declares,
+    /// the objects of that kind a `kix deploy --prune` would leave on the
+    /// cluster.
+    left_behind: HashMap<ResourceId, kix::plan::document::LeftBehind>,
 }
 
 impl LiveSide {
@@ -482,6 +499,27 @@ impl LiveSide {
 
 /// Fetch the live cluster's Kix-owned view for `new_graph`'s cluster from
 /// the Kubernetes cluster of `connection`.
+/// Return, for each orphan that declares a kind the new build no longer
+/// declares, the objects of that kind a `kix deploy --prune` would leave on
+/// the cluster ([`super::plan::left_behind`]). The listing only reads.
+async fn left_behind_of(
+    global: &crate::cli::GlobalArgs,
+    old_manifests: &[Value],
+    orphans: &[ResourceId],
+    new_graph: &StoreGraph,
+) -> HashMap<ResourceId, kix::plan::document::LeftBehind> {
+    let new_manifests: Vec<&Value> = new_graph.resources.values().map(|r| &r.manifest).collect();
+    let leaving = kix::plan::kinds_leaving(old_manifests, orphans, new_manifests.into_iter());
+    if leaving.is_empty() {
+        return HashMap::new();
+    }
+    let Ok(client) = client::make_client(global.context.as_deref()).await else {
+        return HashMap::new();
+    };
+    let deleting: HashSet<ResourceId> = orphans.iter().cloned().collect();
+    super::plan::left_behind(&client, &leaving, &deleting).await
+}
+
 async fn fetch_live_manifests(
     global: &crate::cli::GlobalArgs,
     connection: Connection,
@@ -585,6 +623,7 @@ async fn fetch_live_manifests(
         drift_unchecked,
         orphans: Vec::new(),
         connection,
+        left_behind: HashMap::new(),
     })
 }
 
@@ -796,6 +835,7 @@ mod tests {
             drift_unchecked,
             orphans: Vec::new(),
             connection: Connection::InCluster,
+            left_behind: HashMap::new(),
         }));
         let result = diff_graphs(&old, &new, &side, Detail::Plain);
 
@@ -868,6 +908,7 @@ mod tests {
             drift_unchecked: 0,
             orphans: Vec::new(),
             connection: Connection::InCluster,
+            left_behind: HashMap::new(),
         };
         live.set_aside_left_earlier(&new, Some(&deployed));
         let names = |ids: &[ResourceId]| ids.iter().map(|r| r.name.clone()).collect::<Vec<_>>();

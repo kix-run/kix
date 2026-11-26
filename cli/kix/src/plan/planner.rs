@@ -1041,7 +1041,7 @@ pub async fn keep_shared(
 /// declares and that no other object of `old_manifests` and none of `added`
 /// declares, with the orphan: the definition itself when it is an orphan,
 /// else the first reference to it.
-fn kinds_leaving<'a>(
+pub fn kinds_leaving<'a>(
     old_manifests: &[Value],
     orphans: &[ResourceId],
     added: impl Iterator<Item = &'a Value>,

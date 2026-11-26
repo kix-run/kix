@@ -693,16 +693,12 @@ fn prune_entries(
     answers: &HashMap<ResourceId, PruneAnswer>,
     left_behind: Option<&HashMap<ResourceId, LeftBehind>>,
 ) -> Vec<PruneEntry> {
-    let policy = checked.flags().prune;
-    let mut entries: Vec<PruneEntry> = checked
-        .orphans()
-        .iter()
-        .map(|rid| {
-            let mut entry = prune_entry(rid, policy, answers.get(rid));
-            entry.left_behind = left_behind.and_then(|l| l.get(rid)).cloned();
-            entry
-        })
-        .collect();
+    let mut entries = orphan_entries(
+        checked.orphans(),
+        checked.flags().prune,
+        answers,
+        left_behind,
+    );
     entries.extend(checked.shared_orphans().iter().map(|s| {
         PruneEntry::new(
             s.rid.display_id(),
@@ -712,6 +708,25 @@ fn prune_entries(
     }));
     entries.sort_by(|a, b| a.resource.cmp(&b.resource));
     entries
+}
+
+/// Return the [`PruneEntry`] of each of `orphans` under prune policy
+/// `policy`, with the dry run's `answers` and the objects `left_behind` that
+/// each orphan's kind leaves on the cluster.
+fn orphan_entries(
+    orphans: &[ResourceId],
+    policy: PrunePolicy,
+    answers: &HashMap<ResourceId, PruneAnswer>,
+    left_behind: Option<&HashMap<ResourceId, LeftBehind>>,
+) -> Vec<PruneEntry> {
+    orphans
+        .iter()
+        .map(|rid| {
+            let mut entry = prune_entry(rid, policy, answers.get(rid));
+            entry.left_behind = left_behind.and_then(|l| l.get(rid)).cloned();
+            entry
+        })
+        .collect()
 }
 
 /// Return what a deploy with prune policy `policy` does with orphan `rid`,
@@ -847,6 +862,72 @@ fn markdown(p: &Planned, doc: &Plan) -> String {
 mod tests {
     use super::*;
     use kix::cluster::preview::DeleteWait;
+
+    /// What a deploy prints before it asks to go on (`deploy::preview`,
+    /// then `deploy::confirm`) is the text of the plan document, and the
+    /// document's prune entries carry what the dry run found a prune leaves
+    /// behind, so the warning comes before the prompt.
+    #[test]
+    fn the_plan_before_the_prompt_names_objects_left_behind() {
+        let crd = ResourceId::new(
+            "apiextensions.k8s.io",
+            "CustomResourceDefinition",
+            kix::manifest::types::CLUSTER_SCOPED,
+            "challenges.acme.cert-manager.io",
+        );
+        let left = LeftBehind {
+            kind: "Challenge.acme.cert-manager.io".into(),
+            count: 1,
+            with_finalizers: 1,
+            objects: vec![kix::plan::document::LeftObject {
+                resource: "Challenge.acme.cert-manager.io/c@app".into(),
+                finalizers: vec!["acme.cert-manager.io/finalizer".into()],
+            }],
+        };
+        let found = HashMap::from([(crd.clone(), left)]);
+        let entries = orphan_entries(
+            std::slice::from_ref(&crd),
+            PrunePolicy::Delete,
+            &HashMap::new(),
+            Some(&found),
+        );
+        let graph = kix::eval::store_graph::StoreGraph::empty("c");
+        let mut doc = Plan::new(
+            crate::plan::kix_build(),
+            MadeBy::DryRun,
+            "c",
+            Build::of(&graph),
+            &kix::plan::diff_graphs(&graph, &graph),
+            Detail::Plain,
+            &[],
+            NotCheckedReason::ReadOnly,
+        );
+        doc.flags = Some(PlanFlags {
+            prune: PrunePolicy::Delete,
+            reconcile: false,
+            force_conflicts: false,
+            accept_migrations: false,
+        });
+        doc.prune = Checked::found(entries);
+        let text = plan::render::render_text(&doc);
+        assert!(
+            text.contains("this prune leaves 1 Challenge.acme.cert-manager.io object"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "Challenge.acme.cert-manager.io/c@app (finalizers: acme.cert-manager.io/finalizer)"
+            ),
+            "{text}"
+        );
+        let none = orphan_entries(
+            std::slice::from_ref(&crd),
+            PrunePolicy::Delete,
+            &HashMap::new(),
+            None,
+        );
+        assert!(none[0].left_behind.is_none());
+    }
 
     /// A delete's entry carries what the dry run found it will wait for. An
     /// orphan that the deploy keeps carries none of it.

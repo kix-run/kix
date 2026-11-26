@@ -34,7 +34,7 @@ pub(crate) use diff::partition_propagation;
 pub use diff::{diff_garbage, diff_graphs};
 pub use planner::{
     CheckedPlan, Connected, OldSide, Planned, Planner, Start, Target, TargetChecks, Work,
-    keep_shared,
+    keep_shared, kinds_leaving,
 };
 #[cfg(test)]
 use redact::LAST_APPLIED;

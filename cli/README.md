@@ -979,7 +979,12 @@ over that plan through `ops::DryRun`, so every SSA and DELETE goes with
   After the run, `deploy::run_deploy_async` lists the same kinds again
   (`commands::plan::left_behind`) and prints
   `render::left_behind_after_prune` after the summary, or puts them in the
-  JSON summary's `left_behind`.
+  JSON summary's `left_behind`. `kix plan --read-only` and `kix diff`
+  against the live cluster refuse `--prune`, since a prune is checked with
+  dry-run deletes, but they read the same listing (`diff::left_behind_of`,
+  from `kix::plan::kinds_leaving` over the live objects before
+  `set_aside_left_earlier`) and put it on their `kept_warn_only` prune
+  entries.
 - **Not checked.** `cluster::classify::classify` sorts the answers into
   `Verdict::Accepted`, `Refused`, and `NotChecked { reason, because }`.
   `kix plan`, the deploy gate, saved plans, and `kix rollback` all call it.

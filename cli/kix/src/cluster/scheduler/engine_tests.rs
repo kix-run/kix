@@ -3766,3 +3766,66 @@ async fn a_slow_prune_delete_is_reported_while_it_waits() {
     });
     assert!(last_wait < ready, "{last_wait:?} {ready:?}");
 }
+
+/// A fresh deploy of the rendered external-secrets build finishes. The
+/// webhook pods become ready only once the cert-controller runs, because the
+/// cert-controller writes their certificate, and the cert-controller requires
+/// the webhook configurations. An apply dependency from a configuration to the
+/// webhook's Service, which waits on the webhook pods, would close that loop
+/// through readiness, and the deploy would hang.
+#[tokio::test(start_paused = true)]
+async fn a_fresh_external_secrets_deploy_finishes() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/operator-graphs/external-secrets.json");
+    let manifests: Vec<Value> =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let webhook = ResourceId::new(
+        "apps",
+        "Deployment",
+        "external-secrets",
+        "external-secrets-webhook",
+    );
+    let cert_controller = ResourceId::new(
+        "apps",
+        "Deployment",
+        "external-secrets",
+        "external-secrets-cert-controller",
+    );
+    let certificate = Gate::new();
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        webhook.clone(),
+        NodeScript::default().ready(Behaviour::Gate(certificate.clone(), Ready::Ready)),
+    );
+    let watcher = {
+        let ops = ops.clone();
+        tokio::spawn(async move {
+            while !ops
+                .calls()
+                .contains(&Call::ApplyStart(cert_controller.clone()))
+            {
+                tokio::time::sleep(secs(1)).await;
+            }
+            certificate.open();
+        })
+    };
+    let cfg = config(StallPolicy {
+        warn_after: secs(30),
+        abort_after: Some(secs(600)),
+    });
+    let result = run(
+        &ops,
+        plan_of(&manifests),
+        &cfg,
+        Arc::new(Recorder::default()),
+    )
+    .await;
+    watcher.abort();
+    let result = result.expect("the deploy finishes");
+    assert_eq!(
+        (result.failed, result.cancelled),
+        (0, 0),
+        "{:?}",
+        result.failures
+    );
+}
