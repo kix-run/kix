@@ -26,16 +26,14 @@ This guide assumes Kix, `kubectl`, and the AWS CLI (`aws`) are installed, and th
 
 Include `kix.flavors.eks` as the first module in `kix.buildCluster`. The flavor assumes your cluster has:
 
-- A managed control plane (`managedControlPlane = true`), privileged containers and DaemonSets enabled, and `containerd.discardUnpackedLayers = true` (matching Amazon Linux 2023 nodes).
+- A managed control plane (`managedControlPlane = true`), multiple nodes (`multiNode = true`), privileged containers and DaemonSets enabled, and `containerd.discardUnpackedLayers = true` (matching Amazon Linux 2023 nodes).
 - Amazon VPC CNI (`cni` bound `exclusive` as `aws-vpc-cni`), CoreDNS as `kube-dns` in `kube-system` (`dns` bound `shadowable`), and classic Elastic Load Balancers built by the EKS service controller (`loadBalancer` bound `shadowable`).
 - No default `StorageClass` (`storageClasses` bound `absent`) and no Kubernetes metrics API (`metricsApi` bound `absent`). EKS registers an `v1.metrics.eks.amazonaws.com` APIService that does not serve `metrics.k8s.io`, so `kubectl top` and horizontal pod autoscaling need a deployed `metrics-server`.
 - IAM roles for service accounts (IRSA) by default (`cluster.flavor.eks.cloudIdentity = "irsa"`), and network policy enforcement turned off (`cluster.flavor.eks.networkPolicy = "none"`).
 
-Because `kix.flavors.eks` leaves `cluster.capabilities.multiNode` unset, every build warns `cluster.capabilities.multiNode is not set` until you set `cluster.capabilities.multiNode = true;` (for two or more nodes) or `false` (for a single node).
-
 ### Size small node groups
 
-With `multiNode = true` and `availabilityZones` unset, `cluster.availability.default` defaults to `"node"`, so packages that scale with availability run two or more replicas of each controller (for example, `cert-manager` and `external-secrets` each run six pods across three deployments). On two 2-vCPU nodes, deploying several controllers can exhaust CPU requests and leave pods `Pending`. Both `kix deploy` and `kix status` print the scheduler reason (`0/2 nodes are available: 2 Insufficient cpu`). Set `cluster.availability.default = "none";` across a small test cluster, or `availability = "none";` on individual instances, as shown in [Set the cluster availability level](/docs/how-to/platform-capabilities/set-the-cluster-availability-level/).
+Because `kix.flavors.eks` sets `cluster.capabilities.multiNode = true` without `availabilityZones`, `cluster.availability.default` defaults to `"node"`, so packages that scale with availability run two or more replicas of each controller (for example, `cert-manager` and `external-secrets` each run six pods across three deployments). On two 2-vCPU nodes, deploying several controllers can exhaust CPU requests and leave pods `Pending`. Both `kix deploy` and `kix status` print the scheduler reason (`0/2 nodes are available: 2 Insufficient cpu`). Set `cluster.availability.default = "none";` across a small test cluster, or `availability = "none";` on individual instances, as shown in [Set the cluster availability level](/docs/how-to/platform-capabilities/set-the-cluster-availability-level/).
 
 ### Bind the definition and deploy
 
@@ -49,7 +47,7 @@ Read the UID from your EKS cluster:
   ]}
 />
 
-Add the flavor, node capability, and UID to your cluster file (using the sample UUID format below as an example):
+Add the flavor and UID to your cluster file (using the sample UUID format below as an example):
 
 ```nix title="clusters/eks.nix"
 { kix, packages }:
@@ -59,7 +57,6 @@ kix.buildCluster {
     kix.flavors.eks
     {
       cluster.kubernetes.uid = "4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c";
-      cluster.capabilities.multiNode = true;
     }
   ];
 }
