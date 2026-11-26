@@ -121,6 +121,18 @@ in
     )
     || throw "unexpected check result: ${builtins.toJSON result}";
 
+  # The fix asks for a quota that names both classes, because GKE admits
+  # each class only through a quota whose scope names it.
+  critical-priority-fix-asks-for-both-classes =
+    let
+      result = checkIn [ "kube-system" ] "apps";
+    in
+    (
+      result ? thrown
+      && lib.hasInfix ''includes both "system-node-critical" and "system-cluster-critical"'' result.thrown
+    )
+    || throw "unexpected check result: ${builtins.toJSON result}";
+
   # The check passes in a namespace on the list.
   critical-priority-check-passes-listed-namespace = checkIn [ "kube-system" ] "kube-system" == [ ];
 

@@ -433,7 +433,7 @@ in
               + "Kubernetes would reject every pod this workload creates, so Kix stopped the build.";
             fix =
               firstFix
-              + "\nIf \"${namespaceName}\" has a ResourceQuota for \"${class}\", add \"${namespaceName}\" to cluster.capabilities.criticalPriorityNamespaces.";
+              + "\nIf \"${namespaceName}\" has a ResourceQuota whose scopeSelector includes both \"system-node-critical\" and \"system-cluster-critical\", add \"${namespaceName}\" to cluster.capabilities.criticalPriorityNamespaces. Kix allows both classes in every listed namespace, so the quota must allow both too.";
           };
 
       # Check that multi-replica workloads with required anti-affinity or

@@ -583,12 +583,14 @@ in
         type = lib.types.nullOr (lib.types.listOf lib.types.str);
         default = null;
         description = ''
-          Namespaces where the cluster allows pods with the built-in
-          `system-node-critical` or `system-cluster-critical` PriorityClass.
+          Namespaces where the cluster allows pods with either built-in
+          PriorityClass, `system-node-critical` and `system-cluster-critical`.
+          A namespace on the list must admit both classes.
           When set, any workload using either class outside these namespaces
           fails the build. The `gke` flavor sets this to `[ "kube-system" ]`
-          because GKE rejects these pods in namespaces without a matching
-          ResourceQuota. `null` means no known restriction.
+          because GKE admits each class only in a namespace with a
+          ResourceQuota whose scope names that class. `null` means no known
+          restriction.
         '';
       };
     };
