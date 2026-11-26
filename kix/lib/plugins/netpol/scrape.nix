@@ -822,11 +822,9 @@ in
                   "isolates only some of the target's pods"
               }. ${
                 if defaultDeny then
-                  "Namespace ${plain t.namespace} has no default deny, because it holds no instance Kix deploys or it is in networkPolicy.platformNamespaces, and there"
+                  "Namespace ${plain t.namespace} has no default-deny policy because it contains no deployed instances or is listed in `networkPolicy.platformNamespaces`. Kix skipped generating a scrape ingress policy to avoid isolating the remaining pods, so the monitoring server cannot scrape the isolated pods. Select all of the target's pods in that ingress policy, or add a default-deny policy to ${plain t.namespace} (declare `namespaces.${plain t.namespace} = { };` and remove `${plain t.namespace}` from `networkPolicy.platformNamespaces` if present)"
                 else
-                  "Without default deny"
-              } Kix adds scrape ingress only where it can show that every pod is already isolated, so the server cannot reach the isolated pods. Select all of the target's pods in that policy${
-                lib.optionalString (!defaultDeny) ", or turn on networkPolicy.defaultDeny"
+                  "With `networkPolicy.defaultDeny = false`, Kix skipped generating a scrape ingress policy to avoid isolating the remaining pods, so the monitoring server cannot scrape the isolated pods. Select all of the target's pods in that ingress policy, or set `networkPolicy.defaultDeny = true`"
               }."
             ) partlyIsolatedTargets
           );

@@ -2,4 +2,4 @@
 kind = "added"
 library = ["kix.operandPolicy"]
 +++
-`kix.operandPolicy` takes `selector` (the operand pods' labels), `ingress`, and `egress` in place of a whole Cilium `spec`. A policy written this way does not depend on Cilium's spec shape, so a future enforcer that writes standard `NetworkPolicy` can render it too. Every in-tree package now uses this form, and every built manifest stays the same. The `spec` argument still works.
+Existing `kix.operandPolicy` calls that pass `spec` continue to work without changes, and built manifests are unchanged. For new policies over operator-managed pods, pass `selector` (the pods' `matchLabels`), `ingress`, and `egress` to `kix.operandPolicy` instead of a Cilium `spec` so the policy stays independent of Cilium's resource format.

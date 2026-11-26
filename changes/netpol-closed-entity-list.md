@@ -3,4 +3,4 @@ kind = "error"
 library = ["meta.network.intents", "meta.network.externalIngressEntities"]
 id = "K2060"
 +++
-`entities` on a `meta.network.intents` rule or a `networkPolicy.platformIntents` rule, and `meta.network.externalIngressEntities`, accept only `world`, `host`, `remote-node`, `kube-apiserver`, `cluster`, and `all`. Any other Cilium entity name, such as `health` or `ingress`, now fails evaluation with `[K2060]`. Replace it with one of these names, or build that policy yourself with the `cilium` package's custom resource kinds.
+Replace any Cilium-only entity name (such as `"health"` or `"ingress"`) in `meta.network.intents`, `meta.network.externalIngressEntities`, or `networkPolicy.platformIntents` with `"world"`, `"host"`, `"remote-node"`, `"kube-apiserver"`, `"cluster"`, or `"all"`, or build a `CiliumNetworkPolicy` directly with `scope.mkCR` and `cilium.out.crds.CiliumNetworkPolicy`. Kix now rejects any other entity name during evaluation so intent rules stay portable across network policy enforcers.

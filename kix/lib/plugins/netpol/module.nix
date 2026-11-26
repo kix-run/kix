@@ -22,21 +22,18 @@ let
   cniRole = config.cluster.roles.cni or { };
   cniExclusive = (cniRole.binding or null) == "exclusive";
   cniName =
-    if (cniRole.provider or null) != null then "`${cniRole.provider}`" else "the environment's network";
+    if (cniRole.provider or null) != null then "`${cniRole.provider}`" else "managed by the platform";
 
   ciliumFix =
-    "Declare a `cilium` instance. Where the environment installs Cilium, a flavour sets "
-    + "cluster.roles.cni.binding = \"shadowable\" and declares a "
-    + "platform-cilium import (on RKE2: "
-    + "cluster.flavor.rke2.cni = [ \"cilium\" ]), and the instance "
-    + "configures or uses that Cilium instead of installing one.";
+    "Declare a `cilium` instance (`instances.kube-system.cilium.package = packages.experimental.cilium;`), or set `networkPolicy.enable = false`. "
+    + "If the cluster already runs Cilium, set `cluster.flavor.rke2.cni = [ \"cilium\" ]` on RKE2, or set "
+    + "`cluster.roles.cni.binding = \"shadowable\"` and declare a `platform-cilium` import so the `cilium` instance uses the existing installation.";
 
   exclusiveCniFix =
-    "This cluster's pod network is ${cniName} (cluster.roles.cni.binding = \"exclusive\"), "
-    + "so Kix cannot install Cilium here. Kix generates only Cilium network policy today, "
-    + "and no enforcer for this pod network exists yet. Set `networkPolicy.enable = false`. "
-    + "If the environment runs Cilium, set cluster.roles.cni.binding = \"shadowable\", "
-    + "declare a platform-cilium import, and declare a `cilium` instance.";
+    "Set `networkPolicy.enable = false`. This cluster's pod network is ${cniName} (`cluster.roles.cni.binding = \"exclusive\"`), "
+    + "so Kix cannot install Cilium here, and Kix only generates Cilium network policies today. "
+    + "If you disabled the built-in CNI so Kix can install Cilium, set `cluster.roles.cni.binding = \"absent\"` and add `packages.experimental.cilium` under `instances`. "
+    + "If the cluster already runs Cilium, set `cluster.roles.cni.binding = \"shadowable\"`, add a `platform-cilium` import, and add `packages.experimental.cilium` under `instances`.";
 
   resolveEnforcerOut =
     {
@@ -68,11 +65,11 @@ in
             type = lib.types.bool;
             default = true;
             description = ''
-              Generate a deny-all policy (`<namespace>-default-deny`) in each
-              namespace that holds an active instance Kix deploys or that the
-              cluster definition declares under `namespaces`, except those in
-              `platformNamespaces`. A namespace that holds only imports or
-              inactive optional instances gets none.
+              Write a `<namespace>-default-deny` policy in every namespace that
+              contains an active deployed instance or is declared under
+              `namespaces`, except namespaces listed in `platformNamespaces`.
+              Namespaces that contain only `kix.mkImport` instances or inactive
+              `optional` instances do not get a default-deny policy.
             '';
           };
           directions = lib.mkOption {
@@ -104,14 +101,14 @@ in
             default = [ ];
             example = [ "kube-system" ];
             description = ''
-              Namespaces whose own pods the platform runs and changes, such
-              as `kube-system` on a managed cloud. Kix writes no
-              `<namespace>-default-deny` policy in them, so those pods keep
-              their traffic. Workloads Kix deploys there still get their own
-              policies, which isolate only those pods. The `gke`,
-              `gke-autopilot`, `eks`, and `aks` flavors set
-              `[ "kube-system" ]`. Describe platform pods that need rules
-              with `platformIntents`.
+              Namespaces where the cluster platform manages its own pods, such
+              as `kube-system` on managed cloud providers. Kix omits
+              `<namespace>-default-deny` in these namespaces so platform pods
+              are not blocked. Any workload Kix deploys in these namespaces
+              still gets its own generated policies, which isolate only that
+              workload's pods. Defaults to `[ "kube-system" ]` on the `gke`,
+              `gke-autopilot`, `eks`, and `aks` flavors. Use `platformIntents`
+              to write policies for platform-managed pods.
             '';
           };
           platformIntents = lib.mkOption {

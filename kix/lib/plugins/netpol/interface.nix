@@ -7,13 +7,13 @@ let
   requiredAttrs = {
     policyKinds = "[kind]. the policy kinds this enforcer emits; the hasNetworkPolicy rule accepts them as a namespace's policy";
 
-    mkPolicy = "{ mkResource, extraArgs, selector, ingress ? [ ], egress ? [ ] } -> resource. build a network-policy resource selecting pods by the matchLabels `selector`, with rules from the builders below; an empty list writes no section for that direction. Without `selector`, `extraArgs.spec` is the enforcer's own spec (from mkDefaultDenySpec)";
+    mkPolicy = "{ mkResource, extraArgs, selector ? null, ingress ? [ ], egress ? [ ] } -> resource. Build a network policy resource selecting pods with `matchLabels = selector` and rules from `ingress` and `egress` (omitting any direction whose list is empty). When `selector` is null, read the full policy spec from `extraArgs.spec` (such as from `mkDefaultDenySpec`).";
 
     mkDefaultDenySpec = "{ denyIngress, denyEgress } -> spec attrs for a default-deny policy";
 
-    dnsEgressRule = "rule. egress on UDP and TCP 53 to the DNS peers this rule set was built for (see withDnsPeers)";
+    dnsEgressRule = "rule. Allow egress on UDP and TCP port 53 to the configured DNS peers (see `withDnsPeers`).";
 
-    withDnsPeers = "[dns peer] -> netpol. this contract again, with dnsEgressRule and the intent target \"dns\" built for these peers. Kix calls it with the dns role provider's out.dnsPeers (bindDnsPeers below); `out.netpol` itself uses defaultDnsPeers";
+    withDnsPeers = "[dnsPeer] -> netpol. Return a copy of `out.netpol` whose `dnsEgressRule` and `\"dns\"` intent target allow the given DNS peers instead of the default `kube-dns` pods.";
 
     apiServerEgressRule = "rule. egress to kube-apiserver";
 
@@ -84,8 +84,10 @@ let
     else
       fail {
         id = "K2060";
-        message = "${where} names the network entities ${builtins.toJSON unknown}, which Kix does not know.";
-        fix = "Use only ${lib.concatMapStringsSep ", " (e: "\"${e}\"") entityNames}.";
+        message = "${where} lists unsupported network entities ${builtins.toJSON unknown}, so Kix rejected the network policy.";
+        fix = "Replace ${builtins.toJSON unknown} with supported entity names (${
+          lib.concatMapStringsSep ", " (e: "\"${e}\"") entityNames
+        }). For Cilium-only entities such as \"health\" or \"ingress\", build a custom policy resource with `cilium.out.crds.CiliumNetworkPolicy` instead.";
       };
 
   # Return `intents` (an attrset of `{ ingress, egress }` rule lists) after

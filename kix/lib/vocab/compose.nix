@@ -817,15 +817,15 @@ rec {
     else if spec != null then
       if selector != null then
         scopeFail {
-          message = "kix.operandPolicy \"${name}\" passes both `selector` and `spec`.";
-          fix = "Pass `selector`, `ingress`, and `egress`, and leave `spec` out.";
+          message = "kix.operandPolicy \"${name}\" sets both `selector` and `spec`, so Kix rejected the network policy.";
+          fix = "Remove `spec` and pass `selector` with `ingress` and `egress` rules instead.";
         }
       else
         legacyOperandPolicy { inherit scope name spec; }
     else if selector == null then
       scopeFail {
-        message = "kix.operandPolicy \"${name}\" has no `selector`.";
-        fix = "Pass `selector`, the matchLabels of the operand pods.";
+        message = "kix.operandPolicy \"${name}\" is missing `selector`, so Kix could not select which pods this network policy applies to.";
+        fix = "Set `selector` to the pod label set (`matchLabels`) for the target pods.";
       }
     else if enforcedIngress == [ ] && enforcedEgress == [ ] then
       null

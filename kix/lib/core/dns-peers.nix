@@ -38,13 +38,13 @@ rec {
     in
     if !(builtins.isList peers) || peers == [ ] then
       fail {
-        message = "The dns role provider ${provider} sets out.dnsPeers to ${builtins.toJSON peers}, and it must be a non-empty list.";
-        fix = "List the DNS endpoints as { namespace; podSelector; } or { cidr; }, or leave out.dnsPeers unset for the kube-dns pods in kube-system.";
+        message = "DNS provider `${provider}` sets `out.dnsPeers` to ${builtins.toJSON peers}, which must be a non-empty list, so Kix could not build DNS egress rules.";
+        fix = "Set `out.dnsPeers` on `${provider}` to a non-empty list of `{ namespace = \"...\"; podSelector = { ... }; }` or `{ cidr = \"...\"; }` entries, or omit `out.dnsPeers` to allow `k8s-app = \"kube-dns\"` pods in `kube-system`.";
       }
     else if bad != [ ] then
       fail {
-        message = "The dns role provider ${provider} lists DNS peers that are neither { namespace; podSelector; } nor { cidr; }: ${builtins.toJSON bad}.";
-        fix = "Give each peer either `namespace` and `podSelector`, or `cidr`.";
+        message = "DNS provider `${provider}` has invalid entries in `out.dnsPeers`: ${builtins.toJSON bad}. Kix could not build DNS egress rules.";
+        fix = "Write each entry in `out.dnsPeers` as either `{ namespace = \"<namespace>\"; podSelector = { ... }; }` (to match DNS pods by label) or `{ cidr = \"<cidr>\"; }` (to match an IP range), with no extra fields.";
       }
     else
       peers;

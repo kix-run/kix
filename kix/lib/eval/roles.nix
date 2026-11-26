@@ -21,7 +21,7 @@ rec {
     };
 
     dns = {
-      description = "Cluster DNS provider. Workloads take a store-path dependency on its root for readiness ordering; consumers read out.fqdn. An import may set out.dnsPeers (core/dns-peers.nix), the endpoints the network policy enforcer opens DNS to; without it, and for a managed provider, the peers are the kube-dns pods in kube-system.";
+      description = "Cluster DNS provider. Workloads depend on its root resource for deploy ordering, and consumers read `out.fqdn`. A `dns` import may also set `out.dnsPeers` to list the endpoints that generated network policies allow on port 53. When `out.dnsPeers` is unset, or when a managed package provides `dns`, policies allow pods labeled `k8s-app: kube-dns` in `kube-system`.";
       outContract = [ "fqdn" ];
     };
 

@@ -68,8 +68,8 @@ let
           else if extraArgs ? spec then
             failWith {
               package = "cilium";
-              message = "network policy '${extraArgs.name or "<unnamed>"}' passes both `selector` and `extraArgs.spec`.";
-              fix = "Pass the rules as `ingress` and `egress` next to `selector`, and leave `spec` out.";
+              message = "CiliumNetworkPolicy '${extraArgs.name or "<unnamed>"}' sets both `selector` and `extraArgs.spec`, so Kix rejected it.";
+              fix = "Remove `extraArgs.spec` and pass rules in `ingress` and `egress` alongside `selector`.";
             }
           else
             extraArgs
@@ -110,10 +110,10 @@ let
       if cidrPeers != [ ] then
         failWith {
           package = "cilium";
-          message = "The cluster's DNS peers include addresses (${
+          message = "The cluster's `out.dnsPeers` includes IP ranges (${
             lib.concatMapStringsSep ", " (p: p.cidr) cidrPeers
-          }), and the cilium enforcer builds its DNS rule from pod peers only.";
-          fix = "List the DNS pods in the dns role provider's out.dnsPeers as { namespace; podSelector; }.";
+          }), which the `cilium` network policy enforcer cannot include in its DNS egress rule, so Kix stopped evaluation.";
+          fix = "Replace `{ cidr = ...; }` entries in the `dns` import's `out.dnsPeers` with pod selectors (`{ namespace = \"...\"; podSelector = { ... }; }`), or omit `out.dnsPeers` to allow `k8s-app = \"kube-dns\"` pods in `kube-system`.";
         }
       else
         {
@@ -388,7 +388,8 @@ let
                 toCIDR = [
                   (rule.cidr or (failWith {
                     package = "cilium";
-                    message = "A node-local egress intent rule must have a `cidr` field.";
+                    message = "Egress intent rule with `to = \"node-local\"` is missing `cidr`, so Kix could not build the rule.";
+                    fix = "Add `cidr` with the node-local IP range, such as `cidr = \"169.254.169.254/32\";`.";
                   })
                   )
                 ];
