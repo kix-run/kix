@@ -297,12 +297,12 @@ refuses before it applies anything when that version is older than such a
 release and the Kix deploying now is newer than the release's minor:
 
 ```text
-Deploy blocked: cluster lt1 was last deployed with Kix 0.10.0, and cannot skip required stop Kix 0.11.0 on the way to Kix 0.12.1.
-Nothing was applied to cluster lt1.
+Deploy blocked: cluster dev was last deployed with Kix 0.10.0, and cannot skip required stop Kix 0.11.0 on the way to Kix 0.12.1.
+Nothing was applied to cluster dev.
 
 Every cluster deployed with Kix older than 0.11.0 must be deployed once with Kix 0.11.x before deploying Kix 0.12.1.
 
-Next: check out the commit where this project was pinned to Kix 0.11.x (for example with `git worktree add` or `git checkout`), run `kix deploy lt1` from there, then return here and run `kix deploy lt1` again.
+Next: check out the commit where this project was pinned to Kix 0.11.x (for example with `git worktree add` or `git checkout`), run `kix deploy dev` from there, then return here and run `kix deploy dev` again.
 ```
 
 A deploy with a Kix of the release's own minor passes, and so does a cluster
@@ -525,10 +525,10 @@ anything if the running version of Kix was withdrawn:
 
 ```text
 Deploy blocked: Kix 0.10.1 was withdrawn because it deletes Secrets on rollback.
-Nothing was applied to cluster lt1.
+Nothing was applied to cluster dev.
 
-Next: upgrade this project to Kix 0.10.2 with `kix upgrade --to 0.10.2`, then run `kix deploy lt1` again.
-To deploy with Kix 0.10.1 anyway, set KIX_ALLOW_WITHDRAWN=0.10.1. Kix will set kix.run/withdrawn-kix=0.10.1 on cluster lt1's Activation record.
+Next: upgrade this project to Kix 0.10.2 with `kix upgrade --to 0.10.2`, then run `kix deploy dev` again.
+To deploy with Kix 0.10.1 anyway, set KIX_ALLOW_WITHDRAWN=0.10.1. Kix will set kix.run/withdrawn-kix=0.10.1 on cluster dev's Activation record.
 ```
 
 Setting `KIX_ALLOW_WITHDRAWN` to the exact withdrawn version lets the deploy

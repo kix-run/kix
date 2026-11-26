@@ -570,7 +570,7 @@ writes. Versions before 0.10.0-rc.4 take the older spellings `list packages
   `flake.lock` back as they were at the start of the step.
 - `out.rs`: the text a run prints, from the approved output design: the
   `Upgrading Kix <from> -> <to>` line, one line per phase (`Building 6
-  clusters with current Kix 0.10.0 (ja1, ...)... ok`, `Installing Kix
+  clusters with current Kix 0.10.0 (prod, ...)... ok`, `Installing Kix
   0.12.1... ok`, `Pinned project to Kix 0.12.1 (updated flake.nix, flake.lock)`), the
   release notes grouped as `Config changes required`, `Behavior & data
   changes`, `Security fixes`, and `Notes`, the `Manifest changes` lines

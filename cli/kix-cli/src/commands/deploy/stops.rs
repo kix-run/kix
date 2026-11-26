@@ -221,22 +221,22 @@ mod tests {
     #[test]
     fn a_deploy_refusal_names_the_stop_and_the_way_through() {
         assert_eq!(
-            render_skipped_stop("lt1", &refusal(), Writer::Deploy),
-            "Deploy blocked: cluster lt1 was last deployed with Kix 0.10.0, and cannot skip required stop Kix 0.11.0 on the way to Kix 0.12.1.\n\
-             Nothing was applied to cluster lt1.\n\
+            render_skipped_stop("dev", &refusal(), Writer::Deploy),
+            "Deploy blocked: cluster dev was last deployed with Kix 0.10.0, and cannot skip required stop Kix 0.11.0 on the way to Kix 0.12.1.\n\
+             Nothing was applied to cluster dev.\n\
              \n\
              Every cluster deployed with Kix older than 0.11.0 must be deployed once with Kix 0.11.x before deploying Kix 0.12.1.\n\
              \n\
-             Next: check out the commit where this project was pinned to Kix 0.11.x (for example with `git worktree add` or `git checkout`), run `kix deploy lt1` from there, then return here and run `kix deploy lt1` again.\n"
+             Next: check out the commit where this project was pinned to Kix 0.11.x (for example with `git worktree add` or `git checkout`), run `kix deploy dev` from there, then return here and run `kix deploy dev` again.\n"
         );
     }
 
     #[test]
     fn a_rollback_refusal_rolls_back_with_the_stop() {
-        let text = render_skipped_stop("lt1", &refusal(), Writer::Rollback);
-        assert!(text.starts_with("Rollback blocked: cluster lt1"), "{text}");
+        let text = render_skipped_stop("dev", &refusal(), Writer::Rollback);
+        assert!(text.starts_with("Rollback blocked: cluster dev"), "{text}");
         assert!(
-            text.contains("and run `kix rollback lt1` from there."),
+            text.contains("and run `kix rollback dev` from there."),
             "{text}"
         );
     }
