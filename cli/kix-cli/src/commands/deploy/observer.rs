@@ -378,7 +378,15 @@ fn counts_labelled(r: &DeployResult, held_back: Option<&str>) -> String {
 fn applied_then_not_ready(r: &DeployResult) -> String {
     match r.failed_after_apply {
         0 => String::new(),
-        n => format!(" ({n} applied, then not ready)"),
+        n => format!(" ({n} applied but not ready)"),
+    }
+}
+
+fn failed_cluster_state(r: &DeployResult) -> String {
+    match r.failed_after_apply {
+        0 => String::new(),
+        1 => " (1 applied but not ready; its new manifest is on the cluster)".to_string(),
+        n => format!(" ({n} applied but not ready; their new manifests are on the cluster)"),
     }
 }
 
@@ -557,11 +565,11 @@ pub(super) fn closing(r: &DeployResult, c: &Closing<'_>) -> String {
             let _ = writeln!(out, "  Cluster state:");
             let _ = writeln!(
                 out,
-                "    - {} created and {} configured object(s) from this run finished and are ready on the cluster, {} failed{}, and {} were never sent to the cluster.",
+                "    - {} created and {} configured object(s) from this run are ready on the cluster. {} failed{}, and {} were never sent to the cluster.",
                 r.created,
                 r.configured,
                 r.failed,
-                applied_then_not_ready(r),
+                failed_cluster_state(r),
                 r.cancelled
             );
             if let Some(line) = record_line {

@@ -462,12 +462,12 @@ mod run_end_tests {
             &closing(Previous::Active("prod-4be1c09a".into()), None),
         );
         assert!(
-            text.contains("1 failed (1 applied, then not ready), 4 not started"),
+            text.contains("1 failed (1 applied but not ready), 4 not started"),
             "{text}"
         );
         assert!(
             text.contains(
-                "1 failed (1 applied, then not ready), and 4 were never sent to the cluster."
+                "1 failed (1 applied but not ready; its new manifest is on the cluster), and 4 were never sent to the cluster."
             ),
             "{text}"
         );
