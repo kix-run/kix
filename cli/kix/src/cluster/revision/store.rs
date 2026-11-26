@@ -200,6 +200,20 @@ impl Revisions {
             })
     }
 
+    /// Remove every entry of `status.applied` of revision `name`.
+    pub async fn clear_applied(&self, name: &str) -> Result<(), RevisionError> {
+        let patch = json!({ "status": { "applied": null } });
+        self.api
+            .patch_status(name, &PatchParams::default(), &Patch::Merge(&patch))
+            .await
+            .map(|_| ())
+            .map_err(|source| RevisionError::Api {
+                action: "clear the applied hashes of",
+                name: name.to_string(),
+                source,
+            })
+    }
+
     /// Delete revision `name`. A revision that is already gone counts as
     /// deleted.
     pub async fn delete(&self, name: &str) -> Result<(), RevisionError> {

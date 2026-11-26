@@ -377,6 +377,10 @@ pub(crate) struct KeptOrphans {
     /// was current at finalize time (used when `--offline` bypassed
     /// reading the live record during planning).
     pub carry_current: bool,
+    /// Objects the records name that the plan could not find out about,
+    /// because the cluster does not serve their kind. The run's
+    /// kept-orphans revision names them again.
+    pub unknown: Vec<crate::cluster::revision::RevisionObject>,
 }
 
 impl KeptOrphans {

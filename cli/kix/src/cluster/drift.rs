@@ -14,6 +14,7 @@
 use kube::api::DynamicObject;
 use serde_json::Value;
 
+use super::apply;
 use super::fieldsv1::{self, KIX_FIELD_MANAGER};
 use crate::manifest::types::ResourceId;
 
@@ -122,12 +123,8 @@ pub fn check_object(obj: &DynamicObject, applied: Option<&str>) -> DriftReport {
         };
     };
 
-    // Project onto Kix's current fieldset, strip `kix.run/*` annotations, and
-    // hash canonical JSON.
-    // TODO: exclude PI spec.driftIgnore pointers here, resolved through
-    // kix.run/package annotations and a PackageInstance GET, so compiled
-    // delegation (HPA on replicas, cert-manager on Secret data) is an
-    // expected co-owner, not drift.
+    // Project onto Kix's current fieldset without the ceded fields, strip
+    // `kix.run/*` annotations, and hash canonical JSON.
     let Some(current) = fieldsv1::applied_content_hash(obj) else {
         return DriftReport {
             rid,
@@ -162,7 +159,9 @@ pub fn check_object(obj: &DynamicObject, applied: Option<&str>) -> DriftReport {
 /// matches, which includes a replicas change combined with any other change
 /// to Kix's fields.
 fn unrecorded_scale(obj: &DynamicObject, stamped: &str) -> Option<UnrecordedScale> {
-    if !serves_scale(obj) {
+    // A ceded replicas count is out of the applied hash, so its change is
+    // not drift.
+    if !serves_scale(obj) || is_ceded(&ceded_of(obj), &["f:spec".into(), "f:replicas".into()]) {
         return None;
     }
     let live = obj.data.pointer("/spec/replicas")?.as_i64()?;
@@ -176,7 +175,7 @@ fn unrecorded_scale(obj: &DynamicObject, stamped: &str) -> Option<UnrecordedScal
         return None;
     }
 
-    let mut projection = fieldsv1::kix_owned_projection(obj)?;
+    let mut projection = fieldsv1::hashed_projection(obj)?;
     // Indexing `projection["spec"]` below panics unless it is an object.
     projection.get("spec")?.as_object()?;
     let deployed = (0..=SCALE_SEARCH_LIMIT).find(|&candidate| {
@@ -212,8 +211,12 @@ fn serves_scale(obj: &DynamicObject) -> bool {
 /// records a `/scale` entry only when the write sets a non-zero value and a
 /// manager already owned `spec.replicas`. [`UnrecordedScale`] covers the other
 /// cases.
+///
+/// A field the object cedes (`kix.run/cede-fields`) is left out: another
+/// manager is meant to own it.
 pub(crate) fn foreign_owners(obj: &DynamicObject) -> Vec<ForeignOwner> {
     let kix_owned = kix_owned_leaves(obj);
+    let ceded = ceded_of(obj);
     let Some(entries) = obj.metadata.managed_fields.as_deref() else {
         return Vec::new();
     };
@@ -222,11 +225,14 @@ pub(crate) fn foreign_owners(obj: &DynamicObject) -> Vec<ForeignOwner> {
         .filter(|e| e.manager.as_deref() != Some(KIX_FIELD_MANAGER))
         .filter(|e| e.subresource.as_deref() != Some("status"))
         .map(|e| {
-            let leaves = e
+            let leaves: Vec<(String, Vec<String>)> = e
                 .fields_v1
                 .as_ref()
                 .map(|f| leaves(&f.0))
-                .unwrap_or_default();
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|(_, keys)| !is_ceded(&ceded, keys))
+                .collect();
             let unshared_paths = leaves
                 .iter()
                 .filter(|(_, keys)| !kix_owned.contains(keys))
@@ -368,12 +374,61 @@ impl ForeignField {
 }
 
 /// Return the fields of `obj` that a manager other than Kix owns, leaving out
-/// status writes and fields Kix's `Apply` entry still owns.
+/// status writes, fields Kix's `Apply` entry still owns, and fields the
+/// object cedes.
 ///
 /// A field Kix still owns holds the value Kix applied, because the API server
 /// moves ownership to whoever changes a value. So the fields returned are the
 /// ones another manager changed or took over since Kix applied the object.
 pub fn foreign_fields(obj: &DynamicObject) -> Vec<ForeignField> {
+    let ceded = ceded_of(obj);
+    taken_fields(obj)
+        .into_iter()
+        .filter(|f| !is_ceded(&ceded, &f.keys))
+        .collect()
+}
+
+/// Return whether applying `manifest` without force would be refused with a
+/// conflict on `obj`: `manifest` sets a field that another manager took from
+/// Kix, and the object does not cede that field.
+pub(crate) fn conflicts(obj: &DynamicObject, manifest: &Value) -> bool {
+    foreign_fields(obj)
+        .iter()
+        .any(|f| f.value_in(manifest).is_some())
+}
+
+/// Return `manifest` without each field it cedes that another manager owns
+/// on `obj` and Kix's `Apply` entry does not. A forced apply of the result
+/// leaves those fields to their manager, as an apply that is refused on them
+/// and sent again without them does. A Secret's ceded `data` key goes from
+/// `stringData` too, which Kix sends as `data`.
+pub(crate) fn without_ceded_taken(manifest: &Value, obj: &DynamicObject) -> Value {
+    let ceded = apply::ceded_fields(manifest);
+    let mut out = manifest.clone();
+    if ceded.is_empty() {
+        return out;
+    }
+    let secret = crate::manifest::types::is_secret(manifest);
+    for field in taken_fields(obj) {
+        let Some(path) = segs(&field.keys) else {
+            continue;
+        };
+        if !ceded.iter().any(|c| apply::covers(c, &path)) {
+            continue;
+        }
+        apply::remove_path(&mut out, &path);
+        if secret && path.first() == Some(&apply::Seg::Field("data".into())) {
+            let mut in_strings = path.clone();
+            in_strings[0] = apply::Seg::Field("stringData".into());
+            apply::remove_path(&mut out, &in_strings);
+        }
+    }
+    out
+}
+
+/// Return the fields of `obj` that a manager other than Kix owns and Kix's
+/// `Apply` entry does not, leaving out status writes.
+fn taken_fields(obj: &DynamicObject) -> Vec<ForeignField> {
     let kix_owned = kix_owned_leaves(obj);
     let Some(entries) = obj.metadata.managed_fields.as_deref() else {
         return Vec::new();
@@ -395,6 +450,50 @@ pub fn foreign_fields(obj: &DynamicObject) -> Vec<ForeignField> {
                     path,
                     keys,
                 })
+        })
+        .collect()
+}
+
+/// Return the field paths `obj` cedes in its `kix.run/cede-fields`
+/// annotation.
+fn ceded_of(obj: &DynamicObject) -> Vec<Vec<apply::Seg>> {
+    let Some(declared) = obj
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|a| a.get(crate::manifest::keys::CEDE_FIELDS))
+    else {
+        return Vec::new();
+    };
+    apply::ceded_fields(&serde_json::json!({
+        "metadata": { "annotations": { (crate::manifest::keys::CEDE_FIELDS): declared } }
+    }))
+}
+
+/// Return whether one of `ceded` covers the field whose fieldsV1 key chain
+/// is `keys`.
+fn is_ceded(ceded: &[Vec<apply::Seg>], keys: &[String]) -> bool {
+    !ceded.is_empty()
+        && segs(keys).is_some_and(|path| ceded.iter().any(|c| apply::covers(c, &path)))
+}
+
+/// Convert a fieldsV1 key chain to the segments of a field path. A set
+/// element (`v:`) has no such segment, so its chain gives `None`.
+fn segs(keys: &[String]) -> Option<Vec<apply::Seg>> {
+    keys.iter()
+        .map(|key| {
+            if let Some(name) = key.strip_prefix("f:") {
+                Some(apply::Seg::Field(name.to_string()))
+            } else if let Some(json) = key.strip_prefix("k:") {
+                match serde_json::from_str::<Value>(json).ok()? {
+                    Value::Object(keys) => Some(apply::Seg::Key(keys.into_iter().collect())),
+                    _ => None,
+                }
+            } else if let Some(i) = key.strip_prefix("i:") {
+                i.parse().ok().map(apply::Seg::Index)
+            } else {
+                None
+            }
         })
         .collect()
 }

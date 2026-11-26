@@ -102,8 +102,9 @@ struct Changes {
     /// What the record the run finalizes lists under
     /// `status.orphansKeptFrom` if the run leaves orphans on the cluster.
     kept_orphans: KeptOrphans,
-    /// The objects the run applies with force: the ones that revert drift.
-    force: HashSet<ResourceId>,
+    /// The objects the run applies with force, the ones that revert drift,
+    /// with the `resourceVersion` the plan read for each.
+    force: HashMap<ResourceId, String>,
     /// Why the run writes each object whose write the new build alone does
     /// not explain.
     reasons: HashMap<ResourceId, WriteReason>,
@@ -189,8 +190,8 @@ pub struct CheckedPlan {
     /// made with `--only` applies in full too. Empty otherwise.
     needed: Vec<String>,
     /// The objects the plan labels as reverting drift, which the run applies
-    /// with force.
-    force: HashSet<ResourceId>,
+    /// with force while each still has the `resourceVersion` the plan read.
+    force: HashMap<ResourceId, String>,
 }
 
 /// What a run of a [`CheckedPlan`] would do ([`CheckedPlan::work`]).
@@ -1239,7 +1240,7 @@ impl<'a> Planner<'a> {
             actions,
             orphans,
             kept_orphans,
-            force: HashSet::new(),
+            force: HashMap::new(),
             reasons: HashMap::new(),
             consumed: None,
             orphan_manifests: Vec::new(),
@@ -1256,22 +1257,28 @@ impl<'a> Planner<'a> {
         baseline: &Baseline,
         ledger: &Ledger,
         live: &LiveObjects,
-    ) -> Changes {
+    ) -> Result<Changes, PlanError> {
         let made: HashSet<ResourceId> = new_manifests.iter().map(ResourceId::from_value).collect();
-        let decided = decide::decide(new_manifests, &made, live, ledger, self.flags.reconcile);
+        let decided = decide::decide(
+            new_manifests,
+            &made,
+            live,
+            ledger,
+            self.flags.reconcile,
+            true,
+        )
+        .map_err(|e| PlanError::ReadForbidden(Box::new(e)))?;
         if !decided.lost.is_empty() {
             (self.report)(PlanEvent::NotHeld(&decided.lost));
         }
-        if !decided.unread.is_empty() {
-            let unread: Vec<String> = decided.unread.iter().cloned().collect();
-            (self.report)(PlanEvent::KindsUnread(&unread));
-        }
-        let mut force = HashSet::new();
+        let mut force = HashMap::new();
         let mut reasons = HashMap::new();
         let mut actions = Vec::with_capacity(decided.decisions.len() + decided.orphans.len());
         for decision in decided.decisions {
-            if let Label::RevertsDrift(_) = decision.label {
-                force.insert(decision.id.clone());
+            if let (Label::RevertsDrift(_), Some(version)) =
+                (&decision.label, &decision.resource_version)
+            {
+                force.insert(decision.id.clone(), version.clone());
             }
             if let Some(reason) = write_reason(&decision.label) {
                 reasons.insert(decision.id, reason);
@@ -1283,15 +1290,17 @@ impl<'a> Planner<'a> {
             .iter()
             .filter_map(|rid| match live.get(rid) {
                 Live::Present(obj) => Some(crate::manifest::types::to_manifest_value(obj)),
-                Live::Absent | Live::Unread => None,
+                Live::Absent | Live::Unserved | Live::Unread => None,
             })
             .collect();
         actions.extend(decided.orphans.iter().cloned().map(ChangeAction::Orphan));
-        // The plan read every kept orphan from the cluster, so the run's
-        // kept-orphans revision carries nothing forward unexamined.
+        // The plan read every kept orphan it could from the cluster. The
+        // run's kept-orphans revision names again the ones whose kind the
+        // cluster does not serve, and carries nothing else forward.
         let mut kept_orphans = baseline.orphans_kept_from(new_manifests);
         kept_orphans.unexamined.clear();
-        Changes {
+        kept_orphans.unknown = decided.unknown;
+        Ok(Changes {
             actions,
             orphans: decided.orphans,
             kept_orphans,
@@ -1299,7 +1308,7 @@ impl<'a> Planner<'a> {
             reasons,
             consumed: Some(ledger.taken_in().to_vec()),
             orphan_manifests,
-        }
+        })
     }
 
     /// Run [`Planner::plan`] over the manifests of `new_graph`. `read` is
@@ -1340,14 +1349,25 @@ impl<'a> Planner<'a> {
             consumed,
             orphan_manifests,
         } = match (ledger, read) {
-            (Some(ledger), Some((_, live))) => self.decided(new_manifests, baseline, ledger, live),
+            (Some(ledger), Some((_, live))) => {
+                self.decided(new_manifests, baseline, ledger, live)?
+            }
             _ => self.changes(new_manifests, baseline, read.map(|(_, live)| live)),
         };
         // A deploy with `--only` leaves every orphan alone, so it does not
-        // ask which ones another Kix cluster deploys.
-        let (orphans, shared_orphans) = match client {
-            Some(client) if !partial => keep_shared(client, cluster, orphans).await?,
-            _ => (orphans, Vec::new()),
+        // ask which ones another Kix cluster deploys. The one planner read
+        // every orphan and the tenancy already.
+        let (orphans, shared_orphans) = match (read, ledger) {
+            _ if partial => (orphans, Vec::new()),
+            (Some((_, live)), Some(_)) => {
+                baseline
+                    .tenancy
+                    .complete_for_others()
+                    .map_err(|e| PlanError::Tenancy(Box::new(e)))?;
+                inventory::split_shared_orphans_listed(orphans, live, &baseline.tenancy)
+            }
+            (Some((client, _)), None) => keep_shared(client, cluster, orphans).await?,
+            (None, _) => (orphans, Vec::new()),
         };
         let resource_graph =
             ResourceGraph::from_manifests(new_manifests).map_err(PlanError::Graph)?;
@@ -1450,17 +1470,12 @@ impl<'a> Planner<'a> {
 
 /// Return the ledger of the one planner for the Kix cluster `baseline` was
 /// read for, or `None` when that Kix cluster is not read from revisions
-/// ([`Ledger::of`]). Refuse when a revision its records name could not be
-/// read, because the plan could not tell which objects are orphans.
+/// ([`Ledger::of`]). Refuse when the tenancy could not read what this Kix
+/// cluster's records name, because the plan could not tell which objects
+/// are orphans or which planner plans it.
 fn ledger_of(baseline: &Baseline) -> Result<Option<Ledger>, PlanError> {
-    let Some(ledger) = Ledger::of(&baseline.tenancy, !baseline.failed().left_out) else {
-        return Ok(None);
-    };
-    baseline
-        .tenancy
-        .complete_for_own()
-        .map_err(|e| PlanError::Tenancy(Box::new(e)))?;
-    Ok(Some(ledger))
+    Ledger::of(&baseline.tenancy, !baseline.failed().left_out)
+        .map_err(|e| PlanError::Tenancy(Box::new(e)))
 }
 
 /// Return the objects a plan lists on the cluster: those of
@@ -1487,7 +1502,7 @@ fn write_reason(label: &Label) -> Option<WriteReason> {
         Label::RevertsDrift(report) => Some(WriteReason::RevertsDrift {
             changed_by: super::document::DriftOwner::of_report(report),
         }),
-        Label::Intended | Label::Reconciled | Label::Unchanged | Label::NotListed => None,
+        Label::Intended | Label::Reconciled | Label::Unchanged | Label::DriftReported(_) => None,
     }
 }
 
@@ -1866,7 +1881,7 @@ mod tests {
     /// A plan made while connected writes again each object the build leaves
     /// unchanged that the cluster no longer holds: one that is gone and one
     /// that is being deleted. It leaves unchanged an object the cluster holds
-    /// and one of a kind this account may not list. A plan made without
+    /// and one this account may neither list nor get. A plan made without
     /// connecting writes none of them.
     #[tokio::test]
     async fn an_unchanged_object_the_cluster_no_longer_holds_is_written_again() {
@@ -1887,6 +1902,7 @@ mod tests {
         going["metadata"]["finalizers"] = json!(["example.com/hold"]);
         let api = FakeApi::new([object("ConfigMap", "held"), going]);
         api.fail_next("/api/v1/secrets", 1, 403);
+        api.fail_next("/api/v1/namespaces/app/secrets/hidden", 1, 403);
         let client = api.client();
 
         let build = StoreGraph::synthesize(

@@ -23,7 +23,8 @@ use serde_json::Value;
 
 pub use ssa::{ApplyAction, ApplyError, ApplyPreview, namespaceless};
 pub(crate) use ssa::{
-    ApplyResult, Seg, apply_resource, ceded_fields, conflict_paths, record_activation_on_skipped,
+    ApplyResult, Seg, Takeover, apply_resource, ceded_fields, conflict_paths, covers,
+    record_activation_on_skipped, remove_covered, remove_path,
 };
 #[cfg(test)]
 use ssa::{

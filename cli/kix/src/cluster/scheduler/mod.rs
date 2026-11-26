@@ -1402,6 +1402,12 @@ impl<'a> Run<'a> {
     /// Finalize the Activation record unless the run was a no-op or a dry run.
     /// `left` names the orphans the prune left on the cluster.
     async fn finalize(self, left: Vec<ResourceId>) -> Result<DeployResult, DeployError> {
+        let never_pruned: Vec<ResourceId> = self
+            .orphan_rids
+            .iter()
+            .filter(|rid| !self.consumed_orphans.contains(rid) && never_pruned(rid.group_kind()))
+            .cloned()
+            .collect();
         let r = &self.result;
         let actually_changed = r.created > 0
             || r.configured > 0
@@ -1418,6 +1424,7 @@ impl<'a> Run<'a> {
                     r.failed > 0,
                     Left {
                         orphans: &left,
+                        never_pruned: &never_pruned,
                         manifests: self.old_manifests,
                     },
                 ),

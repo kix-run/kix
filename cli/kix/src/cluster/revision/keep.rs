@@ -38,19 +38,30 @@ pub fn needed(
     head: Option<&HeadStatus>,
     records: &[Record],
 ) -> Result<BTreeSet<String>, CleanError> {
+    if let Some((record, Err(source))) = records
+        .iter()
+        .find_map(|r| Some((r, r.revisions.as_ref()?)).filter(|(_, m)| m.is_err()))
+    {
+        return Err(CleanError::UnreadableMap {
+            record: record.name.clone(),
+            source: source.clone(),
+        });
+    }
+    Ok(needed_readable(head, records))
+}
+
+/// Return what [`needed`] returns, leaving out the records whose map this
+/// Kix cannot read rather than refusing.
+pub(crate) fn needed_readable(head: Option<&HeadStatus>, records: &[Record]) -> BTreeSet<String> {
     let current = head.and_then(|h| h.current.as_deref());
     let deploying = head
         .and_then(|h| h.lock.as_ref())
         .and_then(|l| l.activation.as_deref());
     let mut names = BTreeSet::new();
     for record in records {
-        let Some(map) = &record.revisions else {
+        let Some(Ok(map)) = &record.revisions else {
             continue;
         };
-        let map = map.as_ref().map_err(|source| CleanError::UnreadableMap {
-            record: record.name.clone(),
-            source: source.clone(),
-        })?;
         if record.phase != PHASE_SUPERSEDED
             || Some(record.name.as_str()) == current
             || Some(record.name.as_str()) == deploying
@@ -58,7 +69,17 @@ pub fn needed(
             names.extend(map.names().map(str::to_string));
         }
     }
-    Ok(names)
+    names
+}
+
+/// Return the names of the revisions that a readable map of a record in
+/// `records` names, `Superseded` or not.
+pub(crate) fn named_by(records: &[Record]) -> BTreeSet<String> {
+    records
+        .iter()
+        .filter_map(|r| r.revisions.as_ref()?.as_ref().ok())
+        .flat_map(|map| map.names().map(str::to_string))
+        .collect()
 }
 
 /// Why [`clean`] stopped.
@@ -133,6 +154,11 @@ impl State {
     /// Return the names of the revisions that must stay ([`needed`]).
     pub(crate) fn needed(&self) -> Result<BTreeSet<String>, CleanError> {
         needed(self.head.as_ref(), &self.records)
+    }
+
+    /// Return [`needed_readable`] of what was read.
+    pub(crate) fn needed_readable(&self) -> BTreeSet<String> {
+        needed_readable(self.head.as_ref(), &self.records)
     }
 }
 

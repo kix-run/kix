@@ -290,6 +290,7 @@ mod orphans_kept_from_tests {
             found: vec![source("v1")],
             unexamined: vec![source("elsewhere")],
             carry_current: false,
+            unknown: Vec::new(),
         };
         assert_eq!(names(&kept.recorded(None, true)), vec!["v1", "elsewhere"]);
         assert_eq!(names(&kept.recorded(None, false)), vec!["elsewhere"]);
@@ -305,6 +306,7 @@ mod orphans_kept_from_tests {
             found: vec![source("v1")],
             unexamined: vec![],
             carry_current: false,
+            unknown: Vec::new(),
         };
         assert_eq!(names(&kept.recorded(Some(&current), true)), vec!["v1"]);
         kept.carry_current = true;

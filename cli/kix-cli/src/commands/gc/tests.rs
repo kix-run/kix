@@ -1093,8 +1093,37 @@ mod revision_tests {
             live: ["left", "stuck", "added"]
                 .map(|n| ResourceId::new("", "ConfigMap", "d", n))
                 .into(),
+            unknown: HashSet::new(),
             in_build: HashSet::new(),
         }
+    }
+
+    /// gc removes a kept entry only when the object is known to be gone or
+    /// its delete reported it gone. An entry whose kind the read could not
+    /// list, or the cluster does not serve now, stays, even when gc deletes
+    /// nothing.
+    #[test]
+    fn gc_keeps_an_entry_it_could_not_read() {
+        let state = state(&recs(), |_| Written::Revisions);
+        let KeptUpdate::Objects {
+            listed, in_build, ..
+        } = objects_update(&state)
+        else {
+            panic!("objects");
+        };
+        let unread: HashSet<ResourceId> = listed.iter().map(|o| o.resource_id()).collect();
+        let update = KeptUpdate::Objects {
+            listed: listed.clone(),
+            live: HashSet::new(),
+            unknown: unread,
+            in_build,
+        };
+        assert_eq!(update.remaining(&HashSet::new()), None);
+        let gone: HashSet<ResourceId> = [listed[0].resource_id()].into();
+        assert_eq!(
+            update.remaining(&gone).map(|r| r.len()),
+            Some(listed.len() - 1)
+        );
     }
 
     /// gc that deleted some of the kept orphans writes a kept-orphans

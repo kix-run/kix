@@ -1577,13 +1577,15 @@ async fn read_last_runs_reruns_failed_rerun_jobs_and_names_the_others() {
     );
 }
 
-/// A Job whose kind Kix may not list leaves the answer unknown, so the plan
-/// does not say that nothing failed. A Job of a group the cluster does not
-/// serve is not on the cluster, so it never counts as failed.
+/// A Job whose kind Kix may neither list nor get leaves the answer unknown,
+/// so the plan does not say that nothing failed. A Job of a group the
+/// cluster does not serve is not on the cluster, so it never counts as
+/// failed.
 #[tokio::test]
 async fn read_last_runs_does_not_answer_for_a_job_it_cannot_read() {
     let api = crate::cluster::fake_api::FakeApi::new([live_job_named("done", false)]);
     api.fail_next("/apis/batch/v1/jobs", 1, 403);
+    api.fail_next("/apis/batch/v1/namespaces/default/jobs/done", 1, 403);
     let client = api.client();
     let discovery = crate::cluster::discovery::discover_resources(&client)
         .await

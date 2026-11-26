@@ -33,6 +33,15 @@
 //! plain-text error, as the apiserver does for a path it has not registered.
 //! [`FakeApi::serve_retired_records`] adds the Activation kind under a
 //! retired domain to discovery, as on a cluster that has not migrated.
+//!
+//! An apply that sends `metadata.resourceVersion` is refused with 409 when
+//! the object has another one, as Kubernetes does. [`FakeApi::track_owners`]
+//! turns on a small model of server-side apply's field ownership: an apply
+//! owns the fields it sends, keeps the fields other managers own, removes
+//! the fields it owned before and no longer sends, and is refused with 409
+//! when it would change a field another manager owns, unless it is forced.
+//! Lists count as one field. [`FakeApi::update_as`] changes an object as
+//! another manager's update does, taking the fields it changes.
 
 use std::sync::{Arc, Mutex};
 
@@ -134,6 +143,8 @@ struct State {
     retired_records: bool,
     /// What `/version` answers, once set.
     version: Option<Value>,
+    /// Applies keep `metadata.managedFields` ([`FakeApi::track_owners`]).
+    owners: bool,
 }
 
 impl State {
@@ -329,6 +340,38 @@ impl FakeApi {
             .unwrap()
             .failures
             .push((path.to_string(), times, status));
+    }
+
+    /// Model server-side apply's field ownership on every later apply (see
+    /// the module docs).
+    pub fn track_owners(&self) {
+        self.state.lock().unwrap().owners = true;
+    }
+
+    /// Change the held object of `kind` named `name` with `f`, as an update
+    /// by field manager `manager` through `subresource` (such as `scale`)
+    /// does: the manager takes every field `f` changes from the managers that
+    /// owned it, and the object gets a new resourceVersion.
+    pub fn update_as(
+        &self,
+        manager: &str,
+        subresource: Option<&str>,
+        kind: &str,
+        name: &str,
+        f: impl FnOnce(&mut Value),
+    ) {
+        let mut st = self.state.lock().unwrap();
+        let i = st
+            .objects
+            .iter()
+            .position(|o| o["kind"] == kind && o["metadata"]["name"] == name)
+            .expect("the object to update");
+        let before = st.objects[i].clone();
+        f(&mut st.objects[i]);
+        let changed = changed_fields(&before, &st.objects[i]);
+        owners::take(&mut st.objects[i], manager, subresource, &changed);
+        let rv = st.bump();
+        st.objects[i]["metadata"]["resourceVersion"] = json!(rv);
     }
 
     /// Serve the Activation kind under a retired domain too, which is what
@@ -631,6 +674,29 @@ impl FakeApi {
                     return status(400, "BadRequest", "the fake serves JSON bodies only");
                 };
                 let existing = st.objects.iter().position(&matches);
+                let sent_version = obj["metadata"]["resourceVersion"].take();
+                if !sent_version.is_null()
+                    && existing.map(|i| &st.objects[i]["metadata"]["resourceVersion"])
+                        != Some(&sent_version)
+                {
+                    return status(
+                        409,
+                        "Conflict",
+                        "Operation cannot be fulfilled: the object has been modified; please apply your changes to the latest version and try again",
+                    );
+                }
+                if st.owners {
+                    let manager = query
+                        .split('&')
+                        .find_map(|q| q.strip_prefix("fieldManager="))
+                        .unwrap_or("unknown")
+                        .to_string();
+                    let force = query.split('&').any(|q| q == "force=true");
+                    match owners::apply(existing.map(|i| &st.objects[i]), &obj, &manager, force) {
+                        Ok(merged) => obj = merged,
+                        Err(message) => return status(409, "Conflict", &message),
+                    }
+                }
                 let rv = st.bump();
                 let uid = match existing {
                     Some(i) => st.objects[i]["metadata"]["uid"].clone(),
@@ -714,6 +780,276 @@ impl Target {
                     .as_deref()
                     .is_none_or(|ns| meta["namespace"] == ns))
             && self.name.as_deref().is_none_or(|n| meta["name"] == n)
+    }
+}
+
+/// Return the fields whose value differs between `before` and `after`.
+fn changed_fields(before: &Value, after: &Value) -> Vec<Vec<String>> {
+    let mut fields = owners::fields_of(before);
+    for f in owners::fields_of(after) {
+        if !fields.contains(&f) {
+            fields.push(f);
+        }
+    }
+    fields.retain(|f| owners::value_at(before, f) != owners::value_at(after, f));
+    fields
+}
+
+/// The field ownership model of [`FakeApi::track_owners`]. A field is the
+/// chain of fieldsV1 keys (`f:spec`, `f:replicas`) from the object's root
+/// to a value that is not a non-empty map. Lists are one field.
+mod owners {
+    use serde_json::{Value, json};
+
+    pub(super) type Field = Vec<String>;
+
+    /// Return the fields of `obj` an apply or update can own: everything
+    /// but `apiVersion`, `kind`, `status`, and the metadata other than
+    /// labels and annotations.
+    pub(super) fn fields_of(obj: &Value) -> Vec<Field> {
+        let mut out = Vec::new();
+        let Some(map) = obj.as_object() else {
+            return out;
+        };
+        for (key, value) in map {
+            match key.as_str() {
+                "apiVersion" | "kind" | "status" => {}
+                "metadata" => {
+                    for part in ["labels", "annotations"] {
+                        if let Some(sub) = value.get(part) {
+                            walk(
+                                sub,
+                                vec!["f:metadata".into(), format!("f:{part}")],
+                                &mut out,
+                            );
+                        }
+                    }
+                }
+                _ => walk(value, vec![format!("f:{key}")], &mut out),
+            }
+        }
+        out
+    }
+
+    fn walk(value: &Value, prefix: Field, out: &mut Vec<Field>) {
+        match value {
+            Value::Object(map) if !map.is_empty() => {
+                for (key, child) in map {
+                    let mut chain = prefix.clone();
+                    chain.push(format!("f:{key}"));
+                    walk(child, chain, out);
+                }
+            }
+            _ => out.push(prefix),
+        }
+    }
+
+    pub(super) fn value_at<'v>(obj: &'v Value, field: &[String]) -> Option<&'v Value> {
+        field
+            .iter()
+            .try_fold(obj, |node, key| node.get(key.strip_prefix("f:")?))
+    }
+
+    fn set_at(obj: &mut Value, field: &[String], value: Value) {
+        let mut node = obj;
+        for key in &field[..field.len() - 1] {
+            let name = key.trim_start_matches("f:");
+            if !node.get(name).is_some_and(Value::is_object) {
+                node[name] = json!({});
+            }
+            node = &mut node[name];
+        }
+        node[field[field.len() - 1].trim_start_matches("f:")] = value;
+    }
+
+    fn remove_at(obj: &mut Value, field: &[String]) {
+        let Some((last, parents)) = field.split_last() else {
+            return;
+        };
+        let mut node = obj;
+        for key in parents {
+            match node.get_mut(key.trim_start_matches("f:")) {
+                Some(next) => node = next,
+                None => return,
+            }
+        }
+        if let Some(map) = node.as_object_mut() {
+            map.remove(last.trim_start_matches("f:"));
+        }
+    }
+
+    /// Return the fields a fieldsV1 tree names.
+    fn fields_of_tree(tree: &Value, prefix: Field, out: &mut Vec<Field>) {
+        let children: Vec<(&String, &Value)> = tree
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(k, _)| k.as_str() != ".")
+            .collect();
+        if children.is_empty() {
+            if !prefix.is_empty() {
+                out.push(prefix);
+            }
+            return;
+        }
+        for (key, child) in children {
+            let mut chain = prefix.clone();
+            chain.push(key.clone());
+            fields_of_tree(child, chain, out);
+        }
+    }
+
+    fn tree_of(fields: &[Field]) -> Value {
+        let mut tree = json!({});
+        for field in fields {
+            let mut node = &mut tree;
+            for key in field {
+                node = node
+                    .as_object_mut()
+                    .expect("a fieldsV1 node")
+                    .entry(key.clone())
+                    .or_insert_with(|| json!({}));
+            }
+        }
+        tree
+    }
+
+    fn entries(obj: Option<&Value>) -> Vec<Value> {
+        obj.and_then(|o| o["metadata"]["managedFields"].as_array())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn fields_of_entry(entry: &Value) -> Vec<Field> {
+        let mut out = Vec::new();
+        fields_of_tree(&entry["fieldsV1"], Vec::new(), &mut out);
+        out
+    }
+
+    fn entry(manager: &str, operation: &str, subresource: Option<&str>, fields: &[Field]) -> Value {
+        let mut e = json!({
+            "manager": manager,
+            "operation": operation,
+            "apiVersion": "v1",
+            "fieldsType": "FieldsV1",
+            "fieldsV1": tree_of(fields),
+        });
+        if let Some(sub) = subresource {
+            e["subresource"] = json!(sub);
+        }
+        e
+    }
+
+    fn is_apply_of(e: &Value, manager: &str) -> bool {
+        e["manager"] == manager && e["operation"] == "Apply" && e["subresource"].is_null()
+    }
+
+    fn path(field: &[String]) -> String {
+        field
+            .iter()
+            .map(|k| format!(".{}", k.trim_start_matches("f:")))
+            .collect()
+    }
+
+    /// Apply `sent` as field manager `manager` over `existing`, and return
+    /// what the server stores, or the conflict message.
+    pub(super) fn apply(
+        existing: Option<&Value>,
+        sent: &Value,
+        manager: &str,
+        force: bool,
+    ) -> Result<Value, String> {
+        let sent_fields = fields_of(sent);
+        let all = entries(existing);
+        let (mine, others): (Vec<Value>, Vec<Value>) =
+            all.into_iter().partition(|e| is_apply_of(e, manager));
+        let owned_before: Vec<Field> = mine.iter().flat_map(fields_of_entry).collect();
+        let before = |f: &Field| existing.and_then(|o| value_at(o, f));
+        let differs = |f: &Field| before(f).is_some() && before(f) != value_at(sent, f);
+        if !force {
+            let conflicts: Vec<String> = others
+                .iter()
+                .flat_map(|e| {
+                    fields_of_entry(e)
+                        .into_iter()
+                        .filter(|f| sent_fields.contains(f) && differs(f))
+                        .map(move |f| format!("conflict with {}: {}", e["manager"], path(&f)))
+                })
+                .collect();
+            if !conflicts.is_empty() {
+                return Err(format!(
+                    "Apply failed with {} conflict(s): {}",
+                    conflicts.len(),
+                    conflicts.join(", ")
+                ));
+            }
+        }
+        let mut merged = match existing {
+            Some(obj) => {
+                let mut merged = obj.clone();
+                let others_own: Vec<Field> = others.iter().flat_map(fields_of_entry).collect();
+                for f in &owned_before {
+                    if !sent_fields.contains(f) && !others_own.contains(f) {
+                        remove_at(&mut merged, f);
+                    }
+                }
+                for f in &sent_fields {
+                    if let Some(v) = value_at(sent, f) {
+                        set_at(&mut merged, f, v.clone());
+                    }
+                }
+                for key in ["apiVersion", "kind"] {
+                    merged[key] = sent[key].clone();
+                }
+                merged
+            }
+            None => sent.clone(),
+        };
+        let mut kept: Vec<Value> = Vec::new();
+        for mut e in others {
+            let fields: Vec<Field> = fields_of_entry(&e)
+                .into_iter()
+                .filter(|f| !(sent_fields.contains(f) && differs(f)))
+                .collect();
+            if !fields.is_empty() {
+                e["fieldsV1"] = tree_of(&fields);
+                kept.push(e);
+            }
+        }
+        kept.insert(0, entry(manager, "Apply", None, &sent_fields));
+        merged["metadata"]["managedFields"] = Value::Array(kept);
+        Ok(merged)
+    }
+
+    /// Give `manager` the fields `changed` of `obj`, through `subresource`,
+    /// taking them from every other entry.
+    pub(super) fn take(
+        obj: &mut Value,
+        manager: &str,
+        subresource: Option<&str>,
+        changed: &[Field],
+    ) {
+        let mut out: Vec<Value> = Vec::new();
+        let mut taken: Vec<Field> = changed.to_vec();
+        for mut e in entries(Some(obj)) {
+            let mine = e["manager"] == manager
+                && e["operation"] == "Update"
+                && e["subresource"].as_str() == subresource;
+            let fields: Vec<Field> = fields_of_entry(&e)
+                .into_iter()
+                .filter(|f| !changed.contains(f))
+                .collect();
+            if mine {
+                taken.extend(fields);
+                continue;
+            }
+            if !fields.is_empty() {
+                e["fieldsV1"] = tree_of(&fields);
+                out.push(e);
+            }
+        }
+        out.push(entry(manager, "Update", subresource, &taken));
+        obj["metadata"]["managedFields"] = Value::Array(out);
     }
 }
 

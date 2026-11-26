@@ -40,13 +40,25 @@ impl RevisionObject {
 ///
 /// An object that a revision of a record with a readable `status.revisions`
 /// names takes its hash from that revision's `status.applied`. Any other
-/// object takes it from its `kix.run/applied-hash` annotation, which an
-/// earlier Kix wrote.
+/// object, and a named object that no revision records a hash for, takes it
+/// from its `kix.run/applied-hash` annotation, which every Kix that applies
+/// an object still writes. Two revisions that record different hashes for
+/// one object leave its hash not known.
 #[derive(Debug, Default)]
 pub struct AppliedHashes {
-    /// Each object a consulted revision names, with its applied hash when a
-    /// revision records one.
-    named: HashMap<RevisionObject, Option<String>>,
+    /// Each object a consulted revision names, with what the revisions
+    /// record for it.
+    named: HashMap<RevisionObject, Recorded>,
+}
+
+/// What the consulted revisions record for one object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Recorded {
+    /// No revision records a hash.
+    Nothing,
+    Hash(String),
+    /// Two revisions record different hashes.
+    Disagree,
 }
 
 impl AppliedHashes {
@@ -59,7 +71,8 @@ impl AppliedHashes {
     /// Index the objects that `revisions` holds and that the readable maps of
     /// `records` name. A `Superseded` record is skipped, because Kix deletes
     /// its revisions. When two revisions name the same object, a recorded
-    /// hash wins over a missing one.
+    /// hash wins over a missing one, and two different recorded hashes
+    /// disagree.
     pub fn of<'a>(
         records: impl IntoIterator<Item = &'a Record>,
         revisions: impl IntoIterator<Item = &'a Revision>,
@@ -68,17 +81,20 @@ impl AppliedHashes {
             .into_iter()
             .map(|r| (r.name.as_str(), r))
             .collect();
-        let mut named: HashMap<RevisionObject, Option<String>> = HashMap::new();
+        let mut named: HashMap<RevisionObject, Recorded> = HashMap::new();
         for record in records {
             let Some(map) = readable_map(record) else {
                 continue;
             };
             for revision in map.names().filter_map(|n| by_name.get(n)) {
                 for object in &revision.spec.objects {
-                    let entry = named.entry(object.clone()).or_default();
-                    if entry.is_none() {
-                        *entry = revision.applied.get(&object.hash).cloned();
-                    }
+                    let entry = named.entry(object.clone()).or_insert(Recorded::Nothing);
+                    *entry = match (&*entry, revision.applied.get(&object.hash)) {
+                        (_, None) => entry.clone(),
+                        (Recorded::Nothing, Some(hash)) => Recorded::Hash(hash.clone()),
+                        (Recorded::Hash(held), Some(hash)) if held == hash => entry.clone(),
+                        (Recorded::Hash(_) | Recorded::Disagree, Some(_)) => Recorded::Disagree,
+                    };
                 }
             }
         }
@@ -105,15 +121,15 @@ impl AppliedHashes {
     /// is not known.
     pub fn applied<'a>(&'a self, obj: &'a DynamicObject) -> Option<&'a str> {
         let annotations = obj.metadata.annotations.as_ref()?;
-        if !self.named.is_empty()
-            && let Some(hash) = keys::get_meta(annotations, keys::IDENTITY_HASH)
-            && let Some(found) = self
-                .named
+        let recorded = keys::get_meta(annotations, keys::IDENTITY_HASH).and_then(|hash| {
+            self.named
                 .get(&RevisionObject::of_id(hash, &drift::resource_id(obj)))
-        {
-            return found.as_deref();
+        });
+        match recorded {
+            Some(Recorded::Hash(hash)) => Some(hash),
+            Some(Recorded::Disagree) => None,
+            Some(Recorded::Nothing) | None => keys::get_meta(annotations, keys::APPLIED_HASH),
         }
-        keys::get_meta(annotations, keys::APPLIED_HASH)
     }
 }
 
@@ -135,17 +151,14 @@ fn readable_map(record: &Record) -> Option<&RevisionMap> {
 ///   differ. The new one takes the old one's hash of every object both name
 ///   that the run did not apply.
 ///
-/// Leave out entries a revision already holds with the same value, and
-/// write nothing when the run applied nothing.
+/// Leave out entries a revision already holds with the same value. A run
+/// that applied nothing still carries hashes into the revisions it replaces.
 pub fn pending(
     applied: &BTreeMap<RevisionObject, String>,
     kept: &[&Revision],
     replaced: &[(&Revision, &Revision)],
 ) -> BTreeMap<String, BTreeMap<String, String>> {
     let mut out: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-    if applied.is_empty() {
-        return out;
-    }
     for (old, new) in replaced {
         let in_old: HashSet<&RevisionObject> = old.spec.objects.iter().collect();
         let carried = new

@@ -4,6 +4,7 @@ use kube::api::DynamicObject;
 use serde_json::json;
 
 use super::*;
+use crate::cluster::activation::Record;
 use crate::cluster::fieldsv1::{self, KIX_FIELD_MANAGER};
 use crate::cluster::head::HeadStatus;
 use crate::cluster::revision::{Revision, RevisionMap, RevisionObject, RevisionSpec, Slot};
@@ -155,9 +156,9 @@ fn shown(decided: &Decided) -> Vec<String> {
                 Label::LeftByDegraded(r) => format!("left by {r}"),
                 Label::AppliedHashMissing => "applied hash missing".to_string(),
                 Label::RevertsDrift(report) => format!("reverts drift on {}", report.rid.name),
+                Label::DriftReported(report) => format!("reports drift on {}", report.rid.name),
                 Label::Reconciled => "reconciled".to_string(),
                 Label::Unchanged => "unchanged".to_string(),
-                Label::NotListed => "not listed".to_string(),
             };
             format!("{}: {action} {label}", d.id.name)
         })
@@ -212,7 +213,9 @@ fn the_three_rules_decide_in_order_and_label_each_write() {
         },
     ];
     let tenancy = tenancy(&recs);
-    let ledger = Ledger::of(&tenancy, true).expect("read from revisions");
+    let ledger = Ledger::of(&tenancy, true)
+        .unwrap()
+        .expect("read from revisions");
     assert_eq!(ledger.taken_in(), ["failed"]);
 
     let mut deleting = live("deleting", "h-del");
@@ -234,7 +237,7 @@ fn the_three_rules_decide_in_order_and_label_each_write() {
             live("failed-not-applied", "h-someone-else"),
             live("crd-like", "h-c"),
         ],
-        [(String::new(), "Secret".to_string())],
+        [],
     );
     let new = [
         manifest("ConfigMap", "absent", "h-a"),
@@ -247,14 +250,13 @@ fn the_three_rules_decide_in_order_and_label_each_write() {
         manifest("ConfigMap", "both", "h-b-new"),
         manifest("ConfigMap", "deleting", "h-del"),
         manifest("ConfigMap", "never-made", "h-nm"),
-        manifest("Secret", "hidden", "h-s"),
     ];
     let mut made: HashSet<ResourceId> = new.iter().map(ResourceId::from_value).collect();
     // An object the build makes that the runner does not apply, as the
     // operator leaves out CRDs: no decision, and not an orphan.
     made.insert(id("crd-like"));
 
-    let decided = decide(&new, &made, &live, &ledger, false);
+    let decided = decide(&new, &made, &live, &ledger, false, true).unwrap();
     assert_eq!(
         shown(&decided),
         [
@@ -271,7 +273,6 @@ fn the_three_rules_decide_in_order_and_label_each_write() {
             "deleting: apply intended",
             // Gone, and the Degraded record has no applied hash for it.
             "never-made: apply left by cur",
-            "hidden: skip not listed",
         ]
     );
     assert_eq!(
@@ -280,10 +281,10 @@ fn the_three_rules_decide_in_order_and_label_each_write() {
     );
     // Only an object the build leaves unchanged counts as lost.
     assert_eq!(decided.lost, [id("deleting"), id("never-made")]);
-    assert_eq!(decided.unread, ["Secret".to_string()].into());
+    assert!(decided.unknown.is_empty());
 
     // With `--reconcile`, the unchanged object is written again.
-    let reconciled = decide(&new, &made, &live, &ledger, true);
+    let reconciled = decide(&new, &made, &live, &ledger, true, true).unwrap();
     assert!(shown(&reconciled).contains(&"in-sync: apply reconciled".to_string()));
 }
 
@@ -309,12 +310,12 @@ fn a_failed_record_is_left_out_while_another_deploy_may_run() {
             kept: &[],
         },
     ];
-    let ledger = Ledger::of(&tenancy(&recs), false).unwrap();
+    let ledger = Ledger::of(&tenancy(&recs), false).unwrap().unwrap();
     assert!(ledger.taken_in().is_empty());
     let live = LiveObjects::of([live("by-failed", "h-f"), live("failed-left", "h-fl")], []);
     let new = [manifest("ConfigMap", "by-failed", "h-by")];
     let made = new.iter().map(ResourceId::from_value).collect();
-    let decided = decide(&new, &made, &live, &ledger, false);
+    let decided = decide(&new, &made, &live, &ledger, false, true).unwrap();
     assert_eq!(shown(&decided), ["by-failed: apply intended"]);
     assert!(decided.orphans.is_empty());
 }
@@ -331,7 +332,7 @@ fn an_unchanged_record_is_left_alone() {
         applied: &[],
         kept: &[],
     }];
-    let ledger = Ledger::of(&tenancy(&recs), true).unwrap();
+    let ledger = Ledger::of(&tenancy(&recs), true).unwrap().unwrap();
     let record = json!({
         "apiVersion": keys::API_VERSION,
         "kind": RECORD_KIND,
@@ -341,7 +342,7 @@ fn an_unchanged_record_is_left_alone() {
     let live = LiveObjects::of([obj], []);
     let new = [record];
     let made = new.iter().map(ResourceId::from_value).collect();
-    let decided = decide(&new, &made, &live, &ledger, false);
+    let decided = decide(&new, &made, &live, &ledger, false, true).unwrap();
     assert!(matches!(decided.decisions[0].label, Label::Unchanged));
 }
 
@@ -350,5 +351,269 @@ fn an_unchanged_record_is_left_alone() {
 #[test]
 fn a_cluster_not_read_from_revisions_has_no_ledger() {
     let tenancy = Tenancy::fixture_of_state(CLUSTER, &BTreeMap::new(), &[], &[]);
-    assert!(Ledger::of(&tenancy, true).is_none());
+    assert!(Ledger::of(&tenancy, true).unwrap().is_none());
+}
+
+/// The choice of planner fails closed: a tenancy that could not list the
+/// revisions, or read the current record's map, refuses rather than plans
+/// by comparing builds.
+#[test]
+fn a_tenancy_that_could_not_read_the_revisions_has_no_ledger_and_no_fallback() {
+    let recs = [Rec {
+        name: "cur",
+        phase: PHASE_ACTIVE,
+        current: true,
+        objects: &[("web", "h-w")],
+        applied: &[],
+        kept: &[],
+    }];
+    assert!(Ledger::of(&tenancy(&recs), true).unwrap().is_some());
+    let heads: BTreeMap<String, HeadStatus> = [(
+        CLUSTER.to_string(),
+        serde_json::from_value(json!({ "current": "cur", "generation": 1 })).unwrap(),
+    )]
+    .into();
+    let failed = Tenancy::from_state(CLUSTER, &heads, &[], Err("forbidden".into()));
+    assert!(matches!(
+        Ledger::of(&failed, true),
+        Err(Problem::Revisions { .. })
+    ));
+}
+
+/// Return the tenancy of one `Active` record `cur` whose instance revision
+/// names `objects` with the applied hashes `applied`, and whose
+/// kept-orphans revision names `kept`.
+fn current(objects: &[(&str, &str)], applied: &[(&str, &str)], kept: &[(&str, &str)]) -> Ledger {
+    let recs = [Rec {
+        name: "cur",
+        phase: PHASE_ACTIVE,
+        current: true,
+        objects,
+        applied,
+        kept,
+    }];
+    Ledger::of(&tenancy(&recs), true).unwrap().unwrap()
+}
+
+/// An object of the build whose kind the cluster does not serve yet is
+/// absent: the deploy applies it once its kind is served. A candidate whose
+/// kind is not served is not known to be gone, so it keeps its place in the
+/// kept-orphans revision with the hash the records give it.
+#[test]
+fn an_unserved_kind_is_absent_for_the_build_and_not_known_for_a_candidate() {
+    let ledger = current(&[("web", "h-w"), ("old", "h-o")], &[], &[]);
+    let live = LiveObjects::of([], []).unserved([(String::new(), "ConfigMap".to_string())]);
+    let new = [manifest("ConfigMap", "web", "h-w")];
+    let made = new.iter().map(ResourceId::from_value).collect();
+    let decided = decide(&new, &made, &live, &ledger, false, true).unwrap();
+    assert_eq!(shown(&decided), ["web: apply intended"]);
+    assert!(decided.orphans.is_empty());
+    assert_eq!(decided.unknown, [revision_object("old", "h-o")]);
+}
+
+/// The plan refuses when the account may neither list nor get the objects
+/// of a kind it must read, whether an object of the build or a candidate is
+/// of that kind. It never skips a write the build makes.
+#[test]
+fn an_object_this_account_cannot_read_stops_the_plan() {
+    let ledger = current(&[("old", "h-o")], &[], &[]);
+    let unread = || LiveObjects::of([], [(String::new(), "ConfigMap".to_string())]);
+    let new = [manifest("ConfigMap", "web", "h-w")];
+    let made: HashSet<ResourceId> = new.iter().map(ResourceId::from_value).collect();
+    let refused = decide(&new, &made, &unread(), &ledger, false, true).unwrap_err();
+    assert_eq!(refused.resources, ["configmaps"]);
+    assert!(
+        refused.to_string().contains("`list` on `configmaps`"),
+        "{refused}"
+    );
+    // A candidate alone is enough.
+    let refused = decide(&[], &HashSet::new(), &unread(), &ledger, false, true).unwrap_err();
+    assert_eq!(refused.resources, ["configmaps"]);
+}
+
+/// Kix recorded an applied hash for the object, so an object that now has
+/// no Kix field records lost the fields Kix applied: it reverts drift.
+#[test]
+fn an_object_that_lost_every_kix_field_reverts_drift() {
+    let ledger = current(&[("web", "h-w")], &[("h-w", "x")], &[]);
+    let mut obj = live("web", "h-w");
+    obj.metadata.managed_fields = Some(Vec::new());
+    let live = LiveObjects::of([obj], []);
+    let new = [manifest("ConfigMap", "web", "h-w")];
+    let made = new.iter().map(ResourceId::from_value).collect();
+    let decided = decide(&new, &made, &live, &ledger, false, true).unwrap();
+    assert_eq!(shown(&decided), ["web: apply reverts drift on web"]);
+}
+
+/// Return the live Deployment `web` with build hash `h-w`, which cedes
+/// `spec.replicas`, after `scaler` (when given) set `spec.replicas` to
+/// `replicas` and took it from Kix, and `editor` (when given) changed the
+/// image.
+fn deployment(replicas: i64, scaler: Option<&str>, editor: Option<&str>) -> DynamicObject {
+    let mut kix_fields = json!({
+        "f:metadata": { "f:annotations": { (format!("f:{}", keys::CEDE_FIELDS)): {} } },
+        "f:spec": { "f:replicas": {}, "f:template": { "f:spec": { "f:image": {} } } },
+    });
+    let mut entries = Vec::new();
+    if let Some(scaler) = scaler {
+        kix_fields["f:spec"]
+            .as_object_mut()
+            .unwrap()
+            .remove("f:replicas");
+        entries.push(json!({
+            "manager": scaler, "operation": "Update", "subresource": "scale",
+            "fieldsV1": { "f:spec": { "f:replicas": {} } },
+        }));
+    }
+    let mut image = "web:1";
+    if let Some(editor) = editor {
+        kix_fields["f:spec"]["f:template"]["f:spec"]
+            .as_object_mut()
+            .unwrap()
+            .remove("f:image");
+        entries.push(json!({
+            "manager": editor, "operation": "Update",
+            "fieldsV1": { "f:spec": { "f:template": { "f:spec": { "f:image": {} } } } },
+        }));
+        image = "web:edited";
+    }
+    entries.insert(
+        0,
+        json!({ "manager": KIX_FIELD_MANAGER, "operation": "Apply", "fieldsV1": kix_fields }),
+    );
+    serde_json::from_value(json!({
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+            "name": "web",
+            "namespace": "d",
+            "labels": { "app.kubernetes.io/managed-by": "kix" },
+            "annotations": {
+                (keys::IDENTITY_HASH): "h-w",
+                (keys::CEDE_FIELDS): ".spec.replicas",
+            },
+            "resourceVersion": "7",
+            "managedFields": entries,
+        },
+        "spec": { "replicas": replicas, "template": { "spec": { "image": image } } },
+    }))
+    .unwrap()
+}
+
+fn deployment_manifest() -> Value {
+    json!({
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+            "name": "web",
+            "namespace": "d",
+            "annotations": {
+                (keys::IDENTITY_HASH): "h-w",
+                (keys::CEDE_FIELDS): ".spec.replicas",
+            },
+        },
+        "spec": { "replicas": 1, "template": { "spec": { "image": "web:1" } } },
+    })
+}
+
+fn deployment_ledger(applied: &str) -> Ledger {
+    let recs = [Rec {
+        name: "cur",
+        phase: PHASE_ACTIVE,
+        current: true,
+        objects: &[],
+        applied: &[],
+        kept: &[],
+    }];
+    let mut ledger = Ledger::of(&tenancy(&recs), true).unwrap().unwrap();
+    let mut revision = Revision::new(RevisionSpec::new(
+        CLUSTER,
+        Slot::Instance {
+            namespace: "d".into(),
+            name: "cur".into(),
+        },
+        vec![RevisionObject {
+            hash: "h-w".into(),
+            group: "apps".into(),
+            kind: "Deployment".into(),
+            namespace: Some("d".into()),
+            name: "web".into(),
+        }],
+    ));
+    revision.applied = [("h-w".to_string(), applied.to_string())].into();
+    let record = Record {
+        name: "cur".into(),
+        phase: PHASE_ACTIVE.into(),
+        revisions: Some(Ok(RevisionMap {
+            instances: [("d/cur".to_string(), revision.name.clone())].into(),
+            cluster_level: String::new(),
+            kept_orphans: None,
+        })),
+        ..Record::default()
+    };
+    ledger.applied = AppliedHashes::of([&record], [&revision]);
+    ledger
+}
+
+/// A field the object cedes is out of the applied hash, so an autoscaler
+/// that changes it leaves the object in sync, for the CLI and the operator.
+#[test]
+fn an_autoscaled_ceded_field_is_not_drift() {
+    let applied = fieldsv1::applied_content_hash(&deployment(1, None, None)).unwrap();
+    let ledger = deployment_ledger(&applied);
+    let live = LiveObjects::of([deployment(5, Some("hpa"), None)], []);
+    let new = [deployment_manifest()];
+    let made = new.iter().map(ResourceId::from_value).collect();
+    for forces in [true, false] {
+        let decided = decide(&new, &made, &live, &ledger, false, forces).unwrap();
+        assert_eq!(shown(&decided), ["web: skip unchanged"], "forces {forces}");
+    }
+}
+
+/// A forced revert of drift leaves out each ceded field another manager
+/// owns, so it takes back the edited image and leaves the replicas to the
+/// autoscaler. It records the `resourceVersion` it read. The operator,
+/// which never forces, writes nothing and reports the drift, because
+/// another manager owns a field the build sets.
+#[test]
+fn a_forced_revert_leaves_ceded_fields_to_their_manager_and_the_operator_reports_it() {
+    let applied = fieldsv1::applied_content_hash(&deployment(1, None, None)).unwrap();
+    let ledger = deployment_ledger(&applied);
+    let live = LiveObjects::of([deployment(5, Some("hpa"), Some("kubectl-edit"))], []);
+    let new = [deployment_manifest()];
+    let made = new.iter().map(ResourceId::from_value).collect();
+
+    let cli = decide(&new, &made, &live, &ledger, false, true).unwrap();
+    assert_eq!(shown(&cli), ["web: apply reverts drift on web"]);
+    let ChangeAction::Apply(sent) = &cli.decisions[0].action else {
+        panic!("an apply");
+    };
+    assert_eq!(sent.pointer("/spec/replicas"), None, "{sent}");
+    assert_eq!(
+        sent.pointer("/spec/template/spec/image"),
+        Some(&json!("web:1"))
+    );
+    assert_eq!(cli.decisions[0].resource_version.as_deref(), Some("7"));
+    let Label::RevertsDrift(report) = &cli.decisions[0].label else {
+        panic!("reverts drift");
+    };
+    // The ceded field's manager is not named as having changed it.
+    let owners = crate::plan::document::DriftOwner::of_report(report);
+    assert_eq!(owners.len(), 1, "{owners:?}");
+    assert_eq!(owners[0].manager, "kubectl-edit");
+
+    let operator = decide(&new, &made, &live, &ledger, false, false).unwrap();
+    assert_eq!(shown(&operator), ["web: skip reports drift on web"]);
+}
+
+/// Drift that no other manager owns, such as a removed field, is applied
+/// by the operator too, without force: the apply cannot conflict.
+#[test]
+fn the_operator_applies_drift_no_other_manager_owns() {
+    let ledger = current(&[("web", "h-w")], &[("h-w", "stale")], &[]);
+    let live = LiveObjects::of([live("web", "h-w")], []);
+    let new = [manifest("ConfigMap", "web", "h-w")];
+    let made = new.iter().map(ResourceId::from_value).collect();
+    let decided = decide(&new, &made, &live, &ledger, false, false).unwrap();
+    assert_eq!(shown(&decided), ["web: apply reverts drift on web"]);
 }

@@ -47,6 +47,13 @@ pub enum ApplyError {
         source: kube::Error,
     },
 
+    /// A forced apply of an object the plan read at one `resourceVersion`
+    /// found it at another.
+    #[error(
+        "{resource} changed on the cluster after the plan was made (not updated). Kix takes fields back from other field managers only when the object is as the plan read it, so this change was not overwritten. Run the command again to plan from the cluster as it is now."
+    )]
+    ChangedSincePlan { resource: String },
+
     #[error(
         "immutable field changed on {resource} (not updated). Kubernetes does not allow changing this field in place, and Kix did not recreate {resource} automatically; review the impact of deleting {resource}, delete it, and run the deploy again. Kubernetes reported: {}", reported(.source)
     )]
@@ -254,6 +261,20 @@ pub(crate) async fn record_activation_on_skipped(
     .await
 }
 
+/// Whether an apply takes ownership of fields another field manager owns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Takeover {
+    /// No: an apply that would change another manager's field is refused
+    /// with a conflict.
+    No,
+    /// Yes, whatever the object holds (`--force-conflicts`).
+    Always,
+    /// Yes, when the live object still has this `resourceVersion`, the one
+    /// the plan read. Otherwise the apply fails with
+    /// [`ApplyError::ChangedSincePlan`].
+    IfUnchangedSince(String),
+}
+
 /// Apply a single resource via server-side apply.
 ///
 /// If `activation_hash` is provided, the resource's `kix.run/activations`
@@ -267,7 +288,7 @@ pub(crate) async fn apply_resource(
     dry_run: bool,
     activation_hash: Option<&str>,
     live_activations: Option<&HashSet<String>>,
-    force_conflicts: bool,
+    takeover: Takeover,
 ) -> Result<ApplyResult, ApplyError> {
     let rid = ResourceId::from_value(manifest);
     let name = rid.name.clone();
@@ -280,14 +301,26 @@ pub(crate) async fn apply_resource(
         });
     }
     let api: Api<DynamicObject> = super::super::discovery::api_for(client, ar, &scope, &rid);
-    let manifest = &*string_data_as_data(manifest);
+    let mut manifest = string_data_as_data(manifest);
 
     // Default to non-force SSA so ownership conflicts return their field paths
     // and current manager. --force-conflicts opts into taking ownership.
     let mut pp = PatchParams::apply(FIELD_MANAGER);
-    if force_conflicts {
+    if takeover != Takeover::No {
         pp = pp.force();
     }
+    // A `resourceVersion` in the applied object makes the API server refuse
+    // the apply with 409 when the object changed since that version. A forced
+    // apply never conflicts on fields, so a 409 then means only that.
+    if let Takeover::IfUnchangedSince(version) = &takeover
+        && let Some(meta) = manifest
+            .to_mut()
+            .get_mut("metadata")
+            .and_then(Value::as_object_mut)
+    {
+        meta.insert("resourceVersion".into(), Value::String(version.clone()));
+    }
+    let manifest = &*manifest;
     if dry_run {
         pp = pp.dry_run();
     }
@@ -313,6 +346,11 @@ pub(crate) async fn apply_resource(
     // sees an actionable error pointing at --force-conflicts.
     let (echo, stripped) = match apply_patch(&api, &name, &pp, manifest, &rid).await {
         Ok(echo) => (echo, None),
+        Err(ApplyError::Conflict { resource, .. })
+            if matches!(takeover, Takeover::IfUnchangedSince(_)) =>
+        {
+            return Err(ApplyError::ChangedSincePlan { resource });
+        }
         Err(ApplyError::Conflict { resource, source }) => {
             // A conflict confined to fields the resource ceded is not a
             // failure: the other manager has taken what it was meant to
@@ -627,7 +665,7 @@ pub(crate) fn conflict_paths(text: &str) -> Vec<String> {
 
 /// Return `true` if `ceded` is a prefix of `path`, where [`Seg::Any`] (`[*]`)
 /// matches any list key or index segment.
-fn covers(ceded: &[Seg], path: &[Seg]) -> bool {
+pub(crate) fn covers(ceded: &[Seg], path: &[Seg]) -> bool {
     ceded.len() <= path.len()
         && ceded.iter().zip(path).all(|(c, p)| match (c, p) {
             (Seg::Any, Seg::Key(..)) | (Seg::Any, Seg::Index(_)) => true,
@@ -644,7 +682,8 @@ fn step_mut<'a>(v: &'a mut Value, seg: &Seg) -> Option<&'a mut Value> {
     }
 }
 
-fn remove_path(v: &mut Value, path: &[Seg]) -> bool {
+/// Remove the field at `path` from `v`, and return whether it was there.
+pub(crate) fn remove_path(v: &mut Value, path: &[Seg]) -> bool {
     match path {
         [] => false,
         [last] => match last {
@@ -668,6 +707,39 @@ fn remove_path(v: &mut Value, path: &[Seg]) -> bool {
             Some(child) => remove_path(child, rest),
             None => false,
         },
+    }
+}
+
+/// Remove from `v` every field `ceded` covers. A [`Seg::Any`] segment covers
+/// each element of a list.
+pub(crate) fn remove_covered(v: &mut Value, ceded: &[Seg]) {
+    match ceded {
+        [] => {}
+        [Seg::Any] => {
+            if let Some(items) = v.as_array_mut() {
+                items.clear();
+            }
+        }
+        [last] => {
+            remove_path(v, std::slice::from_ref(last));
+        }
+        [Seg::Any, rest @ ..] => {
+            for item in v.as_array_mut().into_iter().flatten() {
+                remove_covered(item, rest);
+            }
+        }
+        [Seg::Key(keys), rest @ ..] => {
+            for item in v.as_array_mut().into_iter().flatten() {
+                if picks(keys, item) {
+                    remove_covered(item, rest);
+                }
+            }
+        }
+        [head, rest @ ..] => {
+            if let Some(child) = step_mut(v, head) {
+                remove_covered(child, rest);
+            }
+        }
     }
 }
 

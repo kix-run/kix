@@ -754,12 +754,18 @@ mod applied_tests {
             .collect()
     }
 
+    /// A run that applied nothing, such as an operator deploy whose build
+    /// only removed an object, still carries the hashes of what it left
+    /// unchanged into the revision that replaces the old one. Otherwise the
+    /// next plan would apply each of them again.
     #[test]
-    fn a_run_that_applied_nothing_writes_nothing() {
+    fn a_run_that_applied_nothing_still_carries_hashes() {
         let (x, y) = (object("x", "x"), object("y1", "y"));
         let old = web(vec![x.clone(), y.clone()], &[(&x, "hx")]);
-        let new = web(vec![x.clone(), object("y2", "y")], &[]);
-        assert!(pending(&BTreeMap::new(), &[&old, &new], &[(&old, &new)]).is_empty());
+        let new = web(vec![x.clone()], &[]);
+        let writes = pending(&BTreeMap::new(), &[&old, &new], &[(&old, &new)]);
+        assert_eq!(writes, [(new.name.clone(), entries(&[(&x, "hx")]))].into());
+        assert!(pending(&BTreeMap::new(), &[&old], &[]).is_empty());
     }
 
     /// An object that two kept revisions name with the same build hash gets
@@ -904,23 +910,50 @@ mod applied_tests {
         }
     }
 
-    /// A record that names its revisions is read from them, so an
-    /// annotation does not stand in for a missing entry. A record with no
-    /// map, as an earlier Kix wrote, and a `Superseded` record, whose
-    /// revisions Kix deletes, are read from the annotation.
+    /// A record that names its revisions is read from them. While Kix still
+    /// writes the annotation, it stands in for an entry no revision holds,
+    /// as after the first deploy that wrote a map, which records hashes only
+    /// for what it applied. A record with no map, as an earlier Kix wrote,
+    /// and a `Superseded` record, whose revisions Kix deletes, are read from
+    /// the annotation.
     #[test]
-    fn a_record_without_a_map_reads_the_annotation() {
+    fn an_object_without_an_entry_reads_the_annotation() {
         let x = object("x", "x");
         let obj = live(&x, Some("from-annotation"));
         let empty = web(vec![x.clone()], &[]);
         let revisions = std::slice::from_ref(&empty);
         let with_map = AppliedHashes::of(&[record(PHASE_ACTIVE, Some(&empty))], revisions);
-        assert_eq!(with_map.applied(&obj), None);
+        assert_eq!(with_map.applied(&obj), Some("from-annotation"));
+        assert_eq!(with_map.applied(&live(&x, None)), None);
+        let recorded = web(vec![x.clone()], &[(&x, "from-revision")]);
+        let from_revision = AppliedHashes::of(
+            &[record(PHASE_ACTIVE, Some(&recorded))],
+            std::slice::from_ref(&recorded),
+        );
+        assert_eq!(from_revision.applied(&obj), Some("from-revision"));
         let without = AppliedHashes::of(&[record(PHASE_ACTIVE, None)], revisions);
         assert_eq!(without.applied(&obj), Some("from-annotation"));
         let superseded = AppliedHashes::of(&[record(PHASE_SUPERSEDED, Some(&empty))], revisions);
         assert_eq!(superseded.applied(&obj), Some("from-annotation"));
         let other = live(&object("y", "x"), Some("from-annotation"));
         assert_eq!(with_map.applied(&other), Some("from-annotation"));
+    }
+
+    /// Two revisions that record different applied hashes for one object,
+    /// as after a write that reached one and not the other, leave its hash
+    /// not known, so the next plan applies it without force and records
+    /// one. The annotation does not stand in.
+    #[test]
+    fn two_revisions_that_disagree_leave_the_hash_not_known() {
+        let x = object("x", "x");
+        let one = web(vec![x.clone()], &[(&x, "h1")]);
+        let mut two = web(vec![x.clone()], &[(&x, "h2")]);
+        two.name = format!("{}-other", two.name);
+        let mut recorded = record(PHASE_ACTIVE, Some(&one));
+        if let Some(Ok(map)) = &mut recorded.revisions {
+            map.kept_orphans = Some(two.name.clone());
+        }
+        let source = AppliedHashes::of(&[recorded], [&one, &two]);
+        assert_eq!(source.applied(&live(&x, Some("from-annotation"))), None);
     }
 }

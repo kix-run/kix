@@ -188,17 +188,30 @@ pub fn merge_typed_metadata(obj: &DynamicObject) -> Value {
 ///
 /// 1. Merge typed metadata back into the data `Value`.
 /// 2. Project onto Kix's `fieldsV1` fieldset.
-/// 3. Strip `kix.run/*` annotations so the stamp does not change its own hash.
-/// 4. Compute Blake3 over canonical (sorted-keys) JSON.
+/// 3. Remove the fields the object cedes in `kix.run/cede-fields`.
+/// 4. Strip `kix.run/*` annotations so the stamp does not change its own hash.
+/// 5. Compute Blake3 over canonical (sorted-keys) JSON.
+///
+/// Kix computes this hash from the apply's answer and again from the live
+/// object, so a ceded field is out of both. Another controller may then
+/// change it without the object reading as drifted.
 ///
 /// Returns `None` when the object has no Kix server-side apply `managedFields`
 /// entry.
 pub fn applied_content_hash(obj: &DynamicObject) -> Option<String> {
-    // TODO: exclude PI spec.driftIgnore pointers here. Compiled
-    // delegation drops the listed JSON pointers from the projection on both
-    // the stamp and the check side, so expected co-owners (HPA on replicas,
-    // cert-manager on Secret data) never enter the hash.
-    kix_owned_projection(obj).map(projection_hash)
+    hashed_projection(obj).map(projection_hash)
+}
+
+/// Return what [`applied_content_hash`] hashes: [`kix_owned_projection`]
+/// without the fields the object cedes.
+pub(crate) fn hashed_projection(obj: &DynamicObject) -> Option<Value> {
+    let fields = kix_fieldset(obj)?;
+    let full = merge_typed_metadata(obj);
+    let mut projection = project(&full, &fields);
+    for ceded in crate::cluster::apply::ceded_fields(&full) {
+        crate::cluster::apply::remove_covered(&mut projection, &ceded);
+    }
+    Some(projection)
 }
 
 /// Strip `kix.run/*` annotations from `projection` and return its canonical
@@ -314,6 +327,45 @@ mod tests {
         let live = json!(["a", "b", "c"]);
         let fields = json!({"i:1": {}});
         assert_eq!(project(&live, &fields), json!(["b"]));
+    }
+
+    /// A field the object cedes is out of the applied hash, so another
+    /// manager may change it. A field it does not cede is still in.
+    #[test]
+    fn the_applied_hash_leaves_out_ceded_fields() {
+        let object = |replicas: i64, image: &str| -> DynamicObject {
+            serde_json::from_value(json!({
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": {
+                    "name": "web",
+                    "namespace": "app",
+                    "annotations": {
+                        (crate::manifest::keys::CEDE_FIELDS): ".spec.replicas,.spec.template.spec.containers[*].resources",
+                    },
+                    "managedFields": [{
+                        "manager": KIX_FIELD_MANAGER,
+                        "operation": "Apply",
+                        "fieldsV1": {"f:spec": {
+                            "f:replicas": {},
+                            "f:template": {"f:spec": {"f:containers": {
+                                "k:{\"name\":\"web\"}": {"f:name": {}, "f:image": {}, "f:resources": {}},
+                            }}},
+                        }},
+                    }],
+                },
+                "spec": {
+                    "replicas": replicas,
+                    "template": {"spec": {"containers": [
+                        {"name": "web", "image": image, "resources": {"limits": {"cpu": replicas}}},
+                    ]}},
+                },
+            }))
+            .unwrap()
+        };
+        let base = applied_content_hash(&object(1, "a"));
+        assert_eq!(applied_content_hash(&object(5, "a")), base);
+        assert_ne!(applied_content_hash(&object(1, "b")), base);
     }
 
     #[test]

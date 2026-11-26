@@ -195,11 +195,11 @@ pub fn print(event: PlanEvent<'_>) {
         }
         PlanEvent::KindsUnread(kinds) => {
             warning(&format!(
-                "this Kubernetes account cannot list {} across the cluster.",
+                "this Kubernetes account can neither list {} across the cluster nor get them one by one.",
                 some_names(kinds.iter().map(String::as_str))
             ));
             crate::esay!(
-                "  Without `--reconcile`, this plan skips objects of these kinds that are unchanged from the current deployment, even if they were deleted or are being deleted on the cluster.\n  To check them, grant this account cluster-wide `list` permission for these kinds, or pass `--reconcile` on `kix plan` or `kix deploy` to reapply every resource."
+                "  Without `--reconcile`, this plan skips objects of these kinds that are unchanged from the current deployment, even if they were deleted or are being deleted on the cluster.\n  To check them, grant this account cluster-wide `list` permission for these kinds, or `get` in the namespaces the build uses, or pass `--reconcile` on `kix plan` or `kix deploy` to reapply every resource."
             );
         }
         PlanEvent::KeptUnresolved { sources, cluster } => {

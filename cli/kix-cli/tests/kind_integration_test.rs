@@ -1418,3 +1418,140 @@ fn a_deploy_waits_for_an_object_being_deleted_then_creates_it() {
     );
     assert!(deleting.is_empty(), "the new ConfigMap is being deleted");
 }
+
+const DRIFT_NIX: &str = r#"{ scope, ... }:
+{
+  meta = {
+    version = "1";
+    description = "Two ConfigMaps, one with a field another controller sets";
+    owner = "test";
+  };
+  build =
+    { self, ... }:
+    {
+      ceded = scope.mkResource {
+        apiVersion = "v1";
+        kind = "ConfigMap";
+        name = "drift-ceded";
+        extra.data = { owned = "kix"; rotated = "initial"; };
+        ownership.cede = [ "data.rotated" ];
+      };
+      edited = scope.mkResource {
+        apiVersion = "v1";
+        kind = "ConfigMap";
+        name = "drift-edited";
+        extra.data.value = "kix";
+      };
+      root = self.edited;
+    };
+}
+"#;
+
+/// Verify, against a real API server, what a deploy does to drift. Another
+/// field manager changes a field the package cedes and a field it does not.
+/// The next plan writes only the object whose field the package does not
+/// cede. The deploy takes that field back with force and leaves the ceded
+/// field to its manager. The plan after that writes nothing.
+///
+/// The kind cluster is `$KIX_KIND_CLUSTER` (default `kix-drift`); the test
+/// creates and deletes it.
+#[test]
+#[ignore] // Run explicitly: cargo test --test kind_integration_test -- --ignored
+fn drift_is_reverted_and_ceded_fields_are_left_alone() {
+    if !has_kind() || !has_kubectl() {
+        eprintln!("skipping: kind or kubectl not available");
+        return;
+    }
+    let kind_cluster = std::env::var("KIX_KIND_CLUSTER").unwrap_or_else(|_| "kix-drift".into());
+    let ctx = format!("kind-{kind_cluster}");
+    kind_delete(&kind_cluster);
+    clear_activation_cache("hold");
+    assert!(kind_create(&kind_cluster), "failed to create kind cluster");
+    struct Cleanup(String);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            kind_delete(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(kind_cluster.clone());
+
+    let flake = TwoClusters::new();
+    let flake_nix = std::fs::read_to_string(flake.path().join("flake.nix"))
+        .unwrap()
+        .replace(
+            "sweep-b = ./b.nix;",
+            "sweep-b = ./b.nix;\n        hold = ./hold-cluster.nix;",
+        );
+    flake.write("flake.nix", &flake_nix);
+    flake.write("hold.nix", DRIFT_NIX);
+    write_hold_cluster(flake.path(), true);
+
+    let (ok, out) = flake.kix(&ctx, &["deploy", "hold", "--yes"]);
+    assert!(ok, "{out}");
+    let plan = |flake: &TwoClusters| {
+        let out = assert_cmd::Command::cargo_bin("kix")
+            .unwrap()
+            .env("NO_COLOR", "true")
+            .arg("--flake")
+            .arg(flake.path())
+            .args(["--context", &ctx, "plan", "hold"])
+            .output()
+            .expect("kix should run");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        eprintln!("$ kix plan hold\n{text}");
+        (out.status.code(), text)
+    };
+    assert_eq!(plan(&flake).0, Some(0), "the deploy left nothing to do");
+
+    let patch = |manager: &str, name: &str, data: &str| {
+        let out = kubectl(
+            &ctx,
+            &[
+                "-n",
+                "hold-test",
+                "patch",
+                "configmap",
+                name,
+                "--type=merge",
+                &format!("--field-manager={manager}"),
+                "-p",
+                &format!(r#"{{"data":{data}}}"#),
+            ],
+        );
+        assert!(out.status.success(), "{out:?}");
+    };
+    patch("rotator", "drift-ceded", r#"{"rotated":"rotated"}"#);
+    let (code, text) = plan(&flake);
+    assert_eq!(code, Some(0), "a ceded field is not drift: {text}");
+
+    patch("editor", "drift-edited", r#"{"value":"edited"}"#);
+    let (code, text) = plan(&flake);
+    assert_eq!(code, Some(2), "{text}");
+    assert!(text.contains("editor"), "{text}");
+    assert!(text.contains("ownership.cede"), "{text}");
+    assert!(!text.contains("drift-ceded"), "{text}");
+
+    let (ok, out) = flake.kix(&ctx, &["deploy", "hold", "--yes"]);
+    assert!(ok, "{out}");
+    let get = |name: &str, key: &str| {
+        kubectl_stdout(
+            &ctx,
+            &[
+                "-n",
+                "hold-test",
+                "get",
+                "configmap",
+                name,
+                "-o",
+                &format!("jsonpath={{.data.{key}}}"),
+            ],
+        )
+    };
+    assert_eq!(get("drift-edited", "value").trim(), "kix");
+    assert_eq!(get("drift-ceded", "rotated").trim(), "rotated");
+    assert_eq!(plan(&flake).0, Some(0), "the deploy left nothing to do");
+}

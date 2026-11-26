@@ -479,9 +479,9 @@ fn write_drift(out: &mut String, plan: &Plan) -> fmt::Result {
                     ))
                     .into_owned(),
                     (true, None) if takes_back(plan, d) && !d.managers.is_empty() => {
+                        let managers = d.managers.join(", ");
                         output::yellow(&format!(
-                            "the deploy writes this object and takes the field back from {}",
-                            d.managers.join(", ")
+                            "the deploy writes this object and takes the field back from {managers}. If {managers} is meant to own this field, declare it with `ownership.cede` and Kix leaves it alone"
                         ))
                         .into_owned()
                     }
@@ -654,10 +654,12 @@ fn write_drift_markdown(out: &mut String, plan: &Plan) -> fmt::Result {
                 (true, Some(owners)) => format!(
                     "the deploy writes this object, which stops on a field ownership conflict with `{owners}` unless run with `--force-conflicts`"
                 ),
-                (true, None) if takes_back(plan, d) && !d.managers.is_empty() => format!(
-                    "the deploy writes this object and takes the field back from `{}`",
-                    d.managers.join(", ")
-                ),
+                (true, None) if takes_back(plan, d) && !d.managers.is_empty() => {
+                    let managers = d.managers.join(", ");
+                    format!(
+                        "the deploy writes this object and takes the field back from `{managers}`. If `{managers}` is meant to own this field, declare it with `ownership.cede` and Kix leaves it alone"
+                    )
+                }
                 (true, None) => {
                     "the deploy writes this object and restores the deployed value".into()
                 }

@@ -152,9 +152,11 @@ pub enum PlanEvent<'a> {
     /// Objects the build leaves unchanged that are absent from the cluster
     /// or being deleted. The plan writes them again.
     NotHeld(&'a [ResourceId]),
-    /// Kinds of unchanged objects that this account may not list, as
-    /// `Kind` or `Kind.group`. The plan does not know whether the cluster
-    /// still holds those objects, and leaves them unchanged.
+    /// Kinds of unchanged objects that this account may neither list nor
+    /// get, as `Kind` or `Kind.group`. The plan does not know whether the
+    /// cluster still holds those objects, and leaves them unchanged. Only a
+    /// plan that compares builds reports this. The one planner refuses
+    /// instead ([`PlanError::ReadForbidden`]).
     KindsUnread(&'a [String]),
 }
 
@@ -214,6 +216,9 @@ pub enum PlanError {
          to recover, then run the command again."
     )]
     ReadLive(Box<FetchError>),
+    /// This account may neither list nor get objects the plan must read.
+    #[error("{0}. Nothing was planned or applied to the cluster")]
+    ReadForbidden(Box<crate::cluster::inventory::ReadForbidden>),
     #[error(
         "cannot read the deploy lock (`ActivationHead`) for this Kix cluster: {}. \
          Nothing was planned or applied to the cluster. \

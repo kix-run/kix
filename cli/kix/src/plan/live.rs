@@ -3,8 +3,9 @@
 //! For a Kix cluster read from revisions, the operator decides through the
 //! one planner the CLI uses ([`super::decide`]), from the build it applies,
 //! the live objects, and the cluster's records and revisions. It never
-//! applies with force, so a drifted object whose fields another manager
-//! owns fails with a conflict that the run reports.
+//! applies with force, so it does not write a drifted object whose changed
+//! fields another manager owns. The plan lists such objects
+//! ([`LivePlan::drift_not_reverted`]) for the operator to report.
 //!
 //! For any other Kix cluster, it compares the build with every live object
 //! of its Kix cluster by build hash: those already include what failed and
@@ -75,6 +76,22 @@ pub enum LivePlanError {
     Graph(GraphError),
     #[error(transparent)]
     Marker(MalformedMarker),
+    /// The records or revisions of this Kix cluster could not be read, so
+    /// the plan cannot tell which objects they name.
+    #[error("{0}. Nothing was applied or deleted")]
+    Tenancy(Box<crate::cluster::tenancy::Problem>),
+    /// This account may neither list nor get objects the plan must read.
+    #[error("{0}. Nothing was applied or deleted")]
+    ReadForbidden(Box<crate::cluster::inventory::ReadForbidden>),
+}
+
+/// A drifted object the operator leaves as it is, because another field
+/// manager owns fields the build sets and the operator never forces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriftNotReverted {
+    pub rid: ResourceId,
+    /// The managers that own fields Kix applied, with those fields.
+    pub owners: Vec<crate::plan::document::DriftOwner>,
 }
 
 /// A build planned against the live objects of one Kix cluster, with the
@@ -98,6 +115,10 @@ pub struct LivePlan {
     /// writes the record names in it. `None` when the record names no Kix
     /// cluster to label them with.
     revisions: Option<RevisionSet>,
+    drift_not_reverted: Vec<DriftNotReverted>,
+    /// The objects the records name whose kind the cluster does not serve,
+    /// which the run's kept-orphans revision names again.
+    unknown: Vec<crate::cluster::revision::RevisionObject>,
 }
 
 impl LivePlan {
@@ -123,17 +144,22 @@ impl LivePlan {
             .await
             .map_err(|e| LivePlanError::Fetch(Box::new(e)))?;
         let records = Records::open(client, &discovery).map_err(LivePlanError::Domain)?;
+        let fetch = |e: FetchError| LivePlanError::Fetch(Box::new(e));
+        // The objects first, then the records ([`crate::cluster::tenancy::read`]).
+        let listed = inventory::list_labelled(client, &discovery)
+            .await
+            .map_err(fetch)?;
+        let tenancy = crate::cluster::tenancy::read(&records, &cluster)
+            .await
+            .map_err(|e| fetch(FetchError::RecordsError(e)))?;
         // Only this Kix cluster's objects: every other Kix cluster's objects
         // are absent from this build and would otherwise be pruned as
         // orphans.
-        let sweep = inventory::sweep_managed(
-            client,
-            &discovery,
-            &records,
+        let sweep = inventory::scope_sweep(
+            inventory::managed_of(listed.clone()),
             inventory::SweepScope::Cluster(&cluster),
-        )
-        .await
-        .map_err(|e| LivePlanError::Fetch(Box::new(e)))?;
+            tenancy,
+        );
         // Which orphans another Kix cluster still deploys is decided below,
         // so a run that cannot tell stops before it plans a prune.
         sweep
@@ -144,24 +170,29 @@ impl LivePlan {
         let mut live: Vec<Value> = sweep.managed.iter().map(to_manifest_value).collect();
         // The operator holds the deploy lock, so no other deploy is applying
         // what a `Failed` or `Partial` record names.
-        let (actions, shared_orphans) = match Ledger::of(&sweep.tenancy, true) {
+        let ledger =
+            Ledger::of(&sweep.tenancy, true).map_err(|e| LivePlanError::Tenancy(Box::new(e)))?;
+        let mut drift_not_reverted = Vec::new();
+        let mut unknown = Vec::new();
+        let (actions, shared_orphans) = match ledger {
             Some(ledger) => {
-                sweep
-                    .tenancy
-                    .complete_for_own()
-                    .map_err(|e| LivePlanError::Fetch(Box::new(FetchError::Tenancy(e))))?;
                 let made = made_by(desired, revisions.as_ref());
                 let ids: Vec<ResourceId> = desired
                     .iter()
                     .map(ResourceId::from_value)
                     .chain(ledger.candidates(&made).cloned())
                     .collect();
-                let listed = LiveObjects::list(client, &discovery, &ids)
-                    .await
-                    .map_err(|e| LivePlanError::Fetch(Box::new(e)))?;
-                let decided = decided_changes(desired, &made, &listed, &ledger, &sweep.tenancy);
+                // The sweep's listing holds every labelled object of every
+                // kind, so the plan reads the build's objects from it.
+                let objects =
+                    LiveObjects::of_listing(client, &discovery, listed, ids.iter().collect())
+                        .await
+                        .map_err(fetch)?;
+                let decided = decided_changes(desired, &made, &objects, &ledger, &sweep.tenancy)?;
                 live =
                     crate::cluster::apply::baseline_manifests(&live, &[decided.orphan_manifests]);
+                drift_not_reverted = decided.drift_not_reverted;
+                unknown = decided.unknown;
                 (decided.actions, decided.shared)
             }
             None => live_changes(desired, &sweep.managed, &sweep.tenancy),
@@ -190,7 +221,15 @@ impl LivePlan {
             foreign: sweep.foreign,
             unattributed: sweep.unattributed.len(),
             revisions,
+            drift_not_reverted,
+            unknown,
         })
+    }
+
+    /// Return the drifted objects the plan leaves as they are, because
+    /// another field manager owns fields the build sets.
+    pub fn drift_not_reverted(&self) -> &[DriftNotReverted] {
+        &self.drift_not_reverted
     }
 
     /// Read the last runs of the plan's Jobs, as a deploy from the CLI does
@@ -289,8 +328,12 @@ impl LivePlan {
                 // so there is nothing to fold and nothing to supersede.
                 consumed_failed: Vec::new(),
                 // Its orphans are live objects the next reconcile finds
-                // again, so there are no builds to record.
-                kept_orphans: Default::default(),
+                // again, so there are no builds to record. The objects whose
+                // kind the cluster does not serve keep their place.
+                kept_orphans: crate::cluster::activation::KeptOrphans {
+                    unknown: self.unknown,
+                    ..Default::default()
+                },
                 // Only a run that writes the record names revisions in it.
                 revisions: self.revisions.filter(|_| manage_lifecycle),
                 // The operator deploys whole builds.
@@ -321,6 +364,8 @@ struct DecidedChanges {
     shared: Vec<SharedOrphan>,
     /// The live objects of the orphans the prune may delete, as manifests.
     orphan_manifests: Vec<Value>,
+    drift_not_reverted: Vec<DriftNotReverted>,
+    unknown: Vec<crate::cluster::revision::RevisionObject>,
 }
 
 /// Return every object of the build `desired` is part of: the objects of
@@ -347,17 +392,32 @@ fn decided_changes(
     live: &LiveObjects,
     ledger: &Ledger,
     tenancy: &Tenancy,
-) -> DecidedChanges {
-    let decided = decide::decide(desired, made, live, ledger, false);
-    if !decided.unread.is_empty() {
-        tracing::warn!(kinds = ?decided.unread, "this account may not list these kinds, so their objects are left alone");
+) -> Result<DecidedChanges, LivePlanError> {
+    let decided = decide::decide(desired, made, live, ledger, false, false)
+        .map_err(|e| LivePlanError::ReadForbidden(Box::new(e)))?;
+    if !decided.unknown.is_empty() {
+        tracing::info!(
+            count = decided.unknown.len(),
+            "objects earlier deploys left are of kinds the cluster does not serve now; they are not pruned, and the record keeps them listed"
+        );
     }
     let (orphans, shared) = inventory::split_shared_orphans_listed(decided.orphans, live, tenancy);
     let orphan_manifests = orphans
         .iter()
         .filter_map(|rid| match live.get(rid) {
             Live::Present(obj) => Some(to_manifest_value(obj)),
-            Live::Absent | Live::Unread => None,
+            Live::Absent | Live::Unserved | Live::Unread => None,
+        })
+        .collect();
+    let drift_not_reverted = decided
+        .decisions
+        .iter()
+        .filter_map(|d| match &d.label {
+            decide::Label::DriftReported(report) => Some(DriftNotReverted {
+                rid: d.id.clone(),
+                owners: crate::plan::document::DriftOwner::of_report(report),
+            }),
+            _ => None,
         })
         .collect();
     let actions = decided
@@ -366,11 +426,13 @@ fn decided_changes(
         .map(|d| d.action)
         .chain(orphans.into_iter().map(ChangeAction::Orphan))
         .collect();
-    DecidedChanges {
+    Ok(DecidedChanges {
         actions,
         shared,
         orphan_manifests,
-    }
+        drift_not_reverted,
+        unknown: decided.unknown,
+    })
 }
 
 /// Compare desired manifests with this cluster's live objects by identity
@@ -572,6 +634,8 @@ mod tests {
             foreign: inventory::Foreign::default(),
             unattributed: 0,
             revisions: None,
+            drift_not_reverted: Vec::new(),
+            unknown: Vec::new(),
         };
         assert_eq!(operator.applies(), 0);
         assert_eq!(
@@ -851,7 +915,14 @@ mod tests {
                 .unwrap();
             assert_eq!(written(cli.plan()), ["web"]);
             let web = ResourceId::from_value(&config_map("web", "1"));
-            assert_eq!(cli.force(), crate::cluster::ops::Force::Only([web].into()));
+            let version = api.object("ConfigMap", "web").unwrap()["metadata"]["resourceVersion"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            assert_eq!(
+                cli.force(),
+                crate::cluster::ops::Force::Only([(web, version)].into())
+            );
             assert!(matches!(
                 cli.objects().writes[0].reason,
                 Some(crate::plan::document::WriteReason::RevertsDrift { .. })
@@ -976,6 +1047,441 @@ mod tests {
                     .any(|r| r.starts_with("PATCH") && r.contains("/configmaps/calm?")),
                 "{:?}",
                 api.requests()
+            );
+        }
+
+        /// Return the build of `manifests` with its Activation record
+        /// `record`, for Kix cluster `a`.
+        fn release(record: &str, manifests: &[Value]) -> StoreGraph {
+            let mut all = manifests.to_vec();
+            all.push(json!({
+                "apiVersion": keys::API_VERSION,
+                "kind": crate::manifest::lifecycle::RECORD_KIND,
+                "metadata": {
+                    "name": record,
+                    "labels": { (keys::CLUSTER_LABEL): "a" },
+                },
+                "spec": { "cluster": "a" },
+            }));
+            build(&all)
+        }
+
+        fn deployment(name: &str, cede: bool) -> Value {
+            let mut d = json!({
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": {
+                    "name": name,
+                    "namespace": "app",
+                    "labels": { "app.kubernetes.io/managed-by": "kix" },
+                },
+                "spec": { "replicas": 1, "template": { "spec": { "image": "web:1" } } },
+                // The fake stores what a create sends, so the Deployment is
+                // ready at once. No apply owns `status`.
+                "status": {
+                    "observedGeneration": 1,
+                    "replicas": 1,
+                    "updatedReplicas": 1,
+                    "readyReplicas": 1,
+                    "availableReplicas": 1,
+                    "conditions": [{ "type": "Available", "status": "True" }],
+                },
+            });
+            if cede {
+                d["metadata"]["annotations"] = json!({ (keys::CEDE_FIELDS): ".spec.replicas" });
+            }
+            d
+        }
+
+        /// Return the current record of Kix cluster `a` and the baseline the
+        /// CLI plans against.
+        async fn current_baseline(client: &Client) -> crate::plan::baseline::Baseline {
+            let opened = Records::open(
+                client,
+                &discovery::discover_resources(client).await.unwrap(),
+            )
+            .unwrap();
+            let tenancy = crate::cluster::tenancy::read(&opened, "a").await.unwrap();
+            let active = opened.into_records().unwrap().active("a").await.unwrap();
+            crate::plan::baseline::Baseline {
+                active,
+                tenancy,
+                ..crate::plan::baseline::Baseline::empty()
+            }
+        }
+
+        /// Plan `graph` as `kix plan` does.
+        async fn cli_plan(api: &FakeApi, graph: &StoreGraph) -> crate::plan::CheckedPlan {
+            let client = api.client();
+            let baseline = current_baseline(&client).await;
+            crate::plan::Planner::new(crate::plan::fixtures::flags(&[]), &|_| {})
+                .plan(graph, "a", &baseline, Some(&client))
+                .await
+                .unwrap()
+        }
+
+        /// Plan `graph` and run the plan as `kix deploy` does, and return
+        /// what the run reports.
+        async fn cli_deploy(
+            api: &FakeApi,
+            graph: &StoreGraph,
+        ) -> Result<crate::cluster::stream::DeployResult, DeployError> {
+            let checked = cli_plan(api, graph).await;
+            let client = api.client();
+            let lock = crate::cluster::head::take(
+                &client,
+                crate::cluster::head::Request {
+                    cluster: "a".into(),
+                    holder: crate::cluster::head::Holder::cli("kix deploy"),
+                    purpose: crate::cluster::head::Purpose::Deploy,
+                    activation: checked.activation_name().map(str::to_string),
+                    expect: None,
+                },
+                crate::cluster::head::system_clock(),
+                &|_| {},
+            )
+            .await
+            .unwrap();
+            let lock = Arc::new(lock);
+            let target =
+                crate::plan::Target::connect(client, crate::build_source::SopsSources::Local)
+                    .await
+                    .unwrap();
+            let (result, _) = checked
+                .run(
+                    target,
+                    lock.clone(),
+                    None,
+                    test_config(),
+                    Arc::new(crate::cluster::stream::NullObserver),
+                )
+                .await;
+            lock.release().await.unwrap();
+            result
+        }
+
+        /// Plan the repair of the current record's build `graph` as the
+        /// operator does.
+        async fn operator_plan(api: &FakeApi, graph: &StoreGraph) -> LivePlan {
+            let client = api.client();
+            let name = current_baseline(&client).await.active.unwrap().name;
+            let record: DynamicObject = serde_json::from_value(
+                api.object(crate::manifest::lifecycle::RECORD_KIND, &name)
+                    .unwrap(),
+            )
+            .unwrap();
+            let desired: Vec<Value> = manifests(graph)
+                .into_iter()
+                .filter(|m| !crate::manifest::lifecycle::is_record(m))
+                .collect();
+            LivePlan::sweep(
+                &client,
+                &record,
+                &desired,
+                Some(RevisionSet::of("a", graph)),
+            )
+            .await
+            .unwrap()
+        }
+
+        /// Run the operator's repair `plan`, going on past a failed object.
+        async fn operator_repair(
+            api: &FakeApi,
+            plan: LivePlan,
+        ) -> crate::cluster::stream::DeployResult {
+            operator_run(
+                api,
+                plan,
+                crate::cluster::scheduler::OnErrorPolicy::Continue,
+            )
+            .await
+        }
+
+        /// Run the operator's repair `plan` with `on_error`.
+        async fn operator_run(
+            api: &FakeApi,
+            plan: LivePlan,
+            on_error: crate::cluster::scheduler::OnErrorPolicy,
+        ) -> crate::cluster::stream::DeployResult {
+            let client = api.client();
+            let lock = crate::cluster::head::take(
+                &client,
+                crate::cluster::head::Request {
+                    cluster: "a".into(),
+                    holder: crate::cluster::head::Holder::operator("kix", None),
+                    purpose: crate::cluster::head::Purpose::Repair,
+                    activation: None,
+                    expect: None,
+                },
+                crate::cluster::head::system_clock(),
+                &|_| {},
+            )
+            .await
+            .unwrap();
+            let lock = Arc::new(lock);
+            let config = SchedulerConfig {
+                on_error,
+                ..test_config()
+            };
+            let result = plan
+                .run(
+                    lock.clone(),
+                    false,
+                    config,
+                    Arc::new(crate::cluster::stream::NullObserver),
+                )
+                .await
+                .unwrap();
+            lock.release().await.unwrap();
+            result
+        }
+
+        fn writes(plan: &crate::plan::CheckedPlan) -> Vec<String> {
+            written(plan.plan())
+                .into_iter()
+                .filter(|n| !n.starts_with("a-v"))
+                .collect()
+        }
+
+        /// Plan, run, and plan again: the second plan writes nothing, from
+        /// the CLI and from the operator. An autoscaler that changes a ceded
+        /// field leaves both plans with nothing to write. A field another
+        /// manager took that the object does not cede is taken back by the
+        /// CLI, with force, and the plan after that writes nothing again.
+        #[tokio::test]
+        async fn plan_run_plan_again_writes_nothing() {
+            let api = FakeApi::new([]);
+            api.track_owners();
+            let v1 = release(
+                "a-v1",
+                &[
+                    config_map("conf", "1"),
+                    deployment("scaled", true),
+                    deployment("fixed", false),
+                ],
+            );
+            let first = cli_deploy(&api, &v1).await.unwrap();
+            assert_eq!(first.failed, 0, "{first:?}");
+            assert_eq!(writes(&cli_plan(&api, &v1).await), Vec::<String>::new());
+            let operator = operator_plan(&api, &v1).await;
+            assert_eq!(
+                (operator.applies(), operator.drift_not_reverted().len()),
+                (0, 0)
+            );
+
+            // An autoscaler scales both Deployments through `/scale`.
+            for name in ["scaled", "fixed"] {
+                api.update_as("hpa", Some("scale"), "Deployment", name, |o| {
+                    o["spec"]["replicas"] = json!(5);
+                });
+            }
+            let plan = cli_plan(&api, &v1).await;
+            assert_eq!(writes(&plan), ["fixed"]);
+            let operator = operator_plan(&api, &v1).await;
+            assert_eq!(operator.applies(), 0);
+            assert_eq!(
+                operator
+                    .drift_not_reverted()
+                    .iter()
+                    .map(|d| d.rid.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["fixed"]
+            );
+
+            // The operator sends nothing for it, so even a run that stops at
+            // the first failure has none, and the rest of the build goes on.
+            let before = api.requests().len();
+            let result = operator_run(
+                &api,
+                operator_plan(&api, &v1).await,
+                crate::cluster::scheduler::OnErrorPolicy::Stop,
+            )
+            .await;
+            assert_eq!(result.failed, 0, "{result:?}");
+            assert!(
+                !api.requests()[before..]
+                    .iter()
+                    .any(|r| r.starts_with("PATCH") && r.contains("/deployments/fixed")),
+                "{:?}",
+                api.requests()
+            );
+
+            let second = cli_deploy(&api, &v1).await.unwrap();
+            assert_eq!(second.failed, 0, "{second:?}");
+            let scaled = api.object("Deployment", "scaled").unwrap();
+            let fixed = api.object("Deployment", "fixed").unwrap();
+            assert_eq!(
+                scaled["spec"]["replicas"],
+                json!(5),
+                "the autoscaler keeps a ceded field"
+            );
+            assert_eq!(
+                fixed["spec"]["replicas"],
+                json!(1),
+                "the deploy takes the field back"
+            );
+            assert_eq!(writes(&cli_plan(&api, &v1).await), Vec::<String>::new());
+            let operator = operator_plan(&api, &v1).await;
+            assert_eq!(
+                (operator.applies(), operator.drift_not_reverted().len()),
+                (0, 0)
+            );
+        }
+
+        /// An earlier Kix stored applied hashes that covered ceded fields.
+        /// On the first plan after the change, such an object reads as
+        /// drifted once. The forced apply leaves out the ceded field the
+        /// autoscaler owns, so it writes nothing the autoscaler set, and it
+        /// records the new hash. The plan after that writes nothing.
+        #[tokio::test]
+        async fn a_hash_stored_with_ceded_fields_reads_as_drift_once_and_is_harmless() {
+            let api = FakeApi::new([]);
+            api.track_owners();
+            let v1 = release(
+                "a-v1",
+                &[deployment("scaled", true), deployment("held", true)],
+            );
+            cli_deploy(&api, &v1).await.unwrap();
+            // Store each hash as an earlier Kix computed it, ceded field and
+            // all.
+            let store = Revisions::new(&api.client());
+            let listed = store.list("a").await.unwrap().readable;
+            for name in ["scaled", "held"] {
+                let obj: DynamicObject =
+                    serde_json::from_value(api.object("Deployment", name).unwrap()).unwrap();
+                let old = crate::cluster::fieldsv1::projection_hash(
+                    crate::cluster::fieldsv1::kix_owned_projection(&obj).unwrap(),
+                );
+                assert_ne!(
+                    Some(&old),
+                    crate::cluster::fieldsv1::applied_content_hash(&obj).as_ref()
+                );
+                for revision in &listed {
+                    if let Some(o) = revision.spec.objects.iter().find(|o| o.name == name) {
+                        store
+                            .write_applied(&revision.name, &[(o.hash.clone(), old.clone())].into())
+                            .await
+                            .unwrap();
+                    }
+                }
+            }
+            api.update_as("hpa", Some("scale"), "Deployment", "scaled", |o| {
+                o["spec"]["replicas"] = json!(5);
+                for count in [
+                    "replicas",
+                    "updatedReplicas",
+                    "readyReplicas",
+                    "availableReplicas",
+                ] {
+                    o["status"][count] = json!(5);
+                }
+            });
+            let plan = cli_plan(&api, &v1).await;
+            assert_eq!(writes(&plan), ["held", "scaled"]);
+            let result = cli_deploy(&api, &v1).await.unwrap();
+            assert_eq!(result.failed, 0, "{result:?}");
+            assert_eq!(
+                api.object("Deployment", "scaled").unwrap()["spec"]["replicas"],
+                json!(5)
+            );
+            assert_eq!(
+                api.object("Deployment", "held").unwrap()["spec"]["replicas"],
+                json!(1)
+            );
+            assert_eq!(writes(&cli_plan(&api, &v1).await), Vec::<String>::new());
+        }
+
+        /// The operator repairs drift that no other manager owns, without
+        /// force, and its next plan writes nothing.
+        #[tokio::test]
+        async fn an_operator_repair_then_its_next_plan_writes_nothing() {
+            let api = FakeApi::new([]);
+            api.track_owners();
+            let v1 = release(
+                "a-v1",
+                &[config_map("conf", "1"), deployment("scaled", true)],
+            );
+            cli_deploy(&api, &v1).await.unwrap();
+            api.update_as("hpa", Some("scale"), "Deployment", "scaled", |o| {
+                o["spec"]["replicas"] = json!(3);
+            });
+            // A field removed by hand has no owner left.
+            api.patch_object("ConfigMap", "conf", |o| {
+                o["data"] = json!({});
+            });
+            let plan = operator_plan(&api, &v1).await;
+            assert_eq!(written(&plan.plan), ["conf"]);
+            let result = operator_repair(&api, plan).await;
+            assert_eq!((result.configured, result.failed), (1, 0), "{result:?}");
+            let again = operator_plan(&api, &v1).await;
+            assert_eq!((again.applies(), again.drift_not_reverted().len()), (0, 0));
+            assert_eq!(
+                api.object("Deployment", "scaled").unwrap()["spec"]["replicas"],
+                json!(3)
+            );
+        }
+
+        /// A forced revert of drift is sent with the `resourceVersion` the
+        /// plan read, so an edit made after the plan stops the deploy rather
+        /// than being overwritten.
+        #[tokio::test]
+        async fn a_forced_revert_stops_on_an_object_changed_after_the_plan() {
+            let api = FakeApi::new([]);
+            api.track_owners();
+            let v1 = release("a-v1", &[deployment("web", false)]);
+            cli_deploy(&api, &v1).await.unwrap();
+            api.update_as("kubectl-edit", None, "Deployment", "web", |o| {
+                o["spec"]["template"]["spec"]["image"] = json!("web:edited");
+            });
+            let checked = cli_plan(&api, &v1).await;
+            assert_eq!(writes(&checked), ["web"]);
+            // A second edit after the plan was made.
+            api.update_as("kubectl-edit", None, "Deployment", "web", |o| {
+                o["spec"]["template"]["spec"]["image"] = json!("web:later");
+            });
+            let client = api.client();
+            let lock = crate::cluster::head::take(
+                &client,
+                crate::cluster::head::Request {
+                    cluster: "a".into(),
+                    holder: crate::cluster::head::Holder::cli("kix deploy"),
+                    purpose: crate::cluster::head::Purpose::Deploy,
+                    activation: checked.activation_name().map(str::to_string),
+                    expect: None,
+                },
+                crate::cluster::head::system_clock(),
+                &|_| {},
+            )
+            .await
+            .unwrap();
+            let lock = Arc::new(lock);
+            let target =
+                crate::plan::Target::connect(client, crate::build_source::SopsSources::Local)
+                    .await
+                    .unwrap();
+            let (result, _) = checked
+                .run(
+                    target,
+                    lock.clone(),
+                    None,
+                    test_config(),
+                    Arc::new(crate::cluster::stream::NullObserver),
+                )
+                .await;
+            lock.release().await.unwrap();
+            let failure = format!(
+                "{:?}",
+                result
+                    .map(|r| r.failures)
+                    .unwrap_or_else(|e| e.partial().failures.clone())
+            );
+            assert!(
+                failure.contains("changed on the cluster after the plan was made"),
+                "{failure}"
+            );
+            assert_eq!(
+                api.object("Deployment", "web").unwrap()["spec"]["template"]["spec"]["image"],
+                json!("web:later")
             );
         }
 

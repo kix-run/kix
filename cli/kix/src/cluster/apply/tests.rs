@@ -1002,9 +1002,18 @@ async fn a_namespaced_kind_without_a_namespace_is_refused() {
         .iter()
         .find(|(ar, _)| ar.kind == "ConfigMap")
         .unwrap();
-    let err = super::apply_resource(&client, ar, scope.clone(), &cm, false, None, None, false)
-        .await
-        .unwrap_err();
+    let err = super::apply_resource(
+        &client,
+        ar,
+        scope.clone(),
+        &cm,
+        false,
+        None,
+        None,
+        super::Takeover::No,
+    )
+    .await
+    .unwrap_err();
     assert!(
         matches!(&err, super::ApplyError::NoNamespace { resource } if resource == "ConfigMap/shared"),
         "{err}"
@@ -1087,7 +1096,7 @@ async fn an_apply_reports_the_fields_the_server_did_not_keep() {
             dry_run,
             None,
             None,
-            false,
+            super::Takeover::No,
         )
         .await
         .unwrap();
@@ -1098,10 +1107,18 @@ async fn an_apply_reports_the_fields_the_server_did_not_keep() {
     }
 
     // The same object stored as sent has nothing to report.
-    let result =
-        super::apply_resource(&client, ar, scope.clone(), &gizmo, false, None, None, false)
-            .await
-            .unwrap();
+    let result = super::apply_resource(
+        &client,
+        ar,
+        scope.clone(),
+        &gizmo,
+        false,
+        None,
+        None,
+        super::Takeover::No,
+    )
+    .await
+    .unwrap();
     assert!(result.not_kept.is_empty(), "{:?}", result.not_kept);
 }
 
@@ -1329,9 +1346,18 @@ async fn an_object_being_deleted_is_not_applied() {
         "metadata": { "name": "cm", "namespace": "app" },
         "data": { "k": "v" },
     });
-    let err = super::apply_resource(&client, ar, scope.clone(), &cm, false, None, None, false)
-        .await
-        .unwrap_err();
+    let err = super::apply_resource(
+        &client,
+        ar,
+        scope.clone(),
+        &cm,
+        false,
+        None,
+        None,
+        super::Takeover::No,
+    )
+    .await
+    .unwrap_err();
     assert!(
         matches!(&err, super::ApplyError::BeingDeleted { reason, uid: Some(_), .. }
             if reason == "being deleted, waiting for example.com/hold"),
@@ -1431,18 +1457,35 @@ async fn an_apply_sends_secret_values_as_data() {
         o
     };
 
-    let result = super::apply_resource(&client, ar, scope.clone(), &built, true, None, None, false)
-        .await
-        .unwrap();
+    let result = super::apply_resource(
+        &client,
+        ar,
+        scope.clone(),
+        &built,
+        true,
+        None,
+        None,
+        super::Takeover::No,
+    )
+    .await
+    .unwrap();
     let preview = result.preview.expect("a dry run previews");
     assert_eq!(without_server_fields(preview.result), sent);
     assert!(result.not_kept.is_empty(), "{:?}", result.not_kept);
     assert_eq!(api.object("Secret", "creds"), None);
 
-    let result =
-        super::apply_resource(&client, ar, scope.clone(), &built, false, None, None, false)
-            .await
-            .unwrap();
+    let result = super::apply_resource(
+        &client,
+        ar,
+        scope.clone(),
+        &built,
+        false,
+        None,
+        None,
+        super::Takeover::No,
+    )
+    .await
+    .unwrap();
     assert!(result.not_kept.is_empty(), "{:?}", result.not_kept);
     assert_eq!(
         without_server_fields(api.object("Secret", "creds").unwrap()),

@@ -180,6 +180,7 @@ impl Refusal {
             | ApplyError::NoNamespace { .. }
             | ApplyError::BeingDeleted { .. }
             | ApplyError::StillBeingDeleted { .. }
+            | ApplyError::ChangedSincePlan { .. }
             | ApplyError::Interrupted { .. } => {
                 return Refusal::Other {
                     message: err.to_string(),

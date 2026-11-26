@@ -466,12 +466,14 @@ pub(super) enum KeptUpdate {
         build_hash: Option<String>,
     },
     /// The Active record's kept-orphans revision names `listed`. gc writes
-    /// a new one that names what remains: the objects still on the cluster
-    /// (`live`) that gc did not delete and that the Active build does not
-    /// hold (`in_build`).
+    /// a new one that names what remains: the objects that are not known to
+    /// be gone, because they are still on the cluster (`live`) or the read
+    /// could not tell (`unknown`), that gc did not delete and that the
+    /// Active build does not hold (`in_build`).
     Objects {
         listed: Vec<RevisionObject>,
         live: HashSet<ResourceId>,
+        unknown: HashSet<ResourceId>,
         in_build: HashSet<ResourceId>,
     },
 }
@@ -495,6 +497,7 @@ impl KeptUpdate {
                     .flatten()
                     .map(ResourceId::from_value)
                     .collect(),
+                unknown: kept.unknown.clone(),
                 in_build: ids_of(graph),
             },
             None => KeptUpdate::Builds {
@@ -511,6 +514,7 @@ impl KeptUpdate {
         let KeptUpdate::Objects {
             listed,
             live,
+            unknown,
             in_build,
         } = self
         else {
@@ -520,7 +524,9 @@ impl KeptUpdate {
             .iter()
             .filter(|o| {
                 let rid = o.resource_id();
-                live.contains(&rid) && !gone.contains(&rid) && !in_build.contains(&rid)
+                (live.contains(&rid) || unknown.contains(&rid))
+                    && !gone.contains(&rid)
+                    && !in_build.contains(&rid)
             })
             .cloned()
             .collect();
@@ -823,6 +829,14 @@ async fn run_hard_async(
         }
     }
     let forbidden_none = sweep.forbidden.is_empty();
+    let unread: HashSet<String> = sweep.forbidden.iter().cloned().collect();
+    // A kept object of a kind the sweep could not list, or of a kind the
+    // cluster does not serve now, is not known to be gone.
+    let not_known = |rid: &ResourceId| match discovery::find(&discovery, &rid.group, &rid.kind) {
+        None => true,
+        Some((ar, _)) if ar.group.is_empty() => unread.contains(&ar.plural),
+        Some((ar, _)) => unread.contains(&format!("{}.{}", ar.plural, ar.group)),
+    };
     let unattributed_judged = sweep.unattributed.is_empty() || args.includes(Include::Unattributed);
     let copies: HashSet<ResourceId> = sweep
         .copies
@@ -887,6 +901,11 @@ async fn run_hard_async(
     let examined_all = forbidden_none && unattributed_judged;
     let update = match retirement.active.as_ref().map(|a| tenancy.kept(a)) {
         Some(Kept::Objects(objects)) => KeptUpdate::Objects {
+            unknown: objects
+                .iter()
+                .map(|o| o.resource_id())
+                .filter(|rid| not_known(rid))
+                .collect(),
             listed: objects.into_iter().cloned().collect(),
             live: live.iter().map(kix::cluster::drift::resource_id).collect(),
             in_build: in_build.clone(),

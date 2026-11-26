@@ -1051,7 +1051,8 @@ over that plan through `ops::DryRun`, so every SSA and DELETE goes with
   a `write_again` predicate: `--reconcile`, or `Live::lost` (absent, or
   carrying a `deletionTimestamp`). A lost object becomes `Apply`, which the
   objects check accepts as `reapplied`, and `PlanEvent::NotHeld` names it.
-  A kind the account may not list (403) is `Live::Unread`: its unchanged
+  A kind the account may not list (403) has each object read by GET. An
+  object it may not get either is `Live::Unread`: on this path its unchanged
   objects stay `Skip`, and `PlanEvent::KindsUnread` warns. Any other list
   failure fails the plan (`PlanError::ReadLive`). The same listing answers
   the Jobs' last runs (`DeployPlan::last_runs_from`), so a connected plan
@@ -1399,7 +1400,9 @@ Source::Revisions`: its head names a current record with a readable
 (`kix/src/plan/decide.rs`). `kix plan`, `kix deploy`, `kix rollback`, and the
 operator's deploy and repair all call it, from the same stored facts: the new
 build, the live objects (`inventory::LiveObjects`, one LIST per kind of the
-build and of every object the ledger names), and the Kix cluster's records and
+build and of every object the ledger names, and a GET per object for a kind
+the account may not list; the operator reads them from its sweep's listing),
+and the Kix cluster's records and
 revisions (`decide::Ledger`, read from the `Tenancy` the plan already holds,
 with the applied hashes of `revision::AppliedHashes`). Live state decides.
 
@@ -1416,12 +1419,32 @@ For each object of the new build, in this order:
    (`DeployRecord::write_applied`), so the next plan leaves it unchanged. A
    missing hash never reads as in sync.
 3. The applied hash differs from the hash of the live object's Kix-owned
-   fields (`drift::check_object`): apply, labelled `RevertsDrift(report)`.
+   fields (`drift::check_object`), or Kix recorded a hash and the object now
+   has no Kix field records: apply, labelled `RevertsDrift(report)`. The
+   applied hash leaves out the fields the object cedes (`kix.run/cede-fields`,
+   `fieldsv1::hashed_projection`), on the apply side and the check side, so a
+   ceded field never reads as drift. The manifest sent leaves out each ceded
+   field another manager owns (`drift::without_ceded_taken`), so a forced
+   apply does not take it back. A runner that never forces (`decide`'s
+   `forces` is false, the operator) labels an object whose changed fields
+   another manager owns `DriftReported(report)` and writes nothing
+   (`drift::conflicts`).
 
 Otherwise the object is unchanged and nothing is written to it. The
-Activation record is decided by rule 1 only, because no revision names it. A
-kind the account may not list is left alone (`Label::NotListed`) and reported
-through `PlanEvent::KindsUnread`.
+Activation record is decided by rule 1 only, because no revision names it.
+
+The listing gives three answers for an object (`inventory::Live`): present,
+absent, or not known. An object of the build whose kind the cluster does not
+serve (`Live::Unserved`) is absent, and its apply waits for the kind. An
+orphan candidate whose kind is not served is not known: `Decided::unknown`
+carries it with the build hash its records give it, and the run's
+kept-orphans revision names it again (`KeptOrphans::unknown`). An object the
+account may neither list nor get (`Live::Unread`) stops the plan with
+`inventory::ReadForbidden`, which names the resources and the verbs. `kix gc`
+rewrites the kept-orphans revision without an entry only when the object is
+known absent or its delete reported it gone (`KeptBaseline::unknown`). The
+kept-orphans revision also names the orphans of kinds Kix never prunes
+(`ops::Left::never_pruned`), which `status.orphansKeptFrom` leaves out.
 
 An orphan is a live, prunable object that the new build does not make and that
 the current record's revisions, its kept-orphans revision, or a `Failed` or
@@ -1432,16 +1455,34 @@ the next deploy takes in. `Failed` and `Partial` records are left out while
 another deploy may be running (`FailedBaseline::left_out`); otherwise the run
 supersedes each one it took in (`Ledger::taken_in`). `made` is every object of
 the build, so the CRDs and the record the operator leaves out of `new` are not
-orphans. Objects another Kix cluster still deploys are kept (`keep_shared`).
+orphans. Objects another Kix cluster still deploys are kept
+(`inventory::split_shared_orphans_listed`, from the listing and the tenancy
+the plan already holds).
 
 The plan document carries the labels as `objects.writes[].reason`
 (`document::WriteReason`), and the text plan counts them. `kix deploy` applies
 with force exactly the objects labelled `RevertsDrift` (`ops::Force::Only`;
 `--force-conflicts` still forces every apply), so a revert of drift takes back
-the fields others changed and any other conflict still stops the deploy. The
-operator never forces: a conflict fails the object, the run reports it through
-its Events and logs, and the next try comes at the operator's requeue
-interval.
+the fields others changed and any other conflict still stops the deploy. Each
+forced apply carries the `resourceVersion` the plan read
+(`apply::Takeover::IfUnchangedSince`), so an object changed after the plan
+fails with `ApplyError::ChangedSincePlan` and the deploy stops. The plan's
+drift line for a field another manager took names the manager and points at
+`ownership.cede`. The operator never forces: it writes no object labelled
+`DriftReported`, which does not count as a failure, so its dependents go on.
+`LivePlan::drift_not_reverted` lists them and the operator posts a
+`DriftNotReverted` Warning Event for each, which the Event recorder counts on
+one Event across requeues. Drift no other manager owns, such as a removed
+field or a replicas change Kubernetes recorded no owner for, the operator
+applies without force.
+
+`revision::AppliedHashes` reads an object's hash from the revisions that name
+it. An object no revision holds a hash for falls back to its
+`kix.run/applied-hash` annotation while Kix still writes it, and two
+revisions that record different hashes leave it not known (rule 2). A run
+carries the old revisions' hashes into the revisions it replaces even when it
+applied nothing, and a revision that exists when the run creates it and that
+no record names has its `status.applied` cleared.
 
 The builds stay the source of three things: the old side of the package diff
 people review (`Baseline::diff_side`), migration pairs, and `--offline`. A
@@ -1449,7 +1490,9 @@ plan under `--offline` compares builds, and `kix deploy --offline` runs that
 plan; it does not plan again once it connects.
 
 `Ledger::of` returns `None` for any other Kix cluster, and the plan compares
-builds as below. A Kix cluster that no Kix with revisions has deployed plans
+builds as below. It refuses (`Tenancy::complete_for_own`) when the tenancy
+could not read something about this Kix cluster or every Kix cluster, such as
+the revision list or the current record's map, so the choice fails closed. A Kix cluster that no Kix with revisions has deployed plans
 that way on its first deploy by this Kix.
 
 ### Comparing builds (a Kix cluster not read from revisions)

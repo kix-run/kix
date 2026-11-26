@@ -194,7 +194,7 @@ impl DeployPlan {
                     failed.insert(rid.clone());
                 }
                 Live::Unread => all_read = false,
-                Live::Present(_) | Live::Absent => {}
+                Live::Present(_) | Live::Absent | Live::Unserved => {}
             }
         }
         let reported = self.rerun_failed(&failed);

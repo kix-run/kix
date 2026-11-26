@@ -87,6 +87,9 @@ pub(crate) struct ActivationRecord {
     /// applied, read from the record's `status.partial` when the run began.
     /// [`DeployRecord::end_partial`] adds them to this run's.
     earlier_only: std::sync::Mutex<Vec<String>>,
+    /// Whether [`DeployRecord::write_applied`] has carried the old
+    /// revisions' hashes into the run's revisions.
+    carried: std::sync::atomic::AtomicBool,
 }
 
 impl ActivationRecord {
@@ -96,6 +99,7 @@ impl ActivationRecord {
             config,
             recorded_kept: std::sync::Mutex::new(None),
             earlier_only: std::sync::Mutex::new(Vec::new()),
+            carried: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -159,14 +163,44 @@ impl ActivationRecord {
     ///
     /// Every run sends the creates, so a run that takes over or continues a
     /// record creates what an earlier run of it did not.
-    async fn create_revisions(&self) -> Result<(), RecordWriteError> {
+    ///
+    /// A revision that exists and that no record of `records` names was left
+    /// by a run that stopped, or by a cleanup that failed. Its
+    /// `status.applied` describes that run's objects, so it is cleared.
+    async fn create_revisions(&self, records: &Records) -> Result<(), RecordWriteError> {
         let (Some(_), Some(set)) = (&self.config.name, &self.config.revisions) else {
             return Ok(());
         };
         let store = Revisions::new(self.resources.client());
-        futures::future::try_join_all(set.all().map(|revision| store.create(revision)))
-            .await
-            .map_err(RecordWriteError::Revisions)?;
+        let store = &store;
+        let created = futures::future::try_join_all(set.all().map(|revision| async move {
+            Ok::<_, super::super::revision::RevisionError>((
+                revision,
+                store.create(revision).await?,
+            ))
+        }))
+        .await
+        .map_err(RecordWriteError::Revisions)?;
+        let existing: Vec<&Revision> = created
+            .into_iter()
+            .filter(|(_, c)| *c == super::super::revision::Created::Exists)
+            .map(|(r, _)| r)
+            .collect();
+        if existing.is_empty() {
+            return Ok(());
+        }
+        let named = keep::named_by(
+            &records
+                .of_cluster(self.resources.cluster())
+                .await
+                .map_err(RecordWriteError::Records)?,
+        );
+        for revision in existing.into_iter().filter(|r| !named.contains(&r.name)) {
+            store
+                .clear_applied(&revision.name)
+                .await
+                .map_err(RecordWriteError::Revisions)?;
+        }
         Ok(())
     }
 
@@ -191,7 +225,7 @@ impl ActivationRecord {
             return Ok(None);
         };
         let store = Revisions::new(self.resources.client());
-        let wanted: HashSet<&ResourceId> = left.orphans.iter().collect();
+        let wanted: HashSet<&ResourceId> = left.orphans.iter().chain(left.never_pruned).collect();
         let mut objects: Vec<RevisionObject> = left
             .manifests
             .iter()
@@ -199,6 +233,7 @@ impl ActivationRecord {
             .filter_map(RevisionObject::of_manifest)
             .collect();
         let kept = &self.config.kept_orphans;
+        objects.extend(kept.unknown.iter().cloned());
         if kept.carry_current || !kept.unexamined.is_empty() {
             let earlier = match current.and_then(|c| c.revisions.as_ref()) {
                 None => None,
@@ -321,7 +356,7 @@ impl DeployRecord for ActivationRecord {
         // names only revisions that exist. A failure stops the run before
         // anything is applied, and leaves the record as it was.
         self.create_record(name, &records).await?;
-        self.create_revisions().await?;
+        self.create_revisions(&records).await?;
         let map = self.config.revisions.as_ref().map(RevisionMap::of);
         let earlier = records
             .begin_deploy(name, self.resources.cluster(), 1, map.as_ref())
@@ -392,7 +427,12 @@ impl DeployRecord for ActivationRecord {
 
     async fn write_applied(&self) -> Result<(), RecordWriteError> {
         let applied = self.resources.take_applied();
-        if applied.is_empty() {
+        // A run that names revisions carries the old revisions' hashes into
+        // them once, even when it applied nothing.
+        let carry = self.config.name.is_some()
+            && self.config.revisions.is_some()
+            && !self.carried.swap(true, std::sync::atomic::Ordering::SeqCst);
+        if applied.is_empty() && !carry {
             return Ok(());
         }
         let records = self
@@ -403,7 +443,9 @@ impl DeployRecord for ActivationRecord {
         let client = self.resources.client();
         let work = async {
             let state = keep::State::read(client, &records, self.resources.cluster()).await?;
-            let needed = state.needed()?;
+            // A record whose map this Kix cannot read names revisions it
+            // cannot see, which then get no hashes. The others still do.
+            let needed = state.needed_readable();
             let listed = &state.revisions.readable;
             let kept: Vec<&Revision> = listed.iter().filter(|r| needed.contains(&r.name)).collect();
             let replaced = self.replaced(state.current(), listed);
@@ -537,6 +579,7 @@ mod tests {
 
     const NONE_LEFT: Left<'static> = Left {
         orphans: &[],
+        never_pruned: &[],
         manifests: &[],
     };
 
@@ -1181,6 +1224,7 @@ mod tests {
                 false,
                 Left {
                     orphans: &orphans,
+                    never_pruned: &[],
                     manifests: &manifests,
                 },
             )
@@ -1199,6 +1243,7 @@ mod tests {
                 false,
                 Left {
                     orphans: &orphans[..1],
+                    never_pruned: &[],
                     manifests: &manifests,
                 },
             )
@@ -1253,6 +1298,7 @@ mod tests {
                 false,
                 Left {
                     orphans: &orphans,
+                    never_pruned: &[],
                     manifests: &manifests,
                 },
             )
@@ -1312,6 +1358,7 @@ mod tests {
                     false,
                     Left {
                         orphans: &orphans,
+                        never_pruned: &[],
                         manifests: &manifests,
                     },
                 )
@@ -1510,6 +1557,163 @@ mod tests {
             assert_eq!(applied_of(&api, &failed.instances["app/web"]), expected);
             assert!(applied_of(&api, &gone.instances["app/web"]).is_empty());
             assert_eq!(status_writes(&api), 2);
+        }
+
+        /// A run that applied nothing, such as an operator deploy whose
+        /// build only removed an object, still carries the old revision's
+        /// hashes into the revision that replaces it.
+        #[tokio::test]
+        async fn a_run_that_applied_nothing_carries_the_hashes_of_unchanged_objects() {
+            let (x, y) = (object("x", "app", "x"), object("y", "app", "y"));
+            let mut old = build("1");
+            old.instances
+                .insert("app/web".into(), web_revision(vec![x.clone(), y.clone()]));
+            let mut new = old.clone();
+            new.instances
+                .insert("app/web".into(), web_revision(vec![x.clone()]));
+            let api = FakeApi::new([
+                activation("old", "Active", Some(&RevisionMap::of(&old))),
+                activation("new", "Deploying", None),
+            ]);
+            let store = Revisions::new(&api.client());
+            for revision in old.all() {
+                store.create(revision).await.unwrap();
+            }
+            store
+                .write_applied(
+                    &old.instances["app/web"].name,
+                    &BTreeMap::from([(x.hash.clone(), "hx".to_string())]),
+                )
+                .await
+                .unwrap();
+            let committed = lock(&api, "old").await;
+            committed.commit("old").await.unwrap();
+            committed.release().await.unwrap();
+
+            let run = run(&api, "new", Some(new.clone()), None).await;
+            run.begin().await.unwrap();
+            run.write_applied().await.unwrap();
+            assert_eq!(
+                applied_of(&api, &new.instances["app/web"]),
+                BTreeMap::from([(x.hash.clone(), "hx".to_string())])
+            );
+        }
+
+        /// A revision that exists when a run creates it, and that no record
+        /// names, was left by a run that stopped or a cleanup that failed.
+        /// The run clears its applied hashes, which describe that run's
+        /// objects. A revision a record names keeps its hashes.
+        #[tokio::test]
+        async fn a_revision_no_record_names_is_adopted_without_its_hashes() {
+            let set = build("1");
+            let mut current = build("1");
+            current.instances.insert(
+                "app/web".into(),
+                web_revision(vec![object("c", "app", "c")]),
+            );
+            let api = FakeApi::new([
+                activation("cur", "Active", Some(&RevisionMap::of(&current))),
+                activation("new", "Deploying", None),
+            ]);
+            let store = Revisions::new(&api.client());
+            let left = &set.instances["app/web"];
+            let named = &set.instances["data/db"];
+            for revision in [left, named] {
+                store.create(revision).await.unwrap();
+                store
+                    .write_applied(
+                        &revision.name,
+                        &BTreeMap::from([("h".to_string(), "stale".to_string())]),
+                    )
+                    .await
+                    .unwrap();
+            }
+            // `cur` names the db revision too: the instance did not change.
+            assert_eq!(current.instances["data/db"].name, named.name);
+
+            run(&api, "new", Some(set.clone()), None)
+                .await
+                .begin()
+                .await
+                .unwrap();
+            assert!(applied_of(&api, left).is_empty());
+            assert_eq!(applied_of(&api, named).len(), 1);
+        }
+
+        /// A record whose map this Kix cannot read names revisions it cannot
+        /// see. The run still writes its applied hashes to the revisions the
+        /// other records name.
+        #[tokio::test]
+        async fn an_unreadable_record_does_not_stop_the_applied_hashes() {
+            let api = FakeApi::new([
+                activation("newer", "Failed", None),
+                activation("one", "Deploying", None),
+            ]);
+            api.patch_object("Activation", "newer", |o| {
+                o["status"]["revisions"] = json!({ "format": 99 });
+            });
+            let set = build("1");
+            let run = run(&api, "one", Some(set.clone()), None).await;
+            run.begin().await.unwrap();
+            let web = object("1", "app", "web");
+            run.resources.note_applied(&manifest(&web), "w1".into());
+            run.write_applied().await.unwrap();
+            assert_eq!(
+                applied_of(&api, &set.instances["app/web"]),
+                BTreeMap::from([(web.hash.clone(), "w1".to_string())])
+            );
+        }
+
+        /// An orphan of a kind Kix never prunes, such as a Namespace, is
+        /// named by the kept-orphans revision, so later reports list it.
+        #[tokio::test]
+        async fn the_kept_orphans_revision_names_what_kix_never_prunes() {
+            let api = FakeApi::new([activation("one", "Deploying", None)]);
+            let namespace = json!({
+                "apiVersion": "v1",
+                "kind": "Namespace",
+                "metadata": {
+                    "name": "old-ns",
+                    "annotations": { (keys::IDENTITY_HASH): format!("{:a>32}", "n") },
+                },
+            });
+            let manifests = [left_manifest("stale", "1"), namespace.clone()];
+            let lock = lock(&api, "one").await;
+            let one = run(&api, "one", Some(build("1")), Some(lock.clone())).await;
+            one.begin().await.unwrap();
+            one.finalize(
+                false,
+                Left {
+                    orphans: &[],
+                    never_pruned: &[ResourceId::from_value(&namespace)],
+                    manifests: &manifests,
+                },
+            )
+            .await
+            .unwrap();
+            lock.release().await.unwrap();
+            assert_eq!(kept_objects(&api, "one"), ["old-ns"]);
+        }
+
+        /// The objects a plan could not find out about, because the cluster
+        /// does not serve their kind, keep their place in the kept-orphans
+        /// revision.
+        #[tokio::test]
+        async fn the_kept_orphans_revision_names_what_the_plan_could_not_read() {
+            let api = FakeApi::new([activation("one", "Deploying", None)]);
+            let lock = lock(&api, "one").await;
+            let mut one = run(&api, "one", Some(build("1")), Some(lock.clone())).await;
+            one.config.kept_orphans.unknown = vec![RevisionObject {
+                hash: format!("{:a>32}", "w"),
+                group: "example.com".into(),
+                kind: "Widget".into(),
+                namespace: Some("app".into()),
+                name: "unserved".into(),
+            }];
+            one.begin().await.unwrap();
+            one.finalize(false, NONE_LEFT).await.unwrap();
+            lock.release().await.unwrap();
+            assert_eq!(kept_objects(&api, "one"), ["unserved"]);
         }
     }
 }

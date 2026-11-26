@@ -234,6 +234,10 @@ pub(crate) struct Left<'a> {
     /// Each orphan the run did not delete, leaving out the kinds Kix never
     /// prunes.
     pub(crate) orphans: &'a [ResourceId],
+    /// Each orphan of a kind Kix never prunes (`lifecycle::never_pruned`).
+    /// The kept-orphans revision names them so reports can list them, and
+    /// they leave `status.orphansKeptFrom` alone.
+    pub(crate) never_pruned: &'a [ResourceId],
     /// The manifests the run's orphans came from: the earlier builds for the
     /// CLI, the live objects for the operator.
     pub(crate) manifests: &'a [Value],

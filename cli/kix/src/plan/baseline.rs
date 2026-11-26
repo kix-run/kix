@@ -287,6 +287,7 @@ impl Baseline {
                 .chain(unexamined_active)
                 .collect(),
             carry_current: false,
+            unknown: Vec::new(),
         }
     }
 
@@ -688,6 +689,10 @@ pub struct KeptBaseline {
     /// Kix cluster is read from revisions. `closures` then holds one closure
     /// of the ones still on the cluster.
     pub listed: Option<Vec<crate::cluster::revision::RevisionObject>>,
+    /// The objects of `listed` that the read could not find out about,
+    /// because the cluster does not serve their kind or this account may
+    /// not read it. They are not known to be gone.
+    pub unknown: HashSet<ResourceId>,
 }
 
 /// Call [`load_failed`] unless another deploy of `cluster` is still running
@@ -1308,10 +1313,17 @@ pub async fn kept_of(
     let listed = LiveObjects::list(client, discovery, &ids)
         .await
         .map_err(|e| PlanError::Reconstruct(e.to_string()))?;
-    let present = ids.iter().filter_map(|rid| match listed.get(rid) {
-        Live::Present(obj) => Some(obj.clone()),
-        Live::Absent | Live::Unread => None,
-    });
+    let mut present = Vec::new();
+    let mut unknown = HashSet::new();
+    for rid in &ids {
+        match listed.get(rid) {
+            Live::Present(obj) => present.push(obj.clone()),
+            Live::Unserved | Live::Unread => {
+                unknown.insert(rid.clone());
+            }
+            Live::Absent => {}
+        }
+    }
     let manifests = owned_view::kix_owned_manifests_against(present, built);
     Ok(KeptBaseline {
         closures: if manifests.is_empty() {
@@ -1320,6 +1332,7 @@ pub async fn kept_of(
             vec![manifests]
         },
         listed: Some(objects.into_iter().cloned().collect()),
+        unknown,
         ..KeptBaseline::default()
     })
 }
@@ -1693,6 +1706,7 @@ mod tests {
             sources: vec![source("v1")],
             unresolved: vec![source("elsewhere")],
             listed: None,
+            unknown: HashSet::new(),
         };
         let v3 = vec![m("Deployment", "web", "h4")];
         let got = baseline(
@@ -1713,6 +1727,7 @@ mod tests {
             sources: vec![source("v1")],
             unresolved: vec![],
             listed: None,
+            unknown: HashSet::new(),
         };
         let got = baseline(
             active("v2", vec![source("v1")]),

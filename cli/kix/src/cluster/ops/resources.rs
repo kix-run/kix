@@ -1,6 +1,6 @@
 //! [`ResourceIo`] against a real cluster.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -73,18 +73,22 @@ pub(crate) enum Force {
     None,
     /// Every apply (`--force-conflicts`).
     All,
-    /// The applies of these objects: the ones the plan labels as reverting
-    /// drift.
-    Only(HashSet<ResourceId>),
+    /// The applies of these objects, the ones the plan labels as reverting
+    /// drift, each while the object still has the `resourceVersion` the plan
+    /// read.
+    Only(HashMap<ResourceId, String>),
 }
 
 impl Force {
-    /// Return whether the apply of `rid` takes ownership.
-    pub(crate) fn of(&self, rid: &ResourceId) -> bool {
+    /// Return whether and when the apply of `rid` takes ownership.
+    pub(crate) fn of(&self, rid: &ResourceId) -> apply::Takeover {
         match self {
-            Force::None => false,
-            Force::All => true,
-            Force::Only(ids) => ids.contains(rid),
+            Force::None => apply::Takeover::No,
+            Force::All => apply::Takeover::Always,
+            Force::Only(ids) => match ids.get(rid) {
+                Some(version) => apply::Takeover::IfUnchangedSince(version.clone()),
+                None => apply::Takeover::No,
+            },
         }
     }
 }
@@ -964,12 +968,6 @@ mod discovery_tests {
     /// still stops the deploy.
     #[tokio::test]
     async fn only_the_objects_that_revert_drift_are_applied_with_force() {
-        let api = FakeApi::new([]);
-        let client = api.client();
-        let discovery = discovery::discover_resources(&client).await.unwrap();
-        let (ar, scope) = discovery::find(&discovery, "", "ConfigMap")
-            .unwrap()
-            .clone();
         let config_map = |name: &str| {
             json!({
                 "apiVersion": "v1",
@@ -977,13 +975,23 @@ mod discovery_tests {
                 "metadata": { "name": name, "namespace": "app" },
             })
         };
+        let api = FakeApi::new([config_map("drifted"), config_map("other")]);
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let (ar, scope) = discovery::find(&discovery, "", "ConfigMap")
+            .unwrap()
+            .clone();
         let drifted = ResourceId::from_value(&config_map("drifted"));
+        let version = api.object("ConfigMap", "drifted").unwrap()["metadata"]["resourceVersion"]
+            .as_str()
+            .unwrap()
+            .to_string();
         let ops = KubeResources::new(
             client,
             discovery,
             "a".into(),
             None,
-            Force::Only([drifted].into()),
+            Force::Only([(drifted, version)].into()),
         );
         for name in ["drifted", "other"] {
             ops.apply_as(&ar, scope.clone(), &config_map(name))

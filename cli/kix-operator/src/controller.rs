@@ -348,6 +348,9 @@ fn operator_error(e: LivePlanError) -> OperatorError {
         LivePlanError::Graph(_) | LivePlanError::Marker(_) => {
             OperatorError::GraphError(e.to_string())
         }
+        LivePlanError::Tenancy(_) | LivePlanError::ReadForbidden(_) => {
+            OperatorError::ReconcileError(e.to_string())
+        }
     }
 }
 
@@ -881,6 +884,14 @@ async fn run_locked(
     for s in plan.shared_orphans() {
         tracing::info!(name, resource = %s.rid, clusters = ?s.clusters, "prune: {}", s.describe());
     }
+    // The recorder counts a repeated Event on one Event, so a drift left in
+    // place adds one Event, not one for every requeue.
+    let events = K8sEventObserver::new(ctx.events.clone(), activation, keys::API_VERSION);
+    for drift in plan.drift_not_reverted() {
+        let message = drift_not_reverted_message(drift);
+        tracing::warn!(name, resource = %drift.rid, "{message}");
+        events.warn_now("DriftNotReverted", &message).await;
+    }
 
     tracing::info!(
         name,
@@ -1047,6 +1058,24 @@ async fn after_failed_attempt(
             .await;
     }
     Err(OperatorError::ReconcileError(cause.to_string()))
+}
+
+/// Return the message for a drifted object the operator leaves as it is.
+fn drift_not_reverted_message(drift: &kix::plan::live::DriftNotReverted) -> String {
+    let resource = drift.rid.display_id();
+    let owners = if drift.owners.is_empty() {
+        "another field manager now owns fields".to_string()
+    } else {
+        let named: Vec<String> = drift
+            .owners
+            .iter()
+            .map(|o| format!("{} now owns {}", o.manager, o.fields.join(", ")))
+            .collect();
+        named.join("; ")
+    };
+    format!(
+        "{resource} changed on the cluster since Kix applied it: {owners}. The Kix operator never takes fields from another field manager, so it left {resource} as it is. Run `kix deploy` to take the fields back, or declare them with `ownership.cede` if that manager is meant to own them."
+    )
 }
 
 /// Return what stopped a run: the first object that failed and why, or the
