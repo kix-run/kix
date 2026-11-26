@@ -1,0 +1,3 @@
+# 2026-11-26 · `kix/lib/core/resource.nix` · A CustomResourceDefinition's manifest does not say which workload handles its kind.
+
+`controller` on `scope.mkCRD` reaches only the custom resources Kix builds, as `controller:` entries. The CRD manifest carries nothing. So the plan's warning about objects a prune leaves behind (`cluster::left_behind`) fires only when the definition itself leaves the build. It stays silent when a controller leaves while its CRDs stay, for example when the CRDs come from a separate package. It also cannot say "the controller of this kind is being removed", only that the definition leaves. Writing the controller on the CRD as a dependency would make a cycle with workloads that `requires` their CRDs, so it would need a plain annotation.
