@@ -66,9 +66,12 @@ themselves.
 
 ## 2. Decision 4: the DNS provider publishes its peers
 
-**Decision.** The instance claiming the `dns` role exports its DNS endpoints as
-`out.dnsPeers`, and both renderers build `dnsEgressRule` from that list instead
-of hard-coding `k8s-app: kube-dns`.
+**Decision.** The package that claims the `dns` role declares its DNS endpoints
+under one key, `meta.dnsPeers`, and Kix reads the provider's metadata without
+evaluating the instance. Both renderers build `dnsEgressRule` from that list
+instead of hard-coding `k8s-app: kube-dns`. The standard renderer accepts both
+pod and `cidr` peers, and the Cilium renderer refuses `cidr` peers until a
+platform that runs Cilium needs one.
 
 ```nix
 # kix/lib/flavors/gke.nix
@@ -84,24 +87,41 @@ platform-dns = platformDns {
 };
 ```
 
-`peers` defaults to `k8s-app: kube-dns` in `kube-system`, so existing clusters
-produce identical manifests. The `coredns` package exports its own pod
-selector, and the `cilium` package's cluster-wide DNS policy reads the same
-`out.dnsPeers` value.
+A platform import uses the same `meta.dnsPeers` key: `kix.mkImport` takes a
+`dnsPeers` argument and stores it in the import's metadata, and the flavors'
+`platform-dns` helper passes its `peers` argument to `dnsPeers`. `peers`
+defaults to `k8s-app: kube-dns` in `kube-system`, so existing clusters produce
+identical manifests. A pod peer without `namespace` means the provider
+instance's own namespace. The `coredns` package declares
+`meta.dnsPeers = [ { podSelector."k8s-app" = "kube-dns"; } ]` and therefore no
+longer has to run in `kube-system`. The `cilium` package's cluster-wide DNS
+policy reads the same `meta.dnsPeers` value.
 
 The GKE flavors list all four documented GKE DNS destinations. Any single GKE
 cluster uses only one or two of them, and rules for absent peers open nothing
 beyond port 53 on `169.254.169.254/32`, avoiding a separate per-cluster DNS
-mode setting.
+mode setting. The list must hold both the `node-local-dns` pod selector (GKE
+Standard: V, F20) and `169.254.20.10/32` (GKE Autopilot: V, N5), because
+neither works on the other: on Autopilot, pods send DNS to `169.254.20.10` and
+the `node-local-dns` pods run on the host network, where pod selectors do not
+match them.
 
 | DNS peer | Evidence |
 |---|---|
 | `kube-dns` pods (without NodeLocal DNSCache) | **A:** the `kube-dns` Service uses these labels (F20), though this path was not tested live |
-| `node-local-dns` pods | V (F20) |
-| `169.254.169.254` and `169.254.20.10` (Cloud DNS) | D [g-clouddns]. **A** that `ipBlock` rules reach them; requires testing on GKE Autopilot |
+| `node-local-dns` pods | V (F20) on GKE Standard; fails on GKE Autopilot (0 of 3; V, N5) |
+| `169.254.20.10` (NodeLocal DNSCache link-local address) | V (N5) on GKE Autopilot: under default-deny egress, only an `ipBlock` for `169.254.20.10/32` on UDP and TCP 53 lets DNS through (3 of 3); the `kube-dns` pod selector, the `node-local-dns` pod selector, an `ipBlock` for the node range, and an `ipBlock` for the `kube-dns` Service address each fail (0 of 3) |
+| `169.254.169.254` (Cloud DNS without NodeLocal DNSCache) | D [g-clouddns]; untested (**A**) |
 | EKS CoreDNS pods | D [a-bp] |
 
-**Cost.** One additional field (`out.dnsPeers`) on the `dns` role's `out`.
+**Cost.** One additional metadata field (`meta.dnsPeers`) on providers of the
+`dns` role.
 
-**Rejected.** *Allow outbound port 53 to any IP address.* Unrestricted DNS
-egress is a well-known data exfiltration channel.
+**Rejected.**
+
+- *Publish DNS peers through `out`.* Policy generation cannot read a managed
+  provider's `out` because evaluating the instance forces its parts, and the
+  policies for those parts need the DNS peers. On a cluster that deploys the
+  `coredns` package, that cycle causes infinite recursion.
+- *Allow outbound port 53 to any IP address.* Unrestricted DNS egress is a
+  well-known data exfiltration channel.
