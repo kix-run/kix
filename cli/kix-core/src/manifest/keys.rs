@@ -196,6 +196,18 @@ pub const DEPENDS_ON: &str = key!("depends-on");
 /// Readiness rule for a custom resource, as JSON.
 pub const READINESS: &str = key!("readiness");
 
+/// JSON on a ServiceAccount with a cloud identity: the mechanism that
+/// delivers it (`mechanism`) and the identity under its cloud's key (`aws`,
+/// `gcp`, or `azure`). `kix list resources` reads it to list the
+/// ServiceAccounts a cloud must trust.
+pub const CLOUD_IDENTITY: &str = key!("cloud-identity");
+
+/// JSON on a Deployment, StatefulSet, or DaemonSet whose pods use a
+/// ServiceAccount with a cloud identity: the environment variables the
+/// identity's platform adds to each container, with their expected values.
+/// The deploy checks the workload's new pods against it.
+pub const CLOUD_IDENTITY_ENV: &str = key!("cloud-identity-env");
+
 /// `"true"` or `"false"`: whether removing the object can lose data. The
 /// library writes it from the kind's `holdsData` declaration, or for a
 /// PersistentVolumeClaim, a PersistentVolume, or a StatefulSet with claim

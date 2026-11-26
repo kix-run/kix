@@ -1,5 +1,42 @@
 {
   "$defs": {
+    "CloudIdentity": {
+      "description": "A ServiceAccount with a cloud identity, read from the cloud identity\nrecord Kix writes on it.",
+      "properties": {
+        "cloud": {
+          "description": "`aws`, `gcp`, or `azure`.",
+          "type": "string"
+        },
+        "identity": {
+          "additionalProperties": true,
+          "description": "The identity's fields as the definition gives them, such as\n`roleArn` for AWS, `serviceAccount` for Google Cloud (absent when\nroles are granted to the Kubernetes ServiceAccount itself), or\n`clientId` and `tenantId` for Azure.",
+          "type": "object"
+        },
+        "mechanism": {
+          "description": "How the cluster delivers the identity: `irsa`, `eks-pod-identity`,\n`gke`, or `azure-workload-id`.",
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "serviceAccount": {
+          "type": "string"
+        },
+        "subject": {
+          "description": "`system:serviceaccount:<namespace>:<name>`, the subject of the\nServiceAccount's token. An AWS role's trust policy and an Azure\nfederated credential name it. Google Cloud names the same pair as\n`ns/<namespace>/sa/<name>` in its own member strings.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "namespace",
+        "serviceAccount",
+        "cloud",
+        "mechanism",
+        "identity",
+        "subject"
+      ],
+      "type": "object"
+    },
     "InspectNamespace": {
       "description": "One namespace of [`InspectResponse`], as JSON shows it.",
       "properties": {
@@ -42,6 +79,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "A cluster's rendered resources by namespace and kind.",
   "properties": {
+    "cloudIdentities": {
+      "description": "The ServiceAccounts that carry a cloud identity, in namespace and\nname order. Each is a subject that the cloud side must trust or bind.",
+      "items": {
+        "$ref": "#/$defs/CloudIdentity"
+      },
+      "type": "array"
+    },
     "cluster": {
       "type": "string"
     },
@@ -71,7 +115,8 @@
     "cluster",
     "totalResources",
     "namespaces",
-    "kindCounts"
+    "kindCounts",
+    "cloudIdentities"
   ],
   "title": "InspectResponse",
   "type": "object"

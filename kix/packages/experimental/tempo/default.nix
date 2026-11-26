@@ -404,6 +404,8 @@ in
           dep = storageCredentials;
           arg = "storageCredentials";
           cloud = if objectStorageOn && !inClusterStore then "aws" else null;
+          # The package writes only S3 storage settings.
+          supportedClouds = [ "aws" ];
         };
         identity = access.identity;
 

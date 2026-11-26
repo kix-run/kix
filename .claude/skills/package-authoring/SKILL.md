@@ -483,10 +483,10 @@ The only place in this skill with package line numbers. `pkg:N` is
 | `mergeArgs` with a flag and its value as two words, written as a list item of `flags` | `clickhouse-logs/vector-agent.nix`:213-229; several values, spegel:301-303 |
 | `mergeArgs` on an attribute set of flags | victoria-metrics-agent:189-210 |
 | `argValues` to read what `extraArgs` gives a flag | external-dns:441; reloader:106-110 |
-| `mergeGuarded` on `settings` or `extraSpec` | tempo:489; cnpg-cluster:418, 565, 680 |
+| `mergeGuarded` on `settings` or `extraSpec` | tempo:491; cnpg-cluster:420, 567, 682 |
 | Migrations at start: Recreate, deadline from `startupSeconds`, probes | metabase:94-97, 252-256, 284-304 |
 | Config injection into a dependency | metabase:109-112; stackgres-database:120-125; cnpg-database:94-115 |
-| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:553; keycloak:566; tempo:788 |
+| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:553; keycloak:566; tempo:790 |
 | `pick` as an option default with `defaultText` | `cnpg-cluster/options.nix`:12-18 |
 | `pick` inline, header names the instance override (O19) | keycloak:256, header 74-76 |
 | `atLeast` | valkey:122 |
@@ -505,23 +505,26 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Migrations in an init container sharing the server's env and mounts (`kix.withMountsOn [ "migrate" "plausible" ]`) | plausible:620-626, 693; vaultwarden:180-202, 277 |
 | One volume written by an init container and read by the main containers (two mount records, one `readOnly`) | n8n:499-513, 679-680 |
 | Literal credentials refused in `env` | plausible:338-358 |
-| Config-derived egress (a port read from config) through `kix.operandPolicy` | plausible:712-737; cnpg-cluster:474-490, 759-778 |
+| Config-derived egress (a port read from config) through `kix.operandPolicy` | plausible:712-737; cnpg-cluster:476-492, 761-780 |
 | A step after the migrations on one replica of a dependency: an init container running a sibling script from a ConfigMap, with a checksum annotation | plausible:518-561, 605-606; `plausible/replicate.py` |
 | One alias, two implementations, a contract file | `kix/contracts/experimental/clickhouse.nix`; clickhouse:101, clickhouse-cluster:90 |
 | Renamed dependency with `renamedFrom` | immich:209-212; `kix/contracts/stable/redis.nix` (`helpers.renamedFrom`) |
 | Credentials dependency accepting either a Secret or a cloud identity (`kix.cloudIdentity.use` and `credentials.bind`) | external-dns:164-169, 608-615; `providers.nix` (`cloud`) |
-| Cloud identity when one package owns the ServiceAccount and another chooses the cloud (`kix.cloudIdentity.useIdentity`, `ambientProblem`, `out.identityCloud`, `out.ambientCloud`) | `cert-manager/common.nix`:44-59, `cert-manager/controller.nix`:18, 256, cert-manager:405 (`useIdentity`, `out.identityCloud`); cluster-issuer:138-184, 357-375 (`ambientProblem` per solver without credential fields), 388-394 (`use` with `cloud = null` and `identityGoesTo`); `kix/lib/tests/units/cloud-identity.nix` (`holderPackage`, `callerPackage`, `storagePackage`, `databasePackage`); publishing `out.ambientCloud` from an upstream spec field: stackgres-object-storage:138-158, 346-368, 469; `useIdentity` and `annotationsFor` for an operator-created ServiceAccount, locked in `extraSpec`: stackgres-cluster:232-237, 319-351, 410-425 |
-| Cloud identity on a ServiceAccount created by an operator (`kix.cloudIdentity.annotationsFor`, written to the custom resource and locked against `extraSpec`) | cnpg-cluster:359-385, 635-642 |
+| Cloud identity when one package owns the ServiceAccount and another chooses the cloud (`kix.cloudIdentity.useIdentity`, `ambientProblem`, `out.identityCloud`, `out.ambientCloud`) | `cert-manager/common.nix`:44-59, `cert-manager/controller.nix`:18, 256, cert-manager:408 (`useIdentity`, `out.identityCloud`); cluster-issuer:142-188, 361-379 (`ambientProblem` per solver without credential fields), 392-398 (`use` with `cloud = null` and `identityGoesTo`); `kix/lib/tests/units/cloud-identity.nix` (`holderPackage`, `callerPackage`, `storagePackage`, `databasePackage`); publishing `out.ambientCloud` from an upstream spec field: stackgres-object-storage:139-159, 347-369, 470; `useIdentity` and `annotationsFor` for an operator-created ServiceAccount, locked in `extraSpec`: stackgres-cluster:233-238, 320-352, 411-426 |
+| Cloud identity on a ServiceAccount created by an operator (`kix.cloudIdentity.annotationsFor`, written to the custom resource and locked against `extraSpec`) | cnpg-cluster:359-387, 637-644 |
 
 Always declare a cloud identity dependency on the package that owns the
 ServiceAccount, because a ServiceAccount carries a single identity:
 
-- `kix.cloudIdentity.use { inherit scope dep cloud; arg; identityGoesTo ? null; }`:
+- `kix.cloudIdentity.use { inherit scope dep cloud; arg; identityGoesTo ? null; supportedClouds ? null; }`:
   unpacks a dependency that accepts a Secret or (when `cloud` is `"aws"`,
   `"gcp"`, or `"azure"`) a cloud identity, such as `external-dns`. When
   `cloud` is `null` because another package owns the ServiceAccount, pass
   `identityGoesTo` naming that instance's identity dependency so the error's
-  fix points there.
+  fix points there. When no `config` can make the package call another
+  cloud, pass `supportedClouds` (such as `[ "aws" ]` in `tempo` and
+  `cnpg-cluster`), so the refusal of another cloud's identity says the
+  package does not support it instead of suggesting a `config` change.
 - `kix.cloudIdentity.useIdentity { inherit scope dep secretGoesTo; arg; cloud ? ...; }`:
   unpacks an optional cloud identity on a package that owns the ServiceAccount
   while another package chooses the cloud and accepts any Secret (`secretGoesTo`

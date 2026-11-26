@@ -13,6 +13,7 @@
 
 mod declared;
 mod deletion;
+mod identity;
 mod imports;
 mod terminal;
 #[cfg(test)]

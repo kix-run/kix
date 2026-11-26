@@ -143,7 +143,8 @@ let
   # provider (`{ ns; inst; out; }`, or null). Return `{ problem; }` with a
   # `{ message; fix; }` when the cluster cannot deliver it, or the
   # ServiceAccount annotations (with `kix.run/cloud-identity`), the pod
-  # labels, and the restart stamp.
+  # labels, the restart stamp, and the mechanism's facts about pods
+  # (`podEnv`, `podEnvFix`, `servesHostNetwork`, and its `description`).
   render =
     { identity, provider }:
     let
@@ -197,6 +198,10 @@ let
         };
         inherit (rendered) podLabels;
         stamp = builtins.hashString "sha256" recordJson;
+        podEnv = rendered.podEnv or { };
+        podEnvFix = rendered.podEnvFix or null;
+        servesHostNetwork = rendered.servesHostNetwork or true;
+        inherit (mechanism) description;
       };
 
   # Return what is wrong with cloud identity `dep` for software that calls
@@ -247,7 +252,11 @@ let
   # (`"aws"`, `"gcp"`, `"azure"`), or null when it takes no cloud identity.
   # `identityGoesTo` names where this cluster takes the identity instead,
   # such as the dependency of another instance that owns the
-  # ServiceAccount, for the fix when `cloud` is null.
+  # ServiceAccount, for the fix when `cloud` is null. `supportedClouds`
+  # lists every cloud the package can call in any configuration, or is null
+  # when its `config` can choose any of them. An identity for a cloud
+  # outside that list is refused with a message that says the package does
+  # not support that cloud, and suggests no change of `config`.
   # Return `{ secret; identity; bind; }`: one of `secret` and `identity` is
   # the dependency and the other is null, and `bind` adds the identity to
   # ServiceAccount arguments. The scope's `sealResource` renders it through
@@ -262,6 +271,7 @@ let
       dep,
       cloud,
       identityGoesTo ? null,
+      supportedClouds ? null,
       arg ? null,
     }:
     let
@@ -280,10 +290,20 @@ let
               identityGoesTo != null
             ) " To authenticate with this cloud identity, move it to ${identityGoesTo}.";
         };
-        mismatch = m: {
-          message = "${words.This} is set to `${m.given} { ... }` (${m.givenCloud}), but this instance is configured to call ${m.wantedCloud}. Kix rejected the cloud identity.";
-          fix = "Set ${words.this} to `${m.wanted} { ... }` or a Secret instance (`ref.<namespace>.<instance>`) with ${m.wantedCloud} credentials, or change this instance's `config` to use ${m.givenCloud}.";
-        };
+        mismatch =
+          m:
+          if supportedClouds != null && !(builtins.elem dep.cloud supportedClouds) then
+            {
+              message = "${words.This} is set to `${m.given} { ... }` (${m.givenCloud}), but this package can call only ${
+                lib.concatMapStringsSep " or " (c: clouds.${c}) supportedClouds
+              }. It does not support ${m.givenCloud} yet, so Kix rejected the cloud identity.";
+              fix = "Set ${words.this} to `${m.wanted} { ... }` or a Secret instance (`ref.<namespace>.<instance>`) with ${m.wantedCloud} credentials.";
+            }
+          else
+            {
+              message = "${words.This} is set to `${m.given} { ... }` (${m.givenCloud}), but this instance is configured to call ${m.wantedCloud}. Kix rejected the cloud identity.";
+              fix = "Set ${words.this} to `${m.wanted} { ... }` or a Secret instance (`ref.<namespace>.<instance>`) with ${m.wantedCloud} credentials, or change this instance's `config` to use ${m.givenCloud}.";
+            };
       };
     in
     if !(isIdentity dep) then
