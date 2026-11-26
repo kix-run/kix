@@ -434,7 +434,7 @@ in
       warnings =
         map (w: {
           object = { inherit (w) kind name; };
-          message = "${w.kind}/${w.name} uses hostNetwork, so CiliumNetworkPolicy does not filter its traffic.";
+          message = "${w.kind}/${w.name} uses hostNetwork, so network policy does not filter its traffic.";
           fix = "Restrict access to its ports on the node's host network.";
         }) hostNetworkWorkloads
         ++
