@@ -11,7 +11,7 @@ import eksCertManager from '/src/snippets/clusters/test-cloud-identity-eks/eksCe
 import importedStorageClass from '/src/snippets/clusters/example-import/importedStorageClass.json';
 import eksNetworkPolicy from '/src/snippets/clusters/test-netpol-eks/eksNetworkPolicy.json';
 
-Deploy a Kix cluster definition to an existing Amazon Elastic Kubernetes Service (EKS) cluster. You include `kix.flavors.eks`, bind the definition to your cluster's UID, supply a `StorageClass` for EBS volumes, create IAM roles for service accounts (IRSA) or EKS Pod Identity associations in AWS, and optionally enable network policy enforcement in the Amazon VPC CNI.
+Deploy a Kix cluster definition to an existing Amazon Elastic Kubernetes Service (EKS) cluster. This guide covers selecting `kix.flavors.eks`, binding the definition to your cluster's UID, configuring AWS IAM roles for workloads, setting up EBS storage, and turning on network policy enforcement in the Amazon VPC CNI.
 
 :::note[Helpful background]
 - [05. Basic graph and deploy loop](/docs/tutorials/05-basic-graph-and-deploy-loop/): practice checking, planning, deploying, and inspecting a cluster before connecting to EKS.
@@ -26,18 +26,18 @@ This guide assumes Kix, `kubectl`, and the AWS CLI (`aws`) are installed, and th
 
 Include `kix.flavors.eks` as the first module in `kix.buildCluster`. The flavor assumes your cluster has:
 
-- A managed control plane (`managedControlPlane = true`), multiple nodes (`multiNode = true`), privileged containers and DaemonSets enabled, and `containerd.discardUnpackedLayers = true` (matching Amazon Linux 2023 nodes).
-- Amazon VPC CNI (`cni` bound `exclusive` as `aws-vpc-cni`), CoreDNS as `kube-dns` in `kube-system` (`dns` bound `shadowable`), and classic Elastic Load Balancers built by the EKS service controller (`loadBalancer` bound `shadowable`).
-- No default `StorageClass` (`storageClasses` bound `absent`) and no Kubernetes metrics API (`metricsApi` bound `absent`). EKS registers an `v1.metrics.eks.amazonaws.com` APIService that does not serve `metrics.k8s.io`, so `kubectl top` and horizontal pod autoscaling need a deployed `metrics-server`.
+- A managed control plane (`managedControlPlane = true`), multiple nodes (`multiNode = true`), privileged containers and DaemonSets allowed, and `containerd.discardUnpackedLayers = true` (matching Amazon Linux 2023 nodes).
+- Amazon VPC CNI (`cni` role bound as `exclusive`), CoreDNS as `kube-dns` in `kube-system` (`dns` role, `shadowable`), and classic Elastic Load Balancers from the EKS service controller (`loadBalancer` role, `shadowable`).
+- No default `StorageClass` (`storageClasses` role, `absent`) and no Kubernetes metrics API (`metricsApi` role, `absent`). EKS registers a `v1.metrics.eks.amazonaws.com` APIService that does not serve `metrics.k8s.io`, so `kubectl top` and horizontal pod autoscaling require deploying `metrics-server`.
 - IAM roles for service accounts (IRSA) by default (`cluster.flavor.eks.cloudIdentity = "irsa"`), and network policy enforcement turned off (`cluster.flavor.eks.networkPolicy = "none"`).
 
 ### Size small node groups
 
-Because `kix.flavors.eks` sets `cluster.capabilities.multiNode = true` without `availabilityZones`, `cluster.availability.default` defaults to `"node"`, so packages that scale with availability run two or more replicas of each controller (for example, `cert-manager` and `external-secrets` each run six pods across three deployments). On two 2-vCPU nodes, deploying several controllers can exhaust CPU requests and leave pods `Pending`. Both `kix deploy` and `kix status` print the scheduler reason (`0/2 nodes are available: 2 Insufficient cpu`). Set `cluster.availability.default = "none";` across a small test cluster, or `availability = "none";` on individual instances, as shown in [Set the cluster availability level](/docs/how-to/platform-capabilities/set-the-cluster-availability-level/).
+`kix.flavors.eks` sets `cluster.capabilities.multiNode = true` and leaves `availabilityZones` unset, which sets `cluster.availability.default` to `"node"`. Packages that scale with availability then run at least two replicas per controller (for example, `cert-manager` and `external-secrets` each run six pods across three Deployments). On a small node group such as two 2-vCPU nodes, deploying several controllers can exhaust CPU requests and leave pods `Pending`, which `kix deploy` and `kix status` report as `0/2 nodes are available: 2 Insufficient cpu`. On small test clusters, set `cluster.availability.default = "none";` cluster-wide or `availability = "none";` on individual instances (see [Set the cluster availability level](/docs/how-to/platform-capabilities/set-the-cluster-availability-level/)).
 
 ### Bind the definition and deploy
 
-Bind every live cluster definition to its Kubernetes cluster with `cluster.kubernetes.uid` (the UID of its `kube-system` Namespace) so a wrong kubeconfig context cannot deploy this definition to another cluster.
+Bind every live cluster definition to its Kubernetes cluster with `cluster.kubernetes.uid` (the UID of the cluster's `kube-system` Namespace) so a wrong kubeconfig context cannot deploy this definition to another cluster.
 
 Read the UID from your EKS cluster:
 
@@ -47,7 +47,7 @@ Read the UID from your EKS cluster:
   ]}
 />
 
-Add the flavor and UID to your cluster file (using the sample UUID format below as an example):
+Add the flavor and your cluster's UID to your cluster file:
 
 ```nix title="clusters/eks.nix"
 { kix, packages }:
@@ -100,7 +100,7 @@ Each package's upstream documentation defines the IAM permissions its role requi
 
    Kix writes `eks.amazonaws.com/role-arn` (and `kix.run/cloud-identity`) on the `route53` ServiceAccount. When the pod starts, EKS's webhook injects `AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_REGION`, and a projected token volume.
 
-2. **Inspect the required trust values.** Run `kix list resources <cluster>` (which reads only the build, with no cluster connection needed) to print the exact Kubernetes subject and role ARN under **Cloud identities**:
+2. **Inspect the required trust values.** Run `kix list resources <cluster>` to print the Kubernetes subject and role ARN under **Cloud identities** (this reads the local build and does not connect to the cluster):
 
    {/* Output maintained by hand from clusters/test-cloud-identity-eks.nix (outside the kix-examples capture pipeline) and can drift. */}
    <Command
@@ -126,7 +126,7 @@ Each package's upstream documentation defines the IAM permissions its role requi
      ]}
    />
 
-   Create `arn:aws:iam::111122223333:role/external-dns` with a trust policy whose condition key prefix is that issuer URL without `https://` (`oidc.eks.<region>.amazonaws.com/id/<oidc-id>`) and whose `:sub` condition matches the `Subject` column from `kix list resources`:
+   Create the IAM role `arn:aws:iam::111122223333:role/external-dns` with the trust policy below. Replace `oidc.eks.<region>.amazonaws.com/id/<oidc-id>` with your issuer URL (without `https://`), and set the `:sub` condition to the `Subject` value from `kix list resources`:
 
    ```json
    {
@@ -154,7 +154,7 @@ Each package's upstream documentation defines the IAM permissions its role requi
      ]}
    />
 
-   `kix deploy` verifies that the pod received the IRSA environment variables. Because Kix cannot see whether AWS IAM accepts the role (`kix status` reports `ok` either way), check the pod log: a working role logs DNS updates such as `2 record(s) were successfully updated`, whereas a wrong `:sub` logs `Not authorized to perform sts:AssumeRoleWithWebIdentity` and missing permissions log `AccessDenied: User: arn:aws:sts::111122223333:assumed-role/<role>/... is not authorized to perform: route53:ListHostedZones`.
+   `kix deploy` verifies that the pod received the IRSA environment variables, but Kix cannot check whether AWS IAM accepts the role (`kix status` reports `ok` either way). Check the pod log to confirm: a working role logs DNS updates such as `2 record(s) were successfully updated`, a wrong `:sub` condition logs `Not authorized to perform sts:AssumeRoleWithWebIdentity`, and missing permissions log `AccessDenied: User: arn:aws:sts::111122223333:assumed-role/<role>/... is not authorized to perform: route53:ListHostedZones`.
 
 ### Set up EKS Pod Identity
 
@@ -223,13 +223,13 @@ pod <pod> (ServiceAccount `<sa>`) did not receive its cloud identity: <problem>.
 ```
 
 - **Pod Identity mode with no AWS association:** `<problem>` is ``container `external-dns` is missing `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE` and `AWS_CONTAINER_CREDENTIALS_FULL_URI`, which EKS Pod Identity sets``, and `<fix>` reads: `Create an EKS Pod Identity association in AWS linking this ServiceAccount to the configured IAM role (Kix does not create it), and check that the EKS Pod Identity Agent add-on is running. Then restart the workload's pods.`
-- **IRSA mode while an AWS association exists:** EKS gives an EKS Pod Identity association precedence over IRSA, so `<problem>` is ``container `external-dns` has `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE` and `AWS_CONTAINER_CREDENTIALS_FULL_URI`, so the cluster applied EKS Pod Identity instead of IAM roles for service accounts (IRSA)``, with `<fix>` telling you to delete the association in AWS and restart the pods (or switch `cluster.flavor.eks.cloudIdentity` to `"pod-identity"`). Delete the AWS association first whenever switching a ServiceAccount from `"pod-identity"` back to `"irsa"`.
+- **IRSA mode while an AWS association exists:** EKS gives an EKS Pod Identity association precedence over IRSA. `<problem>` is ``container `external-dns` has `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE` and `AWS_CONTAINER_CREDENTIALS_FULL_URI`, so the cluster applied EKS Pod Identity instead of IAM roles for service accounts (IRSA)``, and `<fix>` tells you to delete the association in AWS and restart the pods, or switch `cluster.flavor.eks.cloudIdentity` to `"pod-identity"`. Always delete the AWS association first when switching a ServiceAccount from `"pod-identity"` back to `"irsa"`.
 - **Container sets `AWS_ROLE_ARN` itself:** EKS webhooks leave existing container environment variables untouched. If a container sets `AWS_ROLE_ARN` to another value in `env`, `CloudIdentityNotApplied` names that value and tells you to remove it from `env`. Containers listed in the pod annotation `eks.amazonaws.com/skip-containers` receive no identity variables in either mode and are skipped by this check.
 - **What `CloudIdentityNotApplied` cannot catch:** Kix cannot detect a role whose trust policy or IAM permissions are wrong (those appear only in the workload's pod logs while `kix deploy` and `kix status` report `ok`). In `"pod-identity"` mode, Kix also cannot read AWS associations: if an association names a different IAM role than `roleArn`, the pod receives the association's role and `kix deploy` succeeds.
 
 Other operational details on EKS:
 
-- **Pod restarts and operator pods.** Changing `roleArn` updates `checksum/cloud-identity` on Kix-built pod templates and restarts those pods on deploy. Pods created by an operator (`cnpg-cluster`, `stackgres-cluster`) keep their old role until recreated; see each package's guide. Avoid changing `cert-manager`'s role while an ACME DNS-01 challenge is pending, which can leave the previous `_acme-challenge` TXT record in Route 53 until the controller has a working role again.
+- **Pod restarts and operator pods.** Changing `roleArn` updates `checksum/cloud-identity` on Kix-built pod templates and restarts those pods on deploy. Pods created by an operator (`cnpg-cluster`, `stackgres-cluster`) keep their old role until recreated; see each package's guide. Do not change `cert-manager`'s role while an ACME DNS-01 challenge is pending, or the previous `_acme-challenge` TXT record can remain in Route 53 until the controller has a working role again.
 - **AWS region and node credentials.** Both IRSA and Pod Identity inject `AWS_REGION` automatically. When you pass static AWS keys in a Secret instead, set `AWS_REGION` or `AWS_DEFAULT_REGION` explicitly (`external-dns` fails evaluation without one). Workloads with no cloud identity reach the node's IAM role only if the node group's instance metadata hop limit allows it; on the tested node group (hop limit `1`), pods received no node credentials.
 
 :::note[Reference]
@@ -253,7 +253,7 @@ For public DNS records and certificates in Route 53:
 
 ### Persistent storage
 
-EKS creates a `gp2` `StorageClass` without marking it as the cluster default and creates no `gp3` class, so `kix.flavors.eks` binds `storageClasses` as `"absent"`. Any `persistent-volume-claim` that names no class fails evaluation and asks for a `storageClasses` provider.
+EKS creates a `gp2` `StorageClass` without marking it as the cluster default and creates no `gp3` class, so `kix.flavors.eks` binds `storageClasses` as `"absent"`. Any `persistent-volume-claim` without `storageClassName` fails `kix check` and asks for a `storageClasses` provider.
 
 Install the `aws-ebs-csi-driver` EKS add-on so EBS volumes can bind, then either declare a class (such as `gp3`) with `packages.storage-classes` or import the cluster's existing `gp2` class with `kix.mkImport`. This repository example imports a class named `"local-path"`; on EKS, set both `out.name` and `out.storageClassName` to `"gp2"`:
 
@@ -265,7 +265,7 @@ See [Configure storage classes and PVCs](/docs/how-to/platform-capabilities/conf
 
 By default, the EKS service controller creates a classic Elastic Load Balancer (ELB) for Services with `type: LoadBalancer` and deletes it when the Service is removed. `kix deploy` waits until `status.loadBalancer.ingress` receives the load balancer address, and `kix status` reports the Service unready until then.
 
-The AWS Load Balancer Controller is not an EKS add-on (only EKS Auto Mode includes it), so a cluster that wants it installs it with Helm.
+The AWS Load Balancer Controller is not an EKS add-on (only EKS Auto Mode includes it); install it with Helm if you need it.
 
 ## Turn on generated network policy
 
@@ -293,7 +293,7 @@ Once applied, the `aws-node` pods in `kube-system` run with `--enable-network-po
 
 ### Configure `cluster.flavor.eks.networkPolicy` and `cluster.network`
 
-Kix cannot read live EKS add-on settings. Set `cluster.flavor.eks.networkPolicy = "vpc-cni";` alongside `networkPolicy.enable = true;` (leaving it at `"none"` fails the build so Kix never generates unenforced policies). Kix then writes standard `NetworkPolicy` objects (`networking.k8s.io/v1`), skips default deny in `kube-system`, and binds `network-policy-enforcer` as `exclusive` (rejecting a `cilium` instance). See [Enable generated network policy](/docs/how-to/platform-capabilities/enable-generated-network-policy/).
+Kix cannot read live EKS add-on settings. Set `cluster.flavor.eks.networkPolicy = "vpc-cni";` alongside `networkPolicy.enable = true;` (leaving `cluster.flavor.eks.networkPolicy` at `"none"` fails the build so Kix never generates unenforced policies). Kix then writes standard `NetworkPolicy` objects (`networking.k8s.io/v1`), skips default deny in `kube-system`, and binds `network-policy-enforcer` as `exclusive` (rejecting a `cilium` instance). See [Enable generated network policy](/docs/how-to/platform-capabilities/enable-generated-network-policy/).
 
 Configure policy generation and your cluster's address ranges under [`cluster.network`](/docs/reference/cluster-configuration/#cluster-network):
 
@@ -301,7 +301,7 @@ Configure policy generation and your cluster's address ranges under [`cluster.ne
 
 Kix asks for each `cluster.network` option only when a generated policy needs it:
 
-- **`cluster.network.serviceCidr` (or `cluster.network.apiServer.cidrs`):** Required when any workload's ServiceAccount is bound to a `Role` or `ClusterRole`. On EKS, the VPC CNI evaluates outbound `ipBlock` rules against the `kubernetes` Service ClusterIP before translation (the API server's backing endpoint addresses fail to match and change over time). When you set `serviceCidr`, Kix derives its first IPv4 address for API server egress and excludes the Service range from outbound `world` rules. Find `serviceCidr` with:
+- **`cluster.network.serviceCidr` (or `cluster.network.apiServer.cidrs`):** Required when any workload's ServiceAccount is bound to a `Role` or `ClusterRole`. On EKS, the VPC CNI evaluates outbound `ipBlock` rules against the `kubernetes` Service ClusterIP before address translation; the API server's backing endpoint IPs do not match and change over time. When you set `serviceCidr`, Kix uses the range's first IPv4 address for API server egress and excludes `serviceCidr` from outbound `world` rules. Look up `serviceCidr` with:
 
   <Command
     commands={[
@@ -317,7 +317,7 @@ Kix asks for each `cluster.network` option only when a generated policy needs it
     ]}
   />
 
-  Kix never checks this address against the live cluster: a wrong address deploys without error, open connections stay up, and pods lose API server access after their next restart.
+  Kix does not verify this address against the live cluster. If it is wrong, `kix deploy` succeeds and existing connections stay open, so pods lose API server access only after they restart.
 - **`cluster.network.nodeCidrs` and `cluster.network.apiServer.sources`:** Set both to your cluster's VPC subnet CIDR blocks (or the whole VPC CIDR when all cluster subnets share it). `nodeCidrs` is required when policies target nodes (such as Prometheus scraping `node-exporter`), and `apiServer.sources` is required when workloads serve admission webhooks or aggregated APIs (`cert-manager`, `external-secrets`), which the EKS control plane calls from network interfaces in those subnets. List full subnet CIDR blocks so rules remain valid when control-plane IPs change:
 
   <Command
@@ -333,7 +333,10 @@ Workloads with an AWS cloud identity automatically receive outbound rules for cr
 
 ### Check warnings and EKS platform limits
 
-Some generated rules allow more traffic than intended because of how a cloud matches IP ranges, and Kix marks affected policies with `kix.run/network-policy-widened`. Reasons that a `cluster.network` setting can remove (such as outbound `world` rules reaching ClusterIP Services when `cluster.network.serviceCidr` is unset) show as warnings from `kix check`, with the setting to add. Reasons that come from the platform itself, which no setting removes, show only under `kix check -v`:
+Because standard `NetworkPolicy` uses CIDR blocks for nodes, Services, and external traffic, some generated rules allow more traffic than intended. Kix marks affected policies with the `kix.run/network-policy-widened` annotation:
+
+- When a `cluster.network` setting can narrow the rule (for example, setting `cluster.network.serviceCidr` so outbound `world` rules exclude ClusterIP Services), `kix check` prints a warning naming that setting.
+- When the wider rule is a platform limit that no Kix setting can change, `kix check` hides it by default and lists it under `kix check -v`:
 
 <Command
   commands={[
@@ -345,7 +348,7 @@ Some generated rules allow more traffic than intended because of how a cloud mat
 On EKS with the Amazon VPC CNI, `kix check -v` reports these platform limits:
 
 - **One-second startup window.** Kubernetes `NetworkPolicy` has no readiness status, and in the VPC CNI's default `standard` mode a new pod can send outbound traffic for about one second before its egress policy takes effect. Enabling VPC CNI strict mode closes that window, though strict mode blocks pods that have no `NetworkPolicy`, including unmanaged pods in `kube-system`.
-- **Shared VPC subnets.** Nodes and pods share VPC subnets with VPC endpoints (such as STS), load balancers, and databases, so Kix keeps those subnet ranges in outbound `world` rules; outbound `world` rules therefore also reach nodes and pods on the allowed ports, and subnet rules (`nodeCidrs` and `apiServer.sources`) also match pods in those subnets.
+- **Shared VPC subnets.** Nodes and pods share VPC subnets with VPC endpoints (such as STS), load balancers, and databases, so Kix cannot exclude those subnets from outbound `world` rules. As a result, outbound `world` rules also reach nodes and pods on the allowed ports, and CIDR rules for `nodeCidrs` and `apiServer.sources` also match pods in those subnets.
 - **LoadBalancer ingress.** Classic ELB forwards external traffic from a node or load balancer address inside the VPC, so `world` ingress rules on `LoadBalancer` Services also accept traffic from pods and nodes.
 
 :::note[Explanation]
@@ -361,7 +364,7 @@ See [Network policy](/docs/explanation/network-policy/) for how Kix synthesizes 
 
 Live EKS testing covered an EKS 1.37 cluster with two Amazon Linux 2023 nodes and managed add-ons `vpc-cni` (v1.22 with network policy agent v1.4), `coredns`, `kube-proxy`, `eks-pod-identity-agent`, and `aws-ebs-csi-driver`. These configurations have not been tested yet:
 
-- **AWS Load Balancer Controller, Network Load Balancers (NLB), and IP-mode targets:** Live tests covered only classic ELB with instance targets, excluding NLB or ALB provisioning and how VPC CNI network policy evaluates IP-target traffic.
+- **AWS Load Balancer Controller, Network Load Balancers (NLB), and IP-mode targets:** Live tests covered only classic ELBs with instance targets. Provisioning NLBs or Application Load Balancers (ALBs) and enforcing VPC CNI network policy on IP-mode targets have not been tested.
 - **IPv6 clusters:** The IPv6 EKS Pod Identity agent rule (`fd00:ec2::23/128`) comes from AWS documentation and has not been tested live.
 - **EKS Auto Mode.**
 - **Amazon VPC CNI strict enforcement mode.**

@@ -1,9 +1,9 @@
 +++
 kind = "note"
 +++
-The first deploy after upgrading applies some network policies again, along
-with the objects that depend on them, such as Deployments, Jobs, Services, and
-Ingresses. These are the policies whose `spec` names another object's pods,
-which no longer count as their dependencies. Only Kix's own `kix.run/`
-annotations change on these objects, so no pod restarts, no Job runs again,
-and no traffic rule changes.
+On the first deploy after upgrading, Kix re-applies network policies whose
+`spec` references another resource's pods, along with the resources that depend
+on those policies (such as Deployments, Jobs, Services, and Ingresses). Kix no
+longer records dependencies from a network policy's `spec`, so only `kix.run/`
+annotations change on these resources. No pods restart, no Jobs run again, and
+no traffic rules change.

@@ -1,6 +1,6 @@
 ---
 title: "Deploy to GKE"
-description: "Configure a Kix cluster for Google Kubernetes Engine Standard or Autopilot, wire Workload Identity Federation, and enable Dataplane V2 network policy."
+description: "Configure a Kix cluster for Google Kubernetes Engine Standard or Autopilot, set up Workload Identity Federation, and enable Dataplane V2 network policy."
 ---
 
 import Command from '/src/components/Command.astro';
@@ -10,7 +10,7 @@ import gkeIdentityLinked from '/src/snippets/clusters/test-cloud-identity-gke/gk
 import veleroGkeIdentity from '/src/snippets/clusters/test-cloud-identity-velero-gke/veleroGkeIdentity.json';
 import gkeNetworkPolicy from '/src/snippets/clusters/test-netpol-gke/gkeNetworkPolicy.json';
 
-Deploy a Kix cluster definition to an existing Google Kubernetes Engine (GKE) Standard or Autopilot cluster. You pick the flavor for your cluster mode, bind the definition to your cluster's UID, grant Google Cloud IAM access for workloads that call Google APIs, and set the network ranges Kix needs when generating `NetworkPolicy` objects for GKE Dataplane V2.
+Deploy a Kix cluster definition to an existing Google Kubernetes Engine (GKE) Standard or Autopilot cluster. This guide covers choosing the right GKE flavor, binding the definition to your cluster's UID, granting Google Cloud IAM roles to workloads, and setting the IP ranges Kix needs to generate `NetworkPolicy` objects for GKE Dataplane V2.
 
 :::note[Helpful background]
 - [05. Basic graph and deploy loop](/docs/tutorials/05-basic-graph-and-deploy-loop/): practice checking, planning, deploying, and inspecting a cluster before connecting to GKE.
@@ -19,7 +19,7 @@ Deploy a Kix cluster definition to an existing Google Kubernetes Engine (GKE) St
 - [Flavors and capabilities](/docs/reference/flavors-and-capabilities/): look up the exact role bindings, capabilities, and platform imports of `gke` and `gke-autopilot`.
 :::
 
-This guide assumes Kix, `kubectl`, and `gcloud` are installed, and that your current `kubectl` context connects to your GKE cluster. For Azure Kubernetes Service, `kix.flavors.aks` exists in the Kix library, though Kix has not been tested on a live AKS cluster yet and does not generate network policy on AKS.
+This guide assumes Kix, `kubectl`, and `gcloud` are installed, and that your current `kubectl` context points to your GKE cluster. (The Kix library also includes `kix.flavors.aks` for Azure Kubernetes Service, which has not been tested on a live AKS cluster yet and does not support generated network policies.)
 
 ## Choose a flavor and check your cluster
 
@@ -27,8 +27,8 @@ Include `kix.flavors.gke` for GKE Standard, or `kix.flavors.gke-autopilot` for G
 
 Both flavors assume your cluster has:
 
-- A managed control plane, multiple nodes (`multiNode = true`), and GKE's managed `metrics-server` (`metricsApi` bound `exclusive`).
-- GKE Dataplane V2 (`cni` and `network-policy-enforcer` bound `exclusive`).
+- A managed control plane, multiple nodes (`multiNode = true`), and GKE's managed `metrics-server` (`metricsApi` role, `exclusive`).
+- GKE Dataplane V2 (`cni` and `network-policy-enforcer` roles, `exclusive`).
 - Cluster DNS (`kube-dns` in `kube-system`), GCP Network Load Balancers for `LoadBalancer` Services, and the Persistent Disk CSI driver with `standard-rwo` as the default `StorageClass`.
 - Workload Identity Federation for GKE enabled.
 
@@ -45,7 +45,7 @@ Confirm that your cluster runs Dataplane V2 and Workload Identity Federation:
 
 ### Size small Standard clusters
 
-Because both GKE flavors set `cluster.capabilities.multiNode = true` without `availabilityZones`, `cluster.availability.default` defaults to `"node"`. Packages that scale with availability run two or more replicas of each controller (for example, `cert-manager` and `external-secrets` each run six pods across three deployments). On a small cluster such as two 2-vCPU nodes, deploying several controllers can exhaust CPU requests and leave pods such as Velero's node agent `Pending`. Both `kix deploy` and `kix status` report the scheduler reason (`0/2 nodes are available: 2 Insufficient cpu`). Set `cluster.availability.default = "none";` across a small test cluster, or `availability = "none";` on individual instances, as shown in [Set the cluster availability level](/docs/how-to/platform-capabilities/set-the-cluster-availability-level/).
+`kix.flavors.gke` and `kix.flavors.gke-autopilot` set `cluster.capabilities.multiNode = true` and leave `availabilityZones` unset, which sets `cluster.availability.default` to `"node"`. Packages that scale with availability then run at least two replicas per controller (for example, `cert-manager` and `external-secrets` each run six pods across three Deployments). On a small Standard cluster such as two 2-vCPU nodes, deploying several controllers can exhaust CPU requests and leave pods such as Velero's node agent `Pending`, which `kix deploy` and `kix status` report as `0/2 nodes are available: 2 Insufficient cpu`. On small test clusters, set `cluster.availability.default = "none";` cluster-wide or `availability = "none";` on individual instances (see [Set the cluster availability level](/docs/how-to/platform-capabilities/set-the-cluster-availability-level/)).
 
 ## Bind the definition and deploy
 
@@ -59,7 +59,7 @@ Read the UID from your GKE cluster:
   ]}
 />
 
-Add the flavor and UID to your cluster file (using the sample UUID format below as an example):
+Add the flavor and your cluster's UID to your cluster file:
 
 ```nix title="clusters/gke.nix"
 { kix, packages }:
@@ -93,9 +93,9 @@ Switch the first module to `kix.flavors.gke-autopilot` on Autopilot clusters. Au
 
 - **No writes in `kube-system`.** Autopilot blocks user-managed objects in `kube-system`. The `gke-autopilot` flavor places its platform import records in the `gke-managed` namespace (which Kix creates) and writes nothing to `kube-system`. If your cluster declares `_`-prefixed instances such as `instances._cluster`, change [`cluster.recordNamespace`](/docs/reference/cluster-configuration/#clusterrecordnamespace) from its `kube-system` default to an existing user namespace.
 - **Baseline Pod Security and host restrictions.** GKE's admission webhook enforces the `baseline` Pod Security Standard and blocks privileged containers, host namespaces such as `hostNetwork`, and writable `hostPath` volumes. The flavor sets `privilegedContainers = false` and `podSecurityEnforcement = "baseline"`, so `kix check` rejects `hostNetwork` and privileged workloads before deploy.
-- **No critical PriorityClasses.** GKE allows `system-node-critical` and `system-cluster-critical` only in namespaces with a matching `ResourceQuota`. On GKE Standard, `kube-system` has that quota (`criticalPriorityNamespaces = [ "kube-system" ]`, failing with `[K7426]` in other namespaces). Because Autopilot also blocks user workloads in `kube-system`, `gke-autopilot` sets `criticalPriorityNamespaces = [ ]` and rejects those classes everywhere.
+- **No critical PriorityClasses.** GKE allows `system-node-critical` and `system-cluster-critical` only in namespaces that have a matching `ResourceQuota`. On GKE Standard, `kube-system` has that quota, so `kix.flavors.gke` sets `criticalPriorityNamespaces = [ "kube-system" ]` and fails with `[K7426]` in other namespaces. Because Autopilot also blocks user workloads in `kube-system`, `gke-autopilot` sets `criticalPriorityNamespaces = [ ]` and rejects both classes in every namespace.
 - **DaemonSets and node provisioning.** Autopilot allows DaemonSets (`daemonSets = true`) and schedules them on every node. First deploys take 2 to 3 minutes while Autopilot provisions nodes for pending pods, and a DaemonSet runs on every node Autopilot adds, increasing cluster cost.
-- **Load balancer role.** `gke-autopilot` binds `loadBalancer` as `exclusive` (`shadowable` on `gke`).
+- **Load balancer role.** `gke-autopilot` binds `loadBalancer` as `exclusive` rather than `shadowable`, so packages cannot replace GKE's load balancer controller.
 - **Adjusted resource requests.** Autopilot raises container resource requests that fall below its minimums (for example, raising a `32Mi` memory request to `52Mi`) and adds an `ephemeral-storage` request on the Deployment object. After deployment, `kix plan` shows no differences, while `kix plan --reconcile` lists each field Autopilot modified. Set container requests at or above Autopilot's minimums to avoid those adjustments.
 
 ## Grant Google Cloud identities to workloads
@@ -117,13 +117,13 @@ Each package's upstream documentation defines the Google Cloud IAM permissions i
 
 ### Grant IAM roles directly to the ServiceAccount
 
-1. **Declare the identity in Kix.** Pass `kix.cloudIdentity.gcp { }` on `external-dns` (in the snippet, the `externalDns` helper sets `provider = "google"`, `policy = "upsert-only"`, `txtOwnerId`, and `extraArgs` with `"--google-project=my-project"` and `"--domain-filter=example.com"`):
+1. **Declare the identity in Kix.** Pass `kix.cloudIdentity.gcp { }` to `external-dns`. In this snippet, the local `externalDns` helper sets `provider = "google"`, `policy = "upsert-only"`, `txtOwnerId`, and `extraArgs` (`"--google-project=my-project"` and `"--domain-filter=example.com"`):
 
    <Snippet {...gkeIdentityDirect} />
 
    Kix omits `iam.gke.io/gcp-service-account` on the `clouddns` ServiceAccount because Google Cloud grants roles directly to the Kubernetes ServiceAccount's principal.
 
-2. **Inspect the required IAM principal.** Run `kix list resources <cluster>` (which reads only the build, with no cluster connection needed) to print the principal under **Cloud identities**:
+2. **Inspect the required IAM principal.** Run `kix list resources <cluster>` to print the IAM principal under **Cloud identities** (this reads the local build and does not connect to the cluster):
 
    {/* Output maintained by hand from clusters/test-cloud-identity-gke.nix (outside the kix-examples capture pipeline) and can drift. */}
    <Command
@@ -142,7 +142,7 @@ Each package's upstream documentation defines the Google Cloud IAM permissions i
 
    In `kix list resources <cluster> -o json` (for Terraform), this entry lists `["<project-number>", "<project-id>"]` in `subjectPlaceholders`.
 
-3. **Bind the Google Cloud IAM role.** Look up your project number and bind the package's required `<role>` to the `Subject` principal with `<project-id>` (`my-project`) and `<project-number>` (`123456789012`) filled in:
+3. **Bind the Google Cloud IAM role.** Look up your project number, replace `<project-id>` (`my-project`) and `<project-number>` (`123456789012`) in the `Subject` string, and grant the IAM `<role>` the package requires:
 
    <Command
      commands={[
@@ -237,7 +237,7 @@ Velero's GCP plugin also signs download and log URLs using `backupStorageLocatio
   ```
 
   Use a separate ServiceAccount without a cloud identity, or remove `hostNetwork: true`.
-- **Workloads without an identity and pod restarts.** With Workload Identity Federation enabled, a pod whose ServiceAccount has no cloud identity runs as its own Kubernetes ServiceAccount principal, which holds no Google Cloud roles unless you grant them. Kix writes `checksum/cloud-identity` onto Kix-built pod templates so changing an identity restarts Deployment, StatefulSet, and DaemonSet pods on deploy; pods created at runtime by an operator (such as StackGres) keep their previous identity until recreated.
+- **Workloads without an identity and pod restarts.** With Workload Identity Federation enabled, a pod whose ServiceAccount has no cloud identity runs as its own Kubernetes ServiceAccount principal, which holds no Google Cloud roles unless you grant them. Kix writes `checksum/cloud-identity` onto Kix-built pod templates so changing an identity restarts Deployment, StatefulSet, and DaemonSet pods on deploy. Pods created at runtime by an operator (such as StackGres) keep their previous identity until recreated.
 
 :::note[Reference]
 See [Cloud identities](/docs/reference/instances-and-composition/#cloud-identities) for the full `cloudIdentities` JSON fields and evaluation checks.
@@ -264,13 +264,13 @@ A Service with `type: LoadBalancer` receives a GCP Network Load Balancer IP in r
 
 ## Turn on generated network policy
 
-Dataplane V2 always enforces standard Kubernetes `NetworkPolicy` objects (`networking.k8s.io/v1`), so there is nothing to enable in GKE. Because both flavors bind `network-policy-enforcer` as `exclusive` to Dataplane V2, Kix emits `NetworkPolicy` manifests directly and rejects a `cilium` instance. Kix omits `<namespace>-default-deny` in `kube-system` so GKE's own pods keep running undisturbed. See [Enable generated network policy](/docs/how-to/platform-capabilities/enable-generated-network-policy/) for how Kix derives rules from service connections.
+Dataplane V2 always enforces standard Kubernetes `NetworkPolicy` objects (`networking.k8s.io/v1`), so there is nothing to enable in GKE. Because both flavors bind `network-policy-enforcer` as `exclusive` to Dataplane V2, Kix writes `NetworkPolicy` manifests directly and rejects a `cilium` instance. Kix omits `<namespace>-default-deny` in `kube-system` so GKE's own pods keep running undisturbed. See [Enable generated network policy](/docs/how-to/platform-capabilities/enable-generated-network-policy/) for how Kix derives rules from service connections.
 
 Enable policy generation and supply your cluster's IP ranges under [`cluster.network`](/docs/reference/cluster-configuration/#cluster-network):
 
 <Snippet {...gkeNetworkPolicy} />
 
-Standard `NetworkPolicy` has no selectors for the API server or cluster nodes, so Kix asks for their IP ranges whenever a generated policy needs them (and stops the build naming the missing option):
+Standard `NetworkPolicy` has no built-in selectors for the API server or cluster nodes. When a generated policy needs those addresses and the corresponding `cluster.network` option is unset, Kix stops the build and names the option to set:
 
 - **`cluster.network.apiServer.cidrs`:** Required when any workload's ServiceAccount is bound to a `Role` or `ClusterRole`. Dataplane V2 evaluates `ipBlock` rules after Service address translation, so the `kubernetes` Service ClusterIP never matches; set the API server's endpoint `/32` addresses instead. Look them up with:
 
@@ -280,8 +280,8 @@ Standard `NetworkPolicy` has no selectors for the API server or cluster nodes, s
     ]}
   />
 
-  Append `/32` to each IPv4 address returned, and update this list whenever you rotate the control plane IP. Kix never checks this address against the live cluster: a wrong address deploys without error, open connections stay up, and pods fail to reach the API server after their next restart.
-- **`cluster.network.nodeCidrs`:** Required when a policy targets nodes (for example, Prometheus scraping `node-exporter` on the host network). Kix also excludes this range from outbound `world` rules on GKE so internet egress does not open node kubelets. Set it to your node subnet's primary IPv4 range. Read `networkConfig.subnetwork`, which prints `projects/<project>/regions/<region>/subnetworks/<subnet>` so one command gives both `<subnet>` and `<region>` (for a zonal cluster whose `<location>` is a zone such as `europe-west3-a`, its `<region>` is the zone name without the last part, `europe-west3`):
+  Append `/32` to each IPv4 address returned, and update this list whenever you rotate the control plane IP. Kix does not verify these addresses against the live cluster: if an address is wrong, `kix deploy` succeeds and existing connections stay open, so pods lose API server access only after they restart.
+- **`cluster.network.nodeCidrs`:** Required when a policy targets nodes (for example, Prometheus scraping `node-exporter` on the host network). Kix also excludes this range from outbound `world` rules on GKE so internet egress does not open node kubelets. Set it to your node subnet's primary IPv4 range. Look up your cluster's subnetwork path (`projects/<project>/regions/<region>/subnetworks/<subnet>`), where `<location>` is your cluster's region or zone, then read that subnet's primary range:
 
   <Command
     commands={[
@@ -297,7 +297,10 @@ Workloads with a GKE cloud identity automatically receive outbound access to the
 
 ### Check widened-policy warnings
 
-Some generated rules allow more traffic than intended because of how a cloud matches IP ranges, and Kix marks affected policies with `kix.run/network-policy-widened`. Reasons that a `cluster.network` setting can remove (such as outbound `world` rules reaching nodes when `cluster.network.nodeCidrs` is empty) show as warnings from `kix check`, with the setting to add. Reasons that come from the platform itself, which no setting removes (such as `world` ingress on a `LoadBalancer` Service also admitting cluster nodes), show only under `kix check -v`:
+Because standard `NetworkPolicy` uses CIDR blocks for nodes and external traffic, some generated rules allow more traffic than intended. Kix marks affected policies with the `kix.run/network-policy-widened` annotation:
+
+- When a `cluster.network` setting can narrow the rule (for example, setting `cluster.network.nodeCidrs` so outbound `world` rules exclude cluster nodes), `kix check` prints a warning naming that setting.
+- When the wider rule is a platform limit that no Kix setting can change (for example, `world` ingress on a `LoadBalancer` Service also accepting traffic from cluster nodes), `kix check` hides it by default and lists it under `kix check -v`:
 
 <Command
   commands={[
@@ -323,7 +326,7 @@ See [Network policy](/docs/explanation/network-policy/) for how Kix synthesizes 
 
 Live GKE testing covered a zonal GKE Standard 1.36 cluster (Container-Optimized OS, Dataplane V2, and Workload Identity Federation) and a regional GKE Autopilot 1.36 cluster. These configurations have not been tested yet:
 
-- **Private GKE clusters (private control-plane endpoint) and clusters without Konnectivity:** Where the API server's webhook calls come from has not been checked on these clusters, so the default `cluster.network.apiServer.sources` (the `konnectivity-agent` pods) may not match them.
+- **Private GKE clusters (private control-plane endpoint) and clusters without Konnectivity:** How the API server routes webhook calls on these clusters has not been tested, so the default `cluster.network.apiServer.sources` (`konnectivity-agent` pods in `kube-system`) may not match.
 - **Cloud DNS for GKE as cluster DNS:** The `gke` and `gke-autopilot` flavors include the `169.254.169.254/32` and `169.254.20.10/32` DNS peer rules documented by Google, though replacing `kube-dns` with Cloud DNS for GKE has not been tested under Dataplane V2 network policy.
 - **Metadata server TCP port 8080:** Kix opens TCP ports 80 and 8080 to `169.254.169.254/32` based on Google's documentation; only port 80 was observed in live tests.
 - **GPU node pools** (`cluster.capabilities.gpu = true`).

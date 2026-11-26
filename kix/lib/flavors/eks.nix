@@ -79,14 +79,14 @@ in
     ];
     default = "none";
     description = ''
-      Whether network policy enforcement is enabled on this EKS cluster. Set
-      `"vpc-cni"` after enabling network policy in the Amazon VPC CNI add-on
-      (`enableNetworkPolicy` in the add-on configuration); Kix then emits
-      standard `NetworkPolicy` objects when `networkPolicy.enable = true`.
-      The default `"none"` matches a new EKS cluster where enforcement is off,
-      and fails the build if `networkPolicy.enable = true`. Kix cannot inspect
-      live add-on settings, so update this option whenever you change the
-      add-on configuration.
+      Network policy enforcer configured on this EKS cluster. Set `"vpc-cni"`
+      after turning on `enableNetworkPolicy` in the Amazon VPC CNI add-on
+      configuration; Kix then writes standard `NetworkPolicy` objects when
+      `networkPolicy.enable = true`. Leave at `"none"` (the default) when
+      enforcement is off, as on a new EKS cluster. Setting
+      `networkPolicy.enable = true` while this option is `"none"` fails the
+      build. Kix cannot check live add-on settings, so keep this option in
+      sync with your cluster.
     '';
   };
 
@@ -167,8 +167,8 @@ in
           if (config.networkPolicy.enable or false) && !vpcCni then
             fail {
               clusterOption = "cluster.flavor.eks.networkPolicy";
-              message = "Network policy generation is enabled (`networkPolicy.enable = true`), but `cluster.flavor.eks.networkPolicy` is `\"none\"`. By default, Amazon EKS does not enforce `NetworkPolicy` objects, so Kix stopped the build to avoid generating policies that have no effect.";
-              fix = "Enable network policy in the Amazon VPC CNI add-on (set `enableNetworkPolicy` to \"true\" in the add-on configuration) and set `cluster.flavor.eks.networkPolicy = \"vpc-cni\";`, or set `networkPolicy.enable = false;`.";
+              message = "`networkPolicy.enable` is `true`, but `cluster.flavor.eks.networkPolicy` is `\"none\"`. Amazon EKS does not enforce `NetworkPolicy` objects by default, so Kix stopped the build rather than generate policies that would not be enforced.";
+              fix = "Turn on `enableNetworkPolicy` (`\"true\"`) in the Amazon VPC CNI add-on configuration and set `cluster.flavor.eks.networkPolicy = \"vpc-cni\";`, or set `networkPolicy.enable = false;`.";
             }
           else
             null
