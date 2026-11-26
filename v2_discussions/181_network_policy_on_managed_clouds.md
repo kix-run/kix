@@ -214,11 +214,16 @@ one place only: the API server rule.
 is `true`, because on EKS the node range is the VPC subnets, which also hold VPC
 endpoints such as STS, load balancers, and databases. `podStartsBeforePolicy`
 declares that a new pod starts before its policies take effect, so the scorecard
-rule can report that startup window. On `eks`, the flavor sets
-`ipBlockSelectsPods = true` (V, AWS Q3), `ipBlockSelectsNodes = true` (V,
-AWS Q3 and AWS F18), `ipBlockSeesServiceAddress = true` (V, AWS Q1),
-`nodeRangeHoldsOnlyNodes = false`, and `podStartsBeforePolicy = true` (about one
-second of unrestricted egress in the add-on's `standard` mode, V, AWS Q8).
+rule can report that startup window. The `platformNetworkPolicy` helper defaults
+`podStartsBeforePolicy` to `false`, and the `gke` and `gke-autopilot` flavors do
+not set it, so Kix reports no startup window on GKE. No live test has measured
+whether a new pod on GKE Dataplane V2 has a window before its policies take
+effect (**A**), so the value stays `false` until GKE test 11 in `181a` measures
+it. On `eks`, the flavor sets `ipBlockSelectsPods = true` (V, AWS Q3),
+`ipBlockSelectsNodes = true` (V, AWS Q3 and AWS F18),
+`ipBlockSeesServiceAddress = true` (V, AWS Q1),
+`nodeRangeHoldsOnlyNodes = false`, and `podStartsBeforePolicy = true` (about
+one second of unrestricted egress in the add-on's `standard` mode, V, AWS Q8).
 
 With the flavor in place, a GKE cluster author enables network policy in two
 lines:

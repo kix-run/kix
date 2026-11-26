@@ -36,14 +36,14 @@ that requires a live cloud cluster.
 For step 2, repeat F3 (step 2) and F29: `kix plan` must fail within seconds,
 and prune must finish without errors. For steps 6 and 7, run checks 1 through 9
 on a GKE Dataplane V2 cluster with NodeLocal DNSCache enabled once those steps
-are built. Test 10 can run immediately in a scratch namespace using an explicit
-`NetworkPolicy` manifest before any Kix changes are built.
+are built. Tests 10 and 11 need no Kix changes and can run immediately in a
+scratch namespace with an explicit `NetworkPolicy` manifest.
 
 The live GKE tests already answered the platform questions in tests 5 (N1,
 webhook source), 7 (N2, node kubelet egress), and 9 (N5, Autopilot DNS via
 `169.254.20.10/32`), plus test 10 (N4, excluding the node range from
-`0.0.0.0/0` egress). Tests 1 through 9 still need to run against Kix once steps
-6 and 7 land:
+`0.0.0.0/0` egress). Test 11 still needs to run, and tests 1 through 9 still
+need to run against Kix once steps 6 and 7 land:
 
 1. Deploy a cluster with `kix.flavors.gke`, `networkPolicy.enable = true`, and
    one `echo-server` instance in namespace `np`. Verify that `kix build`
@@ -76,6 +76,10 @@ webhook source), 7 (N2, node kubelet egress), and 9 (N5, Autopilot DNS via
    `169.254.20.10/32` (N5).
 10. Under default-deny egress, allow `0.0.0.0/0` except the node range on TCP
     10250 and record whether a node is still reachable.
+11. Under default-deny egress, run a `Job` that calls a denied address within
+    its first second of startup, repeat with a few pods, and record whether any
+    call succeeds before policies load. If one does, set
+    `podStartsBeforePolicy = true` in the `gke` and `gke-autopilot` flavors.
 
 ## 3. Live EKS tests
 
