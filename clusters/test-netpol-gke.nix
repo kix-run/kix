@@ -7,6 +7,8 @@
 #   server, calls the API server, and calls Cloud DNS on the internet.
 # - `cert-manager/cert-manager` serves an admission webhook, which the API
 #   server calls through the konnectivity-agent pods.
+# - `external-secrets/external-secrets` serves webhooks and metrics that
+#   Prometheus scrapes.
 # - The monitoring module's Prometheus scrapes node-exporter, which runs on
 #   the host network, so its rule uses `cluster.network.nodeCidrs`.
 #
@@ -50,6 +52,10 @@ kix.buildCluster {
       };
 
       instances.cert-manager.cert-manager.package = packages.experimental.cert-manager;
+
+      # Its metrics Services are named after its Deployments, which the
+      # scrape join must read as plain names.
+      instances.external-secrets.external-secrets.package = packages.experimental.external-secrets;
 
       monitoring.enabled = true;
       # Test values only.
