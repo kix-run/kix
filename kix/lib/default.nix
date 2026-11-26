@@ -71,7 +71,6 @@ in
     mkImportResource
     mkPackageInstance
     mkActivation
-    kixCRDs
     attachCtxDeep
     extractStoreHash
     nsOf
@@ -98,6 +97,14 @@ in
     checkPackageOptions
     packageOptionViolations
     ;
+
+  # The Kix program installs the Activation and PackageInstance CRDs itself,
+  # so builds no longer carry them.
+  kixCRDs = kixlib.fail {
+    id = "K5132";
+    message = "`kix.kixCRDs` was removed. Builds no longer contain the Activation and PackageInstance CustomResourceDefinitions, because Kix installs them itself when it deploys.";
+    fix = "Remove the reference. To apply build output with another tool, run `kix deploy` once first, or copy the two CRDs from a cluster that Kix has deployed.";
+  };
 
   inherit (env) mkEnv;
 

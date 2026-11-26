@@ -322,9 +322,14 @@ A timeout ends the CLI only. The operator keeps working on the record.
 
 ## Requirements
 
-- The Activation CRD is installed, and the account can list Activation
-  records. The `--operator` commands check this before changing anything.
-- The operator is running and watches the `kix.run` API group.
+- The operator is running. When it starts, it installs Kix's four
+  CustomResourceDefinitions if they are missing (`activations.kix.run`,
+  `packageinstances.kix.run`, `activationheads.kix.run`, and
+  `packageinstancerevisions.kix.run`), and replaces one whose definition is
+  older than its own. The account running the `--operator` command can list
+  Activation records. The `--operator` commands check this before changing
+  anything.
+- The operator watches the `kix.run` API group.
 - The operator runs a matching or newer version of Kix, its Kubernetes account
   can patch CustomResourceDefinition `activations.kix.run`, and your account
   can read that CRD. On startup, the operator writes `requests,head-lock` to
@@ -333,18 +338,26 @@ A timeout ends the CLI only. The operator keeps working on the record.
   before changing anything and stop if either feature is missing. Upgrade the
   operator before deploying with the upgraded Kix, because an older operator
   deploys without taking the deploy lock.
-- The operator's Kubernetes account can `get` and `create`
-  CustomResourceDefinitions (to install `activationheads.kix.run` if needed)
-  and can `get`, `list`, `create`, and `update` `activationheads.kix.run`,
-  which holds each Kix cluster's deploy lock. For example:
+- The operator's Kubernetes account can `get`, `create`, and `update`
+  CustomResourceDefinitions, to install and update Kix's own CRDs, and
+  `patch` to write its features annotation. It can `get`, `list`, `create`,
+  and `update` `activationheads.kix.run`, which holds each Kix cluster's
+  deploy lock, and use `packageinstancerevisions.kix.run`, which lists the
+  objects each deploy applied. For example:
 
   ```yaml
   - apiGroups: ["apiextensions.k8s.io"]
     resources: ["customresourcedefinitions"]
-    verbs: ["get", "create", "patch"]
+    verbs: ["get", "create", "update", "patch"]
   - apiGroups: ["kix.run"]
     resources: ["activationheads"]
     verbs: ["get", "list", "create", "update"]
+  - apiGroups: ["kix.run"]
+    resources: ["packageinstancerevisions"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: ["kix.run"]
+    resources: ["packageinstancerevisions/status"]
+    verbs: ["get", "patch", "update"]
   ```
 - The operator can read the store path the CLI wrote. It loads manifests from
   `spec.source.path`, so the build must be present in the store the operator

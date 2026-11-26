@@ -2,88 +2,6 @@
 source: kix-cli/tests/snapshot_test.rs
 expression: stdout
 ---
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  annotations:
-    kix.run/identity-hash: gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj
-    kix.run/package: _cluster
-    kix.run/package-namespace: _cluster
-  labels:
-    app.kubernetes.io/managed-by: kix
-  name: activations.kix.run
-spec:
-  group: kix.run
-  names:
-    kind: Activation
-    listKind: ActivationList
-    plural: activations
-    singular: activation
-  scope: Cluster
-  versions:
-  - name: v1alpha1
-    schema:
-      openAPIV3Schema:
-        properties:
-          apiVersion:
-            type: string
-          kind:
-            type: string
-          metadata:
-            type: object
-          spec:
-            type: object
-            x-kubernetes-preserve-unknown-fields: true
-          status:
-            type: object
-            x-kubernetes-preserve-unknown-fields: true
-        type: object
-    served: true
-    storage: true
-    subresources:
-      status: {}
----
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  annotations:
-    kix.run/identity-hash: pk4hih6jm4yj336rlaqk2qycz2k46xvs
-    kix.run/package: _cluster
-    kix.run/package-namespace: _cluster
-  labels:
-    app.kubernetes.io/managed-by: kix
-  name: packageinstances.kix.run
-spec:
-  group: kix.run
-  names:
-    kind: PackageInstance
-    listKind: PackageInstanceList
-    plural: packageinstances
-    singular: packageinstance
-  scope: Namespaced
-  versions:
-  - name: v1alpha1
-    schema:
-      openAPIV3Schema:
-        properties:
-          apiVersion:
-            type: string
-          kind:
-            type: string
-          metadata:
-            type: object
-          spec:
-            type: object
-            x-kubernetes-preserve-unknown-fields: true
-          status:
-            type: object
-            x-kubernetes-preserve-unknown-fields: true
-        type: object
-    served: true
-    storage: true
-    subresources:
-      status: {}
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -223,15 +141,15 @@ apiVersion: kix.run/v1alpha1
 kind: Activation
 metadata:
   annotations:
-    kix.run/built-via: /nix/store/s680z0ii9w3xcf5r0m4l1c6p5cma1k0z-kix-activation-test-cli-fixture.json
-    kix.run/depends-on: 08x610nd0klnlgcgvsmh7bb769x80g57,77m90gbg2015zy9s779q3gxx6fidn4ik,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj
-    kix.run/identity-hash: 6fk674jbv6j1iplbwc1bxvap7xzmz6pv
+    kix.run/built-via: /nix/store/96d5ifmdl25y9pijhm4309fqrllm90hc-kix-activation-test-cli-fixture.json
+    kix.run/depends-on: 9byxj45p7jsrl920fdwpycfbxlq53kzq,z0ylnm92mivbskmi98kd3byr0if48rn5
+    kix.run/identity-hash: phqz5fwmyhfsd9fbpc4zmvflkqx7i08b
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
   labels:
     app.kubernetes.io/managed-by: kix
     kix.run/cluster: test-cli-fixture
-  name: test-cli-fixture-6fk674jbv6j1
+  name: test-cli-fixture-phqz5fwmyhfs
 spec:
   instances:
     fixture:
@@ -242,8 +160,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: 55j0yi92xf65kc7ksx8l81qklwn4vhfs,lv7bvm9y8cc6a1ihdzwhwhsawdg7aj6k,q6cwgfmnjbc5w3vzjmyg1jmhgx858y1j,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
-    kix.run/identity-hash: 08x610nd0klnlgcgvsmh7bb769x80g57
+    kix.run/depends-on: 55j0yi92xf65kc7ksx8l81qklwn4vhfs,lv7bvm9y8cc6a1ihdzwhwhsawdg7aj6k,q6cwgfmnjbc5w3vzjmyg1jmhgx858y1j
+    kix.run/identity-hash: 9byxj45p7jsrl920fdwpycfbxlq53kzq
     kix.run/inverse-deps: PodDisruptionBudget/store
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
@@ -262,8 +180,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: 9g8h8z5j0r8nizncwjp6c7v9v43jwxz1,lv7bvm9y8cc6a1ihdzwhwhsawdg7aj6k,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
-    kix.run/identity-hash: 77m90gbg2015zy9s779q3gxx6fidn4ik
+    kix.run/depends-on: 9g8h8z5j0r8nizncwjp6c7v9v43jwxz1,lv7bvm9y8cc6a1ihdzwhwhsawdg7aj6k
+    kix.run/identity-hash: z0ylnm92mivbskmi98kd3byr0if48rn5
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
     kix.run/root: web

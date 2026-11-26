@@ -3,28 +3,25 @@ source: kix-cli/tests/snapshot_test.rs
 expression: stdout
 ---
 Cluster: test-cli-fixture
-Total resources: 11
+Total resources: 9
 
 Namespaces (2):
-  (cluster-scoped) (4 resources)
+  (cluster-scoped) (2 resources)
   fixture (7 resources)
 
 Resource kinds:
- Kind                                           Count 
- CustomResourceDefinition.apiextensions.k8s.io  2     
- Deployment.apps                                2     
- PackageInstance.kix.run                        2     
- Activation.kix.run                             1     
- ConfigMap                                      1     
- Namespace                                      1     
- PodDisruptionBudget.policy                     1     
- Service                                        1     
+ Kind                        Count 
+ Deployment.apps             2     
+ PackageInstance.kix.run     2     
+ Activation.kix.run          1     
+ ConfigMap                   1     
+ Namespace                   1     
+ PodDisruptionBudget.policy  1     
+ Service                     1     
 
 Resources:
   (cluster-scoped):
-    Activation.kix.run/test-cli-fixture-6fk674jbv6j1
-    CustomResourceDefinition.apiextensions.k8s.io/activations.kix.run
-    CustomResourceDefinition.apiextensions.k8s.io/packageinstances.kix.run
+    Activation.kix.run/test-cli-fixture-phqz5fwmyhfs
     Namespace/fixture
   fixture:
     ConfigMap/store

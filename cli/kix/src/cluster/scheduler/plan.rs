@@ -215,7 +215,7 @@ impl DeployPlan {
             let NodeId::Resource(rid) = &node.id else {
                 continue;
             };
-            if !failed.contains(rid) || node.kind == TransitionKind::Wait {
+            if !failed.contains(rid) {
                 continue;
             }
             match &node.rerun {
@@ -477,7 +477,7 @@ impl SchedulerState {
 /// its last run failed: a Job under `kix.run/rerun`, which then runs again,
 /// or a Job the plan leaves unchanged, which is then reported.
 fn reads_last_run(entry: &PlanNodeEntry) -> bool {
-    entry.kind != TransitionKind::Wait && (entry.rerun.is_some() || skip_reads_live(entry))
+    entry.rerun.is_some() || skip_reads_live(entry)
 }
 
 /// Return whether a `Skip` node still reads its live object before it counts

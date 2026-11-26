@@ -49,10 +49,6 @@ pub enum TransitionKind {
     Delete,
     /// Wait for operator approval.
     Pause,
-    /// Wait for an object the build needs and another Kix cluster writes,
-    /// such as Kix's own CRDs on a consumer cluster.
-    /// Nothing is applied or stamped.
-    Wait,
 }
 
 impl TransitionKind {
@@ -66,7 +62,6 @@ impl TransitionKind {
             TransitionKind::Drain => "drain",
             TransitionKind::Delete => "delete",
             TransitionKind::Pause => "pause",
-            TransitionKind::Wait => "wait",
         }
     }
 
@@ -478,7 +473,7 @@ mod tests {
     #[test]
     fn names_match_the_deploy_log() {
         use TransitionKind::*;
-        for kind in [Apply, Skip, Recreate, Migrate, Drain, Delete, Pause, Wait] {
+        for kind in [Apply, Skip, Recreate, Migrate, Drain, Delete, Pause] {
             assert_eq!(kind.as_str(), serialized(kind));
         }
         use ApplyAction::*;

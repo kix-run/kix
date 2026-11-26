@@ -213,10 +213,18 @@ deployment record, and records the Kix version that last changed the cluster.
 An `Activation` record without a `kix.run/cluster` label uses an
 `ActivationHead` named after the record itself.
 
-Kix creates the `activationheads.kix.run` CustomResourceDefinition
-automatically before taking the lock in `kix deploy`, `kix rollback`,
-`kix gc`, `kix migrate domain`, and the Kix operator. The CRD has no status
-subresource. On every write, Kix replaces the whole object with the
+Kix installs its four CustomResourceDefinitions itself:
+`activations.kix.run`, `packageinstances.kix.run`, `activationheads.kix.run`,
+and `packageinstancerevisions.kix.run`. Builds do not contain them. Before
+taking the lock, `kix deploy`, `kix rollback`, `kix gc`, and
+`kix migrate domain` create any CRD that is missing, and the Kix operator does
+the same when it starts. Each CRD carries the annotation `kix.run/definition`,
+which says which version of Kix's definition it holds. A newer Kix replaces an
+older definition, and an older Kix leaves a newer one as it is. A Kix stops
+with an error if the CRD on the cluster no longer serves the API version it
+uses.
+
+The `activationheads.kix.run` CRD has no status subresource. On every write, Kix replaces the whole object with the
 `resourceVersion` it read, so the Kubernetes API server rejects concurrent
 writes. Do not edit `ActivationHead` objects directly; inspect them with
 `kubectl get activationhead` or `kix status`.

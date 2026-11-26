@@ -4,7 +4,7 @@ let
   kixAnnotations = import ./annotations.nix;
   kixKeys = kixAnnotations.keys;
   resource = import ./resource.nix { inherit lib; };
-  inherit (resource) mkResource kixCRDs clusterScoped;
+  inherit (resource) mkResource clusterScoped;
 in
 {
 
@@ -30,7 +30,6 @@ in
       kind = "PackageInstance";
       name = instanceName;
       inherit namespace labels;
-      requires = [ kixCRDs.packageInstance ];
       annotations = {
         ${kixKeys.root} = mainResource.out.name;
       }
@@ -96,7 +95,6 @@ in
       // lib.optionalAttrs (kubernetesUid != null) {
         ${kixKeys.kubernetesUidLabel} = kubernetesUid;
       };
-      requires = [ kixCRDs.activation ];
       extraDeps = extraDeps;
       storeReferences = [ index ] ++ interfaceFiles;
       namespace = clusterScoped;

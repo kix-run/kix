@@ -2,42 +2,35 @@
 source: kix-cli/tests/snapshot_test.rs
 expression: stdout
 ---
-CustomResourceDefinition.apiextensions.k8s.io/activations.kix.run
-└── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
-CustomResourceDefinition.apiextensions.k8s.io/packageinstances.kix.run
-├── PackageInstance.kix.run/web@fixture
-│   └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
-└── PackageInstance.kix.run/store@fixture
-    └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
 Namespace/fixture
 ├── Service/store@fixture
 │   ├── PackageInstance.kix.run/store@fixture
-│   │   └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
+│   │   └── Activation.kix.run/test-cli-fixture-phqz5fwmyhfs
 │   └── Deployment.apps/web@fixture
 │       └── PackageInstance.kix.run/web@fixture
-│           └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
+│           └── Activation.kix.run/test-cli-fixture-phqz5fwmyhfs
 ├── ConfigMap/store@fixture
 │   └── Deployment.apps/store@fixture
 │       └── Service/store@fixture
 │           ├── PackageInstance.kix.run/store@fixture
-│           │   └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
+│           │   └── Activation.kix.run/test-cli-fixture-phqz5fwmyhfs
 │           └── Deployment.apps/web@fixture
 │               └── PackageInstance.kix.run/web@fixture
-│                   └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
+│                   └── Activation.kix.run/test-cli-fixture-phqz5fwmyhfs
 ├── PodDisruptionBudget.policy/store@fixture
 │   └── PackageInstance.kix.run/store@fixture
-│       └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
+│       └── Activation.kix.run/test-cli-fixture-phqz5fwmyhfs
 ├── PackageInstance.kix.run/web@fixture
-│   └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
+│   └── Activation.kix.run/test-cli-fixture-phqz5fwmyhfs
 ├── PackageInstance.kix.run/store@fixture
-│   └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
+│   └── Activation.kix.run/test-cli-fixture-phqz5fwmyhfs
 ├── Deployment.apps/web@fixture
 │   └── PackageInstance.kix.run/web@fixture
-│       └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
+│       └── Activation.kix.run/test-cli-fixture-phqz5fwmyhfs
 └── Deployment.apps/store@fixture
     └── Service/store@fixture
         ├── PackageInstance.kix.run/store@fixture
-        │   └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
+        │   └── Activation.kix.run/test-cli-fixture-phqz5fwmyhfs
         └── Deployment.apps/web@fixture
             └── PackageInstance.kix.run/web@fixture
-                └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
+                └── Activation.kix.run/test-cli-fixture-phqz5fwmyhfs

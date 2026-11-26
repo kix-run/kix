@@ -28,10 +28,9 @@ under `_cluster`:
 Each filename contains the resource kind and name, such as
 `how-to-app/Deployment-production.yaml`.
 
-The export omits the `Activation` and `PackageInstance` objects, but includes
-the two CustomResourceDefinitions for those kinds. The CRDs are ordinary
-cluster-scoped resources in the graph, so they appear under `_cluster`. Remove
-them manually if the receiving system should contain no Kix resources.
+The export omits the `Activation` and `PackageInstance` objects. It does not
+contain the CustomResourceDefinitions for those kinds either, because Kix
+installs them itself when it deploys and builds do not contain them.
 
 ## Review the export
 

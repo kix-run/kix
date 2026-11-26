@@ -106,27 +106,58 @@ fn each_definition_has_the_number_of_its_content() {
     assert_eq!(found, pinned);
 }
 
+/// Return the definition that builds of earlier releases applied for a
+/// record kind, as `kix/lib/core/resource.nix` wrote it before the program
+/// installed it.
+fn built_by_earlier_releases(kind: &str, plural: &str, scope: &str) -> Value {
+    let open = json!({ "type": "object", "x-kubernetes-preserve-unknown-fields": true });
+    json!({
+        "apiVersion": "apiextensions.k8s.io/v1",
+        "kind": "CustomResourceDefinition",
+        "metadata": {
+            "labels": { "app.kubernetes.io/managed-by": "kix" },
+            "name": format!("{plural}.{}", keys::GROUP),
+        },
+        "spec": {
+            "group": keys::GROUP,
+            "names": {
+                "kind": kind,
+                "listKind": format!("{kind}List"),
+                "plural": plural,
+                "singular": kind.to_lowercase(),
+            },
+            "scope": scope,
+            "versions": [{
+                "name": "v1alpha1",
+                "schema": { "openAPIV3Schema": {
+                    "properties": {
+                        "apiVersion": { "type": "string" },
+                        "kind": { "type": "string" },
+                        "metadata": { "type": "object" },
+                        "spec": open,
+                        "status": open,
+                    },
+                    "type": "object",
+                }},
+                "served": true,
+                "storage": true,
+                "subresources": { "status": {} },
+            }],
+        },
+    })
+}
+
 /// Builds of earlier releases apply these two definitions. Number 1 must
 /// match them, so an older Kix that applies them changes nothing.
 #[test]
 fn number_one_of_the_record_kinds_is_what_builds_applied() {
-    let fixture: Value = serde_json::from_str(include_str!(
-        "../../../../kix-core/tests/fixtures/kix-enterprise-test.json"
-    ))
-    .unwrap();
-    let built: Vec<Value> = fixture["files"]
-        .as_object()
-        .unwrap()
-        .values()
-        .filter_map(|f| serde_json::from_str::<Value>(f["text"].as_str()?).ok())
-        .filter(|m| m["kind"] == "CustomResourceDefinition")
-        .collect();
-    for crd in &all()[..2] {
+    let built = [
+        built_by_earlier_releases("Activation", "activations", "Cluster"),
+        built_by_earlier_releases("PackageInstance", "packageinstances", "Namespaced"),
+    ];
+    for (crd, from_build) in all()[..2].iter().zip(&built) {
         assert_eq!(crd.number, 1);
-        let from_build = built
-            .iter()
-            .find(|m| m["metadata"]["name"] == crd.name.as_str())
-            .unwrap_or_else(|| panic!("the fixture builds {}", crd.name));
+        assert_eq!(crd.name, from_build["metadata"]["name"].as_str().unwrap());
         assert_eq!(crd.definition["spec"], from_build["spec"], "{}", crd.name);
         assert_eq!(crd.definition["apiVersion"], from_build["apiVersion"]);
     }

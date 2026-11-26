@@ -62,22 +62,10 @@ let
     else
       a == b;
 
-  # Return true for Kix's own cluster-level resources (its Activation record
-  # and Kix CRDs), which bypass consumer grant and platform checks.
+  # Return true for Kix's own cluster-level resource, its Activation record,
+  # which bypasses consumer grant and platform checks.
   isKixOwn =
-    m:
-    let
-      kind = m.kind or "";
-      name = plain (m.metadata.name or "");
-    in
-    (kind == "Activation" && groupOf (plain (m.apiVersion or "")) == kixAnnotations.group)
-    || (
-      kind == "CustomResourceDefinition"
-      && builtins.elem name [
-        "activations.${kixAnnotations.group}"
-        "packageinstances.${kixAnnotations.group}"
-      ]
-    );
+    m: (m.kind or "") == "Activation" && groupOf (plain (m.apiVersion or "")) == kixAnnotations.group;
 
   # Return true for string context entries that carry only Kix tracking
   # metadata (fact tokens, markers, or `k8s-*` resource identity paths) rather

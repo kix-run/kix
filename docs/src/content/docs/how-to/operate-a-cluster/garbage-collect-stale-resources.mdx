@@ -202,9 +202,11 @@ Kix deletes every resource from the previous deployment except:
   [Let the operator perform cleanup](#let-the-operator-perform-cleanup).
 - **Resources from any flavor or platform import** you kept in the cluster
   definition.
-- **Kix's own CustomResourceDefinitions** (`activations.kix.run` and
-  `packageinstances.kix.run`). Every Kix cluster on the same Kubernetes cluster
-  shares these two CRDs, so delete them only when no other Kix clusters remain.
+- **Kix's own CustomResourceDefinitions** (`activations.kix.run`,
+  `packageinstances.kix.run`, `activationheads.kix.run`, and
+  `packageinstancerevisions.kix.run`). Kix installs them itself, and every Kix
+  cluster on the same Kubernetes cluster shares them, so delete them only when
+  no other Kix clusters remain.
 
 Delete the remaining records, Namespaces, and CustomResourceDefinitions you no
 longer need with `kubectl delete`.

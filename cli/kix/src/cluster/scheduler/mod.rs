@@ -21,7 +21,7 @@
 //! `run_deploy` is private to the library and accepts only plans constructed
 //! by library entry points.
 //!
-//! The planner produces `Apply`, `Skip`, `Recreate`, and `Wait` transitions.
+//! The planner produces `Apply`, `Skip`, and `Recreate` transitions.
 
 #[cfg(test)]
 mod engine_tests;

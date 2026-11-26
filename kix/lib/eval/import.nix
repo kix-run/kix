@@ -20,7 +20,6 @@ let
     clusterScoped
     mkResource
     mkImportResource
-    kixCRDs
     ;
 in
 
@@ -696,7 +695,6 @@ rec {
         kind = "PackageInstance";
         name = instanceName;
         namespace = namespaceResource;
-        requires = [ kixCRDs.packageInstance ];
         extraDeps = instanceExtraDeps;
         annotations = {
           ${kixKeys.mode} = "import";
