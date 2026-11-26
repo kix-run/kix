@@ -231,6 +231,8 @@ pub struct ScriptedOps {
     finalize: Mutex<Behaviour<Result<Option<Finalized>, String>>>,
     abort: Mutex<Behaviour<Result<(), String>>>,
     log: Mutex<Vec<Logged>>,
+    /// The propagation policy of each [`ResourceIo::prune`] call, in order.
+    propagations: Mutex<Vec<(ResourceId, kube::api::PropagationPolicy)>>,
     applies_now: AtomicUsize,
     applies_peak: AtomicUsize,
     dry_run: std::sync::atomic::AtomicBool,
@@ -261,6 +263,7 @@ impl ScriptedOps {
             finalize: Mutex::new(Behaviour::Now(Ok(None))),
             abort: Mutex::new(Behaviour::Now(Ok(()))),
             log: Mutex::new(Vec::new()),
+            propagations: Mutex::new(Vec::new()),
             applies_now: AtomicUsize::new(0),
             applies_peak: AtomicUsize::new(0),
             dry_run: std::sync::atomic::AtomicBool::new(false),
@@ -353,6 +356,11 @@ impl ScriptedOps {
     }
 
     /// Return all recorded calls without timestamps.
+    /// Return the propagation policy each prune used, in call order.
+    pub fn propagations(&self) -> Vec<(ResourceId, kube::api::PropagationPolicy)> {
+        self.propagations.lock().unwrap().clone()
+    }
+
     pub fn calls(&self) -> Vec<Call> {
         self.log
             .lock()
@@ -563,8 +571,16 @@ impl ResourceIo for ScriptedOps {
         })
     }
 
-    async fn prune(&self, rid: &ResourceId) -> Result<Pruned, DeleteError> {
+    async fn prune(
+        &self,
+        rid: &ResourceId,
+        propagation: kube::api::PropagationPolicy,
+    ) -> Result<Pruned, DeleteError> {
         self.record(Call::Delete(rid.clone()));
+        self.propagations
+            .lock()
+            .unwrap()
+            .push((rid.clone(), propagation));
         let b = self.delete.lock().unwrap().clone();
         b.run().await.map_err(DeleteError::Scripted)
     }

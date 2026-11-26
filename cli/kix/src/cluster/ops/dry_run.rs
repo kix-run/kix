@@ -198,8 +198,12 @@ impl ResourceIo for DryRun {
         Ok(())
     }
 
-    async fn prune(&self, rid: &ResourceId) -> Result<Pruned, DeleteError> {
-        let deleted = self.resources.prune(rid).await;
+    async fn prune(
+        &self,
+        rid: &ResourceId,
+        propagation: kube::api::PropagationPolicy,
+    ) -> Result<Pruned, DeleteError> {
+        let deleted = self.resources.prune(rid, propagation).await;
         let answer = match &deleted {
             Ok(Pruned::Deleted { finalizers, .. }) => PruneAnswer::Deleted(DeleteWait {
                 finalizers: finalizers.clone(),
@@ -364,14 +368,24 @@ mod tests {
             name: "old".into(),
         };
 
-        assert_eq!(dry.prune(&rid("Widget")).await.unwrap(), Pruned::NotServed);
+        assert_eq!(
+            dry.prune(&rid("Widget"), kube::api::PropagationPolicy::Background)
+                .await
+                .unwrap(),
+            Pruned::NotServed
+        );
         let answers = dry.take_answers();
         assert!(matches!(
             &answers[..],
             [a] if matches!(&a.outcome, DryRunOutcome::Pruned(PruneAnswer::Deleted(_)))
         ));
 
-        dry.prune(&rid("ClusterRole")).await.unwrap();
+        dry.prune(
+            &rid("ClusterRole"),
+            kube::api::PropagationPolicy::Background,
+        )
+        .await
+        .unwrap();
         let answers = dry.take_answers();
         assert_eq!(answers.len(), 1);
         assert!(matches!(

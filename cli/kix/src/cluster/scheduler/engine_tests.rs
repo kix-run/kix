@@ -2270,9 +2270,10 @@ async fn stuck_prune_deletes_wait_together() {
     assert!(waited < secs(200), "waited {waited:?}");
 }
 
-/// A stuck orphan whose kind names a controller says whether the controller
-/// runs, and the controller is kept. A stuck orphan that depends on the same
-/// workload through `requires:` names no controller.
+/// A stuck orphan whose kind names a controller is deleted in the
+/// foreground, says whether the controller runs, and the controller is kept.
+/// A stuck orphan that depends on the same workload through `requires:` is
+/// deleted in the background and names no controller.
 #[tokio::test(start_paused = true)]
 async fn a_stuck_prune_names_the_controller() {
     use crate::cluster::readiness::{Deletion, Stuck};
@@ -2329,6 +2330,18 @@ async fn a_stuck_prune_names_the_controller() {
     .unwrap();
 
     assert_eq!((result.pruned, result.failed), (0, 2));
+    // Only the object whose kind names a controller waits for what the
+    // controller made for it.
+    let mut propagations = ops.propagations();
+    propagations.sort_by(|a, b| a.0.name.cmp(&b.0.name));
+    assert!(
+        matches!(
+            propagations.as_slice(),
+            [(cr, kube::api::PropagationPolicy::Foreground), (plain, kube::api::PropagationPolicy::Background)]
+                if cr.name == "cr" && plain.name == "plain"
+        ),
+        "{propagations:?}"
+    );
     let message_of = |name: &str| {
         result
             .failures

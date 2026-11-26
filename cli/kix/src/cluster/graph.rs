@@ -6,6 +6,7 @@ use crate::manifest::keys;
 use crate::manifest::kinds::{self, GroupKind};
 use crate::manifest::types::ResourceId;
 use crate::manifest::workload;
+use kube::api::PropagationPolicy;
 use petgraph::graph::{DiGraph, NodeIndex};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -366,18 +367,24 @@ fn get_annotation(manifest: &serde_json::Value, key: &str) -> Option<String> {
 ///
 /// Most dependencies are the `kix.run/depends-on` entries that name another
 /// manifest of the set. The library writes those from the references in a
-/// manifest. A RoleBinding or ClusterRoleBinding names the ServiceAccount it
-/// grants rights to, but nothing a pod runs as refers to the bindings that
-/// grant it rights. So this also makes every workload depend on each binding
-/// whose subjects include the ServiceAccount its pods run as. Apply then
-/// creates the rights before the pods that use them, and a delete keeps them
-/// while the pods still run, for example while a controller removes the
-/// finalizers of the custom resources deleted in the same run.
+/// manifest. Two more come from what Kubernetes does with a manifest, whatever
+/// the package wrote:
 ///
-/// A binding that already depends on the workload, directly or through other
-/// objects, gets no such dependency, because the package recorded the
-/// opposite order. An operator that removes the finalizer of a binding it
-/// manages for its own ServiceAccount is one case.
+/// - A workload depends on each RoleBinding or ClusterRoleBinding whose
+///   subjects include the ServiceAccount its pods run as ([`grants`]).
+/// - A webhook configuration depends on the Service that each of its
+///   webhooks calls ([`webhook_services`]).
+///
+/// Apply then creates what an object needs before the object, and a delete
+/// removes the object first. A controller keeps its rights while it removes
+/// the finalizers of custom resources deleted in the same run. The API server
+/// stops calling a webhook before its Service and the pods behind it go.
+///
+/// An added dependency that the recorded ones already contradict, because its
+/// target depends on its dependent directly or through other objects, is left
+/// out, because the package recorded the opposite order. An operator that
+/// removes the finalizer of a binding it manages for its own ServiceAccount is
+/// one case.
 pub fn dependency_pairs(manifests: &[serde_json::Value]) -> Vec<(usize, usize)> {
     let mut by_hash: HashMap<String, usize> = HashMap::new();
     for (i, m) in manifests.iter().enumerate() {
@@ -395,8 +402,32 @@ pub fn dependency_pairs(manifests: &[serde_json::Value]) -> Vec<(usize, usize)> 
         }
     }
 
-    let mut grants: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
-    let mut granted = Vec::new();
+    let mut recorded: DiGraph<(), ()> = DiGraph::new();
+    let nodes: Vec<NodeIndex> = manifests.iter().map(|_| recorded.add_node(())).collect();
+    for &(from, to) in &pairs {
+        recorded.add_edge(nodes[from], nodes[to], ());
+    }
+    let mut added = grants(manifests);
+    added.extend(webhook_services(manifests));
+    added.sort_unstable();
+    added.dedup();
+    for (from, to) in added {
+        if !petgraph::algo::has_path_connecting(&recorded, nodes[to], nodes[from], None) {
+            recorded.add_edge(nodes[from], nodes[to], ());
+            pairs.push((from, to));
+        }
+    }
+    pairs.sort_unstable();
+    pairs.dedup();
+    pairs
+}
+
+/// Return a pair for each workload and each RoleBinding or ClusterRoleBinding
+/// whose subjects include the ServiceAccount the workload's pods run as
+/// (`default` when the pod spec names none). The binding names the
+/// ServiceAccount, but nothing in the pod spec names the binding.
+fn grants(manifests: &[serde_json::Value]) -> Vec<(usize, usize)> {
+    let mut bindings: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
     for (i, m) in manifests.iter().enumerate() {
         let gk = GroupKind::of_manifest(m);
         if gk != kinds::ROLE_BINDING && gk != kinds::CLUSTER_ROLE_BINDING {
@@ -425,9 +456,10 @@ pub fn dependency_pairs(manifests: &[serde_json::Value]) -> Vec<(usize, usize)> 
             else {
                 continue;
             };
-            grants.entry((namespace, name)).or_default().push(i);
+            bindings.entry((namespace, name)).or_default().push(i);
         }
     }
+    let mut pairs = Vec::new();
     for (i, m) in manifests.iter().enumerate() {
         let Some(spec) = workload::pod_spec(m) else {
             continue;
@@ -440,25 +472,53 @@ pub fn dependency_pairs(manifests: &[serde_json::Value]) -> Vec<(usize, usize)> 
         let Some(namespace) = namespace_of(m) else {
             continue;
         };
-        for &binding in grants.get(&(namespace, account)).into_iter().flatten() {
-            granted.push((i, binding));
+        for &binding in bindings.get(&(namespace, account)).into_iter().flatten() {
+            pairs.push((i, binding));
         }
     }
+    pairs
+}
 
-    let mut recorded: DiGraph<(), ()> = DiGraph::new();
-    let nodes: Vec<NodeIndex> = manifests.iter().map(|_| recorded.add_node(())).collect();
-    for &(from, to) in &pairs {
-        recorded.add_edge(nodes[from], nodes[to], ());
-    }
-    granted.sort_unstable();
-    for (workload, binding) in granted {
-        if !petgraph::algo::has_path_connecting(&recorded, nodes[binding], nodes[workload], None) {
-            recorded.add_edge(nodes[workload], nodes[binding], ());
-            pairs.push((workload, binding));
+/// Return a pair for each ValidatingWebhookConfiguration or
+/// MutatingWebhookConfiguration and each Service of the set that one of its
+/// webhooks calls through `clientConfig.service`. A webhook that the API
+/// server calls while its Service has no pods behind it fails every request
+/// it covers when its `failurePolicy` is `Fail`.
+fn webhook_services(manifests: &[serde_json::Value]) -> Vec<(usize, usize)> {
+    let services: HashMap<(&str, &str), usize> = manifests
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| GroupKind::of_manifest(m) == kinds::SERVICE)
+        .filter_map(|(i, m)| {
+            let name = m.pointer("/metadata/name")?.as_str()?;
+            Some(((namespace_of(m)?, name), i))
+        })
+        .collect();
+    let mut pairs = Vec::new();
+    for (i, m) in manifests.iter().enumerate() {
+        let gk = GroupKind::of_manifest(m);
+        if gk != kinds::VALIDATING_WEBHOOK_CONFIGURATION
+            && gk != kinds::MUTATING_WEBHOOK_CONFIGURATION
+        {
+            continue;
+        }
+        for webhook in m
+            .get("webhooks")
+            .and_then(|w| w.as_array())
+            .into_iter()
+            .flatten()
+        {
+            let Some(service) = webhook.pointer("/clientConfig/service") else {
+                continue;
+            };
+            let field = |key: &str| service.get(key).and_then(|v| v.as_str());
+            if let (Some(namespace), Some(name)) = (field("namespace"), field("name"))
+                && let Some(&target) = services.get(&(namespace, name))
+            {
+                pairs.push((i, target));
+            }
         }
     }
-    pairs.sort_unstable();
-    pairs.dedup();
     pairs
 }
 
@@ -588,6 +648,21 @@ impl DeleteOrder {
     /// workload should remove a stuck object's finalizers.
     pub fn controllers(&self) -> &HashMap<ResourceId, Vec<ResourceId>> {
         &self.controllers
+    }
+
+    /// Return how to delete `rid`. An object whose kind names a controller
+    /// is deleted in the foreground. Kubernetes then keeps it until the
+    /// objects the controller made for it, and that block their owner's
+    /// deletion, are gone. So the order keeps the controller until it has
+    /// cleaned up those objects too, such as a pending ACME Challenge under a
+    /// Certificate. Other objects are deleted in the background, so their
+    /// delete does not wait for their pods to stop.
+    pub fn propagation(&self, rid: &ResourceId) -> PropagationPolicy {
+        if self.controllers.contains_key(rid) {
+            PropagationPolicy::Foreground
+        } else {
+            PropagationPolicy::Background
+        }
     }
 
     /// Keep `ids` in the order given, with no known dependencies.
@@ -1099,6 +1174,141 @@ mod tests {
             assert!(
                 unnamed > 0,
                 "{cluster}: every held binding is named by its workload, so this test checks nothing new"
+            );
+        }
+    }
+
+    /// A webhook configuration depends on the Service of the set that a
+    /// webhook calls. A Service in another namespace, a Service not in the
+    /// set, and a webhook called by URL add no dependency.
+    #[test]
+    fn a_webhook_configuration_depends_on_the_service_it_calls() {
+        let config = |kind: &str, name: &str, hash: &str, webhooks: serde_json::Value| {
+            json!({
+                "apiVersion": "admissionregistration.k8s.io/v1",
+                "kind": kind,
+                "metadata": { "name": name, "annotations": { (keys::IDENTITY_HASH): hash } },
+                "webhooks": webhooks,
+            })
+        };
+        let calls = |ns: &str, name: &str| json!({ "clientConfig": { "service": { "namespace": ns, "name": name } } });
+        let manifests = [
+            manifest("Service", "webhook", "ops", "hash_svc", ""),
+            config(
+                "ValidatingWebhookConfiguration",
+                "validate",
+                "hash_v",
+                json!([calls("ops", "webhook"), calls("other", "webhook")]),
+            ),
+            config(
+                "MutatingWebhookConfiguration",
+                "mutate",
+                "hash_m",
+                json!([calls("ops", "webhook")]),
+            ),
+            config(
+                "ValidatingWebhookConfiguration",
+                "elsewhere",
+                "hash_e",
+                json!([
+                    calls("ops", "missing"),
+                    { "clientConfig": { "url": "https://example.com/validate" } },
+                ]),
+            ),
+        ];
+        let names = |i: usize| manifests[i]["metadata"]["name"].as_str().unwrap();
+        let pairs: Vec<(&str, &str)> = dependency_pairs(&manifests)
+            .into_iter()
+            .map(|(from, to)| (names(from), names(to)))
+            .collect();
+        assert_eq!(pairs, vec![("validate", "webhook"), ("mutate", "webhook")]);
+    }
+
+    /// In the builds of real operator packages, prune deletes each webhook
+    /// configuration before the Service it calls, and that Service before the
+    /// workload behind it, so the API server never calls a webhook that has
+    /// nothing behind it. Some configurations do not name their Service.
+    #[test]
+    fn operator_graphs_delete_webhook_configurations_before_their_service() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/operator-graphs");
+        let mut unnamed = 0;
+        for cluster in ["cert-manager", "external-secrets"] {
+            let text = std::fs::read_to_string(dir.join(format!("{cluster}.json"))).unwrap();
+            let manifests: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
+            let order = DeleteOrder::of_manifests(&manifests);
+            let mut checked = 0;
+            for config in manifests.iter().filter(|m| {
+                m["kind"]
+                    .as_str()
+                    .is_some_and(|k| k.ends_with("WebhookConfiguration"))
+            }) {
+                let config_id = ResourceId::from_value(config);
+                let named = get_annotation(config, keys::DEPENDS_ON).unwrap_or_default();
+                for webhook in config["webhooks"].as_array().unwrap() {
+                    let called = &webhook["clientConfig"]["service"];
+                    let service = manifests
+                        .iter()
+                        .find(|m| {
+                            m["kind"] == "Service"
+                                && m["metadata"]["name"] == called["name"]
+                                && m["metadata"]["namespace"] == called["namespace"]
+                        })
+                        .unwrap();
+                    let service_id = ResourceId::from_value(service);
+                    assert!(
+                        order.needs[&config_id].contains(&service_id),
+                        "{cluster}: {config_id} does not need {service_id}"
+                    );
+                    let workloads = order.needs[&service_id]
+                        .iter()
+                        .filter(|d| d.group == "apps")
+                        .count();
+                    assert!(workloads > 0, "{cluster}: {service_id} needs no workload");
+                    let hash = get_annotation(service, keys::IDENTITY_HASH).unwrap();
+                    if !named.contains(&hash) {
+                        unnamed += 1;
+                    }
+                    checked += 1;
+                }
+            }
+            assert!(checked > 0, "{cluster}: no webhook calls a Service");
+        }
+        assert!(
+            unnamed > 0,
+            "every configuration names its Service, so this test checks nothing new"
+        );
+    }
+
+    /// In the builds of real operator packages, prune deletes each custom
+    /// resource whose kind names a controller in the foreground, and every
+    /// other object, the controllers included, in the background.
+    #[test]
+    fn operator_graphs_delete_custom_resources_in_the_foreground() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/operator-graphs");
+        for cluster in ["cert-manager", "velero", "external-secrets"] {
+            let text = std::fs::read_to_string(dir.join(format!("{cluster}.json"))).unwrap();
+            let manifests: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
+            let order = DeleteOrder::of_manifests(&manifests);
+            let mut foreground = 0;
+            for m in &manifests {
+                let rid = ResourceId::from_value(m);
+                let expected = if order.controllers().contains_key(&rid) {
+                    foreground += 1;
+                    PropagationPolicy::Foreground
+                } else {
+                    PropagationPolicy::Background
+                };
+                assert_eq!(
+                    format!("{:?}", order.propagation(&rid)),
+                    format!("{expected:?}"),
+                    "{cluster}: {rid}"
+                );
+            }
+            assert!(
+                foreground > 0,
+                "{cluster}: no custom resource names a controller"
             );
         }
     }

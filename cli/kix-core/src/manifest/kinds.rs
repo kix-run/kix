@@ -70,6 +70,14 @@ pub const HORIZONTAL_POD_AUTOSCALER: GroupKind<'static> =
     GroupKind::new("autoscaling", "HorizontalPodAutoscaler");
 pub const PRIORITY_CLASS: GroupKind<'static> = GroupKind::new("scheduling.k8s.io", "PriorityClass");
 pub const STORAGE_CLASS: GroupKind<'static> = GroupKind::new("storage.k8s.io", "StorageClass");
+pub const VALIDATING_WEBHOOK_CONFIGURATION: GroupKind<'static> = GroupKind::new(
+    "admissionregistration.k8s.io",
+    "ValidatingWebhookConfiguration",
+);
+pub const MUTATING_WEBHOOK_CONFIGURATION: GroupKind<'static> = GroupKind::new(
+    "admissionregistration.k8s.io",
+    "MutatingWebhookConfiguration",
+);
 pub const CUSTOM_RESOURCE_DEFINITION: GroupKind<'static> =
     GroupKind::new("apiextensions.k8s.io", "CustomResourceDefinition");
 pub const SERVICE_MONITOR: GroupKind<'static> =

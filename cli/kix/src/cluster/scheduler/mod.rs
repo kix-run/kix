@@ -1144,7 +1144,13 @@ impl<'a> Run<'a> {
         // one only, so many stuck objects make one explanation.
         let mut explained = false;
         let controllers = Arc::new(order.controllers().clone());
+        let propagations: HashMap<ResourceId, kube::api::PropagationPolicy> = order
+            .ids()
+            .iter()
+            .map(|rid| (rid.clone(), order.propagation(rid)))
+            .collect();
         let start = |rid: &ResourceId| {
+            let propagation = propagations[rid].clone();
             let (resources, observer, progress, cancel, controllers) = (
                 resources.clone(),
                 observer.clone(),
@@ -1154,16 +1160,18 @@ impl<'a> Run<'a> {
             );
             let rid = rid.clone();
             async move {
-                let deleted =
-                    match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, resources.prune(&rid))
-                        .await
-                    {
-                        Ok(outcome) => outcome.map_err(|e| e.to_string()),
-                        Err(_) => Err(format!(
-                            "no answer within {}s",
-                            INLINE_BEST_EFFORT_TIMEOUT.as_secs()
-                        )),
-                    };
+                let deleted = match tokio::time::timeout(
+                    INLINE_BEST_EFFORT_TIMEOUT,
+                    resources.prune(&rid, propagation),
+                )
+                .await
+                {
+                    Ok(outcome) => outcome.map_err(|e| e.to_string()),
+                    Err(_) => Err(format!(
+                        "no answer within {}s",
+                        INLINE_BEST_EFFORT_TIMEOUT.as_secs()
+                    )),
+                };
                 match deleted {
                     Ok(kept @ (Pruned::Kept(_) | Pruned::Changed(_))) => Pruning::Kept(kept),
                     Ok(pruned) => match pruned.deleting() {

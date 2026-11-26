@@ -333,7 +333,11 @@ impl KubeResources {
 
 #[async_trait]
 impl ResourceIo for KubeResources {
-    async fn prune(&self, rid: &ResourceId) -> Result<Pruned, DeleteError> {
+    async fn prune(
+        &self,
+        rid: &ResourceId,
+        propagation: kube::api::PropagationPolicy,
+    ) -> Result<Pruned, DeleteError> {
         let (ar, scope) = match self.served(rid).await.map_err(DeleteError::Discovery)? {
             KindLookup::Served(ar, scope) => (ar, scope),
             KindLookup::NotServed => return Ok(Pruned::NotServed),
@@ -348,7 +352,7 @@ impl ResourceIo for KubeResources {
             })
             .await?;
         let dp = DeleteParams {
-            propagation_policy: Some(kube::api::PropagationPolicy::Background),
+            propagation_policy: Some(propagation),
             dry_run: self.dry(),
             ..Default::default()
         };
@@ -570,11 +574,14 @@ mod prune_tests {
             name: name.into(),
         };
         assert!(matches!(
-            ops.prune(&rid("mine")).await.unwrap(),
+            ops.prune(&rid("mine"), kube::api::PropagationPolicy::Background)
+                .await
+                .unwrap(),
             Pruned::Deleted { .. }
         ));
         assert!(matches!(
-            ops.prune(&rid("shared")).await,
+            ops.prune(&rid("shared"), kube::api::PropagationPolicy::Background)
+                .await,
             Ok(Pruned::Kept(_))
         ));
         assert_eq!(api.names("ClusterRole"), vec!["shared"]);
@@ -606,21 +613,30 @@ mod prune_tests {
         };
 
         assert_eq!(
-            ops.prune(&rid("cilium.io", "CiliumNetworkPolicy"))
-                .await
-                .unwrap(),
+            ops.prune(
+                &rid("cilium.io", "CiliumNetworkPolicy"),
+                kube::api::PropagationPolicy::Background
+            )
+            .await
+            .unwrap(),
             Pruned::NotServed
         );
         assert_eq!(
-            ops.prune(&rid("rbac.authorization.k8s.io", "Widget"))
-                .await
-                .unwrap(),
+            ops.prune(
+                &rid("rbac.authorization.k8s.io", "Widget"),
+                kube::api::PropagationPolicy::Background
+            )
+            .await
+            .unwrap(),
             Pruned::NotServed
         );
         assert!(matches!(
-            ops.prune(&rid("rbac.authorization.k8s.io", "ClusterRole"))
-                .await
-                .unwrap(),
+            ops.prune(
+                &rid("rbac.authorization.k8s.io", "ClusterRole"),
+                kube::api::PropagationPolicy::Background
+            )
+            .await
+            .unwrap(),
             Pruned::Deleted { .. }
         ));
         assert!(api.names("ClusterRole").is_empty());
@@ -646,7 +662,11 @@ mod prune_tests {
             namespace: CLUSTER_SCOPED.into(),
             name: "mine".into(),
         };
-        let err = ops.prune(&rid).await.unwrap_err().to_string();
+        let err = ops
+            .prune(&rid, kube::api::PropagationPolicy::Background)
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("kix migrate domain"), "{err}");
         assert_eq!(api.names("ClusterRole"), vec!["mine"]);
     }
@@ -772,7 +792,9 @@ mod group_tests {
         assert_eq!(note(other), json!("other"));
 
         assert!(matches!(
-            ops.prune(&rid("batch/v1")).await.unwrap(),
+            ops.prune(&rid("batch/v1"), kube::api::PropagationPolicy::Background)
+                .await
+                .unwrap(),
             Pruned::Deleted { .. }
         ));
         assert!(api.names_of("batch/v1", "Job").is_empty());
