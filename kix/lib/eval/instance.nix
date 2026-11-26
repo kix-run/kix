@@ -164,13 +164,13 @@ in
         # the plugin default to false.
         _netpolEnabled = clusterConfig.networkPolicy.enable or false;
 
-        _findRoleProvider = clusterCtx.findRoleProvider or (_: null);
+        _dnsPeers = clusterCtx.dnsPeers or dnsPeersLib.defaultDnsPeers;
 
         _networkPolicyEnforcer =
           if !_netpolEnabled || _enforcerProvider == null || _isSelfEnforcer then
             null
           else
-            dnsPeersLib.bindDnsPeers _findRoleProvider _enforcerProvider.out;
+            dnsPeersLib.bindDnsPeers _dnsPeers _enforcerProvider.out;
 
         _edgeAnalysis = rec {
           serviceRegistry = edgeAnalysis.mkServiceRegistry _depResourcesForEdges;
@@ -201,7 +201,7 @@ in
             availability
             ;
           networkPolicyEnforcer = _networkPolicyEnforcer;
-          dnsPeers = dnsPeersLib.dnsPeersOf _findRoleProvider;
+          dnsPeers = _dnsPeers;
           packageId = packageLib.idOf instCfg.package;
           namespaces = nsResources;
           labelStyle = instCfg.labelStyle;

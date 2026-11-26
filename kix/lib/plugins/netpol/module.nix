@@ -65,7 +65,7 @@ let
     if provider == null || (provider.ns == namespaceName && provider.inst == instanceName) then
       null
     else
-      interface.bindDnsPeers cluster.findRoleProvider provider.out;
+      interface.bindDnsPeers cluster.dnsPeers provider.out;
 in
 {
   options.networkPolicy = lib.mkOption {
@@ -219,7 +219,7 @@ in
 
         defaultDenyNamespaces = defaultDenyNamespacesOf ctx.cluster;
         enforcerOut =
-          if provider == null then null else interface.bindDnsPeers ctx.cluster.findRoleProvider provider.out;
+          if provider == null then null else interface.bindDnsPeers ctx.cluster.dnsPeers provider.out;
 
         defaultDenyPolicies = map (
           nsName:

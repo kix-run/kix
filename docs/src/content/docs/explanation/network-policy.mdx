@@ -102,7 +102,7 @@ Beyond cross-package Service references, Kix automatically derives rules for fou
 
 The DNS egress rule allows UDP and TCP port 53 to the cluster's DNS peers. By default, these are pods labeled `k8s-app: kube-dns` in `kube-system`, where kubeadm, kind, k3s, RKE2, and EKS run CoreDNS. A package that claims the `dns` role can override this list in `meta.dnsPeers`, and a `dns` import (`kix.mkImport`, such as a flavor's `platform-dns`) accepts the same list as `dnsPeers`. Each entry selects either pods by label in one namespace (`{ namespace; podSelector; }`, where `namespace` defaults to the provider's namespace) or an IP range (`{ cidr; }`). `packages.experimental.coredns` declares its own pods in `meta.dnsPeers`, so generated policies reach it in whichever namespace it runs. The `gke` and `gke-autopilot` flavors set `dnsPeers` on `platform-dns` to `kube-dns`, `node-local-dns`, `169.254.169.254/32`, and `169.254.20.10/32`, covering standard `kube-dns`, NodeLocal DNSCache, and Cloud DNS.
 
-Because Cilium cannot combine pod selectors and IP ranges in a single DNS rule, the `cilium` enforcer accepts only pod selector entries and fails evaluation when `dnsPeers` or `meta.dnsPeers` includes `{ cidr; }`.
+Kix reads the peers of the active `dns` provider. When none is active, it reads those of the one import that claims the role, even an optional import nothing activated, such as a cloud flavor's `platform-dns`. Because Cilium cannot combine pod selectors and IP ranges in a single DNS rule, the `cilium` enforcer accepts only pod selector entries and fails evaluation when `dnsPeers` or `meta.dnsPeers` includes `{ cidr; }`.
 
 ### Cloud credentials
 
