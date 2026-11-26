@@ -1,7 +1,7 @@
 # 181a: Build plan for network policy on managed clouds
 
 **Status:** Draft implementation plan for `181_network_policy_on_managed_clouds.md`. Implementation has not started.
-**Related:** `181_network_policy_on_managed_clouds.md` (design decisions and the `Fn` and `AWS Fn` finding numbers cited below)
+**Related:** `181c_network_policy_identity_egress_and_dns.md` (decisions 3 and 4, built by steps 7 and 4), `181_network_policy_on_managed_clouds.md` (design decisions and the `Fn` and `AWS Fn` finding numbers cited below)
 
 ## 1. Implementation steps
 

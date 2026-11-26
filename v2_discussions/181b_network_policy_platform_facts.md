@@ -1,7 +1,7 @@
 # 181b: Platform facts for network policy on managed clouds
 
 **Status:** Platform facts and test evidence supporting `181_network_policy_on_managed_clouds.md`, current as of 2026-11-25.
-**Related:** `181_network_policy_on_managed_clouds.md` (design decisions, `Fn` and `AWS Fn` finding numbers, and evidence marks: **V** verified on a live cluster, **D** documented, and **A** unverified assumption), `181a_network_policy_on_clouds_build_plan.md` (live cluster tests to verify the remaining **A** assumptions)
+**Related:** `181c_network_policy_identity_egress_and_dns.md` (the identity egress and DNS decisions that cite these facts), `181_network_policy_on_managed_clouds.md` (design decisions, `Fn` and `AWS Fn` finding numbers, and evidence marks: **V** verified on a live cluster, **D** documented, and **A** unverified assumption), `181a_network_policy_on_clouds_build_plan.md` (live cluster tests to verify the remaining **A** assumptions)
 
 ## 1. How managed cloud platforms enforce policy
 
