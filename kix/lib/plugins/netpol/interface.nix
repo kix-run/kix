@@ -2,6 +2,7 @@
 
 let
   inherit (import ../../core/error.nix { inherit lib; }) fail;
+  dnsPeers = import ../../core/dns-peers.nix { inherit lib; };
 
   requiredAttrs = {
     policyKinds = "[kind]. the policy kinds this enforcer emits; the hasNetworkPolicy rule accepts them as a namespace's policy";
@@ -10,7 +11,9 @@ let
 
     mkDefaultDenySpec = "{ denyIngress, denyEgress } -> spec attrs for a default-deny policy";
 
-    dnsEgressRule = "rule. egress to kube-dns (UDP+TCP 53)";
+    dnsEgressRule = "rule. egress on UDP and TCP 53 to the DNS peers this rule set was built for (see withDnsPeers)";
+
+    withDnsPeers = "[dns peer] -> netpol. this contract again, with dnsEgressRule and the intent target \"dns\" built for these peers. Kix calls it with the dns role provider's out.dnsPeers (bindDnsPeers below); `out.netpol` itself uses defaultDnsPeers";
 
     apiServerEgressRule = "rule. egress to kube-apiserver";
 
@@ -99,6 +102,12 @@ let
 
 in
 {
+  inherit (dnsPeers)
+    defaultDnsPeers
+    checkDnsPeers
+    dnsPeersOf
+    bindDnsPeers
+    ;
   inherit
     requiredAttrs
     validateEnforcerInterface

@@ -53,7 +53,7 @@ When the `cilium` instance configures Cilium (either by installing the Helm char
 
 To keep core cluster networking working in `"always"` mode, the `cilium` instance adds two `CiliumClusterwideNetworkPolicy` objects:
 
-- **`cilium-cluster-dns-egress`:** Allows every pod (`endpointSelector: {}`) to reach pods labeled `k8s-app: kube-dns` in `kube-system` on UDP and TCP port 53, so pods outside Kix-managed namespaces can still resolve DNS names. Set `clusterDnsEgress = false` on the `cilium` instance if you write your own cluster-wide DNS policy.
+- **`cilium-cluster-dns-egress`:** Allows every pod (`endpointSelector: {}`) to reach the cluster's DNS pods on UDP and TCP port 53 (see [DNS peers](#dns-peers)), so pods outside Kix-managed namespaces can still resolve DNS names. Set `clusterDnsEgress = false` on the `cilium` instance if you write your own cluster-wide DNS policy.
 - **`cilium-health-probes`:** Allows Cilium's node health endpoints to probe each other across nodes (`health` and `remote-node` entities).
 
 When the platform manages Cilium's configuration externally (the `cilium` instance uses a `platform-cilium` import with `out.helmChartConfig = null`), Kix leaves Cilium's enforcement mode unchanged and omits both cluster-wide policies.
@@ -91,10 +91,16 @@ When a Service is sealed by `scope.mkResource`, its address-shaped outputs (`out
 
 Beyond cross-package Service references, Kix automatically derives rules for four other structural patterns:
 
-1. **DNS egress:** Every workload with egress policy gets a rule allowing queries to the cluster's DNS pods, and any workload that dials a Service also gets a deploy-ordering dependency on the DNS provider.
+1. **DNS egress:** Every workload with egress policy gets a rule allowing queries to the cluster's DNS pods (see [DNS peers](#dns-peers)), and any workload that dials a Service also gets a deploy-ordering dependency on the DNS provider.
 2. **Kubernetes API server egress:** During instance evaluation, Kix walks the instance's `RoleBinding` and `ClusterRoleBinding` resources. If a workload's `ServiceAccount` is bound to a role, Kix emits an egress rule allowing that workload to reach `kube-apiserver`.
 3. **External ingress and exposure:** A workload fronted by a `LoadBalancer` Service (unless served by an internal provider load-balancer class) gets an ingress rule from `world`. Similarly, `kix.expose` automatically emits an ingress rule on the backend admitting the configured Ingress or Gateway controller's pods.
 4. **StatefulSet peer traffic and metric scrapes:** `StatefulSet` workloads receive self-ingress and self-egress rules so peer replicas can form a cluster. At the cluster level, Kix joins each Prometheus or VMAgent custom resource with the `ServiceMonitor` and `PodMonitor` objects it selects, opening scrape egress from the monitoring server and scrape ingress on each target's numeric pod ports.
+
+### DNS peers
+
+The DNS egress rule allows UDP and TCP port 53 to the cluster's DNS peers. By default, these are the pods labeled `k8s-app: kube-dns` in `kube-system`, which is where kubeadm, kind, k3s, RKE2, and EKS run CoreDNS. A flavor's `platform-dns` import can list other peers in `out.dnsPeers`. Each peer is either pods by label in one namespace (`{ namespace; podSelector; }`) or an address range (`{ cidr; }`). The `gke` and `gke-autopilot` flavors list `kube-dns`, `node-local-dns`, `169.254.169.254/32`, and `169.254.20.10/32`, because a GKE cluster answers DNS from one or two of these, depending on NodeLocal DNSCache and Cloud DNS.
+
+Kix reads `out.dnsPeers` only from an import. A package that provides DNS itself, such as `coredns`, gets the default peers, so under `networkPolicy.enable` it must run in `kube-system` with the `k8s-app: kube-dns` label. The `cilium` enforcer cannot write a DNS rule to an address range, and fails evaluation when the peers include one.
 
 ## Three-phase policy assembly
 

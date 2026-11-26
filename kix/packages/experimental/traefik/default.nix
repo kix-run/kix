@@ -171,14 +171,16 @@ in
       # cannot see Traefik's upstream connections.
       backends.egress = [ { to = "pods"; } ];
       # Clients outside the cluster, plus in-cluster clients and NodePort
-      # traffic that arrives SNATed from a node.
+      # traffic that arrives SNATed from a node. The `cluster` entity names
+      # the nodes as well as the pods.
       front-door.ingress = [
         {
           from = "world";
           ports = map tcp openPorts;
         }
         {
-          from = "all-pods";
+          from = "world";
+          entities = [ "cluster" ];
           ports = map tcp openPorts;
         }
       ];

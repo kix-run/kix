@@ -786,7 +786,11 @@ let
 
         rule = kind: extra: { stubRule = kind; } // extra;
 
-        netpolApi = {
+        # The DNS rule names its peers, so a test can see which ones Kix
+        # bound.
+        netpolApi = netpolFor (import ../core/dns-peers.nix { inherit lib; }).defaultDnsPeers;
+        netpolFor = dnsPeers: {
+          withDnsPeers = netpolFor;
           policyKinds = [ "CiliumNetworkPolicy" ];
           mkPolicy =
             {
@@ -818,7 +822,7 @@ let
             }
             // lib.optionalAttrs denyIngress { ingress = [ ]; }
             // lib.optionalAttrs denyEgress { egress = [ ]; };
-          dnsEgressRule = rule "dns-egress" { };
+          dnsEgressRule = rule "dns-egress" { inherit dnsPeers; };
           apiServerEgressRule = rule "apiserver-egress" { };
           mkExternalIngressRule = { entities }: rule "external-ingress" { inherit entities; };
           mkExternalEgressRule = { entities }: rule "external-egress" { inherit entities; };

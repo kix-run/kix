@@ -186,10 +186,12 @@ in
     roles = [ "dns" ];
     network.intents = {
       # Every pod resolves through it, and so do node resolvers that forward
-      # the cluster domain.
+      # the cluster domain. The `cluster` entity names the nodes as well as
+      # the pods.
       clients.ingress = [
         {
-          from = "all-pods";
+          from = "world";
+          entities = [ "cluster" ];
           ports = dns53;
         }
       ];

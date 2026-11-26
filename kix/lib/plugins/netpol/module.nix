@@ -51,7 +51,7 @@ let
     if provider == null || (provider.ns == namespaceName && provider.inst == instanceName) then
       null
     else
-      provider.out;
+      interface.bindDnsPeers cluster.findRoleProvider provider.out;
 in
 {
   options.networkPolicy = lib.mkOption {
@@ -178,7 +178,8 @@ in
       ctx:
       let
         provider = ctx.cluster.findRoleProvider enforcerRole;
-        enforcerOut = if provider == null then null else provider.out;
+        enforcerOut =
+          if provider == null then null else interface.bindDnsPeers ctx.cluster.findRoleProvider provider.out;
 
         defaultDenyPolicies =
           if cfg.defaultDeny then

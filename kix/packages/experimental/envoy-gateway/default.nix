@@ -733,10 +733,24 @@ in
               selector = proxySelector;
               ingress =
                 (netpol.translateIntentRules {
-                  intents.front-door.ingress = map (from: {
-                    inherit from;
-                    ports = frontDoorPorts;
-                  }) config.clientSources;
+                  # `"all-pods"` in clientSources admits the nodes too (NodePort
+                  # and load balancer traffic SNATed from a node), so it maps
+                  # to the `cluster` entity.
+                  intents.front-door.ingress = map (
+                    source:
+                    {
+                      ports = frontDoorPorts;
+                    }
+                    // (
+                      if source == "all-pods" then
+                        {
+                          from = "world";
+                          entities = [ "cluster" ];
+                        }
+                      else
+                        { from = source; }
+                    )
+                  ) config.clientSources;
                 }).ingressRules;
             };
 

@@ -473,7 +473,7 @@ in
             };
             spec = {
               endpointSelector = { };
-              egress = [ rules.dnsEgressRule ];
+              egress = [ (rules.mkRules scope.dnsPeers).dnsEgressRule ];
             };
           }
         else

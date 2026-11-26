@@ -975,8 +975,9 @@ in
     || throw "envoy-gateway redirect: ${builtins.toJSON route}";
 
   # clientSources chooses who the policy admits to the listener ports: a
-  # private Gateway leaves the world out. out.public follows the Service
-  # type, and is false only for ClusterIP.
+  # private Gateway leaves the world out. "all-pods" admits the `cluster`
+  # entity, which includes the nodes. out.public follows the Service type,
+  # and is false only for ClusterIP.
   envoy-gateway-private-gateway =
     let
       sourcesOf =
@@ -987,14 +988,14 @@ in
             inherit config;
           });
         in
-        builtins.toJSON (byName "gw-proxy-ingress" cnps).spec.ingress;
+        map (r: r.entities or [ r.from ]) (byName "gw-proxy-ingress" cnps).spec.ingress;
       publicOf = config: (clusterWith { inherit config; }).instances.${ns}.gw.out.public;
     in
-    lib.hasInfix "world" (sourcesOf { })
-    && lib.hasInfix "all-pods" (sourcesOf { })
-    && !(lib.hasInfix "world" (sourcesOf {
-      clientSources = [ "all-pods" ];
-    }))
+    sourcesOf { } == [
+      [ "world" ]
+      [ "cluster" ]
+    ]
+    && sourcesOf { clientSources = [ "all-pods" ]; } == [ [ "cluster" ] ]
     && publicOf { }
     && publicOf { proxySpec.provider.kubernetes.envoyService.type = "NodePort"; }
     && !(publicOf { proxySpec.provider.kubernetes.envoyService.type = "ClusterIP"; });

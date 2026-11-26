@@ -6,7 +6,8 @@
 # `baseline` Pod Security Standard. It owns `cni` and `loadBalancer`
 # exclusively, and its default StorageClass is `standard-rwo`.
 #
-# NodeLocal DNSCache is always on in Autopilot. Kix does not model it.
+# NodeLocal DNSCache is always on in Autopilot. The `platform-dns` import
+# lists it among the DNS peers (`gke-dns-peers.nix`).
 #
 # Pods get Google Cloud identities through Workload Identity Federation for
 # GKE, which the `cloud-identity` import in `gke-managed` declares.
@@ -63,6 +64,7 @@ in
     platform-dns = platformDns {
       name = "kube-dns";
       namespace = "kube-system";
+      peers = import ./gke-dns-peers.nix;
     };
 
     cloud-identity = platformCloudIdentity { mechanism = mechanisms.gke { }; };

@@ -1,7 +1,8 @@
 # Tests for the parts of generated network policy that managed clouds need:
 # the missing-enforcer error where the platform owns the pod network, and the
 # enforcer-neutral arguments of `kix.operandPolicy` (`selector`, `ingress`,
-# `egress`) and the closed list of entity names.
+# `egress`), the closed list of entity names, and the DNS peers the `dns`
+# role provider publishes.
 
 {
   lib,
@@ -11,6 +12,8 @@
   byName,
   evalFails,
   containerBase,
+  eval,
+  mkCmPackage,
   ...
 }:
 
@@ -149,6 +152,52 @@ let
       netpolOn
       { instances.app.web.package = intentPackage network loadBalancer; }
     ];
+  # A DNS import in kube-system, as a flavour's `platform-dns` declares it,
+  # with `dnsPeers` when `peers` is not null.
+  dnsImport =
+    peers:
+    eval.mkImport {
+      kind = "Service";
+      apiVersion = "v1";
+      roles = [ "dns" ];
+      out = {
+        name = "kube-dns";
+        fqdn = "kube-dns.kube-system.svc.cluster.local";
+      }
+      // lib.optionalAttrs (peers != null) { dnsPeers = peers; };
+    };
+
+  # Return the DNS rule of the `web` Deployment's egress policy in a cluster
+  # whose `dns` role provider is `dnsPackage`.
+  webDnsRuleWith =
+    dnsPackage:
+    let
+      cluster = mkCluster [
+        netpolOn
+        {
+          instances.kube-system.platform-dns.package = dnsPackage;
+          instances.app.web.package = intentPackage { } false;
+        }
+      ];
+    in
+    lib.findFirst (r: (r.stubRule or null) == "dns-egress") null
+      (byName "web-deployment-web-egress" (manifests cluster)).spec.egress;
+
+  defaultPeers = [
+    {
+      namespace = "kube-system";
+      podSelector."k8s-app" = "kube-dns";
+    }
+  ];
+  customPeers = [
+    {
+      namespace = "dns";
+      podSelector.app = "resolver";
+    }
+    { cidr = "169.254.20.10/32"; }
+  ];
+
+  cilium = import ../../../packages/experimental/cilium/netpol-rules.nix { inherit lib; };
 in
 {
   # Where the platform owns the pod network, a `cilium` instance is refused,
@@ -193,7 +242,7 @@ in
             selector.app = "operand";
           }
         ]
-      && on.spec.egress == [ { stubRule = "dns-egress"; } ]
+      && map (r: r.stubRule) on.spec.egress == [ "dns-egress" ]
     )
     || throw "kix.operandPolicy selector: without enforcer ${builtins.toJSON off}, with enforcer ${builtins.toJSON on}";
 
@@ -265,4 +314,115 @@ in
       && evalFails unknownExternal
     )
     || throw "entities: known ${toString (evalFails known)}, unknown intent ${toString (evalFails unknownIntent)}, known external ${toString (evalFails knownExternal)}, unknown external ${toString (evalFails unknownExternal)}";
+
+  # The enforcer builds every workload's DNS rule from the `dns` import's
+  # `out.dnsPeers`, and from the kube-dns pods in kube-system when it sets
+  # none. A managed provider's `out` is not read, so it gets the default.
+  netpol-clouds-dns-peers-from-import =
+    let
+      custom = webDnsRuleWith (dnsImport customPeers);
+      unset = webDnsRuleWith (dnsImport null);
+      managed = webDnsRuleWith (mkCmPackage {
+        name = "dns";
+        metaExtra.roles = [ "dns" ];
+        out = {
+          fqdn = "dns.kube-system.svc.cluster.local";
+          dnsPeers = customPeers;
+        };
+      });
+    in
+    (
+      custom.dnsPeers == customPeers && unset.dnsPeers == defaultPeers && managed.dnsPeers == defaultPeers
+    )
+    || throw "DNS peers: custom ${builtins.toJSON custom}, unset ${builtins.toJSON unset}, managed ${builtins.toJSON managed}";
+
+  # A peer must be `{ namespace; podSelector; }` or `{ cidr; }`, and the list
+  # must not be empty.
+  netpol-clouds-dns-peers-shape =
+    let
+      fails =
+        peers:
+        evalFails (mkCluster [
+          netpolOn
+          {
+            instances.kube-system.platform-dns.package = dnsImport peers;
+            instances.app.web.package = intentPackage { } false;
+          }
+        ]);
+    in
+    (
+      fails [ ]
+      && fails [ { namespace = "kube-system"; } ]
+      && fails [
+        {
+          cidr = "169.254.20.10/32";
+          namespace = "x";
+        }
+      ]
+      && !(fails customPeers)
+    )
+    || throw "DNS peer shapes";
+
+  # The cilium enforcer writes the kube-dns rule it always wrote for the
+  # default peers, one endpoint per pod peer, and refuses a peer given by
+  # address, because Cilium refuses a rule that mixes endpoints and CIDRs.
+  netpol-clouds-cilium-dns-rule =
+    let
+      dnsPorts = [
+        {
+          ports = [
+            {
+              port = "53";
+              protocol = "UDP";
+            }
+            {
+              port = "53";
+              protocol = "TCP";
+            }
+          ];
+        }
+      ];
+      twoPods =
+        (cilium.mkRules [
+          {
+            namespace = "kube-system";
+            podSelector."k8s-app" = "node-local-dns";
+          }
+          {
+            namespace = "dns";
+            podSelector.app = "resolver";
+          }
+        ]).dnsEgressRule;
+      withCidr = (cilium.mkRules customPeers).dnsEgressRule;
+    in
+    (
+      cilium.dnsEgressRule == {
+        toEndpoints = [
+          {
+            matchLabels = {
+              "k8s:io.kubernetes.pod.namespace" = "kube-system";
+              "k8s-app" = "kube-dns";
+            };
+          }
+        ];
+        toPorts = dnsPorts;
+      }
+      &&
+        twoPods.toEndpoints == [
+          {
+            matchLabels = {
+              "k8s:io.kubernetes.pod.namespace" = "kube-system";
+              "k8s-app" = "node-local-dns";
+            };
+          }
+          {
+            matchLabels = {
+              "k8s:io.kubernetes.pod.namespace" = "dns";
+              app = "resolver";
+            };
+          }
+        ]
+      && !(builtins.tryEval (builtins.deepSeq withCidr true)).success
+    )
+    || throw "cilium DNS rule: two pods ${builtins.toJSON twoPods}";
 }

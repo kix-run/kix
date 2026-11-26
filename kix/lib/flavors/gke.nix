@@ -12,9 +12,11 @@
 # Pods get Google Cloud identities through Workload Identity Federation for
 # GKE, which the `cloud-identity` import declares.
 #
+# GKE enables NodeLocal DNSCache by default from version 1.34.1, so pods send
+# DNS queries to a cache on their own node. The `platform-dns` import lists
+# that cache among the DNS peers (`gke-dns-peers.nix`).
+#
 # Kix does not model these GKE features, so the flavor does not declare them:
-# - NodeLocal DNSCache, which GKE enables by default from version 1.34.1.
-#   Pods then send DNS queries to a cache on their own node.
 # - Google Cloud Managed Service for Prometheus. It reads its own
 #   `monitoring.googleapis.com` resources, not ServiceMonitor or
 #   PrometheusRule.
@@ -90,6 +92,7 @@ in
     platform-dns = platformDns {
       name = "kube-dns";
       namespace = "kube-system";
+      peers = import ./gke-dns-peers.nix;
     };
 
     cloud-identity = platformCloudIdentity { mechanism = mechanisms.gke { }; };
