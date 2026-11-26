@@ -34,8 +34,14 @@ that requires a live cloud cluster.
 ## 2. Live GKE tests
 
 For step 2, repeat F3 (step 2) and F29: `kix plan` must fail within seconds,
-and prune must finish without errors. For steps 6 and 7, run these checks on a
-GKE Dataplane V2 cluster with NodeLocal DNSCache enabled:
+and prune must finish without errors. For steps 6 and 7, run checks 1 through 9
+on a GKE Dataplane V2 cluster with NodeLocal DNSCache enabled once those steps
+are built. Test 10 can run immediately in a scratch namespace using an explicit
+`NetworkPolicy` manifest before any Kix changes are built.
+
+The live GKE test (N1 and N2) already answered the platform questions in tests
+5 and 7 (webhook source and node kubelet egress). Tests 1 through 9 still need
+to run against Kix once steps 6 and 7 land, and test 10 still needs to run:
 
 1. Deploy a cluster with `kix.flavors.gke`, `networkPolicy.enable = true`, and
    one `echo-server` instance in namespace `np`. Verify that `kix build`
@@ -52,23 +58,21 @@ GKE Dataplane V2 cluster with NodeLocal DNSCache enabled:
    and names that option. Set `cidrs` to the control plane's internal IP and
    verify that DNS records appear in Cloud DNS (F19, F21). Then set `cidrs` to
    a wrong IP and verify that `kix deploy` stops before applying anything.
-5. Add `cert-manager` and create a `Certificate`. Test `sources` first with the
-   `konnectivity-agent` pods and then with the control-plane CIDR, and record
-   which one lets the webhook answer.
+5. Add `cert-manager` and create a `Certificate` with
+   `cluster.network.apiServer.sources` unset. Verify that `sources` defaults to
+   the `konnectivity-agent` pods and that the webhook answers (N1).
 6. Set the `echo-server` Service to `LoadBalancer` and verify that four
    external requests return HTTP 200 (F21).
-7. From a pod under default egress deny, run
-   `curl -m 3 -k https://<another node>:10250` and record whether Dataplane V2
-   blocks it. Then add `prometheus` with `node-exporter` and verify that
-   `kix check` fails and names node peers.
+7. Add `prometheus` with `node-exporter`. First leave
+   `cluster.network.nodeCidrs` unset and verify that `kix check` refuses and
+   names `cluster.network.nodeCidrs`. Then set `cluster.network.nodeCidrs` to
+   the node range and verify that Prometheus scrapes `node-exporter` (N2).
 8. Empty the cluster definition and verify that `kix deploy --prune` finishes
    without errors.
 9. If a GKE Autopilot cluster is available, read `/etc/resolv.conf` inside a
    pod, repeat test 2, and record which DNS peer matched.
-
-The standalone policy checks in tests 5 and 7 (webhook source and node kubelet
-egress) can run immediately with explicit `NetworkPolicy` manifests before any
-Kix changes are built.
+10. Under default-deny egress, allow `0.0.0.0/0` except the node range on TCP
+    10250 and record whether a node is still reachable.
 
 ## 3. Live EKS tests
 

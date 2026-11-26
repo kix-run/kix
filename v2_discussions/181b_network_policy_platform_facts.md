@@ -9,12 +9,13 @@
 |---|---|---|---|
 | Enforces standard `NetworkPolicy` | Always on, with no toggle. V (F19), D [g-dpv2] | Off until `enableNetworkPolicy` is set on the add-on, and enforced once set. V (AWS F18), D [a-bp] | Depends on the chosen policy engine: none, Azure NPM, Calico, or Cilium. D [z-np] |
 | Serves `CiliumNetworkPolicy` | No. V (F3) | No. A | Yes (layers 3 and 4) on Azure CNI Powered by Cilium. D [z-cil] |
-| `ipBlock` matches pod IPs | Never. D [g-np] | Unknown (A: yes) | Never on Cilium. D [z-cil] |
-| `ipBlock` or selector matches nodes and host-network pods | No field can match them. D [g-np] | `ipBlock` matches node IPs. V (AWS F18) | Never on Cilium. D [z-cil] |
+| `ipBlock` matches pod IPs | Never. V (N1), D [g-np] | Unknown (A: yes) | Never on Cilium. D [z-cil] |
+| `ipBlock` or selector matches nodes and host-network pods | An `ipBlock` covering the whole node range matches nodes. V (N2). Google's docs say no field can match them. D [g-np] | `ipBlock` matches node IPs. V (AWS F18) | Never on Cilium. D [z-cil] |
 | When policy evaluates Service calls | After Service address translation; rules must match the endpoint IP. V (F21) | A: before translation. AWS docs require the Service port to match the container port. D [a-np] | Unknown |
 | Where cluster DNS answers from | `kube-dns` pods, or `node-local-dns` pods when NodeLocal DNSCache is enabled (default from 1.34). V (F20), D [g-nldns]. With Cloud DNS (Autopilot default): `169.254.169.254` or `169.254.20.10`. D [g-clouddns] | CoreDNS pods labeled `k8s-app: kube-dns`. V (AWS F18) | CoreDNS pods, or LocalDNS at `169.254.10.10` and `169.254.10.11`. D [z-ldns] |
 | How pods reach the API server | Control-plane internal IP on TCP 443; changes during IP rotation. V (F21), D [g-iprot] | Reachable with a rule allowing the VPC and Service ranges on TCP 443. V (AWS F18). Unknown whether the rule must match the Service IP or the endpoint IP (A). Endpoint interfaces change on cluster version upgrades. D [a-net] | Varies by cluster type. D [z-wi] |
-| Outbound traffic needed for cloud identity | `169.254.169.254/32` on TCP 80 (V, F19) and TCP 8080 (D [g-np]) | IRSA: the STS endpoint outside the VPC on TCP 443. V (AWS F18). Pod Identity: the host-network agent at `169.254.170.23` on TCP 80, which requires an explicit rule. V (AWS F18) | `login.microsoftonline.com` on TCP 443; no metadata IP. D [z-wi] |
+| Where API server webhook calls come from | Pods labeled `k8s-app: konnectivity-agent` in `kube-system`. V (N1). Private clusters and clusters without konnectivity are untested (A) | Unknown (A: cluster subnet CIDRs, D [a-net]) | Unknown |
+| Outbound traffic needed for cloud identity | `169.254.169.254/32` on TCP 80, V (F19, N3); TCP 8080 is documented, D [g-np], and unused on the test cluster (N3) | IRSA: the STS endpoint outside the VPC on TCP 443. V (AWS F18). Pod Identity: the host-network agent at `169.254.170.23` on TCP 80, which requires an explicit rule. V (AWS F18) | `login.microsoftonline.com` on TCP 443; no metadata IP. D [z-wi] |
 | Pod startup window | Unknown | In the default `standard` mode, a new pod's first calls go out before its policies load. V (AWS F18), D [a-npcfg] | Unknown |
 
 Kubernetes leaves it up to each network plugin how `ipBlock` handles in-cluster

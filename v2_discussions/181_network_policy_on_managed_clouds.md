@@ -1,6 +1,6 @@
 # 181: Network policy on managed clouds
 
-**Status:** Draft (2026-11-25). Proposed design; implementation has not started. Section 10 lists the decisions needed from the maintainer.
+**Status:** Draft (2026-11-25). Proposed design; implementation has not started. Section 10 lists the seven decisions needed from the maintainer.
 **Related:** `121_netpol_as_plugin.md` (section 5, the envelope repair scheduled here), `95_netpol_build_time_validation.md`, `177_workload_cloud_identity.md`, `180_cloud_identity_across_packages.md`, `housekeeping/2026-11-24-only-cilium-enforces-generated-network-policy.md`, `kix/lib/plugins/netpol/`, `kix/packages/experimental/cilium/netpol-rules.nix`
 
 ## 1. Context
@@ -16,8 +16,9 @@ the cluster installs.
 Every platform claim below is marked with its evidence:
 
 - **V (Fn):** verified on a live cluster. `Fn` cites a finding in the
-  2026-11-25 GKE test report, and `AWS Fn` cites a finding in the EKS test
-  report from the same day.
+  2026-11-25 GKE test report, and `N1`, `N2`, and `N3` cite the "Network policy
+  facts for the design" section of that report. `AWS Fn` cites a finding in the
+  EKS test report from the same day.
 - **D [ref]:** documented by the vendor as of 2026-11-25 (links in `181b_network_policy_platform_facts.md`).
 - **A:** unverified assumption.
 
@@ -114,9 +115,9 @@ inbound traffic to pods covered by an egress-only policy (D [k-np]).
 | DNS egress | Pods from the DNS provider | Peers from `out.dnsPeers` (decision 4) | Same |
 | API server egress | `kube-apiserver`, `host`, and `remote-node` | `ipBlock` from `cluster.network.apiServer` (decision 6) | Same when set; refused when unset |
 | API server ingress (webhooks) | `kube-apiserver`, `host`, and `remote-node` | Peers from `cluster.network.apiServer.sources` | Same when set; refused when unset |
-| `world` egress | `world` entity | `0.0.0.0/0` and `::/0`, excluding `cluster.network.podCidr` and `nodeCidrs` when set | Same where `ipBlock` never matches pods; wider where it does and those CIDRs are unset |
-| `world` ingress | `world` entity | `0.0.0.0/0` and `::/0` | Same on Dataplane V2. Wider elsewhere because in-cluster sources also match (required when nodes forward load balancer traffic) |
-| `host` and `remote-node` | Entities | `ipBlock` over `cluster.network.nodeCidrs` | Same where `ipBlock` can match nodes; refused where it cannot (such as GKE) or when `nodeCidrs` is unset |
+| `world` egress | `world` entity | `0.0.0.0/0` and `::/0`, excluding `cluster.network.podCidr` and `nodeCidrs` when set | Wider where `0.0.0.0/0` matches pods or nodes and the matching CIDRs are unset; same once excluded. On GKE, `0.0.0.0/0` also opens nodes (V, N2), so it is wider there unless `cluster.network.nodeCidrs` is set and excluded; whether an `except` entry removes nodes on Dataplane V2 is **A** (tested in `181a`) |
+| `world` ingress | `world` entity | `0.0.0.0/0` and `::/0` | On Dataplane V2, never admits pods (V, N1), and whether it admits nodes on ingress is **A**. Wider elsewhere because in-cluster sources also match (required when nodes forward load balancer traffic) |
+| `host` and `remote-node` | Entities | `ipBlock` over `cluster.network.nodeCidrs` | Same where `ipBlock` matches nodes, including GKE over `cluster.network.nodeCidrs` (V, N2); refused only when `nodeCidrs` is unset, or on a platform where an `ipBlock` cannot match nodes (AKS with Cilium, D [z-cil]) |
 | `all-pods` | `cluster` entity (pods, nodes, and API server) | `namespaceSelector: {}` (pods only) | Narrower (see below) |
 | Named port on egress | Cilium drops the traffic (warns today) | Supported | Better |
 | `ingressDeny`, `egressDeny` | Passed through | None | Refused |
@@ -186,7 +187,7 @@ cluster.roles.network-policy-enforcer = {
 };
 instances.kube-system.platform-network-policy = platformNetworkPolicy {
   ipBlockSelectsPods = false;
-  ipBlockSelectsNodes = false;
+  ipBlockSelectsNodes = true;
   egressBeforeServiceTranslation = false;
 };
 networkPolicy.platformNamespaces = lib.mkDefault [ "kube-system" ];
@@ -265,9 +266,12 @@ gke = mkMechanism {
 };
 ```
 
+The `gke` mechanism keeps both TCP 80 and TCP 8080 because Google documents
+both (D [g-np]); only port 80 was used on the test cluster (V, F19 and N3).
+
 | Mechanism | Required egress | Standard renderer | Cilium renderer | Evidence |
 |---|---|---|---|---|
-| `gke` | `169.254.169.254/32` TCP 80, 8080 | `ipBlock` | Unused (GKE serves no Cilium kind) | Port 80: V (F19). Port 8080: D [g-np] |
+| `gke` | `169.254.169.254/32` TCP 80, 8080 | `ipBlock` | Unused (GKE serves no Cilium kind) | Port 80: V (F19, N3). Port 8080: D [g-np]; unused on the test cluster (N3) |
 | `irsa` | `world` TCP 443 (STS) | `0.0.0.0/0` | `world` entity | V (AWS F18): the pod receives credentials with this rule and DNS, and calls hang without it |
 | `eks-pod-identity` | `169.254.170.23/32` and `fd00:ec2::23/128` TCP 80 | `ipBlock` | Both `toCIDR` and `host` entity on TCP 80 | V (AWS F18) for IPv4: the pod receives credentials with this rule and gets none without it. IPv6 address: D [a-pi]. **A** on Cilium |
 | `azure-workload-id` | `world` TCP 443 | `0.0.0.0/0` | `world` entity | D [z-wi] |
@@ -405,12 +409,15 @@ GKE, it is the control-plane endpoint IP (V, F21); on EKS, it is likely the
 translation (**A**).
 
 **API server ingress.** Eleven packages expose admission webhooks or aggregated
-APIs (`from = "apiserver"`), which generate ingress rules from `sources`.
-Vendor docs do not state the exact source IPs of webhook calls: on GKE, the
-candidates are `konnectivity-agent` pods or the control-plane CIDR; on EKS, the
-cluster subnet CIDRs (D [a-net]). Once the live tests in `181a` identify the
-source on each cloud, each flavor can set a default where possible; until then,
-the cluster author sets `sources` or `kix check` fails.
+APIs (`from = "apiserver"`), which generate ingress rules from `sources`. On
+GKE, the source is the `konnectivity-agent` pods (`k8s-app: konnectivity-agent`
+in `kube-system`; V, N1), so the `gke` and `gke-autopilot` flavors default
+`cluster.network.apiServer.sources` to those pods. A private GKE cluster or one
+without konnectivity is untested (**A**). On EKS, vendor docs do not state the
+exact source IPs of webhook calls; the candidates are the cluster subnet CIDRs
+(D [a-net]). Once the live tests in `181a` identify the source on EKS, the
+`eks` flavor can set a default where possible; until then, the cluster author
+sets `sources` or `kix check` fails.
 
 **Load balancer ingress.** Backend pods for `LoadBalancer` Services allow
 ingress from `0.0.0.0/0`. That worked on GKE behind a passthrough Network Load
@@ -433,11 +440,10 @@ rotations (D [g-iprot]).
   with a `RoleBinding` or `ClusterRoleBinding` would gain outbound HTTPS access
   to the internet.
 
-**Known limitation.** GKE `NetworkPolicy` has no field that selects node IPs or
-host-network pods (D [g-np]), so `kix check` refuses rules targeting `host` or
-`remote-node` on GKE. That blocks egress enforcement for workloads such as
-Prometheus scraping kubelets or host-network exporters on other nodes; affected
-GKE clusters must set `networkPolicy.directions = "ingress"` today.
+On GKE, a rule to `host` or `remote-node` needs `cluster.network.nodeCidrs` to
+cover the whole node range (V, N2), and `kix check` refuses the rule when
+`nodeCidrs` is unset. Prometheus scraping kubelets on GKE therefore works once
+`nodeCidrs` is set.
 
 ## 9. Build plan
 
@@ -458,27 +464,23 @@ clusters build.
    Recommended: yes. It adds one line per cluster, keeps builds deterministic,
    and fails fast at `kix deploy` when stale. The only zero-line alternative is
    rewriting policies at deploy time.
-3. **Refuse `host` and `remote-node` peers on GKE?** Recommended: yes,
-   documenting `networkPolicy.directions = "ingress"` as the workaround
-   (decision 6). The alternative is omitting the rule with a warning and
-   letting node scrapes fail at runtime.
-4. **Default `networkPolicyWidened` to a warning?** Recommended: yes. If an
+3. **Default `networkPolicyWidened` to a warning?** Recommended: yes. If an
    `ipBlock` matches pod IPs on the VPC CNI (an untested assumption), almost
    every EKS cluster will trigger at least one widened policy, so defaulting to
    an error would block EKS clusters out of the box.
-5. **Apply the default-deny namespace rule of decision 5 across all flavors
+4. **Apply the default-deny namespace rule of decision 5 across all flavors
    (`silent` breaking change)?** Recommended: yes, so every flavor follows one
    rule. The alternative is keeping the old rule and adding only
    `networkPolicy.platformNamespaces`, which leaves F4's root cause in place
    for namespaces holding only imports.
-6. **Add a post-deploy enforcement probe as a follow-up step?** Recommended:
+5. **Add a post-deploy enforcement probe as a follow-up step?** Recommended:
    yes. After `kix deploy`, a short `Job` in a Kix-managed namespace attempts a
    connection that default-deny must block, failing the deploy if it connects.
    Without a probe, a cluster whose declared enforcer is turned off passes
    every check.
-7. **Default `cluster.flavor.eks.networkPolicy` to `"none"`?** Recommended:
+6. **Default `cluster.flavor.eks.networkPolicy` to `"none"`?** Recommended:
    yes, because AWS disables enforcement by default on new EKS clusters.
-8. **Report the EKS startup window as a widening?** Recommended: yes. On EKS, a
+7. **Report the EKS startup window as a widening?** Recommended: yes. On EKS, a
    new pod runs briefly with no policy applied (V, AWS F18), and
    `networkPolicyWidened` can report that once per cluster under `"vpc-cni"`.
    The add-on's `strict` mode closes the window, but it also blocks every pod
