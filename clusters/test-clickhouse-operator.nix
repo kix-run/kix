@@ -1,5 +1,5 @@
 # clusters/test-clickhouse-operator.nix: the Altinity operator alone on kind
-# (v2_discussions/148, phase 4).
+# (discussions/148, phase 4).
 #
 # The operator, its four CRDs and the Secret it logs in to ClickHouse with,
 # and no installation. What this proves on a live cluster is that the

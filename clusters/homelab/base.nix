@@ -134,7 +134,7 @@
   scorecard = {
     # prometheus.io scrape annotations are a by-convention contract emitted
     # by charts (cilium-envoy) and consumed by whatever scrapes — no single
-    # declaring package. Declared known per v2_discussions/128.
+    # declaring package. Declared known per discussions/128.
     knownAnnotationDomains = [ "prometheus.io" ];
   };
 }

@@ -5,7 +5,7 @@ description: Maintain the CRDs and operator roles that Kix packages vendor from 
 
 # CRD vendoring
 
-The rules live in `v2_discussions/146_crd_vendoring_and_upgrades.md`. Read
+The rules live in `discussions/146_crd_vendoring_and_upgrades.md`. Read
 §5 before changing anything. Short form:
 
 - A package whose operator installs and rewrites its own CRDs (stackgres,
