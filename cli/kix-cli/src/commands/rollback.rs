@@ -317,8 +317,9 @@ fn run_direct(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Resul
             .await
             .map_err(|e| {
                 miette!(
-                    "cannot read deploy lock `ActivationHead` `{cluster}`: {}. Nothing was applied to cluster {cluster}. Check your cluster connection and grant this account `get` on `activationheads.kix.run` if needed, then run the command again.",
-                    kix::cluster::errors::describe(&e)
+                    "cannot read deploy lock `ActivationHead` `{cluster}`: {}. Nothing was applied to cluster {cluster}. Check your cluster connection and grant this account `get` on `{}` if needed, then run the command again.",
+                    kix::cluster::errors::describe(&e),
+                    kix::cluster::head::crd_name()
                 )
             })?;
         let last = kix::cluster::stops::LastWrite::of(

@@ -108,8 +108,9 @@ pub enum TakeError {
     #[error(transparent)]
     Crd(#[from] CrdError),
     #[error(
-        "cannot read or update deploy lock `ActivationHead` `{cluster}`: {}. Nothing was changed on the cluster. Check the cluster connection and ensure this account has `get`, `list`, `create`, and `update` permissions on `activationheads.kix.run`, then try again",
-        describe(.source)
+        "cannot read or update deploy lock `ActivationHead` `{cluster}`: {}. Nothing was changed on the cluster. Check the cluster connection and ensure this account has `get`, `list`, `create`, and `update` permissions on `{}`, then try again",
+        describe(.source),
+        super::crd_name()
     )]
     Api {
         cluster: String,

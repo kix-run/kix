@@ -199,9 +199,10 @@ pub enum PlanError {
     #[error(
         "cannot read the deploy lock (`ActivationHead`) for this Kix cluster: {}. \
          Nothing was planned or applied to the cluster. \
-         Check your cluster connection and permissions on `activationheads.kix.run`, \
+         Check your cluster connection and permissions on `{}`, \
          or wait for the Kubernetes API server to recover, then run the command again.",
-        crate::cluster::errors::describe(.0.as_ref())
+        crate::cluster::errors::describe(.0.as_ref()),
+        crate::cluster::head::crd_name()
     )]
     ReadHead(Box<kube::Error>),
     #[error("{0}")]
