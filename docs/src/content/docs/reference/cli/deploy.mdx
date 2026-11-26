@@ -374,10 +374,11 @@ line has `"type": "kubernetes"` and identifies the target cluster with
 reaches the deploy engine, the last JSON line is the `summary` object, with
 `succeeded` (which matches the exit status), `dry_run`, and the `created`,
 `configured`, `unchanged`, `failed`, `cancelled`, `pruned`, and `kept` counts.
-`pruned` counts the orphans this run deleted, and leaves out orphans that were
-already gone. `kept` counts orphans of this Kix cluster that the prune left on
-the cluster because an object they depend on was not deleted, or because they
-form a dependency cycle. Each `prune_kept` line names one of them. Each
+`pruned` counts only orphans deleted during this run, excluding orphans that
+were already gone. `kept` counts orphans of this Kix cluster that `--prune`
+left behind because an undeleted object depends on them (excluding objects
+kept for another Kix cluster) or because their dependencies form a cycle. Each
+is reported in a `prune_kept` event. Each
 object is counted once by its final state: if Kix applies an object and it
 does not become ready, Kix counts it in `failed` rather than `created` or
 `configured`. The `summary` object also includes `failed_after_apply`, the
@@ -414,7 +415,7 @@ status is non-zero.
 | Code | Meaning |
 | --- | --- |
 | `0` | Deploy complete, nothing to apply, or the prompt was declined |
-| `1` | A resource failed, under either `--on-error` mode, or the run was cancelled; `--prune` left orphans of this cluster on the cluster (`kept`); the plan showed a refused write under `--on-error stop`; a stateful migration was detected without `--accept-migrations`; confirmation was needed on a non-interactive terminal; the cluster would skip a [required stop](#required-stops); the cluster was [last deployed by a newer minor version of Kix](#deploys-by-an-older-kix); `kix-upgrade.json` lists a change to stored data for this cluster that no one has acknowledged with [`kix upgrade --acknowledge`](/docs/reference/cli/upgrade/#changes-to-stored-data); or a build, evaluation, or cluster error |
+| `1` | A resource failed, under either `--on-error` mode, or the run was cancelled; `--prune` left orphans belonging to this cluster in place (`kept`); the plan showed a refused write under `--on-error stop`; a stateful migration was detected without `--accept-migrations`; confirmation was needed on a non-interactive terminal; the cluster would skip a [required stop](#required-stops); the cluster was [last deployed by a newer minor version of Kix](#deploys-by-an-older-kix); `kix-upgrade.json` lists a change to stored data for this cluster that no one has acknowledged with [`kix upgrade --acknowledge`](/docs/reference/cli/upgrade/#changes-to-stored-data); or a build, evaluation, or cluster error |
 
 With `--dry-run` the exit status is [`kix plan`'s](/docs/reference/cli/plan/#exit-status):
 `0` when nothing would change, `2` when something would, and `3` when the

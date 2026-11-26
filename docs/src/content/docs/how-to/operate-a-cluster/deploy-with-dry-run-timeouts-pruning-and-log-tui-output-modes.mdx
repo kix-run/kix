@@ -104,14 +104,16 @@ Pruning never deletes a Namespace or CustomResourceDefinition. It also keeps
 an orphan that another Kix cluster in the same Kubernetes cluster still
 deploys. The plan lists both as kept.
 
-Before it deletes an orphan, Kix reads it and checks which Kix clusters
-deploy it. If the object changes between that read and the delete, for
-example because its operator updates its status, Kubernetes refuses the
-delete, and Kix reads and checks the object again. After 5 refused deletes in
-a row, Kix leaves the object in place and the deploy fails. Orphans that Kix
-keeps because something it could not delete depends on them are counted as
-`left on the cluster` in the summary, and the deploy exits 1. Run
-`kix deploy --prune` or `kix gc` again to delete them.
+Right before deleting an orphan, Kix reads it again to make sure no other Kix
+cluster deploys it. If something updates the object between that read and the
+delete request (for example, an operator updating `status`), Kubernetes
+rejects the delete and Kix retries up to 5 times. If all 5 attempts are
+rejected, Kix leaves the object in place and fails the deploy with `[K6315]`.
+Kix also leaves orphans of this cluster in place when another object that
+depends on them could not be deleted, or when their dependencies form a cycle.
+The summary counts those remaining orphans as `left on the cluster`, and the
+deploy exits `1`. Resolve what blocked deletion, then run `kix gc` or
+`kix deploy --prune` to remove them.
 
 Kix waits for each pruned object to be removed from the cluster. It stops
 waiting after `--timeout` passes without a finalizer being removed, or after 5

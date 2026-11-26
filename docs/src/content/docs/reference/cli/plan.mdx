@@ -269,7 +269,7 @@ plan reports it as an ownership conflict naming the manager. With
 | `kept_skipped` | Kept by `--skip-orphan-check`. |
 | `kept_never_pruned` | A Namespace or CustomResourceDefinition, which Kix never deletes automatically. |
 | `kept_shared` | Another Kix cluster's current build contains it. |
-| `kept_changed` | It changed between Kix's read and its delete on each of 5 attempts; the next prune checks it again. |
+| `kept_changed` | The object was modified between Kix reading it and the dry-run delete on all 5 attempts; the next prune checks it again. |
 
 ## Objects not checked
 

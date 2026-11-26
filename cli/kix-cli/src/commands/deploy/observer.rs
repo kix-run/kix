@@ -509,7 +509,7 @@ pub(super) fn closing(r: &DeployResult, c: &Closing<'_>) -> String {
         if r.kept > 0 {
             let _ = writeln!(
                 out,
-                "    - {} object(s) that left the build are still on the cluster, kept because an object they depend on was not deleted or because they form a dependency cycle. The lines above that start with `prune>` name them.",
+                "    - {} removed object(s) remain on the cluster because another object that depends on them was not deleted, or because their dependencies form a cycle. The prune lines above list each object and why it stayed.",
                 r.kept
             );
         }
@@ -518,7 +518,7 @@ pub(super) fn closing(r: &DeployResult, c: &Closing<'_>) -> String {
         if r.failed == 0 {
             let _ = write!(
                 out,
-                "    Resolve what kept them and run `kix gc {cluster}` to delete them."
+                "    Clear what blocked their deletion (see the prune lines above), then run `kix gc {cluster}` to delete them."
             );
         } else {
             let _ = write!(

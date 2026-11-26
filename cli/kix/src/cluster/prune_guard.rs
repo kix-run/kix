@@ -84,7 +84,7 @@ impl Pruned {
         match self {
             Pruned::Kept(shared) => Some(shared.describe()),
             Pruned::Changed(rid) => Some(format!(
-                "[K6315] kept {rid}, which changed between the read and the delete on all {DELETE_ATTEMPTS} attempts; the next prune checks it again"
+                "[K6315] could not delete {rid}: something modified it during all {DELETE_ATTEMPTS} delete attempts, so Kix left it on the cluster; stop what keeps updating {rid} (or wait for updates to settle), then run `kix gc` or `--prune` again"
             )),
             Pruned::Deleted { .. }
             | Pruned::AlreadyDeleting { .. }

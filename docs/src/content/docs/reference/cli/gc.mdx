@@ -158,7 +158,7 @@ since it was listed.
 | Code | Meaning |
 | --- | --- |
 | `0` | Nothing to collect, everything planned was deleted, `--dry-run` printed the plan, or the prompt was declined |
-| `1` | A deletion failed or timed out, or an object gc set out to delete is still on the cluster because something it could not delete depends on it; confirmation was needed on a non-interactive terminal; or a build or cluster error |
+| `1` | A deletion failed or timed out, or `kix gc` left a planned object in place because an undeleted object depends on it or its dependencies form a cycle; confirmation was needed on a non-interactive terminal; or a build or cluster error |
 
 :::tip[Use it in a task]
 See [Garbage-collect stale resources](/docs/how-to/operate-a-cluster/garbage-collect-stale-resources/)
