@@ -1,4 +1,5 @@
 use super::*;
+use crate::cluster::field_manager::FieldManager;
 use crate::cluster::test_fixtures::{api_version_of, manifest};
 use kube::api::ObjectMeta;
 use serde_json::json;
@@ -1006,6 +1007,7 @@ async fn a_namespaced_kind_without_a_namespace_is_refused() {
         &client,
         ar,
         scope.clone(),
+        &FieldManager::of("a"),
         &cm,
         false,
         None,
@@ -1092,6 +1094,7 @@ async fn an_apply_reports_the_fields_the_server_did_not_keep() {
             &client,
             ar,
             scope.clone(),
+            &FieldManager::of("a"),
             &gizmo,
             dry_run,
             None,
@@ -1111,6 +1114,7 @@ async fn an_apply_reports_the_fields_the_server_did_not_keep() {
         &client,
         ar,
         scope.clone(),
+        &FieldManager::of("a"),
         &gizmo,
         false,
         None,
@@ -1350,6 +1354,7 @@ async fn an_object_being_deleted_is_not_applied() {
         &client,
         ar,
         scope.clone(),
+        &FieldManager::of("a"),
         &cm,
         false,
         None,
@@ -1461,6 +1466,7 @@ async fn an_apply_sends_secret_values_as_data() {
         &client,
         ar,
         scope.clone(),
+        &FieldManager::of("a"),
         &built,
         true,
         None,
@@ -1478,6 +1484,7 @@ async fn an_apply_sends_secret_values_as_data() {
         &client,
         ar,
         scope.clone(),
+        &FieldManager::of("a"),
         &built,
         false,
         None,
@@ -1515,14 +1522,24 @@ fn a_conflict_on_secret_data_is_named_as_such() {
     let on_labels =
         "Apply failed with 1 conflict: conflict with \"x\" using v1: .metadata.labels.app";
 
-    let err = super::conflict_error(&rid("Secret"), "Secret/creds@app".into(), conflict(on_data));
+    let err = super::conflict_error(
+        &rid("Secret"),
+        &FieldManager::of("a"),
+        "Secret/creds@app".into(),
+        conflict(on_data),
+    );
     assert!(
         matches!(err, ApplyError::SecretDataConflict { .. }),
         "{err}"
     );
     assert!(err.to_string().starts_with("[K9044] "), "{err}");
     for (kind, message) in [("Secret", on_labels), ("ConfigMap", on_data)] {
-        let err = super::conflict_error(&rid(kind), format!("{kind}/creds@app"), conflict(message));
+        let err = super::conflict_error(
+            &rid(kind),
+            &FieldManager::of("a"),
+            format!("{kind}/creds@app"),
+            conflict(message),
+        );
         assert!(matches!(err, ApplyError::Conflict { .. }), "{kind}: {err}");
     }
 }
@@ -1537,4 +1554,137 @@ fn a_ceded_secret_key_is_stripped_from_data() {
     let msg = "Apply failed with 1 conflict: conflict with \"issuer\" using v1: .data.token";
     let stripped = super::without_ceded_conflicts(&sent, msg).expect("ceded");
     assert_eq!(stripped["data"], json!({"user": "YWRtaW4="}));
+}
+
+/// An apply and the bookkeeping write after it both name the Kix cluster's
+/// own field manager, and the applied hash is read from its entry.
+#[tokio::test]
+async fn an_apply_writes_under_the_clusters_own_manager() {
+    use crate::cluster::{discovery, fake_api::FakeApi};
+
+    let api = FakeApi::default();
+    api.track_owners();
+    let client = api.client();
+    let discovery = discovery::discover_resources(&client).await.unwrap();
+    let (ar, scope) = discovery
+        .iter()
+        .find(|(ar, _)| ar.kind == "ConfigMap")
+        .unwrap();
+    let cm = json!({
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": { "name": "shared", "namespace": "app" },
+        "data": { "key": "1" },
+    });
+    let manager = FieldManager::of("lab");
+    let result = super::apply_resource(
+        &client,
+        ar,
+        scope.clone(),
+        &manager,
+        &cm,
+        false,
+        Some("rec1"),
+        None,
+        super::Takeover::No,
+    )
+    .await
+    .unwrap();
+    assert!(result.applied_hash.is_some());
+    let writes: Vec<String> = api
+        .requests()
+        .into_iter()
+        .filter(|r| r.starts_with("PATCH"))
+        .collect();
+    assert_eq!(writes.len(), 2, "{writes:?}");
+    assert!(
+        writes.iter().all(|r| r.contains("fieldManager=kix%2Flab")),
+        "{writes:?}"
+    );
+    let stored = api.object("ConfigMap", "shared").unwrap();
+    assert_eq!(stored["metadata"]["managedFields"][0]["manager"], "kix/lab");
+}
+
+/// An apply refused because another Kix cluster applies different values
+/// names that Kix cluster and the fields, and says what to do. A conflict
+/// with a manager that is not a Kix cluster's keeps the plain message.
+#[tokio::test]
+async fn a_conflict_with_another_kix_cluster_names_it() {
+    use crate::cluster::{discovery, fake_api::FakeApi};
+
+    let api = FakeApi::default();
+    api.track_owners();
+    let client = api.client();
+    let discovery = discovery::discover_resources(&client).await.unwrap();
+    let (ar, scope) = discovery
+        .iter()
+        .find(|(ar, _)| ar.kind == "ConfigMap")
+        .unwrap();
+    let cm = |value: &str| {
+        json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": { "name": "shared", "namespace": "app" },
+            "data": { "key": value },
+        })
+    };
+    let apply = |manager: &str, value: &str| {
+        let (client, ar, scope, manifest) = (client.clone(), ar.clone(), scope.clone(), cm(value));
+        let manager = FieldManager::of(manager);
+        async move {
+            super::apply_resource(
+                &client,
+                &ar,
+                scope,
+                &manager,
+                &manifest,
+                false,
+                None,
+                None,
+                super::Takeover::No,
+            )
+            .await
+        }
+    };
+    apply("b", "1").await.unwrap();
+    // The same content from a second Kix cluster is accepted.
+    apply("a", "1").await.unwrap();
+    let err = apply("a", "2").await.unwrap_err();
+    let ApplyError::KixClusterConflict { clusters, .. } = &err else {
+        panic!("{err}");
+    };
+    assert_eq!(clusters.len(), 1);
+    assert_eq!(clusters[0].manager, "b");
+    assert_eq!(clusters[0].fields, [".data.key"]);
+    let message = err.to_string();
+    for part in [
+        "ConfigMap/shared@app was not updated.",
+        "Kix cluster `b` also deploys it",
+        "Kix cluster `b` owns .data.key.",
+        "Make the definitions agree",
+        "`--force-conflicts`",
+        "the next deploy of `b` will be refused",
+    ] {
+        assert!(message.contains(part), "{part}: {message}");
+    }
+
+    let not_kix = super::conflict_error(
+        &ResourceId {
+            group: String::new(),
+            kind: "ConfigMap".into(),
+            namespace: "app".into(),
+            name: "shared".into(),
+        },
+        &FieldManager::of("a"),
+        "ConfigMap/shared@app".into(),
+        kube::Error::Api(
+            kube::core::Status::failure(
+                "Apply failed with 1 conflict: conflict with \"kix\": .data.key",
+                "Conflict",
+            )
+            .with_code(409)
+            .boxed(),
+        ),
+    );
+    assert!(matches!(not_kix, ApplyError::Conflict { .. }), "{not_kix}");
 }

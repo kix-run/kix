@@ -43,6 +43,7 @@ use super::{PlanError, PlanEvent};
 use crate::build_source::{Build, InstallableBuild};
 use crate::cluster::activation::{self, KeptOrphanSource, OpenedRecords, Record, Records};
 use crate::cluster::apply::{self, ChangeAction};
+use crate::cluster::field_manager::FieldManager;
 use crate::cluster::inventory::{Live, LiveObjects};
 use crate::cluster::tenancy::{self, Kept, Tenancy};
 use crate::cluster::{discovery, inventory, owned_view};
@@ -1257,8 +1258,11 @@ async fn of_live(
         .into_iter()
         .filter(|obj| lifecycle::lifecycle_of_live(obj).prunable())
         .collect();
-    let manifests =
-        owned_view::kix_owned_manifests_against(objects.iter().cloned(), &new.manifests_by_hash());
+    let manifests = owned_view::kix_owned_manifests_against(
+        objects.iter().cloned(),
+        &new.manifests_by_hash(),
+        &FieldManager::of(cluster),
+    );
     let closures = LiveClosures::of(
         &objects,
         &manifests,
@@ -1324,7 +1328,11 @@ pub async fn kept_of(
             Live::Absent => {}
         }
     }
-    let manifests = owned_view::kix_owned_manifests_against(present, built);
+    let manifests = owned_view::kix_owned_manifests_against(
+        present,
+        built,
+        &FieldManager::of(&tenancy.cluster),
+    );
     Ok(KeptBaseline {
         closures: if manifests.is_empty() {
             Vec::new()

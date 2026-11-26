@@ -116,7 +116,11 @@ fn object(
     let mut obj = json!({ "apiVersion": api_version, "kind": kind, "metadata": metadata });
     let dynamic: DynamicObject = serde_json::from_value(obj.clone()).unwrap();
     let stamp = if in_sync {
-        fieldsv1::applied_content_hash(&dynamic).unwrap()
+        fieldsv1::applied_content_hash(
+            &dynamic,
+            &crate::cluster::field_manager::FieldManager::of("a"),
+        )
+        .unwrap()
     } else {
         "0".repeat(64)
     };

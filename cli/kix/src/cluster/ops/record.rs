@@ -418,6 +418,7 @@ impl DeployRecord for ActivationRecord {
             &ar,
             scope,
             rid,
+            self.resources.manager(),
             hash,
             live.as_ref(),
         )

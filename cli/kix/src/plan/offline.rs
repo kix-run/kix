@@ -242,7 +242,8 @@ mod tests {
     use super::*;
     use crate::build_source::{Build, CarriedBuild, InstallableBuild, Provenance};
     use crate::cluster::fake_api::FakeApi;
-    use crate::cluster::fieldsv1::{KIX_FIELD_MANAGER, applied_content_hash};
+    use crate::cluster::field_manager::{FieldManager, LEGACY};
+    use crate::cluster::fieldsv1::applied_content_hash;
     use crate::cluster::revision::{RevisionMap, RevisionSet, Revisions};
     use crate::eval::store_graph::StoreGraph;
     use crate::manifest::keys;
@@ -322,7 +323,7 @@ mod tests {
     /// Return `manifest` as Kubernetes holds it after Kix applied it.
     fn applied(mut manifest: Value) -> Value {
         manifest["metadata"]["managedFields"] = json!([{
-            "manager": KIX_FIELD_MANAGER,
+            "manager": LEGACY,
             "operation": "Apply",
             "apiVersion": "v1",
             "fieldsV1": { "f:data": { "f:k": {} } },
@@ -390,7 +391,7 @@ mod tests {
                         .find(|m| ResourceId::from_value(m) == o.resource_id())?;
                     let obj: DynamicObject = serde_json::from_value(found.clone()).unwrap();
                     let hash = if in_sync.contains(&o.name.as_str()) {
-                        applied_content_hash(&obj).unwrap()
+                        applied_content_hash(&obj, &FieldManager::of("a")).unwrap()
                     } else if drifted.contains(&o.name.as_str()) {
                         "stale".to_string()
                     } else {

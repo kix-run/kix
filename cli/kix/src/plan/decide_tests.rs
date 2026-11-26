@@ -5,7 +5,8 @@ use serde_json::json;
 
 use super::*;
 use crate::cluster::activation::Record;
-use crate::cluster::fieldsv1::{self, KIX_FIELD_MANAGER};
+use crate::cluster::field_manager::{FieldManager, LEGACY};
+use crate::cluster::fieldsv1;
 use crate::cluster::head::HeadStatus;
 use crate::cluster::revision::{Revision, RevisionMap, RevisionObject, RevisionSpec, Slot};
 use crate::manifest::lifecycle::{PHASE_ACTIVE, PHASE_DEGRADED, PHASE_FAILED, RECORD_KIND};
@@ -105,7 +106,7 @@ fn live(name: &str, hash: &str) -> DynamicObject {
             "labels": { "app.kubernetes.io/managed-by": "kix" },
             "annotations": { (keys::IDENTITY_HASH): hash },
             "managedFields": [{
-                "manager": KIX_FIELD_MANAGER,
+                "manager": LEGACY,
                 "operation": "Apply",
                 "apiVersion": "v1",
                 "fieldsV1": { "f:data": { "f:k": {} } },
@@ -135,7 +136,7 @@ fn id(name: &str) -> ResourceId {
 }
 
 fn in_sync(name: &str, hash: &str) -> String {
-    fieldsv1::applied_content_hash(&live(name, hash)).unwrap()
+    fieldsv1::applied_content_hash(&live(name, hash), &FieldManager::of("a")).unwrap()
 }
 
 /// Return each decision as `name: action label`.
@@ -157,6 +158,9 @@ fn shown(decided: &Decided) -> Vec<String> {
                 Label::AppliedHashMissing => "applied hash missing".to_string(),
                 Label::RevertsDrift(report) => format!("reverts drift on {}", report.rid.name),
                 Label::DriftReported(report) => format!("reports drift on {}", report.rid.name),
+                Label::HeldByOtherCluster(report) => {
+                    format!("held by another cluster on {}", report.rid.name)
+                }
                 Label::Reconciled => "reconciled".to_string(),
                 Label::Unchanged => "unchanged".to_string(),
             };
@@ -479,7 +483,7 @@ fn deployment(replicas: i64, scaler: Option<&str>, editor: Option<&str>) -> Dyna
     }
     entries.insert(
         0,
-        json!({ "manager": KIX_FIELD_MANAGER, "operation": "Apply", "fieldsV1": kix_fields }),
+        json!({ "manager": LEGACY, "operation": "Apply", "fieldsV1": kix_fields }),
     );
     serde_json::from_value(json!({
         "apiVersion": "apps/v1",
@@ -559,7 +563,8 @@ fn deployment_ledger(applied: &str) -> Ledger {
 /// that changes it leaves the object in sync, for the CLI and the operator.
 #[test]
 fn an_autoscaled_ceded_field_is_not_drift() {
-    let applied = fieldsv1::applied_content_hash(&deployment(1, None, None)).unwrap();
+    let applied =
+        fieldsv1::applied_content_hash(&deployment(1, None, None), &FieldManager::of("a")).unwrap();
     let ledger = deployment_ledger(&applied);
     let live = LiveObjects::of([deployment(5, Some("hpa"), None)], []);
     let new = [deployment_manifest()];
@@ -577,7 +582,8 @@ fn an_autoscaled_ceded_field_is_not_drift() {
 /// another manager owns a field the build sets.
 #[test]
 fn a_forced_revert_leaves_ceded_fields_to_their_manager_and_the_operator_reports_it() {
-    let applied = fieldsv1::applied_content_hash(&deployment(1, None, None)).unwrap();
+    let applied =
+        fieldsv1::applied_content_hash(&deployment(1, None, None), &FieldManager::of("a")).unwrap();
     let ledger = deployment_ledger(&applied);
     let live = LiveObjects::of([deployment(5, Some("hpa"), Some("kubectl-edit"))], []);
     let new = [deployment_manifest()];
@@ -616,4 +622,98 @@ fn the_operator_applies_drift_no_other_manager_owns() {
     let made = new.iter().map(ResourceId::from_value).collect();
     let decided = decide(&new, &made, &live, &ledger, false, false).unwrap();
     assert_eq!(shown(&decided), ["web: apply reverts drift on web"]);
+}
+
+/// Return `obj` with its `managedFields` entries under `managers` only.
+fn written_by(mut obj: DynamicObject, managers: &[&str]) -> DynamicObject {
+    let entries = managers
+        .iter()
+        .map(|m| json!({ "manager": m, "operation": "Apply", "apiVersion": "v1" }))
+        .collect::<Vec<_>>();
+    obj.metadata.managed_fields = serde_json::from_value(json!(entries)).unwrap();
+    obj
+}
+
+/// An object that a `Degraded` current record or a `Failed` record names is
+/// taken in only when it has an entry under this Kix cluster's field
+/// manager, or the legacy one. One that only another Kix cluster wrote came
+/// from elsewhere and stays. An `Active` current record's objects and kept
+/// orphans need no entry.
+#[test]
+fn leftovers_are_taken_in_only_with_the_clusters_own_entry() {
+    let recs = |phase| {
+        [
+            Rec {
+                name: "cur",
+                phase,
+                current: true,
+                objects: &[("own", "h-own"), ("legacy", "h-l"), ("other", "h-x")],
+                applied: &[],
+                kept: &[("kept-other", "h-ko")],
+            },
+            Rec {
+                name: "failed",
+                phase: PHASE_FAILED,
+                current: false,
+                objects: &[("failed-own", "h-fo"), ("failed-other", "h-fx")],
+                applied: &[],
+                kept: &[],
+            },
+        ]
+    };
+    let live = LiveObjects::of(
+        [
+            written_by(live("own", "h-own"), &["kix/a"]),
+            written_by(live("legacy", "h-l"), &[LEGACY]),
+            written_by(live("other", "h-x"), &["kix/b"]),
+            written_by(live("kept-other", "h-ko"), &["kix/b"]),
+            written_by(live("failed-own", "h-fo"), &["kix/a", "kix/b"]),
+            written_by(live("failed-other", "h-fx"), &["kix/b"]),
+        ],
+        [],
+    );
+    let made = HashSet::new();
+
+    let degraded = Ledger::of(&tenancy(&recs(PHASE_DEGRADED)), true)
+        .unwrap()
+        .unwrap();
+    let decided = decide(&[], &made, &live, &degraded, false, true).unwrap();
+    assert_eq!(
+        decided.orphans,
+        [id("failed-own"), id("kept-other"), id("legacy"), id("own")]
+    );
+
+    let active = Ledger::of(&tenancy(&recs(PHASE_ACTIVE)), true)
+        .unwrap()
+        .unwrap();
+    let decided = decide(&[], &made, &live, &active, false, true).unwrap();
+    assert_eq!(
+        decided.orphans,
+        [
+            id("failed-own"),
+            id("kept-other"),
+            id("legacy"),
+            id("other"),
+            id("own")
+        ]
+    );
+}
+
+/// Another Kix cluster applied the image with another value. The CLI sends
+/// the apply without force, so Kubernetes refuses it and names that Kix
+/// cluster, rather than taking the field and moving the refusal to the
+/// other cluster's next deploy. The operator reports the drift.
+#[test]
+fn a_field_another_kix_cluster_holds_is_not_taken_by_force() {
+    let applied =
+        fieldsv1::applied_content_hash(&deployment(1, None, None), &FieldManager::of("a")).unwrap();
+    let ledger = deployment_ledger(&applied);
+    let live = LiveObjects::of([deployment(1, None, Some("kix/b"))], []);
+    let new = [deployment_manifest()];
+    let made = new.iter().map(ResourceId::from_value).collect();
+
+    let cli = decide(&new, &made, &live, &ledger, false, true).unwrap();
+    assert_eq!(shown(&cli), ["web: apply held by another cluster on web"]);
+    let operator = decide(&new, &made, &live, &ledger, false, false).unwrap();
+    assert_eq!(shown(&operator), ["web: skip reports drift on web"]);
 }

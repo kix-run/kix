@@ -70,7 +70,7 @@ pub fn object_of(name: &str, stamps: &[String]) -> Value {
             "labels": { "app.kubernetes.io/managed-by": "kix" },
             "annotations": annotations,
             "managedFields": [{
-                "manager": super::fieldsv1::KIX_FIELD_MANAGER,
+                "manager": super::field_manager::LEGACY,
                 "operation": "Apply",
                 "apiVersion": "v1",
             }],

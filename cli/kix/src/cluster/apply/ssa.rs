@@ -4,8 +4,10 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 
 use super::super::errors::FailureClass;
+use super::super::field_manager::{FieldManager, Whose};
 use super::super::fieldsv1;
 use super::super::kept::{self, NotKeptField};
+use super::super::preview::ConflictOwner;
 use crate::manifest::keys;
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use kube::{
@@ -15,9 +17,6 @@ use kube::{
 };
 use serde_json::Value;
 use thiserror::Error;
-
-/// Field manager name for server-side apply.
-const FIELD_MANAGER: &str = "kix";
 
 /// Errors from apply operations.
 #[derive(Error, Debug)]
@@ -34,6 +33,18 @@ pub enum ApplyError {
     )]
     Conflict {
         resource: String,
+        #[source]
+        source: kube::Error,
+    },
+
+    /// Another Kix cluster applies the object and sets fields this apply
+    /// sets to other values.
+    #[error("{}", kix_cluster_conflict(.resource, .clusters, .source))]
+    KixClusterConflict {
+        resource: String,
+        /// Each other Kix cluster named in the conflict, as its cluster
+        /// name, with the fields it owns.
+        clusters: Vec<ConflictOwner>,
         #[source]
         source: kube::Error,
     },
@@ -137,6 +148,44 @@ fn reported(e: &kube::Error) -> String {
         kube::Error::Api(status) if !status.message.is_empty() => status.message.clone(),
         other => other.to_string(),
     }
+}
+
+/// Return the message of [`ApplyError::KixClusterConflict`].
+fn kix_cluster_conflict(
+    resource: &str,
+    clusters: &[ConflictOwner],
+    source: &kube::Error,
+) -> String {
+    let names: Vec<String> = clusters
+        .iter()
+        .map(|c| format!("`{}`", c.manager))
+        .collect();
+    let (who, next) = match names.as_slice() {
+        [one] => (
+            format!("Kix cluster {one} also deploys it and sets"),
+            format!("the next deploy of {one}"),
+        ),
+        _ => (
+            format!("Kix clusters {} also deploy it and set", names.join(", ")),
+            "the next deploy of each of them".to_string(),
+        ),
+    };
+    let fields: Vec<String> = clusters
+        .iter()
+        .filter(|c| !c.fields.is_empty())
+        .map(|c| format!("Kix cluster `{}` owns {}.", c.manager, c.fields.join(", ")))
+        .collect();
+    let mut message =
+        format!("{resource} was not updated. {who} some of its fields to other values.");
+    for line in fields {
+        message.push(' ');
+        message.push_str(&line);
+    }
+    message.push_str(&format!(
+        " The Kix clusters render this shared object differently, and Kubernetes does not let one Kix cluster overwrite fields another one applies. Make the definitions agree, or stop deploying {resource} from all but one of the Kix clusters. Running the command again with `--force-conflicts` takes these fields for this Kix cluster, and {next} will be refused in the same way. Kubernetes reported: {}",
+        reported(source)
+    ));
+    message
 }
 
 /// Return `true` if `rid` has a namespaced kind (`scope == Scope::Namespaced`)
@@ -246,6 +295,7 @@ pub(crate) async fn record_activation_on_skipped(
     ar: &ApiResource,
     scope: Scope,
     rid: &ResourceId,
+    manager: &FieldManager,
     activation_hash: &str,
     live_activations: Option<&HashSet<String>>,
 ) -> Result<(), ApplyError> {
@@ -253,6 +303,7 @@ pub(crate) async fn record_activation_on_skipped(
     update_bookkeeping_annotations_checked(
         &api,
         &rid.name,
+        manager,
         Some(activation_hash),
         None,
         live_activations,
@@ -275,7 +326,7 @@ pub(crate) enum Takeover {
     IfUnchangedSince(String),
 }
 
-/// Apply a single resource via server-side apply.
+/// Apply a single resource via server-side apply under `manager`.
 ///
 /// If `activation_hash` is provided, the resource's `kix.run/activations`
 /// annotation is updated to include this activation (read-modify-write).
@@ -284,6 +335,7 @@ pub(crate) async fn apply_resource(
     client: &Client,
     ar: &ApiResource,
     scope: Scope,
+    manager: &FieldManager,
     manifest: &Value,
     dry_run: bool,
     activation_hash: Option<&str>,
@@ -305,7 +357,7 @@ pub(crate) async fn apply_resource(
 
     // Default to non-force SSA so ownership conflicts return their field paths
     // and current manager. --force-conflicts opts into taking ownership.
-    let mut pp = PatchParams::apply(FIELD_MANAGER);
+    let mut pp = PatchParams::apply(manager.name());
     if takeover != Takeover::No {
         pp = pp.force();
     }
@@ -369,7 +421,7 @@ pub(crate) async fn apply_resource(
                     let echo = apply_patch(&api, &name, &pp, &stripped, &rid).await?;
                     (echo, Some(stripped))
                 }
-                None => return Err(conflict_error(&rid, resource, source)),
+                None => return Err(conflict_error(&rid, manager, resource, source)),
             }
         }
         Err(e) => return Err(e),
@@ -385,11 +437,12 @@ pub(crate) async fn apply_resource(
     let applied_hash = if dry_run {
         None
     } else {
-        let h = fieldsv1::applied_content_hash(&echo);
+        let h = fieldsv1::applied_content_hash(&echo, manager);
         if h.is_none() {
             tracing::warn!(
                 resource = %rid.display_id(),
-                "SSA response has no kix managedFields entry; skipping applied-hash stamp"
+                manager = %manager,
+                "SSA response has no managedFields entry for this field manager; skipping applied-hash stamp"
             );
         }
         h
@@ -407,6 +460,7 @@ pub(crate) async fn apply_resource(
         update_bookkeeping_annotations_checked(
             &api,
             &name,
+            manager,
             activation_hash,
             applied_hash.as_deref(),
             live_activations,
@@ -484,20 +538,41 @@ pub(crate) fn string_data_as_data(manifest: &Value) -> Cow<'_, Value> {
     Cow::Owned(out)
 }
 
-/// Return the error for a conflict that no ceded field explains. A conflict
+/// Return the error for a conflict that no ceded field explains, met by an
+/// apply under `manager`. A conflict with another Kix cluster's manager gets
+/// [`ApplyError::KixClusterConflict`], which names that cluster. A conflict
 /// on a Secret's `data` gets [`ApplyError::SecretDataConflict`], which says
 /// what overwriting the other manager's values means.
 pub(super) fn conflict_error(
     rid: &ResourceId,
+    manager: &FieldManager,
     resource: String,
     source: kube::Error,
 ) -> ApplyError {
-    let on_data = match &source {
-        kube::Error::Api(resp) => conflict_paths(&resp.message)
-            .iter()
-            .any(|p| p == ".data" || p.starts_with(".data.")),
-        _ => false,
+    let message = match &source {
+        kube::Error::Api(resp) => resp.message.as_str(),
+        _ => "",
     };
+    let clusters: Vec<ConflictOwner> = crate::cluster::preview::conflict_owners(message)
+        .into_iter()
+        .filter_map(|owner| match manager.whose(&owner.manager) {
+            Whose::OtherCluster(cluster) => Some(ConflictOwner {
+                manager: cluster.to_string(),
+                fields: owner.fields,
+            }),
+            Whose::This | Whose::Legacy | Whose::NotKix => None,
+        })
+        .collect();
+    if !clusters.is_empty() {
+        return ApplyError::KixClusterConflict {
+            resource,
+            clusters,
+            source,
+        };
+    }
+    let on_data = conflict_paths(message)
+        .iter()
+        .any(|p| p == ".data" || p.starts_with(".data."));
     if on_data && rid.group_kind() == crate::manifest::kinds::SECRET {
         ApplyError::SecretDataConflict { resource, source }
     } else {
@@ -527,17 +602,25 @@ async fn apply_patch(
 async fn update_bookkeeping_annotations_checked(
     api: &Api<DynamicObject>,
     name: &str,
+    manager: &FieldManager,
     activation_hash: Option<&str>,
     applied_hash: Option<&str>,
     live_activations: Option<&HashSet<String>>,
     rid: &ResourceId,
 ) -> Result<(), ApplyError> {
-    update_bookkeeping_annotations(api, name, activation_hash, applied_hash, live_activations)
-        .await
-        .map_err(|e| ApplyError::BookkeepingAnnotationsFailed {
-            resource: rid.display_id(),
-            source: e,
-        })
+    update_bookkeeping_annotations(
+        api,
+        name,
+        manager,
+        activation_hash,
+        applied_hash,
+        live_activations,
+    )
+    .await
+    .map_err(|e| ApplyError::BookkeepingAnnotationsFailed {
+        resource: rid.display_id(),
+        source: e,
+    })
 }
 
 /// One segment of an API server field path: `.spec`, `[name="x"]`,
@@ -862,6 +945,7 @@ pub(super) fn merge_activation_set(
 async fn update_bookkeeping_annotations(
     api: &Api<DynamicObject>,
     name: &str,
+    manager: &FieldManager,
     activation_hash: Option<&str>,
     applied_hash: Option<&str>,
     live_activations: Option<&HashSet<String>>,
@@ -920,15 +1004,16 @@ async fn update_bookkeeping_annotations(
         }
     }
 
-    // Use a merge patch with `FIELD_MANAGER` so the update does not alter Kix's
-    // server-side apply field set or record an "unknown" manager in `managedFields`.
+    // Write under the cluster's field manager so the update does not alter
+    // its server-side apply field set or record an "unknown" manager in
+    // `managedFields`.
     let patch = serde_json::json!({
         "metadata": {
             "annotations": annotations,
         }
     });
     let pp = PatchParams {
-        field_manager: Some(FIELD_MANAGER.to_string()),
+        field_manager: Some(manager.name().to_string()),
         ..PatchParams::default()
     };
     api.patch(name, &pp, &Patch::Merge(&patch)).await?;

@@ -861,7 +861,7 @@ mod tests {
             let graph = build(&[config_map("web", "1"), config_map("calm", "1")]);
             let owned = |mut m: Value| {
                 m["metadata"]["managedFields"] = json!([{
-                    "manager": crate::cluster::fieldsv1::KIX_FIELD_MANAGER,
+                    "manager": crate::cluster::field_manager::LEGACY,
                     "operation": "Apply",
                     "apiVersion": "v1",
                     "fieldsV1": { "f:data": { "f:k": {} } },
@@ -888,7 +888,11 @@ mod tests {
                         .unwrap();
                         let applied = match o.name.as_str() {
                             "web" => "stale".to_string(),
-                            _ => crate::cluster::fieldsv1::applied_content_hash(&obj).unwrap(),
+                            _ => crate::cluster::fieldsv1::applied_content_hash(
+                                &obj,
+                                &crate::cluster::field_manager::FieldManager::of("a"),
+                            )
+                            .unwrap(),
                         };
                         (o.hash.clone(), applied)
                     })
@@ -977,7 +981,7 @@ mod tests {
             let graph = build(&[config_map("web", "1"), config_map("calm", "1")]);
             let owned = |mut m: Value| {
                 m["metadata"]["managedFields"] = json!([{
-                    "manager": crate::cluster::fieldsv1::KIX_FIELD_MANAGER,
+                    "manager": crate::cluster::field_manager::LEGACY,
                     "operation": "Apply",
                     "apiVersion": "v1",
                     "fieldsV1": { "f:data": { "f:k": {} } },
@@ -1350,11 +1354,19 @@ mod tests {
                 let obj: DynamicObject =
                     serde_json::from_value(api.object("Deployment", name).unwrap()).unwrap();
                 let old = crate::cluster::fieldsv1::projection_hash(
-                    crate::cluster::fieldsv1::kix_owned_projection(&obj).unwrap(),
+                    crate::cluster::fieldsv1::kix_owned_projection(
+                        &obj,
+                        &crate::cluster::field_manager::FieldManager::of("a"),
+                    )
+                    .unwrap(),
                 );
                 assert_ne!(
                     Some(&old),
-                    crate::cluster::fieldsv1::applied_content_hash(&obj).as_ref()
+                    crate::cluster::fieldsv1::applied_content_hash(
+                        &obj,
+                        &crate::cluster::field_manager::FieldManager::of("a")
+                    )
+                    .as_ref()
                 );
                 for revision in &listed {
                     if let Some(o) = revision.spec.objects.iter().find(|o| o.name == name) {
@@ -1507,7 +1519,7 @@ mod tests {
             // Kubernetes answers an apply with the fields the manager owns.
             api.on_apply("web", |obj| {
                 obj["metadata"]["managedFields"] = json!([{
-                    "manager": crate::cluster::fieldsv1::KIX_FIELD_MANAGER,
+                    "manager": crate::cluster::field_manager::LEGACY,
                     "operation": "Apply",
                     "apiVersion": "v1",
                     "fieldsV1": { "f:data": { "f:k": {} } },

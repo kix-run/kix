@@ -31,7 +31,7 @@ fn make_obj_gen(generation: i64, data: Value) -> DynamicObject {
 /// by Kix.
 fn make_annotated_obj(annotation: &str, data: Value) -> DynamicObject {
     written_by(
-        crate::cluster::fieldsv1::KIX_FIELD_MANAGER,
+        crate::cluster::field_manager::LEGACY,
         make_copied_obj(annotation, data),
     )
 }
@@ -2668,7 +2668,7 @@ mod pending_restart_waits {
                 "generation": generation,
                 "annotations": { keys::READINESS: RUNNING_VM_RULE },
                 "managedFields": [{
-                    "manager": crate::cluster::fieldsv1::KIX_FIELD_MANAGER,
+                    "manager": crate::cluster::field_manager::LEGACY,
                     "operation": "Apply",
                 }],
             },

@@ -11,6 +11,7 @@ use kix::cluster::activation::{self, Records};
 use kix::cluster::apply::ApplyError;
 use kix::cluster::binding::Connection;
 use kix::cluster::drift::{self, DriftReport, DriftVerdict};
+use kix::cluster::field_manager::FieldManager;
 use kix::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use kix::cluster::owned_view;
 use kix::cluster::revision::AppliedHashes;
@@ -340,10 +341,16 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
                     new: new_by_rid.clone(),
                     managed: &live.managed,
                     drifted: &drifted,
+                    manager: &FieldManager::of(cluster),
                 };
                 origin::label_live(&mut packages, &sides);
             }
-            let drift = origin::live_drift(&live.drifted, &new_by_rid, deployed_by_rid.as_ref());
+            let drift = origin::live_drift(
+                &live.drifted,
+                &new_by_rid,
+                deployed_by_rid.as_ref(),
+                &FieldManager::of(cluster),
+            );
             let mut doc = Plan::new(
                 plan::kix_build(),
                 MadeBy::LiveRead,
@@ -624,7 +631,8 @@ async fn fetch_live_manifests(
         .as_ref()
         .map(activation::Record::of)
         .and_then(|record| tenancy.index_of(&record));
-    let (drifted, drift_unchecked) = check_drift(&compared, &applied);
+    let manager = FieldManager::of(&new_graph.cluster_name);
+    let (drifted, drift_unchecked) = check_drift(&compared, &applied, &manager);
     let built = new_graph.manifests_by_hash();
     let managed: HashMap<ResourceId, Value> = compared
         .iter()
@@ -633,7 +641,7 @@ async fn fetch_live_manifests(
             serde_json::to_value(obj).ok().map(|v| (rid, v))
         })
         .collect();
-    let manifests = owned_view::kix_owned_manifests_against(compared, &built);
+    let manifests = owned_view::kix_owned_manifests_against(compared, &built, &manager);
 
     Ok(LiveSide {
         manifests,
@@ -649,18 +657,19 @@ async fn fetch_live_manifests(
     })
 }
 
-/// Run [`drift::check_object`] on each of `objects`, reading each one's
-/// applied hash from `applied`. Return the drifted ones with their reports,
+/// Run [`drift::check_object`] on each of `objects` against the fields
+/// `manager` applied, reading each one's applied hash from `applied`. Return the drifted ones with their reports,
 /// and how many the check cannot judge because their applied hash is not
 /// known or they have no Kix `managedFields` entry.
 fn check_drift(
     objects: &[DynamicObject],
     applied: &AppliedHashes,
+    manager: &FieldManager,
 ) -> (Vec<(DriftReport, DynamicObject)>, usize) {
     let mut drifted = Vec::new();
     let mut unchecked = 0;
     for obj in objects {
-        let report = drift::check_object(obj, applied.applied(obj));
+        let report = drift::check_object(obj, applied.applied(obj), manager);
         match report.verdict {
             DriftVerdict::Drifted { .. } => drifted.push((report, obj.clone())),
             DriftVerdict::Unstamped | DriftVerdict::NoFieldset => unchecked += 1,
@@ -837,8 +846,11 @@ mod tests {
         live.data["kind"] = json!("Deployment");
         live.data["apiVersion"] = json!("apps/v1");
 
-        let manifests =
-            owned_view::kix_owned_manifests_against([live.clone()], &new.manifests_by_hash());
+        let manifests = owned_view::kix_owned_manifests_against(
+            [live.clone()],
+            &new.manifests_by_hash(),
+            &FieldManager::of("a"),
+        );
         let old = StoreGraph::synthesize(&manifests, &new);
         let unstamped = {
             let mut o = live.clone();
@@ -853,6 +865,7 @@ mod tests {
         let (drifted, drift_unchecked) = check_drift(
             &[live, unstamped, no_fieldset],
             &AppliedHashes::from_annotations(),
+            &FieldManager::of("a"),
         );
         assert_eq!((drifted.len(), drift_unchecked), (1, 2));
         let side = OldSide::Live(Box::new(LiveSide {

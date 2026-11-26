@@ -58,6 +58,7 @@ use crate::cluster::client::{self, ResiliencePolicy};
 use crate::cluster::discovery;
 use crate::cluster::errors;
 use crate::cluster::errors::FetchError;
+use crate::cluster::field_manager::FieldManager;
 use crate::cluster::graph::DeleteOrder;
 use crate::cluster::graph::ResourceGraph;
 use crate::cluster::head::{self, HeadRead, Lock};
@@ -825,6 +826,7 @@ impl Planned {
             new_graph: self.build.graph(),
             deployed,
             folded,
+            manager: FieldManager::of(&self.build.graph().cluster_name),
         }
         .apply(&mut self.checked.pkg_diff, answers);
         self.checked.relabel_reverted_writes();
@@ -1499,9 +1501,11 @@ fn write_reason(label: &Label) -> Option<WriteReason> {
             record: record.clone(),
         }),
         Label::AppliedHashMissing => Some(WriteReason::AppliedHashMissing),
-        Label::RevertsDrift(report) => Some(WriteReason::RevertsDrift {
-            changed_by: super::document::DriftOwner::of_report(report),
-        }),
+        Label::RevertsDrift(report) | Label::HeldByOtherCluster(report) => {
+            Some(WriteReason::RevertsDrift {
+                changed_by: super::document::DriftOwner::of_report(report),
+            })
+        }
         Label::Intended | Label::Reconciled | Label::Unchanged | Label::DriftReported(_) => None,
     }
 }

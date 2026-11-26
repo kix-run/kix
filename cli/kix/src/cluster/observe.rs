@@ -24,6 +24,7 @@ use kube::discovery::{ApiResource, Scope};
 use super::activation::{OpenedRecords, Record};
 use super::drift::{self, DriftVerdict};
 use super::errors::FetchError;
+use super::field_manager::FieldManager;
 use super::inventory;
 use super::readiness;
 use super::revision::AppliedHashes;
@@ -386,6 +387,7 @@ fn view(
     applied: &AppliedHashes,
     lookup: impl FnOnce(&[&str]) -> HashMap<String, StoreEntry>,
 ) -> ClusterView {
+    let manager = FieldManager::of(&cluster);
     let root = record.identity_hash.clone().unwrap_or_default();
     let (expected_from, mut expected) = match &index {
         Some(index) => {
@@ -507,7 +509,7 @@ fn view(
                         } else {
                             Presence::Present
                         },
-                        Some(drift::check_object(obj, applied.applied(obj)).verdict),
+                        Some(drift::check_object(obj, applied.applied(obj), &manager).verdict),
                         if marker {
                             Readiness::NotApplicable
                         } else {

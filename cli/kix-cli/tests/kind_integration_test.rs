@@ -784,10 +784,25 @@ impl TwoClusters {
         shared: bool,
         kubernetes_uid: Option<&str>,
     ) {
-        let shared = if shared {
-            "namespaces.shared = { };\n      instances.shared.shared-role.package = import ./shared-role.nix;"
-        } else {
-            ""
+        let package = shared.then_some("shared-role.nix");
+        self.write_cluster_with(id, message, package, kubernetes_uid);
+    }
+
+    /// Write the definition of `sweep-<id>`, deploying the shared package
+    /// from the file `package` when given, bound to the Kubernetes cluster
+    /// `kubernetes_uid` when given.
+    fn write_cluster_with(
+        &self,
+        id: &str,
+        message: &str,
+        package: Option<&str>,
+        kubernetes_uid: Option<&str>,
+    ) {
+        let shared = match package {
+            Some(file) => format!(
+                "namespaces.shared = {{ }};\n      instances.shared.shared-role.package = import ./{file};"
+            ),
+            None => String::new(),
         };
         let bound = match kubernetes_uid {
             Some(uid) => format!("cluster.kubernetes.uid = \"{uid}\";"),
@@ -901,6 +916,12 @@ fn two_kix_clusters_share_one_kind_cluster() {
     assert!(flake.kix(&ctx, &["deploy", "sweep-a", "--yes"]).0);
     assert!(flake.kix(&ctx, &["deploy", "sweep-b", "--yes"]).0);
     assert_b_intact(&ctx);
+    // Each Kix cluster applies under its own field manager, so the shared
+    // ConfigMap shows both.
+    assert_eq!(
+        apply_managers(&ctx, "configmap", "shared", "sweep-test-shared"),
+        ["kix/sweep-a", "kix/sweep-b"]
+    );
 
     // 1. `kix plan sweep-a --read-only` reports no change: sweep-b's objects are not
     //    removals.
@@ -972,7 +993,7 @@ fn two_kix_clusters_share_one_kind_cluster() {
     assert_b_intact(&ctx);
 
     // 5. sweep-a drops the shared package; its prune keeps what sweep-b
-    //    still deploys.
+    //    still deploys, and leaves sweep-b's field manager on it.
     flake.write_cluster("a", "hello again from sweep-a", false);
     let (ok, out) = flake.kix(&ctx, &["deploy", "sweep-a", "--prune", "--yes"]);
     assert!(ok, "{out}");
@@ -981,6 +1002,15 @@ fn two_kix_clusters_share_one_kind_cluster() {
             && out.contains("still deployed by Kix cluster sweep-b"),
         "{out}"
     );
+    assert_b_intact(&ctx);
+    assert!(
+        apply_managers(&ctx, "configmap", "shared", "sweep-test-shared")
+            .contains(&"kix/sweep-b".to_string())
+    );
+    // sweep-b deploys again with nothing to change, and still has the
+    // shared objects.
+    let (ok, out) = flake.kix(&ctx, &["deploy", "sweep-b", "--prune", "--yes"]);
+    assert!(ok, "{out}");
     assert_b_intact(&ctx);
     let (ok, out) = flake.kix(&ctx, &["gc", "sweep-a", "--full-scan", "--yes"]);
     assert!(ok, "{out}");
@@ -1064,6 +1094,107 @@ fn two_kix_clusters_share_one_kind_cluster() {
     let (ok, out) = flake.kix(&ctx, &["deploy", "sweep-b", "--yes"]);
     assert!(ok, "{out}");
     assert_b_intact(&ctx);
+}
+
+/// Return the field managers with an `Apply` entry on the object `name` of
+/// `kind` in `namespace`, sorted.
+fn apply_managers(kube_ctx: &str, kind: &str, namespace: &str, name: &str) -> Vec<String> {
+    let text = kubectl_stdout(
+        kube_ctx,
+        &[
+            "get",
+            kind,
+            name,
+            "-n",
+            namespace,
+            "--show-managed-fields",
+            "-o",
+            "json",
+        ],
+    );
+    let obj: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let mut managers: Vec<String> = obj["metadata"]["managedFields"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|e| e["operation"] == "Apply" && e["subresource"].is_null())
+        .filter_map(|e| e["manager"].as_str().map(str::to_string))
+        .collect();
+    managers.sort();
+    managers.dedup();
+    managers
+}
+
+/// Verify that two Kix clusters that render a shared object differently
+/// are refused, and that the message names the other Kix cluster and the
+/// field. Taking the field with `--force-conflicts` moves the refusal to the
+/// other Kix cluster's next deploy.
+///
+/// The kind cluster is `$KIX_KIND_CLUSTER` (default `kix-shared-conflict`);
+/// the test creates and deletes it.
+#[test]
+#[ignore] // Run explicitly: cargo test --test kind_integration_test -- --ignored
+fn two_kix_clusters_that_render_a_shared_object_differently_are_refused() {
+    if !has_kind() || !has_kubectl() {
+        eprintln!("skipping: kind or kubectl not available");
+        return;
+    }
+    let kind_cluster =
+        std::env::var("KIX_KIND_CLUSTER").unwrap_or_else(|_| "kix-shared-conflict".into());
+    let ctx = format!("kind-{kind_cluster}");
+    kind_delete(&kind_cluster);
+    clear_activation_cache("sweep-a");
+    clear_activation_cache("sweep-b");
+    assert!(kind_create(&kind_cluster), "failed to create kind cluster");
+    struct Cleanup(String);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            kind_delete(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(kind_cluster.clone());
+
+    let flake = TwoClusters::new();
+    flake.write(
+        "shared-role-b.nix",
+        &SHARED_ROLE_NIX.replace(r#"owner = "both";"#, r#"owner = "only-b";"#),
+    );
+    flake.write_cluster_with("b", "hello from sweep-b", Some("shared-role-b.nix"), None);
+    assert!(flake.kix(&ctx, &["deploy", "sweep-a", "--yes"]).0);
+
+    let (ok, out) = flake.kix(&ctx, &["deploy", "sweep-b", "--yes"]);
+    let out = unwrapped(&out);
+    assert!(!ok, "{out}");
+    for part in [
+        "ConfigMap/sweep-test-shared@shared was not updated.",
+        "Kix cluster `sweep-a` also deploys it",
+        ".data.owner",
+        "`--force-conflicts`",
+    ] {
+        assert!(out.contains(part), "{part}:\n{out}");
+    }
+    let owner = kubectl_stdout(
+        &ctx,
+        &[
+            "get",
+            "configmap",
+            "sweep-test-shared",
+            "-n",
+            "shared",
+            "-o",
+            "jsonpath={.data.owner}",
+        ],
+    );
+    assert_eq!(owner.trim(), "both", "sweep-a's value stays");
+
+    let (ok, out) = flake.kix(&ctx, &["deploy", "sweep-b", "--force-conflicts", "--yes"]);
+    assert!(ok, "{out}");
+    let (ok, out) = flake.kix(&ctx, &["deploy", "sweep-a", "--yes"]);
+    let out = unwrapped(&out);
+    assert!(
+        !ok && out.contains("Kix cluster `sweep-b` also deploys it"),
+        "{out}"
+    );
 }
 
 /// Return `out` with the line wrapping of the error printer undone: the

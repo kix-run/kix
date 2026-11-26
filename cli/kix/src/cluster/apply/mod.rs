@@ -1,6 +1,7 @@
 //! Apply resources with server-side apply and local DAG change detection.
 //!
-//! Uses server-side apply (`Patch::Apply`) with `kix` as the field manager.
+//! Uses server-side apply (`Patch::Apply`) under the Kix cluster's own field
+//! manager ([`super::field_manager`]).
 //! Change detection diffs two sets of stamped manifests locally by comparing
 //! identity-hashes, without querying the live cluster. A Job under the rerun
 //! rule is recreated only when its content hash changed or its last run

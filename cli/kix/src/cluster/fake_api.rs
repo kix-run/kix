@@ -39,8 +39,12 @@
 //! turns on a small model of server-side apply's field ownership: an apply
 //! owns the fields it sends, keeps the fields other managers own, removes
 //! the fields it owned before and no longer sends, and is refused with 409
-//! when it would change a field another manager owns, unless it is forced.
-//! Lists count as one field. [`FakeApi::update_as`] changes an object as
+//! naming the other manager and the field when it would change a field
+//! another manager owns, unless it is forced. Each manager has its own
+//! entry, so the first apply of the same content by a second manager adds
+//! an entry and changes `resourceVersion`, and an apply that changes
+//! nothing, entries included, keeps `resourceVersion`. Lists count as one
+//! field. [`FakeApi::update_as`] changes an object as
 //! another manager's update does, taking the fields it changes.
 
 use std::sync::{Arc, Mutex};
@@ -690,24 +694,39 @@ impl FakeApi {
                         .split('&')
                         .find_map(|q| q.strip_prefix("fieldManager="))
                         .unwrap_or("unknown")
-                        .to_string();
+                        .replace("%2F", "/");
                     let force = query.split('&').any(|q| q == "force=true");
                     match owners::apply(existing.map(|i| &st.objects[i]), &obj, &manager, force) {
                         Ok(merged) => obj = merged,
                         Err(message) => return status(409, "Conflict", &message),
                     }
                 }
-                let rv = st.bump();
-                let uid = match existing {
-                    Some(i) => st.objects[i]["metadata"]["uid"].clone(),
-                    None => json!(format!("uid-{rv}")),
-                };
-                obj["metadata"]["uid"] = uid;
-                obj["metadata"]["resourceVersion"] = json!(rv);
+                if let Some(i) = existing {
+                    obj["metadata"]["uid"] = st.objects[i]["metadata"]["uid"].clone();
+                }
                 if let Some(h) = st.on_apply.iter().position(|(n, _)| n == name) {
                     let (_, hook) = st.on_apply.remove(h);
                     hook(&mut obj);
                 }
+                // With ownership tracked, an apply that changes nothing,
+                // its managers included, keeps the object's resourceVersion.
+                let unchanged = st.owners
+                    && existing.is_some_and(|i| {
+                        let without_version = |o: &Value| {
+                            let mut o = o.clone();
+                            o["metadata"]["resourceVersion"] = Value::Null;
+                            o
+                        };
+                        without_version(&st.objects[i]) == without_version(&obj)
+                    });
+                let rv = match existing {
+                    Some(i) if unchanged => st.objects[i]["metadata"]["resourceVersion"].clone(),
+                    _ => json!(st.bump()),
+                };
+                if existing.is_none() {
+                    obj["metadata"]["uid"] = json!(format!("uid-{rv}"));
+                }
+                obj["metadata"]["resourceVersion"] = rv;
                 if !query.split('&').any(|q| q == "dryRun=All") {
                     match existing {
                         Some(i) => st.objects[i] = obj.clone(),
@@ -960,9 +979,11 @@ mod owners {
         force: bool,
     ) -> Result<Value, String> {
         let sent_fields = fields_of(sent);
-        let all = entries(existing);
-        let (mine, others): (Vec<Value>, Vec<Value>) =
-            all.into_iter().partition(|e| is_apply_of(e, manager));
+        let all_before = entries(existing);
+        let (mine, others): (Vec<Value>, Vec<Value>) = all_before
+            .iter()
+            .cloned()
+            .partition(|e| is_apply_of(e, manager));
         let owned_before: Vec<Field> = mine.iter().flat_map(fields_of_entry).collect();
         let before = |f: &Field| existing.and_then(|o| value_at(o, f));
         let differs = |f: &Field| before(f).is_some() && before(f) != value_at(sent, f);
@@ -1016,7 +1037,13 @@ mod owners {
                 kept.push(e);
             }
         }
-        kept.insert(0, entry(manager, "Apply", None, &sent_fields));
+        // An entry the manager had keeps its place, as on the API server.
+        let at = all_before
+            .iter()
+            .position(|e| is_apply_of(e, manager))
+            .unwrap_or(0)
+            .min(kept.len());
+        kept.insert(at, entry(manager, "Apply", None, &sent_fields));
         merged["metadata"]["managedFields"] = Value::Array(kept);
         Ok(merged)
     }
@@ -1171,4 +1198,100 @@ fn status(code: u16, reason: &str, message: &str) -> (u16, Value) {
 
 fn not_found(path: &str) -> (u16, Value) {
     status(404, "NotFound", &format!("{path} not found"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kube::api::{Api, DynamicObject, Patch, PatchParams};
+    use kube::discovery::ApiResource;
+
+    fn config_maps(api: &FakeApi) -> Api<DynamicObject> {
+        let ar = ApiResource {
+            group: String::new(),
+            version: "v1".into(),
+            api_version: "v1".into(),
+            kind: "ConfigMap".into(),
+            plural: "configmaps".into(),
+        };
+        Api::namespaced_with(api.client(), "app", &ar)
+    }
+
+    fn config_map(value: &str) -> Value {
+        json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": { "name": "shared", "namespace": "app" },
+            "data": { "key": value },
+        })
+    }
+
+    async fn apply(
+        api: &Api<DynamicObject>,
+        manager: &str,
+        value: &str,
+        force: bool,
+    ) -> Result<DynamicObject, kube::Error> {
+        let mut params = PatchParams::apply(manager);
+        if force {
+            params = params.force();
+        }
+        api.patch("shared", &params, &Patch::Apply(config_map(value)))
+            .await
+    }
+
+    fn managers(obj: &DynamicObject) -> Vec<String> {
+        obj.metadata
+            .managed_fields
+            .iter()
+            .flatten()
+            .filter_map(|e| e.manager.clone())
+            .collect()
+    }
+
+    /// The model the tests of two Kix clusters rely on, as kind showed it:
+    /// the same content applied again by the same manager changes nothing.
+    /// The first apply of it by a second manager adds an entry and changes
+    /// `resourceVersion` once. A different value from the second manager is
+    /// refused, naming the first manager and the field, unless forced.
+    #[tokio::test]
+    async fn each_manager_has_its_own_entry() {
+        let fake = FakeApi::new(Vec::<Value>::new());
+        fake.track_owners();
+        let api = config_maps(&fake);
+        let first = apply(&api, "kix/a", "1", false).await.unwrap();
+        let again = apply(&api, "kix/a", "1", false).await.unwrap();
+        assert_eq!(
+            again.metadata.resource_version,
+            first.metadata.resource_version
+        );
+        assert_eq!(managers(&again), ["kix/a"]);
+
+        let second = apply(&api, "kix/b", "1", false).await.unwrap();
+        assert_ne!(
+            second.metadata.resource_version,
+            first.metadata.resource_version
+        );
+        assert_eq!(managers(&second), ["kix/b", "kix/a"]);
+        let both = apply(&api, "kix/a", "1", false).await.unwrap();
+        assert_eq!(
+            both.metadata.resource_version,
+            second.metadata.resource_version
+        );
+
+        let refused = apply(&api, "kix/b", "2", false).await.unwrap_err();
+        let kube::Error::Api(status) = refused else {
+            panic!("{refused}");
+        };
+        assert_eq!(status.code, 409);
+        assert!(
+            status
+                .message
+                .contains("conflict with \"kix/a\": .data.key"),
+            "{}",
+            status.message
+        );
+        let forced = apply(&api, "kix/b", "2", true).await.unwrap();
+        assert_eq!(managers(&forced), ["kix/b"]);
+    }
 }

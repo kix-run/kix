@@ -860,7 +860,7 @@ mod applied_tests {
                 "namespace": "app",
                 "annotations": annotations,
                 "managedFields": [{
-                    "manager": fieldsv1::KIX_FIELD_MANAGER,
+                    "manager": crate::cluster::field_manager::LEGACY,
                     "operation": "Apply",
                     "apiVersion": "v1",
                     "fieldsType": "FieldsV1",
@@ -873,7 +873,12 @@ mod applied_tests {
     }
 
     fn verdict(obj: &DynamicObject, source: &AppliedHashes) -> DriftVerdict {
-        drift::check_object(obj, source.applied(obj)).verdict
+        drift::check_object(
+            obj,
+            source.applied(obj),
+            &crate::cluster::field_manager::FieldManager::of("a"),
+        )
+        .verdict
     }
 
     /// The drift check gives the same verdict whether the applied hash comes
@@ -881,7 +886,11 @@ mod applied_tests {
     #[test]
     fn drift_verdicts_are_the_same_from_a_revision_and_from_the_annotation() {
         let x = object("x", "x");
-        let current = fieldsv1::applied_content_hash(&live(&x, None)).unwrap();
+        let current = fieldsv1::applied_content_hash(
+            &live(&x, None),
+            &crate::cluster::field_manager::FieldManager::of("a"),
+        )
+        .unwrap();
         let cases: [(Option<&str>, DriftVerdict); 3] = [
             (Some(&current), DriftVerdict::InSync),
             (

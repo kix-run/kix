@@ -199,7 +199,7 @@ fn read_back(folder: &Path) -> Value {
                 "name": o.metadata.name,
                 "lifecycle": format!("{:?}", lifecycle::lifecycle_of(&manifest)),
                 "owners": tenancy.owners_of(o),
-                "drift": verdict_name(&drift::check_object(o, applied.applied(o)).verdict),
+                "drift": verdict_name(&drift::check_object(o, applied.applied(o), &crate::cluster::field_manager::FieldManager::of("a")).verdict),
             })
         })
         .collect();

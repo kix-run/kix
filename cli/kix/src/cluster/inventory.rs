@@ -494,9 +494,6 @@ fn split_by_lookup<'a>(
     live: impl Fn(&ResourceId) -> Option<&'a DynamicObject>,
     tenancy: &Tenancy,
 ) -> (Vec<ResourceId>, Vec<SharedOrphan>) {
-    if !tenancy.others_deploy_anything() {
-        return (orphans, Vec::new());
-    }
     let mut prune = Vec::new();
     let mut shared = Vec::new();
     for rid in orphans {
@@ -989,8 +986,9 @@ fn one_per_object(objects: impl IntoIterator<Item = DynamicObject>) -> Vec<Dynam
     kept
 }
 
-/// Return whether `obj` was read through the API group of a `kix`
-/// `managedFields` entry.
+/// Return whether `obj` was read through the API group of a `managedFields`
+/// entry that a Kix cluster wrote. Any Kix cluster's entry tells which group
+/// Kix applies the object through.
 fn read_as_kix_applied(obj: &DynamicObject) -> bool {
     let group = |api_version: &str| {
         api_version
@@ -1006,7 +1004,9 @@ fn read_as_kix_applied(obj: &DynamicObject) -> bool {
         return false;
     };
     obj.metadata.managed_fields.iter().flatten().any(|e| {
-        e.manager.as_deref() == Some(super::fieldsv1::KIX_FIELD_MANAGER)
+        e.manager
+            .as_deref()
+            .is_some_and(|m| super::field_manager::Manager::parse(m).is_kix())
             && e.api_version.as_deref().map(group) == Some(group(read))
     })
 }
@@ -1088,10 +1088,8 @@ mod tests {
 
     /// Attach Kix's `Apply` `managedFields` entry to `obj`.
     fn kix_applied(mut obj: DynamicObject) -> DynamicObject {
-        obj.metadata.managed_fields = Some(vec![entry(
-            crate::cluster::fieldsv1::KIX_FIELD_MANAGER,
-            "Apply",
-        )]);
+        obj.metadata.managed_fields =
+            Some(vec![entry(crate::cluster::field_manager::LEGACY, "Apply")]);
         obj
     }
 
@@ -1157,7 +1155,7 @@ mod tests {
         let mut taken = swept("ConfigMap", "ns", "taken-over", true, false);
         taken.metadata.managed_fields = Some(vec![
             entry("kubectl", "Apply"),
-            entry(crate::cluster::fieldsv1::KIX_FIELD_MANAGER, "Update"),
+            entry(crate::cluster::field_manager::LEGACY, "Update"),
         ]);
         let sweep = partition_sweep(vec![taken]);
         assert_eq!(names(&sweep.managed), ["ns/ConfigMap/taken-over"]);
@@ -1640,7 +1638,7 @@ mod tests {
             let mut o = o;
             o.metadata.managed_fields = Some(vec![ManagedFieldsEntry {
                 api_version: Some(api_version.into()),
-                ..entry(crate::cluster::fieldsv1::KIX_FIELD_MANAGER, "Apply")
+                ..entry(crate::cluster::field_manager::LEGACY, "Apply")
             }]);
             o
         };

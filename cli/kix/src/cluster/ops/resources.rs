@@ -24,6 +24,7 @@ use super::super::apply::{self, ApplyError, ApplyResult};
 use super::super::cancel::CancelToken;
 use super::super::discovery::{self, KindLookup};
 use super::super::errors::FetchError;
+use super::super::field_manager::FieldManager;
 use super::super::prune_guard::{PruneGuard, Pruned};
 use super::super::readiness::{self, Deletion, ImportTarget, ReadinessError, ReadinessResult};
 use super::super::revision::RevisionObject;
@@ -102,6 +103,9 @@ pub(crate) struct KubeResources {
     discovery: DiscoveryCache,
     /// The Kix cluster whose orphans a prune deletes.
     cluster: String,
+    /// The field manager of `cluster`, which every apply and bookkeeping
+    /// write of the run names.
+    manager: FieldManager,
     /// Identity hash of the run's Activation, stamped into
     /// `kix.run/activations` on every object written.
     identity_hash: Option<String>,
@@ -168,6 +172,7 @@ impl KubeResources {
             client,
             writes,
             discovery: Arc::new(RwLock::new(discovery)),
+            manager: FieldManager::of(&cluster),
             cluster,
             identity_hash,
             force,
@@ -188,6 +193,10 @@ impl KubeResources {
 
     pub(super) fn cluster(&self) -> &str {
         &self.cluster
+    }
+
+    pub(super) fn manager(&self) -> &FieldManager {
+        &self.manager
     }
 
     pub(super) fn identity_hash(&self) -> Option<&str> {
@@ -346,6 +355,7 @@ impl KubeResources {
             &self.client,
             ar,
             scope,
+            &self.manager,
             manifest,
             self.dry(),
             self.identity_hash.as_deref(),

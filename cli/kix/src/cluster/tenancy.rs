@@ -27,11 +27,14 @@ use kube::api::DynamicObject;
 
 use super::activation::{KeptOrphanSource, OpenedRecords, Record, RecordsError};
 use super::drift;
+use super::field_manager::{self, FieldManager};
 use super::head::{self, HeadStatus};
 use super::revision::{self, Listed, Revision, RevisionError, RevisionObject, Revisions};
 use crate::eval::package_index::RecordPackageIndex;
 use crate::manifest::keys;
-use crate::manifest::lifecycle::{PHASE_ACTIVE, PHASE_DEGRADED, PHASE_SUPERSEDED};
+use crate::manifest::lifecycle::{
+    Lifecycle, PHASE_ACTIVE, PHASE_DEGRADED, PHASE_SUPERSEDED, lifecycle_of_live,
+};
 use crate::manifest::types::ResourceId;
 
 /// Where [`Tenancy`] reads a Kix cluster's objects from.
@@ -184,6 +187,8 @@ struct Legacy {
 pub struct Tenancy {
     /// The Kix cluster this tenancy is read for.
     pub(crate) cluster: String,
+    /// The field manager of `cluster`.
+    manager: FieldManager,
     /// The Kix clusters read from revisions. Every other one is read from
     /// records.
     revision_clusters: BTreeSet<String>,
@@ -235,6 +240,7 @@ impl Tenancy {
     pub(crate) fn empty(cluster: &str) -> Self {
         Tenancy {
             cluster: cluster.to_string(),
+            manager: FieldManager::of(cluster),
             revision_clusters: BTreeSet::new(),
             legacy: Legacy::default(),
             claims: Claims::default(),
@@ -686,8 +692,14 @@ impl Tenancy {
 
     /// Return other Kix clusters whose current build contains `obj`, or
     /// whose deploy that is under way, queued, failed, or partly deployed
-    /// does. Prune leaves such objects in place. Another cluster's kept
+    /// does, or that have an `Apply` entry under their own field manager on
+    /// `obj`. Prune leaves such objects in place. Another cluster's kept
     /// orphans do not count.
+    ///
+    /// An `Apply` entry counts whatever the other cluster's records say. A
+    /// Kix cluster that adds back an object it applied before may find it
+    /// unchanged and write nothing to it, so its entry is the one sign on
+    /// the object that it deploys it again ([`super::prune_guard`]).
     pub fn still_deployed_by_others(&self, obj: &DynamicObject) -> Vec<String> {
         let legacy = named_hashes(obj)
             .filter(|h| self.legacy.others_current.contains(*h))
@@ -697,17 +709,16 @@ impl Tenancy {
             .iter()
             .filter(|c| !c.kept && !self.is_own(&c.cluster))
             .map(|c| c.cluster.clone());
-        let mut clusters: Vec<String> = legacy.chain(claimed).collect();
+        let applying = field_manager::other_clusters_applying(
+            &self.manager,
+            obj.metadata.managed_fields.as_deref().unwrap_or_default(),
+        )
+        .into_iter()
+        .map(str::to_string);
+        let mut clusters: Vec<String> = legacy.chain(claimed).chain(applying).collect();
         clusters.sort();
         clusters.dedup();
         clusters
-    }
-
-    /// Return whether any other Kix cluster deploys anything, so a caller
-    /// with nothing to ask can skip reading objects.
-    pub(crate) fn others_deploy_anything(&self) -> bool {
-        !self.legacy.others_current.is_empty()
-            || self.revision_clusters.iter().any(|c| !self.is_own(c))
     }
 
     /// Return the sorted names of this cluster's pending records that deploy
@@ -862,12 +873,19 @@ fn named_hashes(obj: &DynamicObject) -> impl Iterator<Item = &str> {
     stamps(obj).chain(own)
 }
 
-/// Return whether `tenancy` settles every hash `obj` names
+/// Return whether `tenancy` settles every record hash `obj` names
 /// ([`Tenancy::knows`]), so a tenancy read before `obj` still judges it.
-/// The hashes include the object's own identity hash, which names a record
-/// only on an Activation record.
+/// Those are the entries of `kix.run/activations`, and the object's own
+/// identity hash when it is an Activation record. On any other object the
+/// identity hash is the hash of its manifest, which names no record.
 pub(crate) fn settles(tenancy: &Tenancy, obj: &DynamicObject) -> bool {
-    named_hashes(obj).all(|h| tenancy.knows(h))
+    let record = lifecycle_of_live(obj) == Lifecycle::Record;
+    let named = if record {
+        named_hashes(obj).collect::<Vec<_>>()
+    } else {
+        stamps(obj).collect()
+    };
+    named.into_iter().all(|h| tenancy.knows(h))
 }
 
 /// Read the [`Tenancy`] for `cluster`: the heads of every Kix cluster, then

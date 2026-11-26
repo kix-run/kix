@@ -12,6 +12,7 @@ pub mod drift;
 pub mod errors;
 #[cfg(any(test, feature = "test-util"))]
 pub mod fake_api;
+pub mod field_manager;
 pub mod fieldsv1;
 pub mod graph;
 pub mod head;

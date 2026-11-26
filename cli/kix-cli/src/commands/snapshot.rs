@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use crate::client;
 use kix::cluster::activation::Records;
+use kix::cluster::field_manager::FieldManager;
 use kix::cluster::{discovery, inventory, owned_view};
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use kube::Client;
@@ -74,7 +75,7 @@ pub fn run(args: &SnapshotArgs, ctx: &mut CommandContext) -> Result<()> {
         for note in sweep.scope_notes() {
             crate::esay!("{note}");
         }
-        let resources = snapshot_resources(sweep.managed);
+        let resources = snapshot_resources(sweep.managed, &FieldManager::of(&cluster));
 
         // Stage files in a sibling temporary directory and swap into place so
         // an interrupted snapshot does not leave a partial output directory.
@@ -117,8 +118,11 @@ pub fn run(args: &SnapshotArgs, ctx: &mut CommandContext) -> Result<()> {
 /// Extract the Kix-owned manifest view for each live object, redacting Secret
 /// values so snapshots can be compared against builds without exposing live
 /// secrets.
-fn snapshot_resources(objects: Vec<DynamicObject>) -> Vec<(ResourceId, Value)> {
-    owned_view::kix_owned_manifests(objects)
+fn snapshot_resources(
+    objects: Vec<DynamicObject>,
+    manager: &FieldManager,
+) -> Vec<(ResourceId, Value)> {
+    owned_view::kix_owned_manifests(objects, manager)
         .into_iter()
         .map(|value| (ResourceId::from_value(&value), value))
         .collect()
@@ -230,7 +234,7 @@ mod tests {
             }),
         ]);
         let sweep = sweep_cluster(&api.client(), "a").await.unwrap();
-        let resources = snapshot_resources(sweep.managed);
+        let resources = snapshot_resources(sweep.managed, &FieldManager::of("a"));
         let dir = tempfile::tempdir().unwrap();
         write_resources(dir.path(), &resources).unwrap();
 
