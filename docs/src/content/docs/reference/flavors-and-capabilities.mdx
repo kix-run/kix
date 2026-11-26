@@ -80,8 +80,8 @@ Kix ships 12 built-in flavor modules under `kix.flavors`:
 
 | Flavor | `cluster.provider` | Target environment | Notable flavor defaults |
 | --- | --- | --- | --- |
-| `kix.flavors.aks` | `"aks"` | Azure Kubernetes Service | Managed control plane, Azure CNI, Azure Load Balancer, `managed-csi` StorageClass, and `discardUnpackedLayers = false`. |
-| `kix.flavors.eks` | `"eks"` | Amazon EKS | Managed control plane, `aws-vpc-cni`, AWS cloud load balancer, `storageClasses` and `metricsApi` bound `"absent"`, and `discardUnpackedLayers = true`. Adds `cluster.flavor.eks.networkPolicy` (`"none"` by default; set `"vpc-cni"` after enabling network policy in the Amazon VPC CNI add-on). Setting `networkPolicy.enable = true` while it is `"none"` fails the build. |
+| `kix.flavors.aks` | `"aks"` | Azure Kubernetes Service | Sets `multiNode = true`, with a managed control plane, Azure CNI, Azure Load Balancer, `managed-csi` StorageClass, and `discardUnpackedLayers = false`. |
+| `kix.flavors.eks` | `"eks"` | Amazon EKS | Sets `multiNode = true`, with a managed control plane, `aws-vpc-cni`, AWS cloud load balancer, `storageClasses` and `metricsApi` bound `"absent"`, and `discardUnpackedLayers = true`. Adds `cluster.flavor.eks.networkPolicy` (`"none"` by default; set `"vpc-cni"` after enabling network policy in the Amazon VPC CNI add-on). Setting `networkPolicy.enable = true` while it is `"none"` fails the build. |
 | `kix.flavors.gke` | `"gke"` | Google Kubernetes Engine (Standard) | Sets `multiNode = true`, `criticalPriorityNamespaces = [ "kube-system" ]`, and `registryConfigPath = "/etc/containerd/hosts.d"`, with a managed control plane, GKE Dataplane V2, GCP Network Load Balancer, and `standard-rwo` StorageClass. Default GKE nodes do not configure containerd to read `/etc/containerd/hosts.d`, so containerd uses that path only if you enable it in GKE's containerd configuration or a node startup script. |
 | `kix.flavors.gke-autopilot` | `"gke-autopilot"` | Google Kubernetes Engine (Autopilot) | Sets `multiNode = true`, `daemonSets = true`, `privilegedContainers = false`, `nodeAutoscaling = true`, `podSecurityEnforcement = "baseline"`, and `criticalPriorityNamespaces = [ ]`. Places platform imports in `gke-managed` because Autopilot blocks user resources in `kube-system`. |
 | `kix.flavors.k3s` | `"k3s"` | k3s | Sets `podCidr = "10.42.0.0/16"`, k3s containerd paths under `/run/k3s` and `/var/lib/rancher/k3s`, Flannel CNI, ServiceLB, `local-path` StorageClass, and `metrics-server`. |
@@ -107,8 +107,8 @@ Each flavor sets defaults under [`cluster.capabilities`](/docs/reference/cluster
 
 | Flavor | `multiNode` | `availabilityZones` | `managedControlPlane` | `nodeAutoscaling` | `privilegedContainers` | `daemonSets` | `podSecurityEnforcement` | `containerd.discardUnpackedLayers` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `aks` | `null` | `null` | `true` | `false` | `true` | `true` | `null` | `false` |
-| `eks` | `null` | `null` | `true` | `false` | `true` | `true` | `null` | `true` |
+| `aks` | `true` | `null` | `true` | `false` | `true` | `true` | `null` | `false` |
+| `eks` | `true` | `null` | `true` | `false` | `true` | `true` | `null` | `true` |
 | `gke` | `true` | `null` | `true` | `false` | `true` | `true` | `null` | `true` |
 | `gke-autopilot` | `true` | `null` | `true` | `true` | `false` | `true` | `"baseline"` | `null` |
 | `k3s` | `null` | `null` | `false` | `false` | `true` | `true` | `null` | `false` |

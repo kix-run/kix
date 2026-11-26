@@ -120,6 +120,8 @@ in
     cluster.containerd.discardUnpackedLayers = lib.mkDefault true;
 
     cluster.capabilities = {
+      # eksctl's default node group has two nodes.
+      multiNode = lib.mkDefault true;
       managedControlPlane = lib.mkDefault true;
       nodeAutoscaling = lib.mkDefault false; # requires Karpenter or cluster-autoscaler
       privilegedContainers = lib.mkDefault true;
