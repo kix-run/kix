@@ -9,10 +9,10 @@
   "commands": [
     {
       "command": "kix graph 08-namespace-deps -o json",
-      "stdout": "{\n  \"nodes\": 16,\n  \"edges\": 27,\n  \"sample\": {\n    \"id\": \"CustomResourceDefinition.apiextensions.k8s.io/activations.kix.run\",\n    \"kind\": \"CustomResourceDefinition\",\n    \"group\": \"apiextensions.k8s.io\",\n    \"name\": \"activations.kix.run\",\n    \"namespace\": \"_cluster\",\n    \"identityHash\": \"gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj\",\n    \"isImport\": false\n  }\n}\n",
-      "stderr": "16 resources, 27 dependencies\n",
-      "stdoutDrift": "\"edges\": 27,\n\"group\": \"apiextensions.k8s.io\",\n\"id\": \"CustomResourceDefinition.apiextensions.k8s.io/activations.kix.run\",\n\"identityHash\": \"<identity-hash>\",\n\"isImport\": false\n\"kind\": \"CustomResourceDefinition\",\n\"name\": \"activations.kix.run\",\n\"namespace\": \"_cluster\",\n\"nodes\": 16,\n\"sample\": {\n{\n}\n",
-      "stderrDrift": "16 resources, 27 dependencies\n",
+      "stdout": "{\n  \"nodes\": 14,\n  \"edges\": 22,\n  \"sample\": {\n    \"id\": \"Deployment.apps/gateway@app\",\n    \"kind\": \"Deployment\",\n    \"group\": \"apps\",\n    \"name\": \"gateway\",\n    \"namespace\": \"app\",\n    \"identityHash\": \"3g1la93xnsy6qgmcwncbfwxwvb2zxi67\",\n    \"isImport\": false\n  }\n}\n",
+      "stderr": "14 resources, 22 dependencies\n",
+      "stdoutDrift": "\"edges\": 22,\n\"group\": \"apps\",\n\"id\": \"Deployment.apps/gateway@app\",\n\"identityHash\": \"<identity-hash>\",\n\"isImport\": false\n\"kind\": \"Deployment\",\n\"name\": \"gateway\",\n\"namespace\": \"app\",\n\"nodes\": 14,\n\"sample\": {\n{\n}\n",
+      "stderrDrift": "14 resources, 22 dependencies\n",
       "exitCode": 0
     }
   ]

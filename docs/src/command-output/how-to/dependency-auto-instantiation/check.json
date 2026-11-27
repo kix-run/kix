@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix check how-to-auto-instantiation",
-      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    14 manifests evaluated       \n scorecard  pass    0 errors, 3 warnings, 0 info \n\ngovernance.hasOwner (warning), 3:\n  apps/api: package 'api' has no meta.owner\n  platform/database: package 'database' has no meta.owner\n  platform/metrics: package 'metrics' has no meta.owner\n",
+      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    12 manifests evaluated       \n scorecard  pass    0 errors, 3 warnings, 0 info \n\ngovernance.hasOwner (warning), 3:\n  apps/api: package 'api' has no meta.owner\n  platform/database: package 'database' has no meta.owner\n  platform/metrics: package 'metrics' has no meta.owner\n",
       "stderr": "",
-      "stdoutDrift": "\nTOOL RESULT DETAILS\napps/api: package 'api' has no meta.owner\neval pass 14 manifests evaluated\ngovernance.hasOwner (warning), 3:\nplatform/database: package 'database' has no meta.owner\nplatform/metrics: package 'metrics' has no meta.owner\nscorecard pass 0 errors, 3 warnings, 0 info\n",
+      "stdoutDrift": "\nTOOL RESULT DETAILS\napps/api: package 'api' has no meta.owner\neval pass 12 manifests evaluated\ngovernance.hasOwner (warning), 3:\nplatform/database: package 'database' has no meta.owner\nplatform/metrics: package 'metrics' has no meta.owner\nscorecard pass 0 errors, 3 warnings, 0 info\n",
       "stderrDrift": "",
       "exitCode": 0
     }

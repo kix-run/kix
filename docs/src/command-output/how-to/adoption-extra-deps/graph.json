@@ -9,10 +9,10 @@
   "commands": [
     {
       "command": "kix graph how-to-adoption -o tree",
-      "stdout": "├── PackageInstance.kix.run/legacy-api@legacy (import)\n├── PackageInstance.kix.run/legacy-api-contract@apps\n│   ├── PackageInstance.kix.run/legacy-api@legacy (import)\n├── ConfigMap/legacy-api-contract@apps\n│   └── PackageInstance.kix.run/legacy-api-contract@apps\n│       ├── PackageInstance.kix.run/legacy-api@legacy (import)\n├── PackageInstance.kix.run/legacy-api-contract@apps\n│   ├── PackageInstance.kix.run/legacy-api@legacy (import)\n└── PackageInstance.kix.run/legacy-api@legacy (import)\n",
-      "stderr": "21 resources, 39 dependencies\n",
+      "stdout": "├── ConfigMap/legacy-api-contract@apps\n│   └── PackageInstance.kix.run/legacy-api-contract@apps\n│       ├── PackageInstance.kix.run/legacy-api@legacy (import)\n├── PackageInstance.kix.run/legacy-api-contract@apps\n│   ├── PackageInstance.kix.run/legacy-api@legacy (import)\n└── PackageInstance.kix.run/legacy-api@legacy (import)\n",
+      "stderr": "19 resources, 31 dependencies\n",
       "stdoutDrift": "ConfigMap/legacy-api-contract@apps\nPackageInstance.kix.run/legacy-api-contract@apps\nPackageInstance.kix.run/legacy-api@legacy (import)\n",
-      "stderrDrift": "21 resources, 39 dependencies\n",
+      "stderrDrift": "19 resources, 31 dependencies\n",
       "exitCode": 0
     }
   ]
