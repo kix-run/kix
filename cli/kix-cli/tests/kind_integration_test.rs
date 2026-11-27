@@ -935,7 +935,7 @@ fn two_kix_clusters_share_one_kind_cluster() {
     //    removals.
     let (ok, out) = flake.kix(&ctx, &["plan", "sweep-a", "--read-only"]);
     assert!(ok, "diff sweep-a should report no change:\n{out}");
-    assert!(out.contains("belong to Kix cluster sweep-b"), "{out}");
+    assert!(out.contains("belong to Kix cluster 'sweep-b'"), "{out}");
 
     // 2. `kix status sweep-a` and `kix snapshot sweep-a` contain none
     //    of sweep-b's objects.

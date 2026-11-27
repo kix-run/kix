@@ -671,7 +671,13 @@ fn check_drift(
 ) -> (Vec<(DriftReport, DynamicObject)>, usize) {
     let mut drifted = Vec::new();
     let mut unchecked = 0;
-    for obj in objects {
+    // A deploy writes its Activation record as its own state, not as an
+    // object of the build, so no revision holds an applied hash for it. The
+    // planner does not check records for drift either.
+    let checked = objects
+        .iter()
+        .filter(|obj| lifecycle::lifecycle_of_live(obj) != Lifecycle::Record);
+    for obj in checked {
         let report = drift::check_object(obj, applied.applied(obj), manager);
         match report.verdict {
             DriftVerdict::Drifted { .. } => drifted.push((report, obj.clone())),
@@ -865,8 +871,13 @@ mod tests {
             o.metadata.managed_fields = None;
             o
         };
+        let record: DynamicObject = serde_json::from_value(json!({
+            "apiVersion": keys::API_VERSION, "kind": lifecycle::RECORD_KIND,
+            "metadata": {"name": "c-1", "annotations": {keys::IDENTITY_HASH: "r"}},
+        }))
+        .unwrap();
         let (drifted, drift_unchecked) = check_drift(
-            &[live, unstamped, no_fieldset],
+            &[live, unstamped, no_fieldset, record],
             &AppliedHashes::from_annotations(),
             &FieldManager::unmigrated("a"),
         );
