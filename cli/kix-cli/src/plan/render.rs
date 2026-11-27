@@ -256,6 +256,13 @@ fn reason_lines(writes: &[&ObjectWrite]) -> Vec<String> {
             output::yellow("↺"),
         ));
     }
+    let n = count(|r| matches!(r, WriteReason::HeldByOtherCluster { .. }));
+    if n > 0 {
+        lines.push(format!(
+            "{} {n} object(s) hold fields another Kix cluster applied; the deploy applies them without force, which adds this Kix cluster's own entry when the values agree and stops on a conflict when they differ",
+            output::yellow("↻"),
+        ));
+    }
     lines
 }
 

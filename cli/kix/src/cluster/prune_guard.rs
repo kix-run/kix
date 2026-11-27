@@ -33,51 +33,47 @@
 //! at any time before or after, and deleted at `v`. Take another Kix cluster
 //! B that deploys the object in a run whose record the guard did not see.
 //!
-//! B applies under its own field manager, and plans from revisions or, on
-//! its first deploy by this Kix, from the notes an older Kix wrote
-//! ([`crate::plan::decide`]). B's planner judges an object as the migration
-//! write leaves it ([`super::migration_write`]), and leaves it unchanged only
-//! when that object has B's `Apply` entry, because otherwise it finds no
-//! fields of B's to compare and applies. So the object had B's entry when B
-//! read it, B's migration write gives it B's entry, or B applies it. Each
-//! of the last two changes `resourceVersion`.
+//! B applies under its own field manager and plans from revisions: before a
+//! run writes any object, it gives the records an older Kix wrote revisions
+//! ([`super::revision::convert`]), and its plan reads them the same way.
+//! B's planner leaves an object unchanged only when the object has B's
+//! `Apply` entry, or when its entry under the legacy manager `kix` holds
+//! B's fields, which B's planner counts only on an object a record of B
+//! already named ([`super::migration_write::takes_legacy`]). On any other
+//! object it finds no fields of B's to compare, and applies it. So either
+//! B wrote the object, which changes `resourceVersion`, or a record of B
+//! named it before B's run.
 //!
-//! - If the object had B's entry at `v`, the guard kept it.
 //! - If B wrote the object before the guard's read, B's entry was there at
 //!   `v`, and the guard kept it.
 //! - If B writes the object after the guard's read and before its delete,
-//!   the write adds B's entry. Kubernetes changes `resourceVersion` when an
+//!   the delete is refused, the guard reads the object again, finds B's
+//!   entry, and keeps it. Kubernetes changes `resourceVersion` when an
 //!   apply under a new manager adds an entry, even when the values are the
-//!   same, and the migration write changes it too. So the delete is
-//!   refused, the guard reads the object again, finds B's entry, and keeps
-//!   it.
+//!   same, and the migration write changes it too.
 //! - If B applies the object after the delete, B's apply creates it again,
 //!   or finds it still being deleted and fails with a message that says so.
+//! - If a record of B named the object before B's run, the guard finds it,
+//!   whenever it read the records: a record with a map is read from its
+//!   revisions whatever B's head names, and a record an older Kix wrote is
+//!   read from the object's `kix.run/activations`, which B removes only
+//!   with the migration write, after its run created its own record and
+//!   revisions. That write changes `resourceVersion`.
 //!
-//! No step depends on when the records were read, so reading them once is
-//! enough. The records cover a run that named the object but has not
-//! applied it yet, for example one that is under way or stopped before it
-//! got there. This Kix writes nothing else to an object, so the argument
-//! needs no annotation.
+//! So a failed migration write, which is best-effort for an unchanged
+//! object, leaves the object safe. No step depends on when the records were
+//! read, so reading them once is enough. The records cover a run that named
+//! the object but has not applied it yet, for example one that is under way
+//! or stopped before it got there.
 //!
-//! A Kix cluster that an older Kix still deploys applies under the legacy
-//! manager `kix`, whose entry says nothing about which Kix cluster wrote it,
-//! and writes the deploying record's hash into `kix.run/activations` after
-//! each apply. That write changes `resourceVersion`, and the record exists
-//! before it, so the guard either finds the hash at `v`, and reads the
-//! records again when it is new, or has its delete refused. While an
-//! object's note names a record of such a Kix cluster, B's migration write
-//! keeps the note with B's deploying record's hash in it, and writes it
-//! again each deploy. So a guard of an earlier release, which reads only
-//! the note, judges such an object correctly, and B's own entry, or the
-//! write of the note, covers it for this guard.
-//!
-//! One case is not covered. The migration write to an unchanged object is
-//! best-effort. When it fails, the object keeps an entry under `kix`, gets
-//! no write from B's run, and its note names only B's earlier records. A
-//! guard that read the records before B's run created its record then does
-//! not find B there, and deletes the object. The next deploy of B writes
-//! the object again.
+//! A Kix cluster that an older Kix still deploys applies under `kix` and
+//! writes the deploying record's hash into `kix.run/activations` after each
+//! apply. That write changes `resourceVersion`, and the record exists before
+//! it, so the guard either finds the hash at `v`, and reads the records
+//! again when it is new, or has its delete refused. While an object's note
+//! names a record of such a Kix cluster, B's migration write keeps the note
+//! with B's deploying record's hash in it, so a guard of an earlier release,
+//! which reads only the note, judges the object as before.
 //!
 //! `kix gc` and the operator's finalizer delete a whole ordered list, and both
 //! go through [`delete_in_order`]. It owns which objects are never deleted
@@ -312,7 +308,7 @@ impl PruneGuard {
     /// written, a cached tenancy that settles every hash can only overstate
     /// what other clusters still deploy. Refuse when the read could not tell
     /// what another Kix cluster deploys ([`Tenancy::complete_for_others`]).
-    async fn tenancy_naming(
+    pub(crate) async fn tenancy_naming(
         &self,
         obj: &DynamicObject,
     ) -> Result<std::sync::Arc<Tenancy>, PruneError> {

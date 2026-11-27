@@ -170,6 +170,13 @@ fn why(write: &ObjectWrite) -> String {
                 by.join("; ")
             )
         }
+        Some(WriteReason::HeldByOtherCluster { changed_by }) => {
+            let by: Vec<&str> = changed_by.iter().map(|o| o.manager.as_str()).collect();
+            format!(
+                "holds fields that {} applied; the deploy applies it without force",
+                by.join(", ")
+            )
+        }
         None => match write.change {
             WriteChange::Added => "added by the build",
             WriteChange::Modified => "changed by the build",

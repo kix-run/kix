@@ -25,6 +25,6 @@ vault/vaultwarden
   Namespace vault                   ok
 
 8 resources: 3 ok, 1 changed, 1 not ready, 1 missing, 2 not checked.
-Next: run `kix deploy shop --reconcile --force-conflicts` to put back what is missing or changed and take back the fields that kubectl-edit owns. `kix plan shop --reconcile --force-conflicts` shows what it would change first.
+Next: run `kix deploy shop` to put back what is missing or changed. `kix plan shop` shows what it would change first. The deploy takes back the fields that kubectl-edit owns.
 
 This account may not list secrets, so Kix did not check objects of those kinds.

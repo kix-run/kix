@@ -117,8 +117,9 @@ struct Changes {
     orphan_manifests: Vec<Value>,
     /// The objects that need the migration write.
     migrations: Migrations,
-    /// The orphans a run that migrates names when it begins.
-    kept_at_begin: Option<Vec<crate::cluster::revision::RevisionObject>>,
+    /// The orphans that need the migration write. The run writes it to the
+    /// ones it keeps.
+    orphan_migrations: Vec<ResourceId>,
 }
 
 /// Where a plan runs: a connection to the cluster, its discovery read
@@ -198,9 +199,9 @@ pub struct CheckedPlan {
     force: HashMap<ResourceId, String>,
     /// The migration writes the run makes.
     migrations: Migrations,
-    /// The orphans a run that migrates names in a kept-orphans revision
-    /// when it begins ([`RecordConfig::kept_at_begin`]).
-    kept_at_begin: Option<Vec<crate::cluster::revision::RevisionObject>>,
+    /// A run of the plan first gives records an older Kix wrote revisions
+    /// ([`crate::cluster::revision::convert`]).
+    converts: bool,
 }
 
 /// What [`CheckedPlan::run`] passes to the engine about the migration write.
@@ -461,7 +462,7 @@ impl CheckedPlan {
             .nodes()
             .iter()
             .any(|n| n.action.written().is_some());
-        if writes || !self.orphans.is_empty() || self.migrations.count() > 0 {
+        if writes || !self.orphans.is_empty() || self.migrations.count() > 0 || self.converts {
             return Work::Changes;
         }
         match last_runs {
@@ -568,7 +569,6 @@ impl CheckedPlan {
             target.client,
             target.discovery,
             self.cluster.clone(),
-            self.activation_identity_hash.clone(),
             self.force(),
             target.sops,
             self.migrations.clone(),
@@ -614,7 +614,6 @@ impl CheckedPlan {
                 lock.guarded(&target.client),
                 target.discovery,
                 self.cluster,
-                self.activation_identity_hash,
                 force,
             )
             .with_migrations(self.migrations),
@@ -628,7 +627,6 @@ impl CheckedPlan {
                 receipt,
                 consumed_failed: self.consumed_failed,
                 kept_orphans: self.kept_orphans,
-                kept_at_begin: self.kept_at_begin,
                 revisions: Some(self.revisions),
                 only,
                 mark_failed_on_abort: true,
@@ -925,6 +923,7 @@ impl<'a> Planner<'a> {
                     .run(&client, &connection)
                     .await?;
                 if let Some(settle) = &self.settle {
+                    refuse_older_operator(&client, &new_graph.cluster_name).await?;
                     self.settle_lock(&client, new_graph, settle).await?;
                 }
                 Some((client, connection))
@@ -962,6 +961,7 @@ impl<'a> Planner<'a> {
         let graph = build.graph();
         let cluster = &graph.cluster_name;
         if let Some(settle) = &self.settle {
+            refuse_older_operator(&client, cluster).await?;
             self.settle_lock(&client, graph, settle).await?;
         }
         let baseline = Baseline::of_cluster(&client, build, self.report).await?;
@@ -1072,6 +1072,7 @@ impl<'a> Planner<'a> {
         connection: binding::Connection,
     ) -> Result<Planned, PlanError> {
         let cluster = build.graph().cluster_name.clone();
+        refuse_older_operator(&client, &cluster).await?;
         let baseline = Baseline::of_record(records, &cluster, current, self.report).await?;
         self.planned(build, baseline, Some((client, connection)))
             .await
@@ -1210,7 +1211,7 @@ impl<'a> Planner<'a> {
             consumed: None,
             orphan_manifests: Vec::new(),
             migrations: Migrations::default(),
-            kept_at_begin: None,
+            orphan_migrations: Vec::new(),
         }
     }
 
@@ -1266,9 +1267,6 @@ impl<'a> Planner<'a> {
             unknown: decided.unknown,
             ..KeptOrphans::default()
         };
-        let kept_at_begin = ledger
-            .is_from_notes()
-            .then(|| Ledger::live_orphans(&decided.orphans, live));
         Ok(Changes {
             actions,
             orphans: decided.orphans,
@@ -1277,14 +1275,12 @@ impl<'a> Planner<'a> {
             reasons,
             consumed: Some(ledger.taken_in().to_vec()),
             orphan_manifests,
-            kept_at_begin,
+            orphan_migrations: decided.orphan_migrations,
             migrations: Migrations {
                 objects: decided.migrations.into_iter().collect(),
                 renamed: decided.renamed.into_iter().collect(),
-                orphans: decided.orphan_migrations,
                 releases: Vec::new(),
-                carried: decided.carried,
-                rule: ledger.rule().clone(),
+                record: ledger.record().map(str::to_string),
             },
         })
     }
@@ -1305,16 +1301,6 @@ impl<'a> Planner<'a> {
         if partial {
             match baseline.active() {
                 None => return Err(PlanError::OnlyFirstDeploy(cluster.to_string())),
-                // The first deploy by this Kix rewrites the metadata of every
-                // object, and a run that does not finalize leaves the Kix
-                // cluster read from its notes.
-                Some(_)
-                    if read.is_some()
-                        && baseline.tenancy.own_source()
-                            != crate::cluster::tenancy::Source::Revisions =>
-                {
-                    return Err(PlanError::OnlyNotMigrated(cluster.to_string()));
-                }
                 // The operator repairs the build of a record it deployed on
                 // every requeue, so it would put back what this deploy
                 // applies and delete the objects it adds.
@@ -1337,7 +1323,7 @@ impl<'a> Planner<'a> {
             consumed,
             orphan_manifests,
             mut migrations,
-            kept_at_begin,
+            orphan_migrations,
         } = match (ledger, read) {
             (Some(ledger), Some((_, live))) => self.decided(new_manifests, ledger, live)?,
             _ => self.changes(new_manifests, baseline),
@@ -1391,7 +1377,6 @@ impl<'a> Planner<'a> {
                 &mut pkg_diff,
                 orphans.len(),
             )?;
-            migrations.orphans.clear();
             migrations.releases.clear();
             migrations.objects.retain(|rid| {
                 plan.nodes()
@@ -1437,10 +1422,15 @@ impl<'a> Planner<'a> {
         revisions
             .check_size()
             .map_err(|e| PlanError::RevisionTooLarge(Box::new(e)))?;
-        // An orphan the prune deletes needs no migration write.
+        // An orphan the prune deletes needs no migration write, and a deploy
+        // with `--only` keeps none.
         let deleted: HashSet<ResourceId> =
             deletes_of(self.flags.prune, &orphans).into_iter().collect();
-        migrations.orphans.retain(|rid| !deleted.contains(rid));
+        migrations.objects.extend(
+            orphan_migrations
+                .into_iter()
+                .filter(|rid| orphans.contains(rid) && !deleted.contains(rid)),
+        );
 
         Ok(CheckedPlan {
             flags: self.flags.clone(),
@@ -1465,16 +1455,17 @@ impl<'a> Planner<'a> {
             needed: selection.map(|s| s.needed).unwrap_or_default(),
             force,
             migrations,
-            kept_at_begin,
+            converts: ledger.is_some_and(Ledger::converts),
         })
     }
 }
 
 /// Return the ledger of the one planner for the Kix cluster `baseline` was
-/// read for, through `client`, for a deploy of `new_manifests`. A Kix
-/// cluster an older Kix deployed last is read from the notes on its live
-/// objects ([`Ledger::of_notes`]), so the plan lists every object that
-/// carries Kix's label first. Refuse when the tenancy could not read what
+/// read for, through `client`, for a deploy of `new_manifests`. When a
+/// record a run needs has no revision map, the run gives it revisions first
+/// ([`crate::cluster::revision::convert`]). The plan lists every object that
+/// carries Kix's label, computes the same conversion, and reads the records
+/// as the run will find them. Refuse when the tenancy could not read what
 /// this Kix cluster's records name, because the plan could not tell which
 /// objects are orphans.
 async fn ledger_for(
@@ -1482,25 +1473,57 @@ async fn ledger_for(
     baseline: &Baseline,
     new_manifests: &[Value],
 ) -> Result<Ledger, PlanError> {
+    use crate::cluster::revision::convert;
     let take_in_stopped = !baseline.failed().left_out;
-    let tenancy_error = |e| PlanError::Tenancy(Box::new(e));
-    let mut ledger = match Ledger::of(&baseline.tenancy, take_in_stopped).map_err(tenancy_error)? {
-        Some(ledger) => ledger,
-        None => {
-            let discovery = discovery::discover_resources(client)
-                .await
-                .map_err(|e| PlanError::Discovery(Box::new(e)))?;
-            let sweep = inventory::list_managed(client, &discovery)
-                .await
-                .map_err(|e| PlanError::Reconstruct(e.to_string()))?;
-            Ledger::of_notes(&baseline.tenancy, &sweep.managed, take_in_stopped)
-                .map_err(tenancy_error)?
-        }
+    let tenancy = &baseline.tenancy;
+    let own = tenancy.own_records();
+    let current = convert::current_of(tenancy.own_current(), own);
+    let conversion = if convert::targets(current, own).is_empty() {
+        crate::cluster::revision::Conversion::default()
+    } else {
+        let discovery = discovery::discover_resources(client)
+            .await
+            .map_err(|e| PlanError::Discovery(Box::new(e)))?;
+        let sweep = inventory::list_managed(client, &discovery)
+            .await
+            .map_err(|e| PlanError::Reconstruct(e.to_string()))?;
+        convert::plan(
+            &tenancy.cluster,
+            current,
+            own,
+            &tenancy.own_listed_revisions(),
+            &sweep.managed,
+        )
+        .map_err(PlanError::RevisionTooLarge)?
     };
+    let converted = tenancy.with_conversion(&conversion);
+    let mut ledger =
+        Ledger::of(&converted, take_in_stopped).map_err(|e| PlanError::Tenancy(Box::new(e)))?;
+    ledger.set_converts(!conversion.is_empty());
     let record =
         lifecycle::record_of(new_manifests).and_then(|m| keys::get(m, keys::IDENTITY_HASH));
     ledger.deploying(record);
     Ok(ledger)
+}
+
+/// Refuse when a record of Kix cluster `cluster` is driven by a Kix operator
+/// older than this Kix ([`crate::cluster::activation::features::operator_without_revisions`]),
+/// before a command that will take the lock plans anything.
+async fn refuse_older_operator(client: &Client, cluster: &str) -> Result<(), PlanError> {
+    let discovery = discovery::discover_resources(client)
+        .await
+        .map_err(|e| PlanError::Discovery(Box::new(e)))?;
+    let opened = Records::open(client, &discovery).map_err(PlanError::Domain)?;
+    let Some(records) = opened.records() else {
+        return Ok(());
+    };
+    match crate::cluster::activation::features::operator_without_revisions(client, records, cluster)
+        .await
+    {
+        Ok(None) => Ok(()),
+        Ok(Some(refusal)) => Err(PlanError::OperatorWithoutRevisions(Box::new(refusal))),
+        Err(e) => Err(PlanError::OperatorFeatures(Box::new(e))),
+    }
 }
 
 /// Return the objects a plan lists on the cluster: those of
@@ -1524,11 +1547,12 @@ fn write_reason(label: &Label) -> Option<WriteReason> {
             record: record.clone(),
         }),
         Label::AppliedHashMissing => Some(WriteReason::AppliedHashMissing),
-        Label::RevertsDrift(report) | Label::HeldByOtherCluster(report) => {
-            Some(WriteReason::RevertsDrift {
-                changed_by: super::document::DriftOwner::of_report(report),
-            })
-        }
+        Label::RevertsDrift(report) => Some(WriteReason::RevertsDrift {
+            changed_by: super::document::DriftOwner::of_report(report),
+        }),
+        Label::HeldByOtherCluster(report) => Some(WriteReason::HeldByOtherCluster {
+            changed_by: super::document::DriftOwner::of_report(report),
+        }),
         Label::Intended | Label::Reconciled | Label::Unchanged | Label::DriftReported(_) => None,
     }
 }

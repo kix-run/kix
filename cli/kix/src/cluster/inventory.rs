@@ -801,7 +801,7 @@ fn is_labelled(obj: &DynamicObject) -> bool {
 /// Kix may neither list nor get objects that a deploy must read.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "this account may neither list nor get {}, so Kix cannot tell what the deploy must write or delete. Grant this account `list` on {} across the cluster, or `get` on {} in each namespace the build uses, then run the command again",
+    "[K9557] this account may neither list nor get {}, so Kix cannot tell what the deploy must write or delete. Grant this account `list` on {} across the cluster, or `get` on {} in each namespace the build uses, then run the command again",
     and_list(.resources),
     and_list(.resources),
     if .resources.len() == 1 { "it" } else { "them" }

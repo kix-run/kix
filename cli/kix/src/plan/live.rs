@@ -7,11 +7,9 @@
 //! fields another manager owns. The plan lists such objects
 //! ([`LivePlan::drift_not_reverted`]) for the operator to report.
 //!
-//! A Kix cluster an older Kix deployed last is read from the notes on its
-//! live objects ([`Ledger::of_notes`]). The operator's deploy of a queued
-//! record moves such a cluster to this Kix's bookkeeping, as `kix deploy`
-//! does. Its drift repair has no record to write, so it refuses
-//! ([`LivePlanError::NotMigrated`]) until a deploy has run.
+//! The records an older Kix wrote get revisions before any run writes an
+//! object ([`crate::cluster::revision::convert`]), in a deploy and in a
+//! repair alike, and the plan reads them as the run will find them.
 //! [`LivePlan::sweep`]
 //! takes the Activation record being reconciled, opens the records, reads
 //! the live objects itself, and plans from them. Because [`LivePlan::sweep`]
@@ -86,11 +84,10 @@ pub enum LivePlanError {
     /// This account may neither list nor get objects the plan must read.
     #[error("{0}. Nothing was applied or deleted")]
     ReadForbidden(Box<crate::cluster::inventory::ReadForbidden>),
-    /// A drift repair of a Kix cluster an older Kix deployed last.
-    #[error(
-        "the Kix operator does not repair drift on Kix cluster {cluster} yet, because an earlier version of Kix deployed it last. Nothing was applied or deleted. The first deploy by this version of Kix moves every object of the Kix cluster to this version's bookkeeping, and a repair writes no deployment record to do that. Run `kix deploy {cluster} --operator` or `kix deploy {cluster}` once, and the operator repairs drift after it"
-    )]
-    NotMigrated { cluster: String },
+    /// A revision the conversion of the records an older Kix wrote would
+    /// create is too large to store.
+    #[error("{0}. Nothing was applied or deleted")]
+    RevisionTooLarge(Box<crate::cluster::revision::TooLarge>),
 }
 
 /// A drifted object the operator leaves as it is, because another field
@@ -129,8 +126,6 @@ pub struct LivePlan {
     unknown: Vec<crate::cluster::revision::RevisionObject>,
     /// The migration writes the run makes.
     migrations: crate::cluster::ops::Migrations,
-    /// The orphans a run that migrates names when it begins.
-    kept_at_begin: Option<Vec<crate::cluster::revision::RevisionObject>>,
 }
 
 impl LivePlan {
@@ -175,6 +170,23 @@ impl LivePlan {
         let tenancy = crate::cluster::tenancy::read(&records, &cluster)
             .await
             .map_err(|e| fetch(FetchError::RecordsError(e)))?;
+        // The run gives the records an older Kix wrote revisions before it
+        // writes anything. The plan reads the records as the run will find
+        // them.
+        let tenancy = {
+            use crate::cluster::revision::convert;
+            let own = tenancy.own_records();
+            let current = convert::current_of(tenancy.own_current(), own);
+            let conversion = convert::plan(
+                &cluster,
+                current,
+                own,
+                &tenancy.own_listed_revisions(),
+                &inventory::managed_of(listed.clone()).managed,
+            )
+            .map_err(LivePlanError::RevisionTooLarge)?;
+            tenancy.with_conversion(&conversion)
+        };
         // Only this Kix cluster's objects: every other Kix cluster's objects
         // are absent from this build and would otherwise be pruned as
         // orphans.
@@ -193,15 +205,8 @@ impl LivePlan {
         let mut live: Vec<Value> = sweep.managed.iter().map(to_manifest_value).collect();
         // The operator holds the deploy lock, so no other deploy is applying
         // what a `Failed` or `Partial` record names.
-        let tenancy_error = |e| LivePlanError::Tenancy(Box::new(e));
-        let mut ledger = match Ledger::of(&sweep.tenancy, true).map_err(tenancy_error)? {
-            Some(ledger) => ledger,
-            None if !deploys => return Err(LivePlanError::NotMigrated { cluster }),
-            None => {
-                let labelled = inventory::managed_of(listed.clone());
-                Ledger::of_notes(&sweep.tenancy, &labelled.managed, true).map_err(tenancy_error)?
-            }
-        };
+        let mut ledger =
+            Ledger::of(&sweep.tenancy, true).map_err(|e| LivePlanError::Tenancy(Box::new(e)))?;
         let record = Record::of(activation);
         ledger.deploying(record.identity_hash.as_deref().filter(|_| deploys));
         let made = made_by(desired, revisions.as_ref());
@@ -237,7 +242,6 @@ impl LivePlan {
             cluster,
             record,
             migrations: decided.migrations,
-            kept_at_begin: decided.kept_at_begin,
             plan,
             orphans,
             shared_orphans,
@@ -311,10 +315,9 @@ impl LivePlan {
         self.unattributed
     }
 
-    /// Run the engine over the plan, stamping the record's identity hash
-    /// into `kix.run/activations` on every object it writes. Every write
-    /// goes through `lock`'s guarded client, and a run that manages the
-    /// lifecycle commits the deploy on `lock`. The caller releases it.
+    /// Run the engine over the plan. Every write goes through `lock`'s
+    /// guarded client, and a run that manages the lifecycle commits the
+    /// deploy on `lock`. The caller releases it.
     ///
     /// With `manage_lifecycle` the run writes the record's lifecycle (begin,
     /// checkpoints, finalize); without, it corrects drift and leaves the
@@ -333,7 +336,6 @@ impl LivePlan {
                 lock.guarded(&self.client),
                 self.discovery,
                 self.cluster,
-                self.record.identity_hash,
                 // The operator runs unattended; surface conflicts in
                 // Activation status rather than silently clobbering fields
                 // owned by other controllers.
@@ -359,7 +361,6 @@ impl LivePlan {
                     unknown: self.unknown,
                     ..Default::default()
                 },
-                kept_at_begin: self.kept_at_begin.filter(|_| manage_lifecycle),
                 // Only a run that writes the record names revisions in it.
                 revisions: self.revisions.filter(|_| manage_lifecycle),
                 // The operator deploys whole builds.
@@ -389,7 +390,6 @@ struct DecidedChanges {
     actions: Vec<ChangeAction>,
     shared: Vec<SharedOrphan>,
     migrations: crate::cluster::ops::Migrations,
-    kept_at_begin: Option<Vec<crate::cluster::revision::RevisionObject>>,
     /// The live objects of the orphans the prune may delete, as manifests.
     orphan_manifests: Vec<Value>,
     drift_not_reverted: Vec<DriftNotReverted>,
@@ -429,9 +429,6 @@ fn decided_changes(
             "objects earlier deploys left are of kinds the cluster does not serve now; they are not pruned, and the record keeps them listed"
         );
     }
-    let kept_at_begin = ledger
-        .is_from_notes()
-        .then(|| Ledger::live_orphans(&decided.orphans, live));
     let (orphans, shared) = inventory::split_shared_orphans_listed(decided.orphans, live, tenancy);
     let orphan_manifests = orphans
         .iter()
@@ -456,10 +453,8 @@ fn decided_changes(
     let migrations = crate::cluster::ops::Migrations {
         objects: decided.migrations.iter().cloned().collect(),
         renamed: decided.renamed.iter().cloned().collect(),
-        orphans: Vec::new(),
         releases: shared.iter().map(|s| s.rid.clone()).collect(),
-        carried: decided.carried.clone(),
-        rule: ledger.rule().clone(),
+        record: ledger.record().map(str::to_string),
     };
     let actions = decided
         .decisions
@@ -471,7 +466,6 @@ fn decided_changes(
         actions,
         shared,
         migrations,
-        kept_at_begin,
         orphan_manifests,
         drift_not_reverted,
         unknown: decided.unknown,
@@ -534,14 +528,25 @@ mod tests {
     }
 
     /// Decide `desired` against `objects` for a Kix cluster that an older
-    /// Kix deployed last, from the notes on the objects, as the operator's
-    /// deploy does.
+    /// Kix deployed last, after the conversion a run writes first, as the
+    /// operator's deploy does.
     fn notes_changes(
         desired: &[Value],
         objects: &[DynamicObject],
         tenancy: &Tenancy,
     ) -> (Vec<ChangeAction>, Vec<SharedOrphan>) {
-        let ledger = Ledger::of_notes(tenancy, objects, true).unwrap();
+        use crate::cluster::revision::convert;
+        let own = tenancy.own_records();
+        let conversion = convert::plan(
+            &tenancy.cluster,
+            convert::current_of(tenancy.own_current(), own),
+            own,
+            &[],
+            objects,
+        )
+        .unwrap();
+        let tenancy = &tenancy.with_conversion(&conversion);
+        let ledger = Ledger::of(tenancy, true).unwrap();
         let made = made_by(desired, None);
         let live = LiveObjects::of(objects.iter().cloned(), []);
         let decided = decided_changes(desired, &made, &live, &ledger, tenancy).unwrap();
@@ -682,7 +687,6 @@ mod tests {
             drift_not_reverted: Vec::new(),
             unknown: Vec::new(),
             migrations: Default::default(),
-            kept_at_begin: None,
         };
         assert_eq!(operator.applies(), 0);
         assert_eq!(

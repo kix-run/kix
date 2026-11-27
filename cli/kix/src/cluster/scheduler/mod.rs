@@ -336,15 +336,12 @@ struct Run<'a> {
     halting_reason: Option<String>,
     discovery_failed: Option<String>,
     // Unchanged resources get the migration write the plan lists for them in
-    // a batch after all nodes terminate (see `ResourceIo::migrate_unchanged`).
+    // a batch after all nodes terminate (see `Run::migrate_unchanged`).
     skipped: Vec<ResourceId>,
     /// Orphans that were deleted and recreated during immutable-conflict
     /// recovery. Excluded from post-deploy pruning because they now belong to
     /// the new build.
     consumed_orphans: HashSet<ResourceId>,
-    /// How many unchanged resources got the migration write. A run that
-    /// changed nothing else still finalizes its record when it wrote one.
-    migrated: usize,
 }
 
 impl<'a> Run<'a> {
@@ -409,7 +406,6 @@ impl<'a> Run<'a> {
             discovery_failed: None,
             skipped: Vec::new(),
             consumed_orphans: HashSet::new(),
-            migrated: 0,
         }
     }
 
@@ -1054,21 +1050,30 @@ impl<'a> Run<'a> {
         true
     }
 
-    /// Write the migration write to each unchanged resource the plan lists
-    /// for it ([`super::migration_write`]). An unchanged resource gets no
-    /// apply, so this is its one write.
+    /// Write the migration write to each object the run did not apply that
+    /// the plan lists for it ([`super::migration_write`]): the unchanged
+    /// objects of the build and the orphans the run keeps. Such an object
+    /// gets no apply, so this is its one write.
     ///
-    /// The write is best-effort. A resource it did not reach keeps what an
-    /// older Kix wrote, and the next deploy plans the write again. Failures
-    /// are counted and reported rather than failing a deploy that otherwise
-    /// succeeded.
+    /// The write is best-effort. An object it did not reach keeps the
+    /// metadata an older Kix wrote, which no reader needs any more, and the
+    /// next deploy plans the write again. Failures are counted and reported
+    /// rather than failing a deploy that otherwise succeeded.
     async fn migrate_unchanged(&mut self) {
-        if self.record.is_none() || self.skipped.is_empty() {
+        if self.record.is_none() {
+            return;
+        }
+        let candidates: Vec<ResourceId> = self
+            .skipped
+            .iter()
+            .chain(self.orphan_rids)
+            .cloned()
+            .collect();
+        if candidates.is_empty() {
             return;
         }
         let mut failures = 0usize;
-        let mut migrated = 0usize;
-        for chunk in self.skipped.chunks(self.config.concurrency.max(1)) {
+        for chunk in candidates.chunks(self.config.concurrency.max(1)) {
             let mut set = JoinSet::new();
             for rid in chunk {
                 let resources = self.resources.clone();
@@ -1090,53 +1095,53 @@ impl<'a> Run<'a> {
                 });
             }
             while let Some(joined) = set.join_next().await {
-                match joined {
-                    Ok(Ok(true)) => migrated += 1,
-                    Ok(Err((rid, e))) => {
-                        failures += 1;
-                        tracing::warn!(resource = %rid.display_id(), error = %e, "could not write the migration write to an unchanged resource");
-                    }
-                    Ok(Ok(false)) | Err(_) => {}
+                if let Ok(Err((rid, e))) = joined {
+                    failures += 1;
+                    tracing::warn!(resource = %rid.display_id(), error = %e, "could not tidy the metadata of an unchanged resource");
                 }
             }
         }
-        self.migrated += migrated;
         if failures > 0 {
             self.emit(DeployEvent::BestEffortFailed {
-                what: "migration write to unchanged resources".into(),
+                what: "metadata of unchanged resources".into(),
                 message: format!(
-                    "{failures} of {} not rewritten; the deploy itself is unaffected and the next deploy writes them",
-                    self.skipped.len()
+                    "{failures} of {} not tidied; the deploy itself is unaffected and the next deploy tidies them",
+                    candidates.len()
                 ),
             });
         }
     }
 
-    /// Once the record is final, write the migration write to the orphans
-    /// the run left, and give up this Kix cluster's fields on the orphans
-    /// another Kix cluster still deploys ([`ResourceIo::after_finalize`]).
-    /// Best-effort: the next deploy plans what failed again.
-    async fn after_finalize(&self, left: &[ResourceId]) {
+    /// Give up this Kix cluster's fields on each orphan another Kix cluster
+    /// still deploys ([`ResourceIo::release`]). A release that fails leaves
+    /// the object in `left`, so the record's kept-orphans revision names it
+    /// and the next deploy finds it and tries again.
+    async fn release_shared(&mut self, left: &mut Vec<ResourceId>) {
         if self.record.is_none() {
             return;
         }
-        let failed = match tokio::time::timeout(
-            INLINE_BEST_EFFORT_TIMEOUT,
-            self.resources.after_finalize(left),
-        )
-        .await
-        {
-            Ok(failed) => failed,
-            Err(_) => vec![format!(
-                "no answer within {}s",
-                INLINE_BEST_EFFORT_TIMEOUT.as_secs()
-            )],
-        };
+        let mut failed = Vec::new();
+        for rid in self.resources.releases() {
+            let released =
+                tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, self.resources.release(&rid))
+                    .await;
+            let message = match released {
+                Ok(Ok(_)) => continue,
+                Ok(Err(e)) => e,
+                Err(_) => format!(
+                    "{}: no answer within {}s",
+                    rid.display_id(),
+                    INLINE_BEST_EFFORT_TIMEOUT.as_secs()
+                ),
+            };
+            failed.push(message);
+            left.push(rid);
+        }
         if !failed.is_empty() {
             self.emit(DeployEvent::BestEffortFailed {
-                what: "metadata of orphans left on the cluster".into(),
+                what: "objects another Kix cluster still deploys".into(),
                 message: format!(
-                    "{}; the deploy itself is unaffected and the next deploy writes them",
+                    "{}; the deployment record lists them, and the next deploy gives up this Kix cluster's fields on them",
                     failed.join("; ")
                 ),
             });
@@ -1169,6 +1174,9 @@ impl<'a> Run<'a> {
                 .cloned()
                 .collect()
         };
+        if prune != PrunePolicy::Skip {
+            self.release_shared(&mut left).await;
+        }
         if effective_orphans.is_empty() || prune == PrunePolicy::Skip {
             return left;
         }
@@ -1453,8 +1461,7 @@ impl<'a> Run<'a> {
             || r.pruned > 0
             || r.already_gone > 0
             || r.kept > 0
-            || r.failed > 0
-            || self.migrated > 0;
+            || r.failed > 0;
         if let Some(record) = &self.record
             && actually_changed
         {
@@ -1471,13 +1478,10 @@ impl<'a> Run<'a> {
             )
             .await
             {
-                Ok(Ok(Some(f))) => {
-                    self.emit(DeployEvent::Finalized {
-                        activation: f.activation,
-                        previous: f.previous,
-                    });
-                    self.after_finalize(&left).await;
-                }
+                Ok(Ok(Some(f))) => self.emit(DeployEvent::Finalized {
+                    activation: f.activation,
+                    previous: f.previous,
+                }),
                 Ok(Ok(None)) => {}
                 // Fail if the record could not be finalized so the caller does
                 // not cache the build as the cluster's active state.

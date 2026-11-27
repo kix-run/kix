@@ -25,7 +25,7 @@ pub enum Created {
 #[derive(Debug, Error)]
 pub enum RevisionError {
     #[error(
-        "cannot {action} {KIND} `{name}`: {}. Check the cluster connection and that this account has `get`, `list`, `create`, `patch`, and `delete` permissions on `{}` (and `patch` on its `status`), then try again",
+        "cannot {action} {KIND} `{name}`: {}. Check the cluster connection and that this account has `get`, `list`, `create`, and `delete` permissions on `{}`, and `patch` on its `status`, then try again",
         describe(.source),
         crd_name()
     )]
@@ -55,7 +55,7 @@ pub enum RevisionError {
 }
 
 /// The revisions one list request returned.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Listed {
     /// The revisions that match their names, sorted by name.
     pub readable: Vec<Revision>,

@@ -792,6 +792,17 @@ async fn run_hard_async(
     // cluster, comparing pre-move live identity hashes against a current build
     // would flag almost every resource as garbage.
     let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
+    if !args.dry_run {
+        super::operator::refuse_older_operator(&client, cluster_name).await?;
+    }
+    // A write that the scan below decides is bound to the generation read
+    // before it, so a run that changed the Kix cluster since refuses it.
+    let generation = kix::cluster::head::generation_of(
+        kix::cluster::head::read(&client, cluster_name)
+            .await
+            .map_err(|e| miette!("{e}"))?
+            .as_ref(),
+    );
     // Scope the sweep to this Kix cluster so another Kix cluster's resources on
     // the same Kubernetes cluster are not flagged as garbage.
     let sweep = inventory::sweep_managed(
@@ -811,7 +822,7 @@ async fn run_hard_async(
             &records,
             &sweep,
             (expected_hashes, expected_ids, in_build),
-            cluster_name,
+            (cluster_name, generation),
             kubernetes_uid,
             build_hash,
             compared,
@@ -1002,11 +1013,12 @@ async fn run_hard_async(
 
 /// Rebuild the kept-orphans list of Kix cluster `cluster_name` when the
 /// revision its current record names is missing or cannot be read, then
-/// run the full scan again. The new list names every live object that has
-/// an `Apply` entry under the cluster's field manager, that no other
-/// revision of the cluster names, and that the build compared with does not
-/// hold ([`kix::cluster::tenancy::Tenancy::unlisted_own`]). With
-/// `--dry-run`, say what the list would name and change nothing.
+/// run the full scan again. The new list names every live object the
+/// cluster applied that no other revision of the cluster names and that
+/// the build compared with does not hold
+/// ([`kix::cluster::tenancy::Tenancy::unlisted_own`]). The write is bound to
+/// `generation`, which the head had before the scan. With `--dry-run`, say
+/// what the list would name and change nothing.
 #[allow(clippy::too_many_arguments)]
 async fn rebuild_kept_list(
     args: &GcArgs,
@@ -1015,7 +1027,7 @@ async fn rebuild_kept_list(
     records: &OpenedRecords,
     sweep: &inventory::ManagedSweep,
     build: (&HashSet<String>, &HashSet<String>, &HashSet<ResourceId>),
-    cluster_name: &str,
+    (cluster_name, generation): (&str, u64),
     kubernetes_uid: Option<&str>,
     build_hash: Option<&str>,
     compared: &str,
@@ -1027,24 +1039,7 @@ async fn rebuild_kept_list(
         .first()
         .map(ToString::to_string)
         .unwrap_or_default();
-    let mut objects: Vec<RevisionObject> = sweep
-        .managed
-        .iter()
-        .chain(&sweep.unattributed)
-        .filter(|obj| lifecycle::lifecycle_of_live(obj).prunable())
-        .filter(|obj| tenancy.unlisted_own(obj))
-        .filter_map(|obj| {
-            let rid = kix::cluster::drift::resource_id(obj);
-            let hash = obj
-                .metadata
-                .annotations
-                .as_ref()
-                .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH))?;
-            (!in_build.contains(&rid)).then(|| RevisionObject::of_id(hash, &rid))
-        })
-        .collect();
-    objects.sort();
-    objects.dedup();
+    let objects = kept_to_rebuild(sweep, in_build);
     crate::say!(
         "{} {problem}. Kix rebuilds the list from the {} live object(s) that this Kix cluster applied, that no other deployment record of it names, and that {compared} does not hold.",
         output::yellow("Note:"),
@@ -1064,28 +1059,7 @@ async fn rebuild_kept_list(
             "the deployment records of '{cluster_name}' cannot be read. Nothing was deleted."
         ));
     };
-    let lock = super::lock::take(
-        client,
-        cluster_name,
-        "kix gc",
-        kix::cluster::head::Purpose::Gc,
-        None,
-        None,
-    )
-    .await?;
-    let guarded = lock.guarded(client);
-    let written = kix::cluster::revision::keep::rebuild_kept(
-        &guarded,
-        &opened.through(&guarded),
-        cluster_name,
-        &record,
-        objects,
-    )
-    .await;
-    super::lock::release(&lock).await;
-    let name = written.map_err(|e| {
-        miette!("could not write the rebuilt kept-orphans list: {e}. Nothing was deleted.")
-    })?;
+    let name = write_rebuilt(client, opened, cluster_name, &record, objects, generation).await?;
     crate::say!("Named kept-orphans revision {name} on deployment record {record}.");
     Box::pin(run_hard_async(
         args,
@@ -1099,6 +1073,72 @@ async fn rebuild_kept_list(
         compared,
     ))
     .await
+}
+
+/// Return what a rebuilt kept-orphans list names: each labelled, prunable
+/// live object of `sweep` that the Kix cluster applied, that no other
+/// revision of it names, and that the build compared with, whose objects
+/// are `in_build`, lacks.
+fn kept_to_rebuild(
+    sweep: &inventory::ManagedSweep,
+    in_build: &HashSet<ResourceId>,
+) -> Vec<RevisionObject> {
+    let tenancy = &sweep.tenancy;
+    let mut objects: Vec<RevisionObject> = sweep
+        .managed
+        .iter()
+        .chain(&sweep.unattributed)
+        .filter(|obj| lifecycle::lifecycle_of_live(obj).prunable())
+        .filter(|obj| tenancy.unlisted_own(obj))
+        .filter_map(|obj| {
+            let rid = kix::cluster::drift::resource_id(obj);
+            let hash = obj
+                .metadata
+                .annotations
+                .as_ref()
+                .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH))?;
+            (!in_build.contains(&rid)).then(|| RevisionObject::of_id(hash, &rid))
+        })
+        .collect();
+    objects.sort();
+    objects.dedup();
+    objects
+}
+
+/// Name a kept-orphans revision of `objects` on record `record` of Kix
+/// cluster `cluster`, under the deploy lock taken at `generation`, the one
+/// the scan read. Return the revision's name. A run that changed the Kix
+/// cluster since the scan raised the generation, so the lock refuses.
+async fn write_rebuilt(
+    client: &kube::Client,
+    records: &Records,
+    cluster: &str,
+    record: &str,
+    objects: Vec<RevisionObject>,
+    generation: u64,
+) -> Result<String> {
+    let lock = super::lock::take(
+        client,
+        cluster,
+        "kix gc",
+        kix::cluster::head::Purpose::Gc,
+        None,
+        Some(generation),
+    )
+    .await?;
+    let guarded = lock.guarded(client);
+    let written = kix::cluster::revision::keep::rebuild_kept(
+        &guarded,
+        &records.through(&guarded),
+        cluster,
+        record,
+        objects,
+    )
+    .await;
+    super::lock::release(&lock).await;
+    written.map_err(|e| {
+        miette!("could not write the rebuilt kept-orphans list: {e}. Nothing was deleted.")
+    })
 }
 
 async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Result<()> {

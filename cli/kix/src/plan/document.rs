@@ -619,6 +619,12 @@ pub enum WriteReason {
     /// changed them, which `changed_by` names. Empty when Kubernetes
     /// recorded no other owner.
     RevertsDrift { changed_by: Vec<DriftOwner> },
+    /// Fields Kix applied are owned by another Kix cluster's field manager,
+    /// or by the manager `kix` an older Kix applies under, which
+    /// `changed_by` names. The deploy applies the build without force: when
+    /// the values agree it adds this Kix cluster's own entry, and when they
+    /// differ Kubernetes refuses it and the deploy stops.
+    HeldByOtherCluster { changed_by: Vec<DriftOwner> },
 }
 
 /// A field manager other than Kix that owns fields Kix applied.

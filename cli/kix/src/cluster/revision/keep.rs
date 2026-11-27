@@ -30,7 +30,8 @@ use crate::manifest::lifecycle::PHASE_SUPERSEDED;
 /// queued records, the record being deployed, and each `Failed` or `Partial`
 /// record, whose objects a later deploy has not taken in yet.
 ///
-/// A `Superseded` record keeps none: a rollback to it writes its revisions
+/// A `Superseded` record keeps none, unless a needed record lists its build
+/// under `status.orphansKeptFrom`: a rollback to it writes its revisions
 /// again from its build. A record with no `status.revisions` names none.
 /// Refuse when a record's map cannot be read, because it may name
 /// revisions this release cannot see.
@@ -57,15 +58,30 @@ pub(crate) fn needed_readable(head: Option<&HeadStatus>, records: &[Record]) -> 
     let deploying = head
         .and_then(|h| h.lock.as_ref())
         .and_then(|l| l.activation.as_deref());
+    let is_needed = |record: &Record| {
+        record.phase != PHASE_SUPERSEDED
+            || Some(record.name.as_str()) == current
+            || Some(record.name.as_str()) == deploying
+    };
+    // A record an older Kix wrote lists the builds whose orphans its deploy
+    // kept under `status.orphansKeptFrom`. When such a build is a record
+    // with revisions, they are what names those orphans.
+    let kept_from: std::collections::HashSet<&str> = records
+        .iter()
+        .filter(|r| is_needed(r))
+        .flat_map(|r| r.orphans_kept_from.iter())
+        .map(|s| s.identity_hash.as_str())
+        .collect();
     let mut names = BTreeSet::new();
     for record in records {
         let Some(Ok(map)) = &record.revisions else {
             continue;
         };
-        if record.phase != PHASE_SUPERSEDED
-            || Some(record.name.as_str()) == current
-            || Some(record.name.as_str()) == deploying
-        {
+        let kept = record
+            .identity_hash
+            .as_deref()
+            .is_some_and(|h| kept_from.contains(h));
+        if is_needed(record) || kept {
             names.extend(map.names().map(str::to_string));
         }
     }

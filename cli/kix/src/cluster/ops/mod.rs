@@ -142,9 +142,10 @@ pub(crate) trait ResourceIo: Send + Sync + 'static {
     ) -> Result<Pruned, DeleteError>;
 
     /// Write the migration write ([`super::migration_write`]) to the
-    /// object `rid` of the build, which the run did not apply because it was
-    /// unchanged, when the plan listed it and the run has not written it
-    /// yet. Return whether it wrote.
+    /// object `rid`, which the run did not apply: an object of the build left
+    /// unchanged, or an orphan the run keeps. Write it only when the plan
+    /// listed the object and the run has not written it yet. Return whether
+    /// it wrote.
     async fn migrate_unchanged(
         &self,
         _rid: &ResourceId,
@@ -152,12 +153,18 @@ pub(crate) trait ResourceIo: Send + Sync + 'static {
         Ok(false)
     }
 
-    /// Once the run's record is final: write the migration write to each
-    /// orphan of `left`, the ones the run left on the cluster, that the plan
-    /// listed, and give up the fields of each orphan another Kix cluster
-    /// still deploys. Return what failed, one message for each object.
-    async fn after_finalize(&self, _left: &[ResourceId]) -> Vec<String> {
+    /// Return the orphans another Kix cluster still deploys, whose fields
+    /// the run gives up in the prune step ([`ResourceIo::release`]).
+    fn releases(&self) -> Vec<ResourceId> {
         Vec::new()
+    }
+
+    /// Give up this Kix cluster's fields on the orphan `rid`, which another
+    /// Kix cluster still deploys, with an apply of nothing under its own
+    /// manager. Return whether it wrote. An object with no `Apply` entry
+    /// under the manager needs nothing.
+    async fn release(&self, _rid: &ResourceId) -> Result<bool, String> {
+        Ok(false)
     }
 
     /// Wait for the object `rid` with uid `uid`, which [`ResourceIo::prune`]
@@ -245,32 +252,28 @@ pub(crate) trait DeployRecord: Send + Sync + 'static {
 /// plan listed them.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Migrations {
-    /// The objects of the build that need the write. The run writes it
-    /// right before it applies one, and once the nodes finish to each one
-    /// it did not apply because it was unchanged.
+    /// The objects of the build and the orphans the run keeps that need the
+    /// write. The run writes it right before it applies an object, and once
+    /// the nodes finish to each object it did not apply and to each kept
+    /// orphan.
     pub(crate) objects: std::collections::HashSet<ResourceId>,
     /// The objects of `objects` whose `Apply` entry under `kix` the write
     /// moves to the cluster's manager. A dry run applies them under `kix`.
     pub(crate) renamed: std::collections::HashSet<ResourceId>,
-    /// The orphans that need the write. The run writes it to those it left
-    /// on the cluster once its record is final and lists them.
-    pub(crate) orphans: Vec<ResourceId>,
-    /// The orphans another Kix cluster still deploys. Once the record is
-    /// final, the run gives up its fields on each with an empty apply, so
-    /// its entry does not keep the object for ever.
+    /// The orphans another Kix cluster still deploys. In the prune step the
+    /// run gives up its fields on each with an empty apply, so its entry
+    /// does not keep the object for ever.
     pub(crate) releases: Vec<ResourceId>,
-    /// The applied hashes the notes of objects the run does not apply hold,
-    /// which the run writes to its revisions with the hashes of what it
-    /// applies ([`super::revision::applied::pending`]).
-    pub(crate) carried: Vec<(super::revision::RevisionObject, String)>,
-    pub(crate) rule: super::migration_write::Rule,
+    /// The identity hash of the record the run deploys, which a note kept
+    /// for an older Kix names.
+    pub(crate) record: Option<String>,
 }
 
 impl Migrations {
     /// Return how many objects the run writes the migration write to, at
     /// most.
     pub(crate) fn count(&self) -> usize {
-        self.objects.len() + self.orphans.len()
+        self.objects.len()
     }
 }
 
@@ -397,6 +400,12 @@ pub(crate) enum RecordWriteError {
     /// A revision the record names could not be created.
     #[error(transparent)]
     Revisions(super::revision::RevisionError),
+    /// The records an older Kix wrote could not be given revisions, so the
+    /// run stops before it writes any object.
+    #[error(
+        "cannot give the deployment records an earlier version of Kix wrote the revisions this version reads: {0}. Nothing was applied"
+    )]
+    Convert(super::revision::convert::ConvertError),
     /// The applied hashes of the objects the run applied could not be
     /// written to the revisions.
     #[error(

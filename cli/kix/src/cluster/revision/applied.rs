@@ -38,17 +38,22 @@ impl RevisionObject {
 
 /// Where a drift check reads the applied hash of a live object.
 ///
-/// An object that a revision of a record with a readable `status.revisions`
-/// names takes its hash from that revision's `status.applied`. Any other
-/// object, and a named object that no revision records a hash for, takes it
-/// from its `kix.run/applied-hash` annotation, which an older Kix wrote and
-/// the migration write removes. Two revisions that record different hashes
-/// for one object leave its hash not known.
+/// Each record is read from its own source. An object that a revision of a
+/// record with a readable `status.revisions` names takes its hash from that
+/// revision's `status.applied`. An object whose `kix.run/activations` names
+/// a consulted record without a map, which an older Kix wrote, takes it
+/// from its `kix.run/applied-hash` annotation. Any other object's hash is
+/// not known, and so is the hash of an object two revisions record
+/// differently.
 #[derive(Debug, Default)]
 pub struct AppliedHashes {
     /// Each object a consulted revision names, with what the revisions
     /// record for it.
     named: HashMap<RevisionObject, Recorded>,
+    /// The identity hashes of the consulted records without a map, or
+    /// `None` to read every object's hash from its annotation
+    /// ([`AppliedHashes::from_annotations`]).
+    noted: Option<std::collections::HashSet<String>>,
     /// The revisions a consulted record names that were not found or could
     /// not be read, sorted.
     missing: Vec<String>,
@@ -66,7 +71,8 @@ enum Recorded {
 
 impl AppliedHashes {
     /// Return a source that reads every object's applied hash from its
-    /// annotation.
+    /// annotation, as an older Kix wrote it, for objects whose records have
+    /// no map.
     pub fn from_annotations() -> AppliedHashes {
         AppliedHashes::default()
     }
@@ -90,8 +96,15 @@ impl AppliedHashes {
             .map(|r| (r.name.as_str(), r))
             .collect();
         let mut named: HashMap<RevisionObject, Recorded> = HashMap::new();
+        let mut noted = std::collections::HashSet::new();
         let mut missing: Vec<String> = Vec::new();
         for record in records {
+            if record.phase != PHASE_SUPERSEDED
+                && record.revisions.is_none()
+                && let Some(hash) = &record.identity_hash
+            {
+                noted.insert(hash.clone());
+            }
             let Some(map) = readable_map(record) else {
                 continue;
             };
@@ -120,7 +133,11 @@ impl AppliedHashes {
                 "deployment records name revisions Kix could not read; the applied hashes of the objects they name are not known, so those objects are applied again or reported as not checked"
             );
         }
-        AppliedHashes { named, missing }
+        AppliedHashes {
+            named,
+            noted: Some(noted),
+            missing,
+        }
     }
 
     /// Return the revisions a consulted record names that Kix could not
@@ -153,11 +170,23 @@ impl AppliedHashes {
             self.named
                 .get(&RevisionObject::of_id(hash, &drift::resource_id(obj)))
         });
+        let from_note = || {
+            let named_by_note = match &self.noted {
+                None => true,
+                Some(noted) => keys::get_meta(annotations, keys::ACTIVATIONS)
+                    .unwrap_or_default()
+                    .split(',')
+                    .any(|h| noted.contains(h.trim())),
+            };
+            named_by_note
+                .then(|| keys::get_meta(annotations, keys::APPLIED_HASH))
+                .flatten()
+        };
         match recorded {
             Some(Recorded::Hash(hash)) => Some(hash),
             Some(Recorded::Disagree) => None,
             None if !self.missing.is_empty() => None,
-            Some(Recorded::Nothing) | None => keys::get_meta(annotations, keys::APPLIED_HASH),
+            Some(Recorded::Nothing) | None => from_note(),
         }
     }
 }
@@ -175,10 +204,10 @@ fn readable_map(record: &Record) -> Option<&RevisionMap> {
 /// - `kept` holds the kept revisions of the run's Kix cluster, with the
 ///   entries they already have. Each one that names an applied object takes
 ///   its hash.
-/// - `replaced` pairs each revision the run's record names with the revision
-///   of the same instance that the current record names, when the two
-///   differ. The new one takes the old one's hash of every object both name
-///   that the run did not apply.
+/// - `replaced` pairs each revision the run's record names that the current
+///   record does not with the revisions the current record names. The new
+///   one takes an old one's hash of every object both name that the run did
+///   not apply.
 ///
 /// Leave out entries a revision already holds with the same value. A run
 /// that applied nothing still carries hashes into the revisions it replaces.

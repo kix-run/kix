@@ -1004,6 +1004,7 @@ mod revision_tests {
     use kix::cluster::fake_api::FakeApi;
     use kix::cluster::tenancy_fixture::{Rec, State, Written, state};
     use kix::manifest::lifecycle::{PHASE_ACTIVE, PHASE_PARTIAL};
+    use serde_json::json;
 
     /// Kix cluster `a`: its current record kept two orphans, and a deploy
     /// with `--only` of the next build added one of them back.
@@ -1186,6 +1187,72 @@ mod revision_tests {
         assert!(
             err.contains(&missing) && err.contains("a-only") && err.contains("Nothing was deleted"),
             "{err}"
+        );
+    }
+
+    /// With its kept-orphans revision gone, a full scan rebuilds the list
+    /// from the live objects the Kix cluster applied that no other revision
+    /// of it names and the build lacks. The rebuilt list is written only
+    /// under a lock taken at the generation the scan read.
+    #[tokio::test]
+    async fn gc_rebuilds_a_missing_kept_orphans_list() {
+        let mut state = state(&recs(), |_| Written::Revisions);
+        let kept = state.revision_named("a-cur", "keptOrphans");
+        state.remove_revision(&kept);
+        let api = FakeApi::new(state.all());
+        for name in ["left", "stuck", "added"] {
+            api.patch_object("ConfigMap", name, |o| {
+                o["metadata"]["managedFields"][0]["manager"] = json!("kix/a");
+            });
+        }
+        let client = api.client();
+        let discovery = kix::cluster::discovery::discover_resources(&client)
+            .await
+            .unwrap();
+        let opened = Records::open(&client, &discovery).unwrap();
+        let sweep = inventory::sweep_managed(
+            &client,
+            &discovery,
+            &opened,
+            inventory::SweepScope::Cluster("a"),
+        )
+        .await
+        .unwrap();
+        assert!(sweep.tenancy.only_kept_unreadable());
+        let in_build: HashSet<ResourceId> = [ResourceId::new("", "ConfigMap", "d", "web")].into();
+        let objects = kept_to_rebuild(&sweep, &in_build);
+        let rebuilt: Vec<&str> = objects.iter().map(|o| o.name.as_str()).collect();
+        // `added` is named by the `Partial` record, so it is not a kept
+        // orphan.
+        assert_eq!(rebuilt, ["left", "stuck"]);
+
+        let records = opened.into_records().unwrap();
+        let generation = kix::cluster::head::generation_of(
+            kix::cluster::head::read(&client, "a")
+                .await
+                .unwrap()
+                .as_ref(),
+        );
+        let moved = write_rebuilt(
+            &client,
+            &records,
+            "a",
+            "a-cur",
+            objects.clone(),
+            generation + 1,
+        )
+        .await;
+        assert!(moved.is_err());
+        assert!(
+            api.object("Activation", "a-cur").unwrap()["status"]["revisions"]["keptOrphans"]
+                == json!(kept)
+        );
+        let name = write_rebuilt(&client, &records, "a", "a-cur", objects, generation)
+            .await
+            .unwrap();
+        assert_eq!(
+            api.object("Activation", "a-cur").unwrap()["status"]["revisions"]["keptOrphans"],
+            json!(name)
         );
     }
 }

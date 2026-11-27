@@ -129,17 +129,9 @@ impl KubeResources {
         client: Client,
         discovery: Vec<(ApiResource, Scope)>,
         cluster: String,
-        identity_hash: Option<String>,
         force: Force,
     ) -> Self {
-        Self::with_writes(
-            Writes::Persist,
-            client,
-            discovery,
-            cluster,
-            identity_hash,
-            force,
-        )
+        Self::with_writes(Writes::Persist, client, discovery, cluster, force)
     }
 
     /// Create a [`KubeResources`] instance that sends every write with
@@ -148,17 +140,9 @@ impl KubeResources {
         client: Client,
         discovery: Vec<(ApiResource, Scope)>,
         cluster: String,
-        identity_hash: Option<String>,
         force: Force,
     ) -> Self {
-        Self::with_writes(
-            Writes::DryRun,
-            client,
-            discovery,
-            cluster,
-            identity_hash,
-            force,
-        )
+        Self::with_writes(Writes::DryRun, client, discovery, cluster, force)
     }
 
     fn with_writes(
@@ -166,10 +150,8 @@ impl KubeResources {
         client: Client,
         discovery: Vec<(ApiResource, Scope)>,
         cluster: String,
-        identity_hash: Option<String>,
         force: Force,
     ) -> Self {
-        let _ = identity_hash;
         Self {
             client,
             writes,
@@ -187,7 +169,6 @@ impl KubeResources {
     /// Make the migration writes the plan listed ([`Migrations`]).
     pub(crate) fn with_migrations(mut self, migrations: Migrations) -> Self {
         self.unmigrated = std::sync::Mutex::new(migrations.objects.clone());
-        self.applied = std::sync::Mutex::new(migrations.carried.iter().cloned().collect());
         self.migrations = migrations;
         self
     }
@@ -201,74 +182,53 @@ impl KubeResources {
             .unwrap_or(false)
     }
 
-    /// Write the migration write to the object `rid` of kind `ar`.
+    /// Return the run's prune guard, made on first use, after discovery has
+    /// settled. It also tells the migration write which Kix clusters name
+    /// an object.
+    async fn guard(&self) -> Result<&PruneGuard, LegacyDomainError> {
+        self.prune_guard
+            .get_or_try_init(|| async {
+                let opened = self.opened().await?;
+                Ok::<_, LegacyDomainError>(PruneGuard::new(
+                    self.client.clone(),
+                    opened,
+                    &self.cluster,
+                ))
+            })
+            .await
+    }
+
+    /// Write the migration write to the object `rid` of kind `ar`. With
+    /// `expect`, the object must still be at the `resourceVersion` the plan
+    /// read ([`migration_write::Write::expect`]).
     async fn migrate(
         &self,
         ar: &ApiResource,
         scope: &Scope,
         rid: &ResourceId,
-    ) -> Result<bool, WriteError> {
+        expect: Option<&str>,
+    ) -> Result<migration_write::Written, WriteError> {
         let api = self.api_for(ar, scope, rid);
-        let written = migration_write::write(
-            &api,
-            &rid.name,
-            &rid.display_id(),
-            &self.manager,
-            &self.migrations.rule,
-        )
-        .await?;
-        Ok(written == migration_write::Written::Rewritten)
+        let resource = rid.display_id();
+        let judge = self.guard().await.map_err(|e| WriteError::Tenancy {
+            resource: resource.clone(),
+            reason: e.to_string(),
+        })?;
+        migration_write::write(&migration_write::Write {
+            api: &api,
+            name: &rid.name,
+            resource: &resource,
+            manager: &self.manager,
+            record: self.migrations.record.as_deref(),
+            judge,
+            expect,
+        })
+        .await
     }
 
-    /// Give up this Kix cluster's fields on the object `rid`, which another
-    /// Kix cluster still deploys, with an apply of nothing under its
-    /// manager. Fields no other manager owns go from the object. An object
-    /// without an `Apply` entry under the manager needs nothing.
-    async fn release(&self, rid: &ResourceId) -> Result<bool, String> {
-        let Some((ar, scope)) = self.cached(rid).await else {
-            return Ok(false);
-        };
-        if let Err(e) = self.migrate(&ar, &scope, rid).await {
-            return Err(e.to_string());
-        }
-        let api = self.api_for(&ar, &scope, rid);
-        let Some(live) = api
-            .get_opt(&rid.name)
-            .await
-            .map_err(|e| format!("could not read {}: {e}", rid.display_id()))?
-        else {
-            return Ok(false);
-        };
-        let applies = live.metadata.managed_fields.iter().flatten().any(|e| {
-            e.manager.as_deref() == Some(self.manager.name())
-                && e.operation.as_deref() == Some("Apply")
-                && e.subresource.is_none()
-        });
-        if !applies {
-            return Ok(false);
-        }
-        let mut metadata = serde_json::json!({ "name": rid.name });
-        if let Some(ns) = &live.metadata.namespace {
-            metadata["namespace"] = Value::String(ns.clone());
-        }
-        let nothing = serde_json::json!({
-            "apiVersion": ar.api_version,
-            "kind": ar.kind,
-            "metadata": metadata,
-        });
-        api.patch(
-            &rid.name,
-            &kube::api::PatchParams::apply(self.manager.name()),
-            &kube::api::Patch::Apply(&nothing),
-        )
-        .await
-        .map_err(|e| {
-            format!(
-                "could not give up this Kix cluster's fields on {}, which another Kix cluster still deploys: {e}",
-                rid.display_id()
-            )
-        })?;
-        Ok(true)
+    /// Return the kinds the run's discovery holds now.
+    pub(super) async fn discovery(&self) -> Vec<(ApiResource, Scope)> {
+        self.discovery.read().await.clone()
     }
 
     pub(super) fn client(&self) -> &Client {
@@ -434,13 +394,32 @@ impl KubeResources {
                 &self.manager
             }
         } else {
-            if self.take_unmigrated(&rid) {
-                self.migrate(ar, &scope, &rid)
-                    .await
-                    .map_err(|e| ApplyError::Migration(Box::new(e)))?;
-            }
             &self.manager
         };
+        let mut takeover = self.force.of(&rid);
+        if !self.dry() && self.take_unmigrated(&rid) {
+            // An object the plan forces is applied only while it is as the
+            // plan read it, so the migration write tests that version and
+            // the apply then tests the version the write left.
+            let expect = match &takeover {
+                apply::Takeover::IfUnchangedSince(version) => Some(version.clone()),
+                apply::Takeover::No | apply::Takeover::Always => None,
+            };
+            match self.migrate(ar, &scope, &rid, expect.as_deref()).await {
+                Ok(migration_write::Written::Rewritten { resource_version })
+                    if expect.is_some() =>
+                {
+                    takeover = apply::Takeover::IfUnchangedSince(resource_version);
+                }
+                Ok(_) => {}
+                Err(WriteError::ChangedSincePlan { .. }) => {
+                    return Err(ApplyError::ChangedSincePlan {
+                        resource: rid.display_id(),
+                    });
+                }
+                Err(e) => return Err(ApplyError::Migration(Box::new(e))),
+            }
+        }
         let result = apply::apply_resource(
             &self.client,
             ar,
@@ -448,7 +427,7 @@ impl KubeResources {
             manager,
             manifest,
             self.dry(),
-            self.force.of(&rid),
+            takeover,
         )
         .await?;
         if let Some(hash) = &result.applied_hash {
@@ -503,29 +482,59 @@ impl ResourceIo for KubeResources {
         let Some((ar, scope)) = self.cached(rid).await else {
             return Ok(false);
         };
-        self.migrate(&ar, &scope, rid).await
+        let written = self.migrate(&ar, &scope, rid, None).await?;
+        Ok(written != migration_write::Written::NothingToDo)
     }
 
-    async fn after_finalize(&self, left: &[ResourceId]) -> Vec<String> {
+    fn releases(&self) -> Vec<ResourceId> {
         if self.dry() {
             return Vec::new();
         }
-        let left: HashSet<&ResourceId> = left.iter().collect();
-        let mut failed = Vec::new();
-        for rid in self.migrations.orphans.iter().filter(|r| left.contains(r)) {
-            let Some((ar, scope)) = self.cached(rid).await else {
-                continue;
-            };
-            if let Err(e) = self.migrate(&ar, &scope, rid).await {
-                failed.push(e.to_string());
-            }
+        self.migrations.releases.clone()
+    }
+
+    async fn release(&self, rid: &ResourceId) -> Result<bool, String> {
+        let Some((ar, scope)) = self.cached(rid).await else {
+            return Ok(false);
+        };
+        let api = self.api_for(&ar, &scope, rid);
+        let Some(live) = api
+            .get_opt(&rid.name)
+            .await
+            .map_err(|e| format!("could not read {}: {e}", rid.display_id()))?
+        else {
+            return Ok(false);
+        };
+        let applies = live.metadata.managed_fields.iter().flatten().any(|e| {
+            e.manager.as_deref() == Some(self.manager.name())
+                && e.operation.as_deref() == Some("Apply")
+                && e.subresource.is_none()
+        });
+        if !applies {
+            return Ok(false);
         }
-        for rid in &self.migrations.releases {
-            if let Err(e) = self.release(rid).await {
-                failed.push(e);
-            }
+        let mut metadata = serde_json::json!({ "name": rid.name });
+        if let Some(ns) = &live.metadata.namespace {
+            metadata["namespace"] = Value::String(ns.clone());
         }
-        failed
+        let nothing = serde_json::json!({
+            "apiVersion": ar.api_version,
+            "kind": ar.kind,
+            "metadata": metadata,
+        });
+        api.patch(
+            &rid.name,
+            &kube::api::PatchParams::apply(self.manager.name()),
+            &kube::api::Patch::Apply(&nothing),
+        )
+        .await
+        .map_err(|e| {
+            format!(
+                "could not give up this Kix cluster's fields on {}, which another Kix cluster still deploys: {e}",
+                rid.display_id()
+            )
+        })?;
+        Ok(true)
     }
 
     async fn prune(
@@ -539,13 +548,7 @@ impl ResourceIo for KubeResources {
         };
         // The guard reads the other clusters' records, so a cluster the
         // domain gate refuses has no guard and nothing is deleted.
-        let guard = self
-            .prune_guard
-            .get_or_try_init(|| async {
-                let opened = self.opened().await.map_err(DeleteError::Domain)?;
-                Ok::<_, DeleteError>(PruneGuard::new(self.client.clone(), opened, &self.cluster))
-            })
-            .await?;
+        let guard = self.guard().await.map_err(DeleteError::Domain)?;
         let dp = DeleteParams {
             propagation_policy: Some(propagation),
             dry_run: self.dry(),
@@ -761,7 +764,7 @@ mod prune_tests {
         ]);
         let client = api.client();
         let discovery = discovery::discover_resources(&client).await.unwrap();
-        let ops = KubeResources::new(client, discovery, "a".into(), None, Force::None);
+        let ops = KubeResources::new(client, discovery, "a".into(), Force::None);
         let rid = |name: &str| ResourceId {
             group: "rbac.authorization.k8s.io".into(),
             kind: "ClusterRole".into(),
@@ -799,7 +802,7 @@ mod prune_tests {
             .into_iter()
             .filter(|(ar, _)| ar.kind != "ClusterRole")
             .collect();
-        let ops = KubeResources::new(client, discovery, "a".into(), None, Force::None);
+        let ops = KubeResources::new(client, discovery, "a".into(), Force::None);
         let rid = |group: &str, kind: &str| ResourceId {
             group: group.into(),
             kind: kind.into(),
@@ -850,7 +853,7 @@ mod prune_tests {
         api.serve_retired_records();
         let client = api.client();
         let discovery = discovery::discover_resources(&client).await.unwrap();
-        let ops = KubeResources::new(client, discovery, "a".into(), None, Force::None);
+        let ops = KubeResources::new(client, discovery, "a".into(), Force::None);
         let rid = ResourceId {
             group: "rbac.authorization.k8s.io".into(),
             kind: "ClusterRole".into(),
@@ -899,7 +902,7 @@ mod apply_tests {
     async fn ops(api: &FakeApi) -> KubeResources {
         let client = api.client();
         let discovery = discovery::discover_resources(&client).await.unwrap();
-        KubeResources::new(client, discovery, "a".into(), None, Force::None)
+        KubeResources::new(client, discovery, "a".into(), Force::None)
     }
 
     /// An apply onto an object being deleted waits for it to be gone, then
@@ -977,7 +980,7 @@ mod group_tests {
         let api = FakeApi::new([job("batch/v1", "batch"), job(&other_version, "other")]);
         let client = api.client();
         let discovery = discovery::discover_resources(&client).await.unwrap();
-        let ops = KubeResources::new(client, discovery, "a".into(), None, Force::None);
+        let ops = KubeResources::new(client, discovery, "a".into(), Force::None);
         let rid = |group: &str| ResourceId::from_value(&job(group, ""));
 
         let note = |live: Option<Value>| live.unwrap()["spec"]["note"].clone();
@@ -1009,7 +1012,7 @@ mod discovery_tests {
     /// Create a [`KubeResources`] instance over `api` with an empty discovery
     /// cache, modeling a cache before the group is served.
     fn ops(api: &FakeApi) -> KubeResources {
-        KubeResources::new(api.client(), Vec::new(), String::new(), None, Force::None)
+        KubeResources::new(api.client(), Vec::new(), String::new(), Force::None)
     }
 
     async fn cached(ops: &KubeResources, group: &str, kind: &str) -> bool {
@@ -1120,7 +1123,6 @@ mod discovery_tests {
             client,
             discovery,
             "a".into(),
-            None,
             Force::Only([(drifted, version)].into()),
         );
         for name in ["drifted", "other"] {

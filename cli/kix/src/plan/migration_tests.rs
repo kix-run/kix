@@ -371,10 +371,11 @@ async fn the_first_deploy_moves_every_object_to_revisions() {
     assert_eq!(again.orphans().len(), 1);
 }
 
-/// A first deploy that stops after it moved some objects leaves its record
-/// `Failed` with a revision map, and the Kix cluster still read from the
-/// notes. The next deploy takes in what the stopped one moved through its
-/// revisions, reads the rest from the notes, and finishes the move.
+/// A first deploy gives the old records revisions before it writes any
+/// object, so one that stops after it tidied some objects leaves the old
+/// current record naming every object through its revisions, and its own
+/// record `Failed` with a map. The next deploy takes in what the stopped one
+/// applied, and finishes tidying.
 #[tokio::test]
 async fn a_migration_that_stops_is_finished_by_the_next_deploy() {
     let api = FakeApi::new([]);
@@ -418,7 +419,7 @@ async fn a_migration_that_stops_is_finished_by_the_next_deploy() {
     let tenancy = baseline(&api.client(), "a").await.tenancy;
     assert_eq!(
         tenancy.own_source(),
-        crate::cluster::tenancy::Source::Records
+        crate::cluster::tenancy::Source::Revisions
     );
 
     let finishing = release(
@@ -482,10 +483,11 @@ async fn a_shared_object_keeps_its_note_until_the_other_cluster_moves() {
     assert_eq!(notes(&api, "ConfigMap", "only-a"), (None, None));
     let mut kept = [a_new_hash.clone(), b_hash.clone()];
     kept.sort();
-    assert_eq!(
-        notes(&api, "ConfigMap", "shared"),
-        (Some(kept.join(",")), None)
-    );
+    // The applied-hash note stays for the older Kix, which reads drift from
+    // it.
+    let (note, applied) = notes(&api, "ConfigMap", "shared");
+    assert_eq!(note, Some(kept.join(",")));
+    assert!(applied.is_some());
     let shared = managers(&api, "ConfigMap", "shared");
     assert!(shared.contains(&"kix:Apply".to_string()), "{shared:?}");
     assert!(shared.contains(&"kix/a:Apply".to_string()), "{shared:?}");
@@ -511,11 +513,10 @@ async fn a_shared_object_keeps_its_note_until_the_other_cluster_moves() {
     assert!(written(&again).is_empty(), "{:?}", written(&again));
 }
 
-/// The operator does not repair drift on a Kix cluster an older Kix
-/// deployed last, because a repair writes no record to move it with. Its
-/// deploy of a queued record moves it.
+/// The operator's repair of a Kix cluster an older Kix deployed plans
+/// after the same conversion as a deploy, so it tidies the objects too.
 #[tokio::test]
-async fn the_operator_repairs_only_a_migrated_cluster() {
+async fn the_operator_repair_reads_the_records_after_their_conversion() {
     let api = FakeApi::new([]);
     api.track_owners();
     let old = release("a", "a-r0", &[config_map("web", "1")]);
@@ -533,27 +534,12 @@ async fn the_operator_repairs_only_a_migrated_cluster() {
         .filter(|m| !lifecycle::is_record(m))
         .collect();
     let revisions = Some(crate::cluster::revision::RevisionSet::of("a", &old));
-    let refused = crate::plan::live::LivePlan::sweep(
-        &api.client(),
-        &record,
-        &desired,
-        revisions.clone(),
-        false,
-    )
-    .await;
-    let Err(err) = refused else {
-        panic!("a repair of a cluster that is not migrated was planned");
-    };
-    assert!(
-        matches!(err, crate::plan::live::LivePlanError::NotMigrated { .. }),
-        "{err}"
-    );
-    assert!(err.to_string().contains("kix deploy a"), "{err}");
-    let deploys =
-        crate::plan::live::LivePlan::sweep(&api.client(), &record, &desired, revisions, true)
+    let repair =
+        crate::plan::live::LivePlan::sweep(&api.client(), &record, &desired, revisions, false)
             .await
             .unwrap();
-    assert_eq!(deploys.metadata_rewrites(), 1);
+    assert_eq!(repair.metadata_rewrites(), 1);
+    assert_eq!(repair.applies(), 0);
 }
 
 /// A Kix cluster that stops deploying an object another Kix cluster still
@@ -597,4 +583,192 @@ async fn an_orphan_another_cluster_deploys_is_released() {
         .filter(|r| r.starts_with("PATCH") && r.contains("/configmaps/shared"))
         .count();
     assert_eq!(applies_to_shared, 0);
+}
+
+/// A Kix cluster that stops deploying an object another Kix cluster
+/// deploys does not touch the entry under `kix` when it has no entry of its
+/// own on the object: the entry may hold the other cluster's fields. Here
+/// `b` moved first, and as an operator would, never applied the shared
+/// object under its own name. `a`'s release then writes nothing, and the
+/// object keeps its values.
+#[tokio::test]
+async fn a_release_leaves_the_legacy_entry_of_another_cluster() {
+    let api = FakeApi::new([]);
+    api.track_owners();
+    let b_old = release("b", "b-r0", &[config_map("shared", "1")]);
+    let b_hash = hash_of(&record_of(&b_old));
+    let a_old = release(
+        "a",
+        "a-r0",
+        &[config_map("shared", "1"), config_map("only-a", "1")],
+    );
+    deployed_by_an_older_kix(&api, "b", &b_old, PHASE_ACTIVE, &[]).await;
+    deployed_by_an_older_kix(&api, "a", &a_old, PHASE_ACTIVE, &[("shared", &[&b_hash])]).await;
+    // `b` moves; the operator never forces, so its plan leaves the shared
+    // object as it is, with the fields under `kix`.
+    let b_new = release("b", "b-r1", &[config_map("shared", "1")]);
+    let b_record = record_of(&b_new);
+    let mut b_record_live = b_record.clone();
+    b_record_live["metadata"]["labels"]["app.kubernetes.io/managed-by"] = json!("kix");
+    b_record_live["spec"]["source"] = json!("/nix/store/b");
+    let b_live: DynamicObject = serde_json::from_value(b_record_live).unwrap();
+    let desired: Vec<Value> = b_new
+        .resources
+        .values()
+        .map(|r| r.manifest.clone())
+        .filter(|m| !lifecycle::is_record(m))
+        .collect();
+    let operator = crate::plan::live::LivePlan::sweep(
+        &api.client(),
+        &b_live,
+        &desired,
+        Some(crate::cluster::revision::RevisionSet::of("b", &b_new)),
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(operator.applies(), 0);
+    deploy(&api, "b", &b_new).await.unwrap();
+    api.patch_object("ConfigMap", "shared", |o| {
+        let entries = o["metadata"]["managedFields"].as_array_mut().unwrap();
+        entries.retain(|e| e["manager"] != "kix/b");
+    });
+    assert_eq!(
+        managers(&api, "ConfigMap", "shared"),
+        ["kix:Apply", "kix:Update"]
+    );
+
+    let a_new = release("a", "a-r1", &[config_map("only-a", "1")]);
+    let checked = plan(&api, "a", &a_new).await;
+    assert_eq!(checked.shared_orphans().len(), 1);
+    deploy(&api, "a", &a_new).await.unwrap();
+    assert_eq!(
+        managers(&api, "ConfigMap", "shared"),
+        ["kix:Apply", "kix:Update"]
+    );
+    assert_eq!(
+        api.object("ConfigMap", "shared").unwrap()["data"]["k"],
+        json!("1")
+    );
+}
+
+/// A release that fails leaves the object in the record's kept-orphans
+/// revision, so the next deploy finds it again and gives up the fields.
+#[tokio::test]
+async fn a_release_that_fails_is_tried_again() {
+    let api = FakeApi::new([]);
+    api.track_owners();
+    let a = release(
+        "a",
+        "a-r1",
+        &[config_map("shared", "1"), config_map("only-a", "1")],
+    );
+    let b = release("b", "b-r1", &[config_map("shared", "1")]);
+    deploy(&api, "a", &a).await.unwrap();
+    deploy(&api, "b", &b).await.unwrap();
+    let a_without = release("a", "a-r2", &[config_map("only-a", "1")]);
+    // The release reads the object first, and that read fails.
+    api.fail_next("/api/v1/namespaces/app/configmaps/shared", 1, 500);
+    deploy(&api, "a", &a_without).await.unwrap();
+    assert_eq!(
+        managers(&api, "ConfigMap", "shared"),
+        ["kix/a:Apply", "kix/b:Apply"]
+    );
+    let (_, kept) = revisions_of(&api, "a", &a_without).await;
+    assert_eq!(named(&kept.into_iter().collect::<Vec<_>>()), ["shared"]);
+
+    let a_again = release(
+        "a",
+        "a-r3",
+        &[config_map("only-a", "1"), config_map("other", "1")],
+    );
+    deploy(&api, "a", &a_again).await.unwrap();
+    assert_eq!(managers(&api, "ConfigMap", "shared"), ["kix/b:Apply"]);
+}
+
+/// The first deploy gives the old current record revisions before it
+/// writes any object. When an object's migration write succeeds and its
+/// apply then fails, the old record still names it through its revisions,
+/// so a later build that drops it prunes it as an orphan.
+#[tokio::test]
+async fn an_object_whose_apply_failed_after_its_tidy_is_still_named() {
+    let api = FakeApi::new([]);
+    api.track_owners();
+    let old = release(
+        "a",
+        "a-r0",
+        &[config_map("edited", "1"), config_map("keep", "1")],
+    );
+    deployed_by_an_older_kix(&api, "a", &old, PHASE_ACTIVE, &[]).await;
+    // Someone takes the value with another field manager, so the changed
+    // build's apply, which is not forced, is refused.
+    api.update_as("kubectl", None, "ConfigMap", "edited", |o| {
+        o["data"]["k"] = json!("by-hand");
+    });
+    let changing = release(
+        "a",
+        "a-r1",
+        &[config_map("edited", "2"), config_map("keep", "1")],
+    );
+    assert!(deploy(&api, "a", &changing).await.is_err());
+    assert_eq!(notes(&api, "ConfigMap", "edited").0, None);
+
+    let dropping = release("a", "a-r2", &[config_map("keep", "1")]);
+    let checked = plan(&api, "a", &dropping).await;
+    let orphans: Vec<&str> = checked.orphans().iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(orphans, ["edited"]);
+}
+
+/// On the first deploy, an object drifted by hand is reverted: its
+/// migration write tests the version the plan read and hands the version
+/// it leaves to the forced apply, so the apply does not read the write as
+/// a change made after the plan.
+#[tokio::test]
+async fn a_drifted_object_is_reverted_on_the_first_deploy() {
+    let api = FakeApi::new([]);
+    api.track_owners();
+    let old = release("a", "a-r0", &[config_map("web", "1")]);
+    deployed_by_an_older_kix(&api, "a", &old, PHASE_ACTIVE, &[]).await;
+    api.update_as("kubectl", None, "ConfigMap", "web", |o| {
+        o["data"]["k"] = json!("by-hand");
+    });
+    let same = release("a", "a-r1", &[config_map("web", "1")]);
+    deploy(&api, "a", &same).await.unwrap();
+    let web = api.object("ConfigMap", "web").unwrap();
+    assert_eq!(web["data"]["k"], json!("1"));
+    assert_eq!(managers(&api, "ConfigMap", "web"), ["kix/a:Apply"]);
+}
+
+/// A build that adds an object another Kix cluster applied under `kix`
+/// does not read that entry as its own: the plan applies the object, which
+/// adds the cluster's own entry, and keeps the note for the older Kix.
+#[tokio::test]
+async fn an_object_another_cluster_applied_is_applied_when_a_build_adds_it() {
+    let api = FakeApi::new([]);
+    api.track_owners();
+    let b_old = release("b", "b-r0", &[config_map("shared", "1")]);
+    let b_hash = hash_of(&record_of(&b_old));
+    deployed_by_an_older_kix(&api, "b", &b_old, PHASE_ACTIVE, &[]).await;
+    let a_old = release("a", "a-r0", &[config_map("only-a", "1")]);
+    deployed_by_an_older_kix(&api, "a", &a_old, PHASE_ACTIVE, &[]).await;
+    let a_new = release(
+        "a",
+        "a-r1",
+        &[config_map("only-a", "1"), config_map("shared", "1")],
+    );
+    let a_new_hash = hash_of(&record_of(&a_new));
+    let checked = plan(&api, "a", &a_new).await;
+    assert!(
+        written(&checked).contains(&"shared".to_string()),
+        "{:?}",
+        written(&checked)
+    );
+    deploy(&api, "a", &a_new).await.unwrap();
+    assert_eq!(
+        managers(&api, "ConfigMap", "shared"),
+        ["kix/a:Apply", "kix:Apply", "kix:Update"]
+    );
+    let mut kept = [a_new_hash, b_hash];
+    kept.sort();
+    assert_eq!(notes(&api, "ConfigMap", "shared").0, Some(kept.join(",")));
 }

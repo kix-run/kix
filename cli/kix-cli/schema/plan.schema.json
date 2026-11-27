@@ -1752,6 +1752,26 @@
             "changed_by"
           ],
           "type": "object"
+        },
+        {
+          "description": "Fields Kix applied are owned by another Kix cluster's field manager,\nor by the manager `kix` an older Kix applies under, which\n`changed_by` names. The deploy applies the build without force: when\nthe values agree it adds this Kix cluster's own entry, and when they\ndiffer Kubernetes refuses it and the deploy stops.",
+          "properties": {
+            "changed_by": {
+              "items": {
+                "$ref": "#/$defs/DriftOwner"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "held_by_other_cluster",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "changed_by"
+          ],
+          "type": "object"
         }
       ]
     }

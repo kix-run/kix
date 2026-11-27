@@ -414,8 +414,10 @@ pub(super) async fn plan_record_retirement(
 
 /// Say which Kubernetes cluster gc targets, connect to it, and open its
 /// Activation records, or return `None` when the cluster has none. With
-/// `settle`, first settle a deploy lock another run holds on `cluster`, so
-/// what gc reads is what a dead run's takeover left.
+/// `settle`, which a gc that will write passes, first refuse when an older
+/// Kix operator drives a record of `cluster`, then settle a deploy lock
+/// another run holds on it, so what gc reads is what a dead run's takeover
+/// left.
 pub(super) async fn open_records(
     global: &crate::cli::GlobalArgs,
     cluster: &str,
@@ -425,6 +427,7 @@ pub(super) async fn open_records(
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
     if settle {
+        super::super::operator::refuse_older_operator(&client, cluster).await?;
         super::super::lock::settle(&client, cluster, "kix gc", kix::cluster::head::Purpose::Gc)
             .await?;
     }

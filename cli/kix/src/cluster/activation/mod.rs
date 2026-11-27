@@ -708,6 +708,20 @@ impl Records {
             .await
     }
 
+    /// Write `map` as the revision map of record `name`, replacing any
+    /// earlier one. Create the revisions it names before this write.
+    pub(crate) async fn name_revisions(
+        &self,
+        name: &str,
+        map: &RevisionMap,
+    ) -> Result<(), RecordsError> {
+        self.patch_status(
+            name,
+            &json!({ "status": { REVISIONS_FIELD: map.to_value() } }),
+        )
+        .await
+    }
+
     /// Name `revision` as the kept-orphans revision in the map of record
     /// `name`, and leave the rest of the map as it is. Create the revision
     /// before this write, so the map names only revisions that exist.

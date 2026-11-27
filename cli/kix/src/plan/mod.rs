@@ -247,14 +247,12 @@ pub enum PlanError {
          for later updates."
     )]
     OnlyFirstDeploy(String),
-    #[error(
-        "cannot use `--only` on Kix cluster '{0}' because an earlier version of Kix deployed it last. \
-         Nothing was planned or applied to the cluster. The first deploy by this version of Kix \
-         moves every object of the Kix cluster to this version's bookkeeping, and a deploy with \
-         `--only` leaves objects out. Next: deploy the full build first with `kix deploy {0}`, \
-         then use `--only` for later updates."
-    )]
-    OnlyNotMigrated(String),
+    /// A record of the Kix cluster is driven by a Kix operator older than
+    /// this Kix.
+    #[error(transparent)]
+    OperatorWithoutRevisions(Box<crate::cluster::activation::features::OperatorWithoutRevisions>),
+    #[error(transparent)]
+    OperatorFeatures(Box<crate::cluster::activation::features::FeaturesCheckError>),
     #[error(
         "cannot use `--only` on Kix cluster '{cluster}' because its active deployment ({record}) \
          is managed by the Kix operator. Nothing was planned or applied to the cluster. The \

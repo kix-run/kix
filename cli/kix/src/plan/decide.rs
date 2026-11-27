@@ -41,19 +41,18 @@
 //! under this Kix cluster's field manager, because that deploy may never have
 //! reached it.
 //!
-//! A Kix cluster that is not read from revisions is one an older Kix
-//! deployed last. Its ledger comes from what the older Kix wrote
-//! ([`Ledger::of_notes`]): which records name each live object from the
-//! object's `kix.run/activations` note, the applied hash from its
-//! `kix.run/applied-hash` note, and the kept orphans from the builds the
-//! current record lists under `status.orphansKeptFrom`. A tenancy that could
-//! not read this Kix cluster's records or revisions gives an error, so the
-//! choice fails closed.
+//! Every record a plan reads has a revision map: a run gives the records an
+//! older Kix wrote revisions before it writes anything
+//! ([`crate::cluster::revision::convert`]), and a plan reads the same
+//! conversion from memory ([`Tenancy::with_conversion`]). A tenancy that
+//! could not read this Kix cluster's records or revisions gives an error, so
+//! the plan fails closed.
 //!
 //! [`decide`] also lists each object that needs the migration write
 //! ([`crate::cluster::migration_write`]). It judges drift on such an object
 //! as the write leaves it: the entry under `kix` that the write moves to
-//! this Kix cluster's manager counts as this cluster's own.
+//! this Kix cluster's manager counts as this cluster's own, and only on an
+//! object a record of this cluster names ([`migration_write::takes_legacy`]).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -63,9 +62,9 @@ use crate::cluster::apply::{self, ChangeAction, Deployed};
 use crate::cluster::drift::{self, DriftReport, DriftVerdict};
 use crate::cluster::field_manager::FieldManager;
 use crate::cluster::inventory::{Live, LiveObjects, ReadForbidden};
-use crate::cluster::migration_write::{self, Rule};
+use crate::cluster::migration_write;
 use crate::cluster::revision::{AppliedHashes, RevisionObject};
-use crate::cluster::tenancy::{Problem, Source, Tenancy};
+use crate::cluster::tenancy::{Problem, Tenancy};
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{self, PHASE_DEGRADED, PHASE_FAILED, PHASE_PARTIAL};
 use crate::manifest::types::ResourceId;
@@ -139,11 +138,6 @@ pub(crate) struct Decided {
     /// The orphans that need the migration write, sorted. A run writes it
     /// to those it leaves on the cluster, once it has recorded them.
     pub orphan_migrations: Vec<ResourceId>,
-    /// The applied hash of each object of the new build that the run does
-    /// not apply and whose `kix.run/applied-hash` note an older Kix wrote.
-    /// The run writes it to the revisions that name the object, because the
-    /// migration write removes the note.
-    pub carried: Vec<(RevisionObject, String)>,
 }
 
 /// How a record of the Kix cluster names an object.
@@ -168,9 +162,6 @@ struct Named {
     hash: String,
     /// The revision records an applied hash for the object.
     applied: bool,
-    /// The object's `kix.run/activations` note names the record, which
-    /// shows that this Kix cluster wrote the object.
-    by_note: bool,
 }
 
 /// What the records and revisions of one Kix cluster say about its objects.
@@ -181,38 +172,47 @@ pub(crate) struct Ledger {
     named: HashMap<ResourceId, Vec<Named>>,
     applied: AppliedHashes,
     taken_in: Vec<String>,
-    /// What the migration write keeps for Kix clusters an older Kix still
-    /// deploys.
-    rule: Rule,
-    /// The ledger comes from the notes an older Kix wrote
-    /// ([`Ledger::of_notes`]).
-    from_notes: bool,
+    /// Which Kix clusters name each object, which decides whose fields the
+    /// entry under `kix` holds.
+    tenancy: Tenancy,
+    /// The identity hash of the record the run deploys.
+    record: Option<String>,
+    /// A run first gives records an older Kix wrote revisions.
+    converts: bool,
 }
 
 impl Ledger {
-    /// Read the ledger of the Kix cluster `tenancy` is read for, or return
-    /// `None` when that Kix cluster is not read from revisions. This is the
-    /// one place that chooses between the one planner and the comparison of
-    /// builds.
+    /// Read the ledger of the Kix cluster `tenancy` is read for, from the
+    /// revisions of its records. Pass a tenancy that holds the conversion a
+    /// run writes first ([`Tenancy::with_conversion`]), so every record it
+    /// reads has a map.
     ///
     /// Refuse when `tenancy` could not read something about this Kix
     /// cluster or about every Kix cluster ([`Tenancy::complete_for_own`]),
-    /// such as the revision list or the current record's map. Kix could
-    /// not tell then whether this Kix cluster is read from revisions, or
+    /// such as the revision list or a record's map. Kix could not tell then
     /// which objects its records name.
     ///
     /// With `take_in_stopped`, the revisions of each `Failed` or `Partial`
     /// record name objects the deploy takes in. Without it, another deploy
     /// may still be applying them, so they are left out.
-    pub(crate) fn of(tenancy: &Tenancy, take_in_stopped: bool) -> Result<Option<Ledger>, Problem> {
+    pub(crate) fn of(tenancy: &Tenancy, take_in_stopped: bool) -> Result<Ledger, Problem> {
         tenancy.complete_for_own()?;
-        if tenancy.own_source() != Source::Revisions {
-            return Ok(None);
-        }
-        let mut ledger = Ledger::empty(tenancy);
-        let current = tenancy.own_current();
+        let mut ledger = Ledger {
+            manager: FieldManager::of(&tenancy.cluster),
+            named: HashMap::new(),
+            applied: AppliedHashes::of(tenancy.own_records(), tenancy.revisions()),
+            taken_in: Vec::new(),
+            tenancy: tenancy.clone(),
+            record: None,
+            converts: false,
+        };
+        let current = crate::cluster::revision::convert::current_of(
+            tenancy.own_current(),
+            tenancy.own_records(),
+        )
+        .map(|r| r.name.clone());
         for record in tenancy.own_records() {
-            let role = if Some(record.name.as_str()) == current {
+            let role = if Some(&record.name) == current.as_ref() {
                 Role::Current
             } else if take_in_stopped
                 && matches!(record.phase.as_str(), PHASE_FAILED | PHASE_PARTIAL)
@@ -226,137 +226,7 @@ impl Ledger {
             ledger.name_revisions(tenancy, record, role);
         }
         ledger.taken_in.sort();
-        Ok(Some(ledger))
-    }
-
-    /// Read the ledger of the Kix cluster `tenancy` is read for when it is
-    /// not read from revisions, from `swept`, the live objects of every kind
-    /// that carry Kix's label, listed after the records:
-    ///
-    /// - the current record, by phase, names each object whose
-    ///   `kix.run/activations` note lists its identity hash;
-    /// - its kept orphans are the objects whose note lists a build it names
-    ///   under `status.orphansKeptFrom`;
-    /// - with `take_in_stopped`, a `Failed` or `Partial` record left each
-    ///   object whose note lists its identity hash, with the build hash the
-    ///   object carries. A record that a deploy by this Kix wrote has a
-    ///   revision map, and names its objects through its revisions instead.
-    ///
-    /// Each object carries the build hash these records gave it, because a
-    /// record's hash is in the note only once its deploy wrote or stamped
-    /// the object. The applied hash comes from the object's
-    /// `kix.run/applied-hash` note, or from a revision that names it.
-    pub(crate) fn of_notes(
-        tenancy: &Tenancy,
-        swept: &[kube::api::DynamicObject],
-        take_in_stopped: bool,
-    ) -> Result<Ledger, Problem> {
-        tenancy.complete_for_own()?;
-        let mut ledger = Ledger::empty(tenancy);
-        ledger.from_notes = true;
-        let own = tenancy.own_records();
-        let current = crate::cluster::activation::current_among(own);
-        let kept: HashSet<&str> = current
-            .iter()
-            .flat_map(|c| c.orphans_kept_from.iter())
-            .map(|s| s.identity_hash.as_str())
-            .collect();
-        let mut by_hash: HashMap<&str, (&crate::cluster::activation::Record, Role)> =
-            HashMap::new();
-        for record in own {
-            let role = if current.is_some_and(|c| c.name == record.name) {
-                Role::Current
-            } else if take_in_stopped
-                && matches!(record.phase.as_str(), PHASE_FAILED | PHASE_PARTIAL)
-            {
-                ledger.taken_in.push(record.name.clone());
-                if matches!(record.revisions, Some(Ok(_))) {
-                    ledger.name_revisions(tenancy, record, Role::Stopped);
-                    continue;
-                }
-                Role::Stopped
-            } else {
-                continue;
-            };
-            if let Some(hash) = &record.identity_hash {
-                by_hash.insert(hash.as_str(), (record, role));
-            }
-        }
-        for obj in swept {
-            if lifecycle::lifecycle_of_live(obj) == lifecycle::Lifecycle::Record {
-                continue;
-            }
-            let Some(live) = build_hash(obj) else {
-                continue;
-            };
-            let rid = crate::cluster::drift::resource_id(obj);
-            let applied = obj
-                .metadata
-                .annotations
-                .as_ref()
-                .is_some_and(|a| keys::contains_meta(a, keys::APPLIED_HASH));
-            let mut named: Vec<Named> = Vec::new();
-            for hash in migration_write::note_of(obj) {
-                let (record, phase, role) = match by_hash.get(hash) {
-                    Some((record, role)) => {
-                        (record.name.clone(), record.phase.clone(), role.clone())
-                    }
-                    None if kept.contains(hash) => match current {
-                        Some(c) => (c.name.clone(), c.phase.clone(), Role::Kept),
-                        None => continue,
-                    },
-                    None => continue,
-                };
-                named.push(Named {
-                    record,
-                    phase,
-                    role,
-                    hash: live.to_string(),
-                    applied,
-                    by_note: true,
-                });
-            }
-            if !named.is_empty() {
-                ledger.named.entry(rid).or_default().extend(named);
-            }
-        }
-        ledger.taken_in.sort();
         Ok(ledger)
-    }
-
-    fn empty(tenancy: &Tenancy) -> Ledger {
-        Ledger {
-            manager: FieldManager::of(&tenancy.cluster),
-            named: HashMap::new(),
-            applied: AppliedHashes::of(tenancy.own_records(), tenancy.revisions()),
-            taken_in: Vec::new(),
-            rule: Rule {
-                others: std::sync::Arc::new(tenancy.unmigrated_others()),
-                record: None,
-            },
-            from_notes: false,
-        }
-    }
-
-    /// Return whether the ledger comes from the notes an older Kix wrote,
-    /// so the run is the first deploy of the Kix cluster by this Kix.
-    pub(crate) fn is_from_notes(&self) -> bool {
-        self.from_notes
-    }
-
-    /// Return each object of `orphans` that `live` holds, with the build
-    /// hash it carries, for the kept-orphans revision a run that migrates
-    /// names before it removes the notes ([`Ledger::of_notes`]).
-    pub(crate) fn live_orphans(orphans: &[ResourceId], live: &LiveObjects) -> Vec<RevisionObject> {
-        let mut out: Vec<RevisionObject> = orphans
-            .iter()
-            .filter_map(|rid| match live.get(rid) {
-                Live::Present(obj) => Some(RevisionObject::of_id(build_hash(obj)?, rid)),
-                Live::Absent | Live::Unserved | Live::Unread => None,
-            })
-            .collect();
-        out.sort();
-        out
     }
 
     /// Name every object the revisions of `record` name, in `role`: the
@@ -395,35 +265,45 @@ impl Ledger {
                         role: role.clone(),
                         hash: object.hash.clone(),
                         applied: revision.applied.contains_key(&object.hash),
-                        by_note: false,
                     });
             }
         }
     }
 
     /// Set the identity hash of the record the run deploys, which the
-    /// migration write keeps in a note it keeps ([`Rule::record`]).
+    /// migration write keeps in a note it keeps for an older Kix.
     pub(crate) fn deploying(&mut self, record: Option<&str>) {
-        self.rule.record = record.map(str::to_string);
+        self.record = record.map(str::to_string);
     }
 
-    /// Return what the migration write keeps for Kix clusters an older Kix
-    /// still deploys.
-    pub(crate) fn rule(&self) -> &Rule {
-        &self.rule
+    /// Return the identity hash of the record the run deploys.
+    pub(crate) fn record(&self) -> Option<&str> {
+        self.record.as_deref()
+    }
+
+    /// Note whether a run first gives records an older Kix wrote
+    /// revisions, which the ledger already reads.
+    pub(crate) fn set_converts(&mut self, converts: bool) {
+        self.converts = converts;
+    }
+
+    /// Return whether a run first gives records an older Kix wrote
+    /// revisions.
+    pub(crate) fn converts(&self) -> bool {
+        self.converts
     }
 
     /// Return whether `obj` needs the migration write.
     fn migrates(&self, obj: &kube::api::DynamicObject) -> bool {
-        migration_write::needed(obj, &self.manager, &self.rule).is_some()
+        migration_write::needed(obj, &self.manager, &self.tenancy, self.record()).is_some()
     }
 
     /// Return the field manager to judge `obj` with: as the migration write
     /// leaves it. The write moves an entry under `kix` to this Kix cluster's
-    /// manager unless the object is kept for a Kix cluster an older Kix
-    /// deploys.
+    /// manager only when the entry holds this cluster's fields
+    /// ([`migration_write::takes_legacy`]).
     fn view_of(&self, obj: &kube::api::DynamicObject) -> FieldManager {
-        if self.migrates(obj) && !migration_write::shared_with_unmigrated(obj, &self.rule) {
+        if migration_write::renames(obj, &self.manager, &self.tenancy) {
             self.manager.as_unmigrated()
         } else {
             self.manager.clone()
@@ -503,14 +383,12 @@ impl Ledger {
     fn takes_in(&self, rid: &ResourceId, obj: &kube::api::DynamicObject) -> bool {
         let live = build_hash(obj);
         let view = self.view_of(obj);
-        let written_here = |n: &Named| {
-            n.by_note
-                || obj
-                    .metadata
-                    .managed_fields
-                    .iter()
-                    .flatten()
-                    .any(|e| view.counts_as_own(e.manager.as_deref()))
+        let written_here = |_: &Named| {
+            obj.metadata
+                .managed_fields
+                .iter()
+                .flatten()
+                .any(|e| view.counts_as_own(e.manager.as_deref()))
         };
         self.named(rid).any(|n| match n.role {
             Role::Current if n.phase == PHASE_DEGRADED => written_here(n),
@@ -564,7 +442,7 @@ pub(crate) fn decide(
                 resource_version = obj.metadata.resource_version.clone();
                 if !lifecycle::is_record(manifest) && ledger.migrates(obj) {
                     out.migrations.push(id.clone());
-                    if migration_write::renames(obj, &ledger.manager, &ledger.rule) {
+                    if migration_write::renames(obj, &ledger.manager, &ledger.tenancy) {
                         out.renamed.push(id.clone());
                     }
                 }
@@ -595,16 +473,6 @@ pub(crate) fn decide(
                 (apply::changed(manifest, deployed, false), label)
             }
         };
-        if let (ChangeAction::Skip(_), Live::Present(obj)) = (&action, live.get(&id))
-            && let Some(annotations) = obj.metadata.annotations.as_ref()
-            && let (Some(hash), Some(applied)) = (
-                keys::get_meta(annotations, keys::IDENTITY_HASH),
-                keys::get_meta(annotations, keys::APPLIED_HASH),
-            )
-        {
-            out.carried
-                .push((RevisionObject::of_id(hash, &id), applied.to_string()));
-        }
         out.decisions.push(Decision {
             id,
             action,

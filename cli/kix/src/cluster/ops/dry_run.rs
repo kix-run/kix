@@ -43,13 +43,12 @@ impl DryRun {
         client: Client,
         discovery: Vec<(ApiResource, Scope)>,
         cluster: String,
-        identity_hash: Option<String>,
         force: super::resources::Force,
         sops: SopsSources,
         migrations: super::Migrations,
     ) -> Self {
         DryRun {
-            resources: KubeResources::dry_run(client, discovery, cluster, identity_hash, force)
+            resources: KubeResources::dry_run(client, discovery, cluster, force)
                 .with_migrations(migrations),
             secrets: SopsHydrator::new(sops),
             journal: Journal::default(),
@@ -268,7 +267,6 @@ mod tests {
             client,
             discovery,
             "a".into(),
-            None,
             super::super::resources::Force::None,
             Default::default(),
             Default::default(),

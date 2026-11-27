@@ -12,8 +12,8 @@ use crate::manifest::types::ResourceId;
 
 use super::super::activation::{KeptOrphans, Record, Records, WaveRecord, WaveStatus};
 use super::super::revision::{
-    Revision, RevisionMap, RevisionObject, RevisionSet, RevisionSpec, Revisions, Slot, applied,
-    keep,
+    self, Revision, RevisionMap, RevisionObject, RevisionSet, RevisionSpec, Revisions, Slot,
+    applied, keep,
 };
 use super::{DeployRecord, Finalized, KubeResources, Left, RecordWriteError};
 
@@ -48,11 +48,6 @@ pub(crate) struct RecordConfig {
     /// What the run's kept-orphans revision names besides the orphans the
     /// run leaves on the cluster.
     pub(crate) kept_orphans: KeptOrphans,
-    /// The orphans the plan found on a Kix cluster an older Kix deployed
-    /// last, which [`DeployRecord::begin`] names in a kept-orphans revision
-    /// before the run removes the notes that name them. A run that stops
-    /// then leaves a record that names them. `None` for any other run.
-    pub(crate) kept_at_begin: Option<Vec<RevisionObject>>,
     /// The revisions of the build the run deploys. [`DeployRecord::begin`]
     /// creates them and then names them in the record's `status.revisions`,
     /// and
@@ -126,9 +121,8 @@ impl ActivationRecord {
     }
 
     /// Create the Activation record `name` from the run's manifest. The
-    /// apply uses the same path as the plan's own node, so field manager,
-    /// identity hash, and annotation stamping all match and the later apply
-    /// is an unchanged no-op. Only the CLI provides a manifest. The operator
+    /// apply uses the same path as the plan's own node, so the field manager
+    /// and the manifest match and the later apply is an unchanged no-op. Only the CLI provides a manifest. The operator
     /// deploys a record that exists.
     async fn create_record(&self, name: &str, records: &Records) -> Result<(), RecordWriteError> {
         let Some(manifest) = self.config.manifest.as_ref() else {
@@ -195,28 +189,6 @@ impl ActivationRecord {
         Ok(())
     }
 
-    /// Create the kept-orphans revision of [`RecordConfig::kept_at_begin`]
-    /// and return its name, or `None` when there is none.
-    async fn create_kept_at_begin(&self) -> Result<Option<String>, RecordWriteError> {
-        let (Some(set), Some(objects)) = (&self.config.revisions, &self.config.kept_at_begin)
-        else {
-            return Ok(None);
-        };
-        if objects.is_empty() {
-            return Ok(None);
-        }
-        let revision = Revision::new(RevisionSpec::new(
-            set.cluster(),
-            Slot::KeptOrphans,
-            objects.clone(),
-        ));
-        Revisions::new(self.resources.client())
-            .create(&revision)
-            .await
-            .map_err(|e| RecordWriteError::KeptOrphans(e.to_string()))?;
-        Ok(Some(revision.name))
-    }
-
     /// Create the kept-orphans revision of a finished deploy and return its
     /// name, or `None` when the deploy left nothing or the run names no
     /// revisions.
@@ -280,10 +252,14 @@ impl ActivationRecord {
         Ok(Some(revision.name))
     }
 
-    /// Return each revision the record names that replaces the revision of
-    /// the same instance, or of the cluster level, that `current` names,
-    /// paired as `(old, new)`. Read both from `listed` when they are there,
-    /// so the pairs carry the hashes already written.
+    /// Return each revision the record names that `current` does not name,
+    /// paired as `(old, new)` with each built revision `current` names. Read
+    /// both from `listed` when they are there, so the pairs carry the
+    /// hashes already written. An object of a new revision takes the
+    /// applied hash an old one records for it with the same build hash
+    /// ([`applied::pending`]), whichever instance held it before: the
+    /// revisions a conversion gives an older Kix's record can group objects
+    /// otherwise than the build does.
     fn replaced<'a>(
         &'a self,
         current: Option<&Record>,
@@ -296,16 +272,17 @@ impl ActivationRecord {
             return Vec::new();
         };
         let find = |name: &str| listed.iter().find(|r| r.name == name);
-        let instances = set
+        let old_names: Vec<&String> = old_map
             .instances
-            .iter()
-            .map(|(key, new)| (old_map.instances.get(key), new));
-        let cluster_level = std::iter::once((Some(&old_map.cluster_level), &set.cluster_level));
-        instances
-            .chain(cluster_level)
-            .filter_map(|(old, new)| {
-                let old = find(old.filter(|o| **o != new.name)?)?;
-                Some((old, find(&new.name).unwrap_or(new)))
+            .values()
+            .chain(std::iter::once(&old_map.cluster_level))
+            .collect();
+        let olds: Vec<&Revision> = old_names.iter().filter_map(|n| find(n)).collect();
+        set.all()
+            .filter(|new| !old_names.contains(&&new.name))
+            .flat_map(|new| {
+                let new = find(&new.name).unwrap_or(new);
+                olds.iter().map(move |old| (*old, new))
             })
             .collect()
     }
@@ -348,6 +325,21 @@ impl DeployRecord for ActivationRecord {
             },
         };
 
+        // Give the records an older Kix wrote revisions before anything else
+        // is written, so every later write and read sees them. It runs
+        // before this run's own revisions are created, so it names any of
+        // them it shares before they would be cleared as unnamed.
+        if self.config.lock.is_some() {
+            let discovery = self.resources.discovery().await;
+            revision::convert::run(
+                self.resources.client(),
+                &records,
+                &discovery,
+                self.resources.cluster(),
+            )
+            .await
+            .map_err(RecordWriteError::Convert)?;
+        }
         let Some(name) = self.config.name.as_deref() else {
             return Ok(());
         };
@@ -356,11 +348,7 @@ impl DeployRecord for ActivationRecord {
         // anything is applied, and leaves the record as it was.
         self.create_record(name, &records).await?;
         self.create_revisions(&records).await?;
-        let kept = self.create_kept_at_begin().await?;
-        let map = self.config.revisions.as_ref().map(|set| RevisionMap {
-            kept_orphans: kept,
-            ..RevisionMap::of(set)
-        });
+        let map = self.config.revisions.as_ref().map(RevisionMap::of);
         let earlier = records
             .begin_deploy(name, self.resources.cluster(), 1, map.as_ref())
             .await
@@ -569,7 +557,6 @@ mod tests {
                 client,
                 discovery,
                 "a".into(),
-                None,
                 crate::cluster::ops::Force::None,
             )),
             RecordConfig {
@@ -578,7 +565,6 @@ mod tests {
                 receipt: None,
                 consumed_failed: Vec::new(),
                 kept_orphans: KeptOrphans::default(),
-                kept_at_begin: None,
                 revisions: None,
                 only,
                 mark_failed_on_abort: true,

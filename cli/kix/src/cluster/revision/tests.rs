@@ -919,33 +919,48 @@ mod applied_tests {
         }
     }
 
-    /// A record that names its revisions is read from them. While Kix still
-    /// writes the annotation, it stands in for an entry no revision holds,
-    /// as after the first deploy that wrote a map, which records hashes only
-    /// for what it applied. A record with no map, as an earlier Kix wrote,
-    /// and a `Superseded` record, whose revisions Kix deletes, are read from
-    /// the annotation.
+    /// Each record is read from its own source. A record that names its
+    /// revisions is read from them, and an object they record no hash for
+    /// has none: its annotation does not stand in. A record without a map,
+    /// as an earlier Kix wrote, is read from the annotation of each object
+    /// whose note names it. A `Superseded` record names nothing.
     #[test]
-    fn an_object_without_an_entry_reads_the_annotation() {
+    fn each_record_is_read_from_its_own_source() {
         let x = object("x", "x");
         let obj = live(&x, Some("from-annotation"));
+        let mut noted = obj.clone();
+        noted
+            .metadata
+            .annotations
+            .get_or_insert_default()
+            .insert(keys::ACTIVATIONS.into(), "rec-r".into());
         let empty = web(vec![x.clone()], &[]);
         let revisions = std::slice::from_ref(&empty);
         let with_map = AppliedHashes::of(&[record(PHASE_ACTIVE, Some(&empty))], revisions);
-        assert_eq!(with_map.applied(&obj), Some("from-annotation"));
-        assert_eq!(with_map.applied(&live(&x, None)), None);
+        assert_eq!(with_map.applied(&obj), None);
         let recorded = web(vec![x.clone()], &[(&x, "from-revision")]);
         let from_revision = AppliedHashes::of(
             &[record(PHASE_ACTIVE, Some(&recorded))],
             std::slice::from_ref(&recorded),
         );
         assert_eq!(from_revision.applied(&obj), Some("from-revision"));
-        let without = AppliedHashes::of(&[record(PHASE_ACTIVE, None)], revisions);
-        assert_eq!(without.applied(&obj), Some("from-annotation"));
-        let superseded = AppliedHashes::of(&[record(PHASE_SUPERSEDED, Some(&empty))], revisions);
-        assert_eq!(superseded.applied(&obj), Some("from-annotation"));
-        let other = live(&object("y", "x"), Some("from-annotation"));
-        assert_eq!(with_map.applied(&other), Some("from-annotation"));
+        let without_map = Record {
+            identity_hash: Some("rec-r".into()),
+            ..record(PHASE_ACTIVE, None)
+        };
+        let from_notes = AppliedHashes::of(std::slice::from_ref(&without_map), revisions);
+        assert_eq!(from_notes.applied(&noted), Some("from-annotation"));
+        assert_eq!(from_notes.applied(&obj), None);
+        let superseded = Record {
+            phase: PHASE_SUPERSEDED.into(),
+            ..without_map
+        };
+        let superseded = AppliedHashes::of(std::slice::from_ref(&superseded), revisions);
+        assert_eq!(superseded.applied(&noted), None);
+        assert_eq!(
+            AppliedHashes::from_annotations().applied(&obj),
+            Some("from-annotation")
+        );
     }
 
     /// A revision a record names that Kix cannot read may name any object,

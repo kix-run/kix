@@ -27,8 +27,9 @@ pub const HEAD_LOCK: &str = "head-lock";
 /// The operator keeps what a deploy did in revisions and writes no notes on
 /// the objects it applies ([`crate::cluster::revision`]). An older operator
 /// would write `kix.run/activations` and `kix.run/applied-hash` back after
-/// the CLI moved the objects to revisions, so a CLI with revisions refuses
-/// to take a Kix cluster's lock beside an operator without it.
+/// the CLI removed them, so a CLI with revisions refuses to change a Kix
+/// cluster whose records such an operator drives
+/// ([`operator_without_revisions`]).
 pub const REVISIONS: &str = "revisions";
 
 /// Every feature this release's operator handles.
@@ -62,6 +63,79 @@ impl OperatorFeatures {
                 .collect(),
         )
     }
+}
+
+/// A record of a Kix cluster that a Kix operator older than this Kix
+/// deploys or repairs ([`operator_without_revisions`]).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "[K9557] Kix cluster {cluster} is driven by a Kix operator older than Kix {version}\n  \
+     Nothing was changed on the cluster.\n\n  \
+     Why:\n    \
+     Deployment record `{record}` of Kix cluster {cluster} was submitted to the Kix operator, which deploys it and repairs its objects again and again. \
+     CustomResourceDefinition `{crd}` does not list `{feature}` in its `{key}` annotation, so the operator running here is older than Kix {version}. \
+     Such an operator writes the annotations `{activations}` and `{applied}` back onto every object it applies, after this version of Kix removed them.\n\n  \
+     Next:\n    \
+     Upgrade the Kix operator to Kix {version} or newer, wait for it to start, then run the command again.",
+    version = crate::version::running(),
+    crd = keys::ACTIVATIONS_CRD,
+    feature = REVISIONS,
+    key = keys::OPERATOR_FEATURES,
+    activations = keys::ACTIVATIONS,
+    applied = keys::APPLIED_HASH,
+)]
+pub struct OperatorWithoutRevisions {
+    pub cluster: String,
+    /// The operator-driven record.
+    pub record: String,
+}
+
+/// Why [`operator_without_revisions`] could not tell.
+#[derive(Debug, thiserror::Error)]
+pub enum FeaturesCheckError {
+    #[error(
+        "could not read CustomResourceDefinition `{crd}` to check the Kix operator's features: {0}. Check that this account has permission to read it, then run the command again",
+        crd = keys::ACTIVATIONS_CRD
+    )]
+    Crd(kube::Error),
+    #[error(transparent)]
+    Records(super::RecordsError),
+}
+
+/// Return the record of Kix cluster `cluster` that an operator without
+/// [`REVISIONS`] would deploy or repair: a record the operator drives
+/// (`spec.source` set) that is the current record, queued, or deploying,
+/// when the Activation CRD does not list [`REVISIONS`]. The operator acts
+/// only on such records, so a Kix cluster with none of them is safe beside
+/// any operator. A cluster without the CRD has no operator.
+pub async fn operator_without_revisions(
+    client: &Client,
+    records: &super::Records,
+    cluster: &str,
+) -> Result<Option<OperatorWithoutRevisions>, FeaturesCheckError> {
+    match read(client).await {
+        Ok(found) if found.handles(REVISIONS) => return Ok(None),
+        Ok(_) => {}
+        Err(kube::Error::Api(e)) if e.code == 404 => return Ok(None),
+        Err(e) => return Err(FeaturesCheckError::Crd(e)),
+    }
+    use crate::manifest::lifecycle::{PHASE_DEPLOYING, PHASE_QUEUED};
+    let own = records
+        .of_cluster(cluster)
+        .await
+        .map_err(FeaturesCheckError::Records)?;
+    let current = super::current_among(&own).map(|r| r.name.clone());
+    Ok(own
+        .iter()
+        .filter(|r| r.operator_driven)
+        .find(|r| {
+            Some(&r.name) == current.as_ref()
+                || matches!(r.phase.as_str(), "" | PHASE_QUEUED | PHASE_DEPLOYING)
+        })
+        .map(|r| OperatorWithoutRevisions {
+            cluster: cluster.to_string(),
+            record: r.name.clone(),
+        }))
 }
 
 fn crds(client: &Client) -> Api<DynamicObject> {

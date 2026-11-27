@@ -217,9 +217,7 @@ fn the_three_rules_decide_in_order_and_label_each_write() {
         },
     ];
     let tenancy = tenancy(&recs);
-    let ledger = Ledger::of(&tenancy, true)
-        .unwrap()
-        .expect("read from revisions");
+    let ledger = Ledger::of(&tenancy, true).unwrap();
     assert_eq!(ledger.taken_in(), ["failed"]);
 
     let mut deleting = live("deleting", "h-del");
@@ -314,7 +312,7 @@ fn a_failed_record_is_left_out_while_another_deploy_may_run() {
             kept: &[],
         },
     ];
-    let ledger = Ledger::of(&tenancy(&recs), false).unwrap().unwrap();
+    let ledger = Ledger::of(&tenancy(&recs), false).unwrap();
     assert!(ledger.taken_in().is_empty());
     let live = LiveObjects::of([live("by-failed", "h-f"), live("failed-left", "h-fl")], []);
     let new = [manifest("ConfigMap", "by-failed", "h-by")];
@@ -336,7 +334,7 @@ fn an_unchanged_record_is_left_alone() {
         applied: &[],
         kept: &[],
     }];
-    let ledger = Ledger::of(&tenancy(&recs), true).unwrap().unwrap();
+    let ledger = Ledger::of(&tenancy(&recs), true).unwrap();
     let record = json!({
         "apiVersion": keys::API_VERSION,
         "kind": RECORD_KIND,
@@ -348,14 +346,6 @@ fn an_unchanged_record_is_left_alone() {
     let made = new.iter().map(ResourceId::from_value).collect();
     let decided = decide(&new, &made, &live, &ledger, false, true).unwrap();
     assert!(matches!(decided.decisions[0].label, Label::Unchanged));
-}
-
-/// A Kix cluster that is not read from revisions has no ledger from
-/// revisions, so a plan reads it from its notes ([`Ledger::of_notes`]).
-#[test]
-fn a_cluster_not_read_from_revisions_has_no_ledger() {
-    let tenancy = Tenancy::fixture_of_state(CLUSTER, &BTreeMap::new(), &[], &[]);
-    assert!(Ledger::of(&tenancy, true).unwrap().is_none());
 }
 
 /// The choice of planner fails closed: a tenancy that could not list the
@@ -371,7 +361,7 @@ fn a_tenancy_that_could_not_read_the_revisions_has_no_ledger_and_no_fallback() {
         applied: &[],
         kept: &[],
     }];
-    assert!(Ledger::of(&tenancy(&recs), true).unwrap().is_some());
+    assert!(Ledger::of(&tenancy(&recs), true).is_ok());
     let heads: BTreeMap<String, HeadStatus> = [(
         CLUSTER.to_string(),
         serde_json::from_value(json!({ "current": "cur", "generation": 1 })).unwrap(),
@@ -396,7 +386,7 @@ fn current(objects: &[(&str, &str)], applied: &[(&str, &str)], kept: &[(&str, &s
         applied,
         kept,
     }];
-    Ledger::of(&tenancy(&recs), true).unwrap().unwrap()
+    Ledger::of(&tenancy(&recs), true).unwrap()
 }
 
 /// An object of the build whose kind the cluster does not serve yet is
@@ -483,7 +473,7 @@ fn deployment(replicas: i64, scaler: Option<&str>, editor: Option<&str>) -> Dyna
     }
     entries.insert(
         0,
-        json!({ "manager": LEGACY, "operation": "Apply", "fieldsV1": kix_fields }),
+        json!({ "manager": "kix/a", "operation": "Apply", "fieldsV1": kix_fields }),
     );
     serde_json::from_value(json!({
         "apiVersion": "apps/v1",
@@ -529,7 +519,7 @@ fn deployment_ledger(applied: &str) -> Ledger {
         applied: &[],
         kept: &[],
     }];
-    let mut ledger = Ledger::of(&tenancy(&recs), true).unwrap().unwrap();
+    let mut ledger = Ledger::of(&tenancy(&recs), true).unwrap();
     let mut revision = Revision::new(RevisionSpec::new(
         CLUSTER,
         Slot::Instance {
@@ -564,8 +554,7 @@ fn deployment_ledger(applied: &str) -> Ledger {
 #[test]
 fn an_autoscaled_ceded_field_is_not_drift() {
     let applied =
-        fieldsv1::applied_content_hash(&deployment(1, None, None), &FieldManager::unmigrated("a"))
-            .unwrap();
+        fieldsv1::applied_content_hash(&deployment(1, None, None), &FieldManager::of("a")).unwrap();
     let ledger = deployment_ledger(&applied);
     let live = LiveObjects::of([deployment(5, Some("hpa"), None)], []);
     let new = [deployment_manifest()];
@@ -584,8 +573,7 @@ fn an_autoscaled_ceded_field_is_not_drift() {
 #[test]
 fn a_forced_revert_leaves_ceded_fields_to_their_manager_and_the_operator_reports_it() {
     let applied =
-        fieldsv1::applied_content_hash(&deployment(1, None, None), &FieldManager::unmigrated("a"))
-            .unwrap();
+        fieldsv1::applied_content_hash(&deployment(1, None, None), &FieldManager::of("a")).unwrap();
     let ledger = deployment_ledger(&applied);
     let live = LiveObjects::of([deployment(5, Some("hpa"), Some("kubectl-edit"))], []);
     let new = [deployment_manifest()];
@@ -676,18 +664,14 @@ fn leftovers_are_taken_in_only_with_the_clusters_own_entry() {
     );
     let made = HashSet::new();
 
-    let degraded = Ledger::of(&tenancy(&recs(PHASE_DEGRADED)), true)
-        .unwrap()
-        .unwrap();
+    let degraded = Ledger::of(&tenancy(&recs(PHASE_DEGRADED)), true).unwrap();
     let decided = decide(&[], &made, &live, &degraded, false, true).unwrap();
     assert_eq!(
         decided.orphans,
         [id("failed-own"), id("kept-other"), id("legacy"), id("own")]
     );
 
-    let active = Ledger::of(&tenancy(&recs(PHASE_ACTIVE)), true)
-        .unwrap()
-        .unwrap();
+    let active = Ledger::of(&tenancy(&recs(PHASE_ACTIVE)), true).unwrap();
     let decided = decide(&[], &made, &live, &active, false, true).unwrap();
     assert_eq!(
         decided.orphans,
@@ -708,8 +692,7 @@ fn leftovers_are_taken_in_only_with_the_clusters_own_entry() {
 #[test]
 fn a_field_another_kix_cluster_holds_is_not_taken_by_force() {
     let applied =
-        fieldsv1::applied_content_hash(&deployment(1, None, None), &FieldManager::unmigrated("a"))
-            .unwrap();
+        fieldsv1::applied_content_hash(&deployment(1, None, None), &FieldManager::of("a")).unwrap();
     let ledger = deployment_ledger(&applied);
     let live = LiveObjects::of([deployment(1, None, Some("kix/b"))], []);
     let new = [deployment_manifest()];
@@ -751,18 +734,19 @@ fn legacy_record(name: &str, cluster: &str, phase: &str, kept_from: &[&str]) -> 
     .unwrap()
 }
 
-/// A Kix cluster an older Kix deployed last is read from the notes: the
-/// current record names what its note lists, the builds under
+/// A Kix cluster an older Kix deployed last is read after the conversion a
+/// run writes first ([`crate::cluster::revision::convert`]): the current
+/// record names what its note lists, the builds under
 /// `status.orphansKeptFrom` name kept orphans, and a `Failed` record left
 /// what its note lists, with the build hash the object carries. A
-/// `Superseded` record and another Kix cluster's record name nothing of
-/// it. Every object it holds needs the migration write, and drift is
-/// judged as the write leaves it. An object another Kix cluster an older
-/// Kix deploys also names keeps its entry under `kix`, so it is not
-/// renamed, and the plan applies it without force to add the cluster's
-/// own entry.
+/// `Superseded` record and another Kix cluster's record name nothing of it.
+/// Every object it holds needs the migration write, and drift is judged as
+/// the write leaves it. An object another Kix cluster an older Kix deploys
+/// also names keeps its entry under `kix`, so it is not renamed, and the
+/// plan applies it without force to add the cluster's own entry.
 #[test]
-fn a_cluster_not_read_from_revisions_is_read_from_its_notes() {
+fn a_cluster_an_older_kix_deployed_is_read_after_its_conversion() {
+    use crate::cluster::revision::convert;
     let records = [
         legacy_record("cur", CLUSTER, PHASE_ACTIVE, &["old-build"]),
         legacy_record("fail", CLUSTER, PHASE_FAILED, &[]),
@@ -779,9 +763,18 @@ fn a_cluster_not_read_from_revisions_is_read_from_its_notes() {
         noted("b-only", "h-b", "rec-b-cur"),
         noted("shared", "h-shared", "rec-b-cur,rec-cur"),
     ];
-    let mut ledger = Ledger::of_notes(&tenancy, &swept, true).unwrap();
+    let own = tenancy.own_records();
+    let conversion = convert::plan(
+        CLUSTER,
+        convert::current_of(tenancy.own_current(), own),
+        own,
+        &[],
+        &swept,
+    )
+    .unwrap();
+    let converted = tenancy.with_conversion(&conversion);
+    let mut ledger = Ledger::of(&converted, true).unwrap();
     ledger.deploying(Some("rec-new"));
-    assert!(ledger.is_from_notes());
     assert_eq!(ledger.taken_in(), ["fail"]);
     let new = [
         manifest("ConfigMap", "same", "h-same"),
@@ -804,10 +797,4 @@ fn a_cluster_not_read_from_revisions_is_read_from_its_notes() {
     assert_eq!(names(&decided.migrations), ["left", "same", "shared"]);
     assert_eq!(names(&decided.renamed), ["left", "same"]);
     assert_eq!(names(&decided.orphan_migrations), ["gone", "kept"]);
-    let carried: Vec<&str> = decided
-        .carried
-        .iter()
-        .map(|(o, _)| o.name.as_str())
-        .collect();
-    assert_eq!(carried, ["same"]);
 }

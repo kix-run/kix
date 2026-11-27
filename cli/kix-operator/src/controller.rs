@@ -350,7 +350,7 @@ fn operator_error(e: LivePlanError) -> OperatorError {
         }
         LivePlanError::Tenancy(_)
         | LivePlanError::ReadForbidden(_)
-        | LivePlanError::NotMigrated { .. } => OperatorError::ReconcileError(e.to_string()),
+        | LivePlanError::RevisionTooLarge(_) => OperatorError::ReconcileError(e.to_string()),
     }
 }
 

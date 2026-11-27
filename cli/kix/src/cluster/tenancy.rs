@@ -36,7 +36,8 @@ use super::revision::{self, Listed, Revision, RevisionError, RevisionObject, Rev
 use crate::eval::package_index::RecordPackageIndex;
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{
-    Lifecycle, PHASE_ACTIVE, PHASE_DEGRADED, PHASE_SUPERSEDED, lifecycle_of_live,
+    Lifecycle, PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_QUEUED, PHASE_SUPERSEDED,
+    lifecycle_of_live,
 };
 use crate::manifest::types::ResourceId;
 
@@ -186,7 +187,7 @@ struct Legacy {
 /// Which Kix clusters on a Kubernetes cluster deploy which objects, read for
 /// one Kix cluster. Build it with [`read`] after listing the objects it
 /// judges.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Tenancy {
     /// The Kix cluster this tenancy is read for.
     pub(crate) cluster: String,
@@ -212,6 +213,19 @@ pub struct Tenancy {
     /// The record this Kix cluster's head names as current.
     own_current: Option<String>,
     problems: Vec<Problem>,
+    /// What the read found, kept so a plan can read the same state with the
+    /// conversion a deploy would write ([`Tenancy::with_conversion`]).
+    raw: Raw,
+}
+
+/// The heads, records, and revisions one read found.
+#[derive(Debug, Clone, PartialEq)]
+struct Raw {
+    heads: BTreeMap<String, HeadStatus>,
+    records: Vec<DynamicObject>,
+    revisions: Result<Option<Listed>, String>,
+    /// The problem listing the heads gave, if any.
+    heads_problem: Option<Problem>,
 }
 
 /// The objects earlier deploys left on the cluster, as a record lists them.
@@ -242,6 +256,19 @@ pub(crate) fn older_kix_deployed_after(current: &Record, own: &[Record]) -> bool
     })
 }
 
+/// Return whether a reader needs `record`, of a Kix cluster whose head reads
+/// `head`: it is the current record, the record the lock holder deploys, or
+/// any record that is not `Superseded`.
+fn needed(head: Option<&HeadStatus>, record: &Record) -> bool {
+    let current = head.and_then(|s| s.current.as_deref());
+    let deploying = head
+        .and_then(|s| s.lock.as_ref())
+        .and_then(|l| l.activation.as_deref());
+    record.phase != PHASE_SUPERSEDED
+        || Some(record.name.as_str()) == current
+        || Some(record.name.as_str()) == deploying
+}
+
 fn is_pending(phase: &str) -> bool {
     !matches!(phase, PHASE_SUPERSEDED | PHASE_ACTIVE | PHASE_DEGRADED)
 }
@@ -270,6 +297,12 @@ impl Tenancy {
             own: Vec::new(),
             own_current: None,
             problems: Vec::new(),
+            raw: Raw {
+                heads: BTreeMap::new(),
+                records: Vec::new(),
+                revisions: Ok(None),
+                heads_problem: None,
+            },
         }
     }
 
@@ -316,6 +349,12 @@ impl Tenancy {
         revisions: Result<Option<&Listed>, String>,
     ) -> Self {
         let mut tenancy = Tenancy::empty(cluster);
+        tenancy.raw = Raw {
+            heads: heads.clone(),
+            records: records.to_vec(),
+            revisions: revisions.clone().map(|l| l.cloned()),
+            heads_problem: None,
+        };
         tenancy.own_current = heads.get(cluster).and_then(|h| h.current.clone());
         let parsed: Vec<(Option<&str>, Record)> = records
             .iter()
@@ -333,35 +372,76 @@ impl Tenancy {
                 tenancy.other_clusters.insert(owner.to_string());
             }
         }
-
-        let listed = match revisions {
-            Ok(listed) => listed,
-            Err(reason) => {
-                tenancy.problems.push(Problem::Revisions { reason });
-                None
+        for (name, status) in heads {
+            if tenancy.reads_revisions_by(name, status, &parsed) {
+                tenancy.revision_clusters.insert(name.clone());
             }
-        };
-        if let Some(listed) = listed {
-            for (name, status) in heads {
-                if tenancy.reads_revisions_by(name, status, &parsed) {
-                    tenancy.revision_clusters.insert(name.clone());
-                }
-            }
-            tenancy.claim(heads, &parsed, listed);
-        } else {
-            for (name, status) in heads {
-                tenancy.note_unreadable_current(name, status, &parsed);
-            }
+        }
+        tenancy.note_unreadable_maps(heads, &parsed);
+        match revisions {
+            Ok(Some(listed)) => tenancy.claim(heads, &parsed, listed),
+            Ok(None) => {}
+            Err(reason) => tenancy.problems.push(Problem::Revisions { reason }),
         }
         tenancy.read_legacy(records, &parsed);
         tenancy
     }
 
+    /// Return this tenancy as it reads once `conversion` is written: each
+    /// record it converts names its revisions, and the read holds them.
+    pub(crate) fn with_conversion(&self, conversion: &revision::Conversion) -> Tenancy {
+        if conversion.is_empty() {
+            return self.clone();
+        }
+        let mut records = self.raw.records.clone();
+        for record in &mut records {
+            let name = record.metadata.name.as_deref().unwrap_or_default();
+            if let Some(map) = conversion.map_of(name) {
+                record.data["status"]["revisions"] = map.to_value();
+            }
+        }
+        let mut listed = match &self.raw.revisions {
+            Ok(Some(listed)) => listed.clone(),
+            Ok(None) | Err(_) => Listed {
+                readable: Vec::new(),
+                unreadable: Vec::new(),
+            },
+        };
+        for revision in conversion.revisions() {
+            listed.readable.retain(|r| r.name != revision.name);
+            listed.readable.push(revision.clone());
+        }
+        let revisions = match &self.raw.revisions {
+            Err(reason) => Err(reason.clone()),
+            Ok(_) => Ok(Some(&listed)),
+        };
+        let mut tenancy = Tenancy::from_state(&self.cluster, &self.raw.heads, &records, revisions);
+        tenancy.problems.extend(self.raw.heads_problem.clone());
+        tenancy.raw.heads_problem = self.raw.heads_problem.clone();
+        tenancy
+    }
+
+    /// Return the revisions of this Kix cluster the read listed, readable
+    /// ones only, whatever record names them.
+    pub(crate) fn own_listed_revisions(&self) -> Vec<Revision> {
+        match &self.raw.revisions {
+            Ok(Some(listed)) => listed
+                .readable
+                .iter()
+                .filter(|r| r.spec.cluster == self.cluster)
+                .cloned()
+                .collect(),
+            Ok(None) | Err(_) => Vec::new(),
+        }
+    }
+
     /// Return whether Kix cluster `name` reads from revisions: its head names
-    /// a current record whose map is readable. Note a current record whose
-    /// map cannot be read.
+    /// a current record whose map is readable, that is not `Superseded`,
+    /// and that no record an older Kix wrote follows. This says only which
+    /// record a reader shows as current. What each record names is read
+    /// from its own source.
     fn reads_revisions_by(
-        &mut self,
+        &self,
         name: &str,
         status: &HeadStatus,
         records: &[(Option<&str>, Record)],
@@ -374,38 +454,30 @@ impl Tenancy {
             .filter(|(owner, _)| *owner == Some(name))
             .map(|(_, r)| r.clone())
             .collect();
-        if current.phase == PHASE_SUPERSEDED || older_kix_deployed_after(current, &own) {
-            return false;
-        }
-        match &current.revisions {
-            Some(Ok(_)) => true,
-            Some(Err(source)) => {
-                self.problems.push(Problem::UnreadableMap {
-                    cluster: name.to_string(),
-                    record: current.name.clone(),
-                    source: source.clone(),
-                });
-                false
-            }
-            None => false,
-        }
+        current.phase != PHASE_SUPERSEDED
+            && !older_kix_deployed_after(current, &own)
+            && matches!(current.revisions, Some(Ok(_)))
     }
 
-    fn note_unreadable_current(
+    /// Note each record whose map this Kix cannot read and that a reader
+    /// needs: the current record of its Kix cluster, the record its lock
+    /// holder deploys, and every record that is not `Superseded`.
+    fn note_unreadable_maps(
         &mut self,
-        name: &str,
-        status: &HeadStatus,
+        heads: &BTreeMap<String, HeadStatus>,
         records: &[(Option<&str>, Record)],
     ) {
-        if let Some(Record {
-            name: record,
-            revisions: Some(Err(source)),
-            ..
-        }) = self.current_of(name, status, records)
-        {
+        for (owner, record) in records {
+            let Some(Err(source)) = &record.revisions else {
+                continue;
+            };
+            let cluster = owner.unwrap_or("?");
+            if !needed(heads.get(cluster), record) {
+                continue;
+            }
             self.problems.push(Problem::UnreadableMap {
-                cluster: name.to_string(),
-                record: record.clone(),
+                cluster: cluster.to_string(),
+                record: record.name.clone(),
                 source: source.clone(),
             });
         }
@@ -424,12 +496,10 @@ impl Tenancy {
             .map(|(_, r)| r)
     }
 
-    /// Index the objects that the needed records of each Kix cluster read
-    /// from revisions name: the current record, the record the lock holder
-    /// deploys, and each record that is not `Superseded`. The records of the
-    /// Kix cluster this tenancy is read for are indexed too when it is read
-    /// from records, so the first deploy of it by this Kix sees what a
-    /// deploy by this Kix that did not finish left ([`Tenancy::revision`]).
+    /// Index the objects that the revisions of each needed record with a
+    /// readable map name, of every Kix cluster: the current record, the
+    /// record the lock holder deploys, and each record that is not
+    /// `Superseded`.
     fn claim(
         &mut self,
         heads: &BTreeMap<String, HeadStatus>,
@@ -444,31 +514,9 @@ impl Tenancy {
         let unreadable: HashMap<&str, &revision::ReadError> =
             listed.unreadable.iter().map(|e| (e.name(), e)).collect();
         for (owner, record) in records {
-            let Some(cluster) =
-                owner.filter(|c| self.revision_clusters.contains(*c) || self.is_own(c))
-            else {
-                continue;
-            };
-            let status = heads.get(cluster);
-            let current = status.and_then(|s| s.current.as_deref());
-            let deploying = status
-                .and_then(|s| s.lock.as_ref())
-                .and_then(|l| l.activation.as_deref());
-            let needed = record.phase != PHASE_SUPERSEDED
-                || Some(record.name.as_str()) == current
-                || Some(record.name.as_str()) == deploying;
+            let cluster = owner.unwrap_or("?");
             let map = match &record.revisions {
-                Some(Ok(map)) if needed => map,
-                Some(Err(source)) if needed => {
-                    if Some(record.name.as_str()) != current {
-                        self.problems.push(Problem::UnreadableMap {
-                            cluster: cluster.to_string(),
-                            record: record.name.clone(),
-                            source: source.clone(),
-                        });
-                    }
-                    continue;
-                }
+                Some(Ok(map)) if needed(heads.get(cluster), record) => map,
                 _ => continue,
             };
             let named = map
@@ -524,8 +572,10 @@ impl Tenancy {
         }
     }
 
-    /// Read the Kix clusters that are not read from revisions from their
-    /// records, and note which identity hashes are settled.
+    /// Read each record without a map from what an older Kix wrote: the
+    /// objects whose `kix.run/activations` names it, and the builds it lists
+    /// under `status.orphansKeptFrom`. Note which identity hashes are
+    /// settled.
     fn read_legacy(&mut self, objects: &[DynamicObject], records: &[(Option<&str>, Record)]) {
         let cluster = self.cluster.clone();
         for ((owner, parsed), record) in records.iter().zip(objects) {
@@ -541,17 +591,22 @@ impl Tenancy {
                 .orphans_kept_from
                 .iter()
                 .map(|source| source.identity_hash.as_str());
-            if owner.is_some_and(|o| self.revision_clusters.contains(o)) {
-                // A record that is Superseded, or whose map this read
-                // indexed, cannot come to name more objects than it does.
-                // One that may still gain a map is left unsettled.
+            if parsed.revisions.is_some() {
+                // A record with a map is read from its revisions. One that
+                // is Superseded, or whose map this read indexed, cannot come
+                // to name more objects than it does. One whose map could not
+                // be read is left unsettled.
                 if parsed.phase == PHASE_SUPERSEDED {
                     self.settled.insert(hash.to_string());
                 }
                 self.settled.extend(kept.map(str::to_string));
                 continue;
             }
-            self.settled.insert(hash.to_string());
+            // A record still queued or deploying may gain a map when this
+            // Kix deploys it, and name objects that carry no note.
+            if !matches!(parsed.phase.as_str(), "" | PHASE_QUEUED | PHASE_DEPLOYING) {
+                self.settled.insert(hash.to_string());
+            }
             self.settled.extend(kept.clone().map(str::to_string));
             let legacy = &mut self.legacy;
             if !cluster.is_empty() && *owner == Some(cluster.as_str()) {
@@ -628,14 +683,6 @@ impl Tenancy {
         self.source_of(&self.cluster)
     }
 
-    /// Return the identity hashes of the records of every other Kix cluster
-    /// that is read from records, in any phase, and of the builds they list
-    /// under `status.orphansKeptFrom`. An older Kix deploys those Kix
-    /// clusters ([`super::migration_write::Rule::others`]).
-    pub(crate) fn unmigrated_others(&self) -> HashSet<String> {
-        self.legacy.others.keys().cloned().collect()
-    }
-
     /// Return every record of this Kix cluster, in any phase.
     pub(crate) fn own_records(&self) -> &[Record] {
         &self.own
@@ -708,16 +755,23 @@ impl Tenancy {
                 .all(|p| p.kept() && p.cluster() == Some(own))
     }
 
-    /// Return whether `obj` has an `Apply` entry under this Kix cluster's
-    /// field manager and no revision of a needed record of this cluster
-    /// other than the kept-orphans revision names it: an object this
-    /// cluster applied that only a kept-orphans list can name.
+    /// Return whether this Kix cluster applied `obj` and no revision of a
+    /// needed record of this cluster other than the kept-orphans revision
+    /// names it: an object that only a kept-orphans list can name. The
+    /// cluster applied it when it has an `Apply` entry under the cluster's
+    /// manager, or when its `kix.run/activations` names a record of this
+    /// cluster an older Kix wrote and its fields are still under `kix`.
     pub fn unlisted_own(&self, obj: &DynamicObject) -> bool {
-        let applied = obj.metadata.managed_fields.iter().flatten().any(|e| {
-            e.manager.as_deref() == Some(self.manager.name())
-                && e.operation.as_deref() == Some("Apply")
-                && e.subresource.is_none()
-        });
+        let entries = obj.metadata.managed_fields.iter().flatten();
+        let mut own = false;
+        let mut legacy = false;
+        for e in entries {
+            if e.operation.as_deref() == Some("Apply") && e.subresource.is_none() {
+                own |= e.manager.as_deref() == Some(self.manager.name());
+                legacy |= e.manager.as_deref() == Some(field_manager::LEGACY);
+            }
+        }
+        let applied = own || (legacy && stamps(obj).any(|h| self.legacy.own.contains(h)));
         applied
             && !self
                 .claims_of(obj)
@@ -822,11 +876,11 @@ impl Tenancy {
     /// Return whether `kix gc` may delete `obj`, one of this cluster's
     /// objects that the build it compares with lacks. gc may delete only what
     /// the kept-orphans revision names and no other revision of a needed
-    /// record of this cluster names. Return `None` when this cluster is read
-    /// from records, or no revision of it names `obj`, and gc decides as
-    /// earlier releases did.
+    /// record of this cluster names. Return `None` when a record of this
+    /// cluster without a map names `obj` through its note, or no revision of
+    /// this cluster names it, and gc decides as earlier releases did.
     pub fn gc_may_delete(&self, obj: &DynamicObject) -> Option<bool> {
-        if self.own_source() != Source::Revisions {
+        if stamps(obj).any(|h| self.legacy.own.contains(h)) {
             return None;
         }
         let own: Vec<&Claim> = self
@@ -838,18 +892,17 @@ impl Tenancy {
     }
 
     /// Return the identity hashes of this cluster's records that deploy
-    /// `obj`: those `kix.run/activations` names, and its own build hash, for
-    /// a cluster read from records, and the records whose revisions other
-    /// than the kept orphans name it, for a cluster read from revisions.
+    /// `obj`: the records with a map whose revisions other than the kept
+    /// orphans name it, and the records without one whose hash
+    /// `kix.run/activations` lists. The object's own build hash is listed
+    /// too, so a record names itself.
     pub fn records_naming(&self, obj: &DynamicObject) -> Vec<String> {
-        if self.own_source() != Source::Revisions {
-            return named_hashes(obj).map(str::to_string).collect();
-        }
         let mut hashes: Vec<String> = self
             .claims_of(obj)
             .iter()
             .filter(|c| !c.kept && self.is_own(&c.cluster))
             .filter_map(|c| c.record_hash.clone())
+            .chain(named_hashes(obj).map(str::to_string))
             .collect();
         hashes.sort();
         hashes.dedup();
@@ -857,14 +910,10 @@ impl Tenancy {
     }
 
     /// Return the identity hashes of this cluster's records whose deploys
-    /// applied `obj`. For a cluster read from records, those are the hashes
-    /// `kix.run/activations` names. For one read from revisions, those are
-    /// the records whose revisions name the object and hold an applied hash
-    /// for the build hash they give it.
+    /// applied `obj`: the records with a map whose revisions name the object
+    /// and hold an applied hash for the build hash they give it, and the
+    /// records without one whose hash `kix.run/activations` lists.
     pub fn applied_by(&self, obj: &DynamicObject) -> HashSet<String> {
-        if self.own_source() != Source::Revisions {
-            return stamps(obj).map(str::to_string).collect();
-        }
         self.claims_of(obj)
             .iter()
             .filter(|c| !c.kept && self.is_own(&c.cluster))
@@ -875,6 +924,54 @@ impl Tenancy {
                     .is_some_and(|r| r.applied.contains_key(&c.hash))
             })
             .filter_map(|c| c.record_hash.clone())
+            .chain(
+                stamps(obj)
+                    .filter(|h| self.legacy.own.contains(*h))
+                    .map(str::to_string),
+            )
+            .collect()
+    }
+
+    /// Return whether a record of this Kix cluster names `obj`: a revision
+    /// of a needed record, its kept-orphans revision included, or the note
+    /// of a record without a map.
+    pub fn named_by_own(&self, obj: &DynamicObject) -> bool {
+        self.claims_of(obj).iter().any(|c| self.is_own(&c.cluster))
+            || stamps(obj).any(|h| self.legacy.own.contains(h))
+    }
+
+    /// Return the other Kix clusters whose records deploy `obj`, sorted: a
+    /// revision other than the kept orphans of a needed record names it, or
+    /// its `kix.run/activations` lists a record without a map that is not
+    /// `Superseded`.
+    pub fn named_by_others(&self, obj: &DynamicObject) -> Vec<String> {
+        let legacy = stamps(obj)
+            .filter(|h| self.legacy.others_current.contains(*h))
+            .filter_map(|h| self.legacy.others.get(h).cloned());
+        let claimed = self
+            .claims_of(obj)
+            .iter()
+            .filter(|c| !c.kept && !self.is_own(&c.cluster))
+            .map(|c| c.cluster.clone());
+        let mut clusters: Vec<String> = legacy.chain(claimed).collect();
+        clusters.sort();
+        clusters.dedup();
+        clusters
+    }
+
+    /// Return whether `obj`'s `kix.run/activations` lists a record of
+    /// another Kix cluster that has no map. An older Kix reads such an
+    /// object's note to tell which Kix clusters still deploy it.
+    pub fn noted_by_older_kix(&self, obj: &DynamicObject) -> bool {
+        stamps(obj).any(|h| self.legacy.others.contains_key(h))
+    }
+
+    /// Return the hashes `obj`'s `kix.run/activations` lists that name a
+    /// record of another Kix cluster without a map, or a build such a
+    /// record lists under `status.orphansKeptFrom`.
+    pub(crate) fn older_kix_hashes<'a>(&self, obj: &'a DynamicObject) -> Vec<&'a str> {
+        stamps(obj)
+            .filter(|h| self.legacy.others.contains_key(*h))
             .collect()
     }
 
@@ -886,12 +983,11 @@ impl Tenancy {
     }
 
     /// Return the objects earlier deploys left on the cluster, as `active`
-    /// lists them: from its kept-orphans revision when this cluster is read
-    /// from revisions and `active` has a readable map, else from its
-    /// `status.orphansKeptFrom`.
+    /// lists them: from its kept-orphans revision when it has a readable
+    /// map, else from its `status.orphansKeptFrom`.
     pub fn kept<'a>(&'a self, active: &'a Record) -> Kept<'a> {
         match &active.revisions {
-            Some(Ok(map)) if self.own_source() == Source::Revisions => Kept::Objects(
+            Some(Ok(map)) => Kept::Objects(
                 map.kept_orphans
                     .as_deref()
                     .and_then(|name| self.claims.revisions.get(name))
@@ -915,12 +1011,11 @@ impl Tenancy {
     }
 
     /// Return the package index of `record`'s build: from its revisions
-    /// when its Kix cluster is read from revisions and it has a readable
-    /// map, else its stored `status.packageIndex`.
+    /// when it has a readable map this read indexed, else its stored
+    /// `status.packageIndex`.
     pub fn index_of(&self, record: &Record) -> Option<RecordPackageIndex> {
-        let cluster = self.record_cluster.get(&record.name);
         match &record.revisions {
-            Some(Ok(map)) if cluster.is_some_and(|c| self.revision_clusters.contains(c)) => {
+            Some(Ok(map)) if map.names().all(|n| self.claims.revisions.contains_key(n)) => {
                 Some(map.package_index(|name| self.claims.revisions.get(name)))
             }
             _ => record.package_index.clone(),
@@ -977,11 +1072,13 @@ pub(crate) fn settles(tenancy: &Tenancy, obj: &DynamicObject) -> bool {
 /// Callers must read [`Tenancy`] after listing the objects it will attribute
 /// (as [`super::inventory::sweep_managed`] and [`super::prune_guard::PruneGuard`]
 /// do). A deploy creates its record, and the revisions its map names, before
-/// any object names the record's hash, so every object read earlier belongs
-/// either to a record and revisions in this read or to ones deleted since.
-/// Reading [`Tenancy`] before the objects would miss a concurrent first
-/// deploy of another Kix cluster and misattribute its objects as
-/// unrecorded.
+/// it writes any object, so every object read earlier belongs either to a
+/// record and revisions in this read or to ones deleted since. Reading
+/// [`Tenancy`] before the objects would miss a concurrent first deploy of
+/// another Kix cluster and misattribute its objects as unrecorded. A record
+/// is read from its revisions whenever it has a map, whatever the head of
+/// its Kix cluster names, so a deploy that finishes between the reads of
+/// the heads and the records does not hide its revisions.
 pub async fn read(records: &OpenedRecords, cluster: &str) -> Result<Tenancy, RecordsError> {
     let Some(records) = records.records() else {
         return Ok(Tenancy::empty(cluster));
@@ -1020,7 +1117,8 @@ pub async fn read(records: &OpenedRecords, cluster: &str) -> Result<Tenancy, Rec
         Ok(listed) => Tenancy::from_state(cluster, &heads, &all, Ok(listed.as_ref())),
         Err(reason) => Tenancy::from_state(cluster, &heads, &all, Err(reason.clone())),
     };
-    tenancy.problems.extend(heads_problem);
+    tenancy.problems.extend(heads_problem.clone());
+    tenancy.raw.heads_problem = heads_problem;
     Ok(tenancy)
 }
 

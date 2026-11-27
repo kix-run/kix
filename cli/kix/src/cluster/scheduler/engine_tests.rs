@@ -1815,7 +1815,7 @@ async fn hung_migration_write_of_unchanged_resource_is_bounded() {
     let failures = rec.best_effort_failures();
     assert_eq!(failures.len(), 1, "{failures:?}");
     assert!(
-        failures[0].starts_with("migration write to unchanged resources: 1 of 1"),
+        failures[0].starts_with("metadata of unchanged resources: 1 of 1"),
         "{failures:?}"
     );
 }

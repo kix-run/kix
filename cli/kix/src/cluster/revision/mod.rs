@@ -23,6 +23,7 @@
 //! own CRDs ([`crate::cluster::own_crds`]).
 
 pub mod applied;
+pub mod convert;
 pub(crate) mod crd;
 pub mod keep;
 mod map;
@@ -38,6 +39,7 @@ use kube::discovery::ApiResource;
 use crate::manifest::keys;
 
 pub use applied::AppliedHashes;
+pub use convert::Conversion;
 pub use map::{RevisionMap, UnreadableMap};
 pub use spec::{
     MAX_BYTES, ReadError, Revision, RevisionObject, RevisionSet, RevisionSpec, Slot, TooLarge,
