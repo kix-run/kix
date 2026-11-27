@@ -1006,7 +1006,7 @@ fn two_kix_clusters_share_one_kind_cluster() {
     let (ok, out) = flake.kix(&ctx, &["deploy", "sweep-a", "--prune", "--yes"]);
     assert!(ok, "{out}");
     assert!(
-        out.contains("kept ClusterRole/sweep-test-reader")
+        out.contains("kept ClusterRole.rbac.authorization.k8s.io/sweep-test-reader")
             && out.contains("still deployed by Kix cluster sweep-b"),
         "{out}"
     );
