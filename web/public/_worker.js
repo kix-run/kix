@@ -28,8 +28,18 @@
 // SHA256SUMS that kix.run serves under /releases/, so the storage host
 // carries no trust. Moving the archives changes DOWNLOAD_ORIGIN here and the
 // fetch in .github/workflows/pages.yml, and no shipped Kix.
+//
+// It also forwards `/p/script.js` and `/p/event`, Plausible's script and the
+// page views it sends, to ANALYTICS_ORIGIN. The pages call only kix.run, so
+// ad blockers that refuse another site's tracking script leave them alone.
+// ANALYTICS_ORIGIN must be in the kix.run zone: Cloudflare passes on the
+// visitor's address that a Worker sets in `x-real-ip` only for a request to
+// its own zone, and Plausible tells visitors apart by that address.
 
 const DOCS_PREFIX = '/docs/';
+
+const ANALYTICS_ORIGIN = 'https://p.kix.run';
+const ANALYTICS_PATHS = new Set(['/p/script.js', '/p/event']);
 
 const DOWNLOAD_ORIGIN = 'https://github.com/kix-run/kix-releases/releases/download/';
 // The version is a release such as 0.8.4, or a prerelease such as 0.9.0-rc.1.
@@ -104,6 +114,21 @@ function downloadRedirect(url) {
   });
 }
 
+/** Forward Plausible's script or a page view to the analytics host, with the visitor's address. */
+async function forwardAnalytics(request, url) {
+  const headers = new Headers(request.headers);
+  headers.delete('host');
+  headers.delete('cookie');
+  headers.set('x-real-ip', request.headers.get('cf-connecting-ip') || '');
+  const readOnly = request.method === 'GET' || request.method === 'HEAD';
+  return fetch(new URL(url.pathname, ANALYTICS_ORIGIN), {
+    method: request.method,
+    headers,
+    body: readOnly ? undefined : await request.arrayBuffer(),
+    redirect: 'manual',
+  });
+}
+
 /** A route with a Markdown representation worth serving, not the `.md` asset itself. */
 function isNegotiablePage(url) {
   if (url.pathname === '/') {
@@ -119,6 +144,10 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const readOnly = request.method === 'GET' || request.method === 'HEAD';
+
+    if (ANALYTICS_PATHS.has(url.pathname)) {
+      return forwardAnalytics(request, url);
+    }
 
     const download = readOnly ? downloadRedirect(url) : null;
     if (download) {

@@ -50,6 +50,14 @@ const url = new URL(Astro.url.pathname, Astro.site);
         document.documentElement.dataset.theme = theme;
       })();
     </script>
+    {/*
+      Plausible: cookieless page-view stats. Both paths are on this site, and
+      the site Worker forwards them (public/_worker.js). The docs' Head.astro
+      sends the same script.
+    */}
+    {!import.meta.env.DEV && (
+      <script is:inline defer data-domain="kix.run" data-api="/p/event" src="/p/script.js" />
+    )}
     <slot name="head" />
   </head>
   <body>
