@@ -32,9 +32,10 @@
 // It also forwards `/p/script.js` and `/p/event`, Plausible's script and the
 // page views it sends, to ANALYTICS_ORIGIN. The pages call only kix.run, so
 // ad blockers that refuse another site's tracking script leave them alone.
-// ANALYTICS_ORIGIN must be in the kix.run zone: Cloudflare passes on the
-// visitor's address that a Worker sets in `x-real-ip` only for a request to
-// its own zone, and Plausible tells visitors apart by that address.
+// Cloudflare reports this Worker's requests there as its own fixed address,
+// not the visitor's, so the Worker sends the visitor's address in
+// `x-visitor-ip`. Plausible tells visitors apart by it, and the origin trusts
+// that header only on requests from Cloudflare's Worker address.
 
 const DOCS_PREFIX = '/docs/';
 
@@ -119,7 +120,7 @@ async function forwardAnalytics(request, url) {
   const headers = new Headers(request.headers);
   headers.delete('host');
   headers.delete('cookie');
-  headers.set('x-real-ip', request.headers.get('cf-connecting-ip') || '');
+  headers.set('x-visitor-ip', request.headers.get('cf-connecting-ip') || '');
   const readOnly = request.method === 'GET' || request.method === 'HEAD';
   return fetch(new URL(url.pathname, ANALYTICS_ORIGIN), {
     method: request.method,

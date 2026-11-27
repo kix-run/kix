@@ -145,7 +145,7 @@ test('forwards a page view to the analytics host with the visitor address', asyn
   const { request, body } = sent[0];
   assert.equal(request.url, 'https://p.kix.run/p/event');
   assert.equal(request.method, 'POST');
-  assert.equal(request.headers.get('x-real-ip'), '203.0.113.7');
+  assert.equal(request.headers.get('x-visitor-ip'), '203.0.113.7');
   assert.equal(request.headers.get('user-agent'), 'Visitor/1.0');
   assert.equal(request.headers.get('content-type'), 'text/plain');
   assert.equal(request.headers.get('cookie'), null);
