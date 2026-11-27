@@ -40,6 +40,7 @@ kix plan --prune
 kix plan --skip-orphan-check
 kix plan --force-conflicts
 kix plan --accept-migrations
+kix plan --operator-removed
 kix plan --bundle <value>
 kix plan --deployed-bundle <value>
 kix plan --only <value>
@@ -70,6 +71,7 @@ kix deploy --prune
 kix deploy --skip-orphan-check
 kix deploy --force-conflicts
 kix deploy --accept-migrations
+kix deploy --operator-removed
 kix deploy --bundle <value>
 kix deploy --deployed-bundle <value>
 kix deploy --only <value>

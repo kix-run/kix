@@ -42,7 +42,7 @@ pub struct DeployArgs {
 
     /// Delegate deployment to the Kix operator instead of applying directly
     /// (requires the build in the cluster's Nix store; incompatible with `--bundle`)
-    #[arg(long, conflicts_with = "bundle")]
+    #[arg(long, conflicts_with_all = ["bundle", "operator_removed"])]
     pub operator: bool,
 
     /// Add a `KEY=VALUE` annotation to the Activation record (repeatable).

@@ -138,6 +138,18 @@ pub struct PlanArgs {
     #[arg(long)]
     pub accept_migrations: bool,
 
+    /// State that the Kix operator was uninstalled, so no operator runs for
+    /// this Kix cluster. Kix cannot tell an uninstalled operator from one
+    /// older than this Kix, and refuses to change a Kix cluster whose records
+    /// were handed to such an operator. With this flag, `kix deploy` first
+    /// takes the cluster back: a queued record becomes Superseded, one the
+    /// operator was deploying becomes Failed, and no record names a build for
+    /// the operator any more. Later commands need no flag. Do not use it
+    /// while an older operator still runs. `kix plan` records the flag and
+    /// changes nothing.
+    #[arg(long)]
+    pub operator_removed: bool,
+
     /// Read the target build from a `.kixbundle` file instead of evaluating,
     /// verifying every store path against its content first
     #[arg(long, value_name = "FILE", conflicts_with = "offline")]

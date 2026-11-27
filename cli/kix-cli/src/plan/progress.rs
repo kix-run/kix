@@ -130,6 +130,30 @@ pub fn print(event: PlanEvent<'_>) {
             );
         }
         PlanEvent::LockHeld(lock) => crate::commands::lock::say_watching(lock),
+        PlanEvent::TookBack { cluster, taken } => {
+            crate::say!(
+                "  {} Took Kix cluster {cluster} back from the Kix operator, because `--operator-removed` says it was uninstalled.",
+                output::yellow("!"),
+            );
+            if let Some(current) = &taken.current {
+                crate::say!(
+                    "    The current deployment record {} no longer names a build for the operator.",
+                    output::bold(current),
+                );
+            }
+            if !taken.superseded.is_empty() {
+                crate::say!(
+                    "    Marked queued deployment record(s) {} Superseded. The operator never started them.",
+                    taken.superseded.join(", "),
+                );
+            }
+            if !taken.failed.is_empty() {
+                crate::say!(
+                    "    Marked deployment record(s) {} Failed. The operator stopped while it deployed them.",
+                    taken.failed.join(", "),
+                );
+            }
+        }
         PlanEvent::FailedFolded(record) => match record.partly_deployed() {
             Some(partial) => crate::say!(
                 "  {} including resources from partial deployment {} ({}...), which applied {}",

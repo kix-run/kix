@@ -84,6 +84,12 @@ pub enum PlanEvent<'a> {
         connection: &'a crate::cluster::binding::Connection,
         uid: Option<&'a str>,
     },
+    /// `--operator-removed` took Kix cluster `cluster` back from the Kix
+    /// operator before the plan read it.
+    TookBack {
+        cluster: &'a str,
+        taken: &'a crate::cluster::activation::features::TakenBack,
+    },
     /// `--offline` found no cached build, so this is a first deploy.
     NoCachedBuild,
     /// `--offline` is loading the cached build.
@@ -253,6 +259,13 @@ pub enum PlanError {
     OperatorWithoutRevisions(Box<crate::cluster::activation::features::OperatorWithoutRevisions>),
     #[error(transparent)]
     OperatorFeatures(Box<crate::cluster::activation::features::FeaturesCheckError>),
+    #[error(
+        "could not take Kix cluster '{cluster}' back from the Kix operator: {source}. Nothing else was changed on the cluster. Next: run the command again."
+    )]
+    TakeBack {
+        cluster: String,
+        source: Box<crate::cluster::activation::features::TakeBackError>,
+    },
     #[error(
         "cannot use `--only` on Kix cluster '{cluster}' because its active deployment ({record}) \
          is managed by the Kix operator. Nothing was planned or applied to the cluster. The \

@@ -524,7 +524,8 @@ mod tests {
             let text = err.to_string();
             assert!(text.starts_with("[K9557]"), "{text}");
             assert!(text.contains("a-1"), "{text}");
-            assert!(text.contains("Upgrade the Kix operator"), "{text}");
+            assert!(text.contains("upgrade it to Kix"), "{text}");
+            assert!(text.contains("kix deploy a --operator-removed"), "{text}");
             assert!(refuse_older_operator(&old.client(), "b").await.is_ok());
             let before = old.requests().len();
             assert!(
