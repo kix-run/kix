@@ -364,7 +364,13 @@ A timeout ends the CLI only. The operator keeps working on the record.
   the annotation does not list `revisions`. An operator from Kix 0.9 or
   earlier writes no annotation and is refused too. Other Kix clusters on the
   same Kubernetes cluster are not affected.
-  {/* GAP: the second way out of this refusal, `kix deploy <cluster> --operator-removed`, for a cluster whose operator was removed. Describe it here once it is built. */}
+- Kix cannot tell an older operator from one that was uninstalled, so
+  uninstalling an older operator leaves its Kix clusters refused with
+  `[K9557]`. Run `kix deploy <cluster> --operator-removed` once for each: it
+  takes the cluster back from the operator before it plans, and later
+  commands need no flag (see
+  [Take a cluster back from a removed operator](/docs/reference/cli/deploy/#take-a-cluster-back-from-a-removed-operator)).
+  Do not use it while the operator still runs.
 - The operator's Kubernetes account can `get`, `create`, and `update`
   CustomResourceDefinitions, to install and update Kix's own CRDs, and
   `patch` to write its features annotation. It can `get`, `list`, `create`,

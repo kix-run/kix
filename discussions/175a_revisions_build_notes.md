@@ -128,14 +128,16 @@ review:
 - **The operator refusal is per Kix cluster:** every command that changes a
   Kix cluster refuses (K9557) while a current, queued, or deploying record of
   it was submitted to an operator that does not list `revisions`. An
-  operator that publishes nothing is refused too.
+  operator that publishes nothing is refused too. `kix deploy
+  --operator-removed` takes a cluster back from an uninstalled operator
+  before it plans: queued records become `Superseded`, a deploying one
+  `Failed`, and those and the current record lose `spec.source`.
 - **`kix gc --full-scan` rebuilds a missing kept-orphans list** from live
   objects this cluster applied that no other revision names.
 
 Open: the cluster-level and kept-orphans revisions have no bound of their
-own (about 2,000 namespaces fill the first). They need a way to split. No
-command yet takes a cluster back from a removed operator, and the conversion
-does not yet refuse a listing it cannot complete. All three are in
+own (about 2,000 namespaces fill the first). They need a way to split. The
+conversion does not yet refuse a listing it cannot complete. Both are in
 `ROADMAP.md`.
 
 ## 4. Build order

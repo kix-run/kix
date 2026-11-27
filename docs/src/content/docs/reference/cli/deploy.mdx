@@ -19,7 +19,7 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 kix deploy <CLUSTER> [-y] [--dry-run] [--plan <FILE>] [--prune | --skip-orphan-check]
            [--timeout <DURATION>] [--on-error stop|continue]
            [--reconcile] [--force-conflicts] [--accept-migrations]
-           [--only <NAMESPACE/INSTANCE>]... [--offline] [--operator]
+           [--only <NAMESPACE/INSTANCE>]... [--offline] [--operator | --operator-removed]
            [--log-format pretty|line|json|tui] [--group-by package|namespace]
            [--flake <FLAKE>] [--context <CONTEXT>]
 ```
@@ -40,6 +40,7 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--plan <FILE>] [--prune | --skip-orphan-c
 | `--only <NAMESPACE/INSTANCE>` | Deploy only this package instance and the instances and resources it depends on, leaving the rest of the build for a later `kix deploy`. Repeatable. Cannot be combined with `--prune` or `--operator`. See [Deploy one instance at a time](#deploy-one-instance-at-a-time). |
 | `--offline` | Plan from the previous activation in the local cache instead of the cluster. The offline plan compares the new build with the build this machine deployed last, so it cannot see changes on the cluster, deploys that stopped part way, or orphans that earlier deploys kept. With `--dry-run` nothing contacts the cluster. Without `--dry-run`, the deploy refuses before applying anything when the cached build is not the Active build of the cluster in the current context: the cache is keyed by cluster name only, so another context's cluster of the same name can have written it. The offline plan is a preview: after you confirm it, the deploy connects, plans again from the live cluster, and runs that plan only when it writes and deletes the same objects. Otherwise it stops with `[K3811]` before taking the deploy lock, lists the objects only one of the two plans writes or deletes, and applies nothing; run `kix deploy` without `--offline` to see and confirm the full plan. |
 | `--operator` | Hand the build to the Kix operator instead of applying it from this machine. Cannot be combined with `--only`, because the operator always deploys the full build. Fails with `[K7218]` if combined with `--timeout`, `--on-error continue`, `--reconcile`, `--skip-orphan-check`, `--force-conflicts`, `--log-format` (other than `pretty`), or `--group-by` (other than `package`), because operator mode uses fixed deploy settings and progress output. See [Operator mode](/docs/reference/cli/operator-mode/). |
+| `--operator-removed` | State that no Kix operator runs for this Kix cluster: before planning, take the cluster back from an operator older than this Kix that was uninstalled, which clears the `[K9557]` refusal for good. Cannot be combined with `--operator`. See [Take a cluster back from a removed operator](#take-a-cluster-back-from-a-removed-operator). |
 | `--log-format <FORMAT>` | `pretty` (default): interactive progress, coloured when stdout is a terminal; falls back to `line` when stdin is not a terminal. `line`: one plain line per resource outcome. `json`: JSON deploy events, one per line, ending with a `summary` object; stdout holds only the events, and the plan and other text go to stderr. `tui`: a live dependency tree while deploying; falls back to `line` when the terminal is not interactive. |
 | `--group-by <GROUP>` | How `--log-format tui` groups the tree: `package` (default) or `namespace`. Execution order does not change. Other log formats ignore it. |
 | `--flake`, `--context`, `--override-input` | See [Global flags](/docs/reference/cli/global-flags/). Without `--dry-run`, `-o` accepts only `text`, and `--no-cache` has no effect; use `--log-format` to choose the deploy's output. |
@@ -267,10 +268,11 @@ plans, while a current, queued, or deploying record of that Kix cluster was
 submitted to the Kix operator and the operator does not list the `revisions`
 feature, because an older operator writes back the annotations this version
 removes. An operator from Kix 0.9 or earlier is refused too. Other Kix
-clusters on the same Kubernetes cluster are not affected. Upgrade the
-operator, then run the command again (see
-[Operator mode](/docs/reference/cli/operator-mode/#requirements)).
-{/* GAP: the second way out of this refusal, `kix deploy <cluster> --operator-removed`, for a cluster whose operator was removed. Describe it here once it is built. */}
+clusters on the same Kubernetes cluster are not affected. Kix cannot tell an operator older than this Kix from one that was
+uninstalled. If the operator still runs, upgrade it, then run the command
+again (see [Operator mode](/docs/reference/cli/operator-mode/#requirements)).
+If it was uninstalled, run `kix deploy <cluster> --operator-removed` once (see
+[Take a cluster back from a removed operator](#take-a-cluster-back-from-a-removed-operator)).
 
 Right after building and connecting, before reading cluster state for the
 plan, `kix deploy` checks whether another run holds the lock. If the lock is
@@ -337,6 +339,33 @@ that does not use the lock), planning prints a warning with the
 `kubectl patch` command to mark it `Failed`. [`kix status`](/docs/reference/cli/status/) and
 [`kix plan`](/docs/reference/cli/plan/) report any current lock holder without
 waiting.
+
+### Take a cluster back from a removed operator
+
+`kix deploy <cluster> --operator-removed` states that no Kix operator runs for
+the Kix cluster. When a current, queued, or deploying record of the cluster
+was submitted to an operator that does not list `revisions`, the deploy takes
+the cluster back before it plans, under the deploy lock:
+
+- a queued record the operator never started becomes `Superseded`;
+- a record the operator was deploying becomes `Failed`, with a reason that
+  names the flag, and the plan takes in what it applied;
+- those records and the current record lose `spec.source`, the build path
+  the operator reads, so they read as records the command line deployed.
+
+This happens before the plan is shown, so it also happens when you then
+decline the plan. Afterwards the deploy runs as a plain `kix deploy`, and
+later commands need no flag. When no such record exists, the flag changes
+nothing. `kix rollback` to an older record the operator deployed makes it
+current again with its build path, which brings the `[K9557]` refusal back;
+the same flag clears it again.
+
+Do not use the flag while an older operator still runs: it would keep writing
+the annotations this version removes. `--operator-removed` cannot be combined
+with `--operator`. `kix plan` accepts the flag, records it in the plan as
+`flags.operator_removed`, and changes nothing, so you can save a plan for a
+deploy with the flag. A plan saved without the flag cannot be deployed with
+it.
 
 ## Required stops
 
@@ -443,7 +472,7 @@ any of these:
 | New build | The build's identity hash. A store path that moved, with the same manifests, still matches. |
 | Deployed build | The identity hash of the build the cluster runs: another deploy landed after the review. |
 | Lock generation | The generation of the cluster's [deploy lock](#the-deploy-lock): another run modified the cluster after the plan was saved (such as `kix deploy --only` or `kix gc`). Skipped when the saved plan has no lock generation (for example, from `--offline` or an older Kix). |
-| Planning flags | `--prune`, `--skip-orphan-check`, `--reconcile`, `--force-conflicts`, `--accept-migrations`, or `--only`. Passing a flag on the command line that was not set when the plan was saved fails before building. `--only` must match the saved plan: pass the exact same `--only` instances for a partial plan, and omit `--only` for a full plan. |
+| Planning flags | `--prune`, `--skip-orphan-check`, `--reconcile`, `--force-conflicts`, `--accept-migrations`, `--operator-removed`, or `--only`. Passing a flag on the command line that was not set when the plan was saved fails before building. `--only` must match the saved plan: pass the exact same `--only` instances for a partial plan, and omit `--only` for a full plan. |
 | Refusals | A conflict, by object, or an admission refusal, by object and reason, that the reviewed plan did not have. |
 | Reverted drift | A drifted field, by object and path, that the deploy would put back and the reviewed plan did not list. |
 | Prune deletes | An orphan the deploy would delete that the reviewed plan did not list. |

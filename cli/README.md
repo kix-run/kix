@@ -1601,7 +1601,14 @@ it and the next deploy tries again.
 a record of it that is current, queued, or deploying is operator-driven and
 the Activation CRD does not list `revisions`
 (`activation::features::operator_without_revisions`, `[K9557]`). `--operator`
-commands keep `require_features`.
+commands keep `require_features`. `kix deploy --operator-removed` clears the condition:
+`Planner::take_back` (in `Planner::run` and `Planner::recheck`, only when the
+planner settles, so not `kix plan` or `--dry-run`) takes the lock when
+`features::take_back` has work, marks queued operator records `Superseded`
+and a `Deploying` one `Failed`, then clears `spec.source` on those and the
+current record (`Records::clear_source`, phase first), releases the lock
+(raising the generation), and reports `PlanEvent::TookBack`. `kix plan`
+records the flag in `PlanFlags::operator_removed` for saved plans.
 
 `kix gc --full-scan` rebuilds a kept-orphans list whose revision is missing
 or cannot be read (`Tenancy::only_kept_unreadable`): it names every labelled

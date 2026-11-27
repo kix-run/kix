@@ -63,7 +63,7 @@
   - The cluster-level and kept-orphans revisions have no bound of their own: about 2,000 namespaces fill the cluster-level one. They need a way to split into several revisions.
   - An optional `kix crds` command that prints or installs Kix's own CRDs, for clusters that apply `kix export` output with another tool and for accounts that may not create CRDs.
   - What an older Kix does with a `Partial` record, which it does not know (doc 175 § 8, question 5).
-  - No command takes a Kix cluster back from a removed operator: while a current, queued, or deploying record was submitted to an operator without `revisions`, every command that changes the cluster refuses with K9557. A flag `kix deploy <cluster> --operator-removed` is being built.
+  - A `kix rollback` to an older record an operator deployed makes it current again with its `spec.source`, so the K9557 refusal comes back after `kix deploy --operator-removed` took the cluster back, and the flag is needed again.
   - The one-time conversion of an older Kix's records trusts its listing of labelled objects. When the account may not list a kind and the record's package index has no names, objects of that kind would be left out of the revisions for good; a refusal (K9558) is being built. Open from the second review of the rework (2026-11-27): a shared object stays untidied while the other cluster has any old record, an operator never gets its own entry on such an object, `--skip-orphan-check` skips the release of a shared orphan, and applied hashes reach the new revisions by a best-effort write.
   - Remove the readers of `kix.run/activations`, `status.packageIndex`, and `status.orphansKeptFrom`, and the `kix` field manager fallback, once no supported release writes them.
 
