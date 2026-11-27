@@ -58,9 +58,10 @@ pub enum ApplyError {
         source: kube::Error,
     },
 
-    /// What a forced apply would take back is not what the plan showed.
+    /// What a forced apply would take back no longer matches what Kix found
+    /// when making the plan.
     #[error(
-        "{resource} was not updated because the fields Kix would take back changed on the cluster after the plan was made. Kix overwrites only the fields, field managers, and live values shown in the plan. Run the command again to review a fresh plan."
+        "{resource} was not updated because the fields Kix would take back changed on the cluster after the plan was made. During planning and again right before writing, Kix reads the object and checks conflicts with a dry run, and updates it only if those fields, their field managers, and their live values are unchanged. Run the command again to review a fresh plan."
     )]
     ChangedSincePlan { resource: String },
 
@@ -358,7 +359,8 @@ pub(crate) fn bound_to(mut sent: Value, live: &DynamicObject) -> Value {
 /// refused on, so the answer covers list keys the server defaults, values
 /// spelled differently from the stored form, and a Secret's `data`. Each
 /// field's value is read from `live`. A refusal that names a field `live`
-/// does not hold, or names no field, gives [`Takes::Unknown`]. Any other
+/// does not hold, names no field, or names a field with no manager Kix can
+/// read gives [`Takes::Unknown`]. Any other
 /// failure is returned as it is.
 pub(crate) async fn takes_back(
     api: &Api<DynamicObject>,
@@ -379,7 +381,9 @@ pub(crate) async fn takes_back(
 /// unforced apply of the object `live`. A 409 that names no field manager
 /// is a `resourceVersion` that no longer matches.
 pub(super) fn taken_in(status: &kube::core::Status, live: &DynamicObject) -> Takes {
-    let owners = conflict_causes(status);
+    let Some(owners) = conflict_causes(status) else {
+        return Takes::Unknown;
+    };
     let owners = if owners.is_empty() {
         crate::cluster::preview::conflict_owners(&status.message)
     } else {
@@ -412,18 +416,16 @@ pub(super) fn taken_in(status: &kube::core::Status, live: &DynamicObject) -> Tak
 
 /// Return the field managers and fields that the causes of a conflict
 /// answer name, one cause per field. The message of each cause names the
-/// manager (`conflict with "kubectl-edit" using apps/v1`).
-fn conflict_causes(status: &kube::core::Status) -> Vec<ConflictOwner> {
+/// manager (`conflict with "kubectl-edit" using apps/v1`). Return `None`
+/// when a cause names no manager Kix can read.
+fn conflict_causes(status: &kube::core::Status) -> Option<Vec<ConflictOwner>> {
     let mut owners: Vec<ConflictOwner> = Vec::new();
     let causes = status.details.iter().flat_map(|d| &d.causes);
     for cause in causes.filter(|c| c.reason == "FieldManagerConflict") {
-        let Some(manager) = crate::cluster::preview::conflict_owners(&cause.message)
+        let manager = crate::cluster::preview::conflict_owners(&cause.message)
             .into_iter()
             .next()
-            .map(|o| o.manager)
-        else {
-            continue;
-        };
+            .map(|o| o.manager)?;
         match owners.iter_mut().find(|o| o.manager == manager) {
             Some(o) => o.fields.push(cause.field.clone()),
             None => owners.push(ConflictOwner {
@@ -432,16 +434,19 @@ fn conflict_causes(status: &kube::core::Status) -> Vec<ConflictOwner> {
             }),
         }
     }
-    owners
+    Some(owners)
 }
 
 /// Return the value at the API server field path `path` in `obj`, or `None`
-/// when the path finds no value or more than one.
+/// when the path is empty or finds no value or more than one.
 ///
 /// The server does not escape a field name that holds a dot, such as the
 /// label `app.kubernetes.io/name`, so each step tries every key of the map
 /// that the rest of the path starts with.
 pub(crate) fn value_at<'v>(obj: &'v Value, path: &str) -> Option<&'v Value> {
+    if path.is_empty() {
+        return None;
+    }
     let mut found = Vec::new();
     values_at(obj, path, &mut found);
     let first = *found.first()?;
@@ -545,8 +550,19 @@ pub(crate) async fn apply_resource(
         }
         Takeover::No | Takeover::Always => {
             // Check if resource exists to determine Created vs Configured. A
-            // dry run keeps the live object for its preview.
-            let live = api.get_opt(&name).await.ok().flatten();
+            // dry run keeps the live object for its preview. A forced apply
+            // needs the read to leave ceded fields to their manager.
+            let read = api.get_opt(&name).await;
+            let live = match (&takeover, read) {
+                (_, Ok(live)) => live,
+                (Takeover::Always, Err(source)) => {
+                    return Err(ApplyError::ReadFailed {
+                        resource: rid.display_id(),
+                        source,
+                    });
+                }
+                (_, Err(_)) => None,
+            };
             if let Some(refused) = live.as_ref().and_then(|obj| being_deleted(&rid, obj)) {
                 return Err(refused);
             }

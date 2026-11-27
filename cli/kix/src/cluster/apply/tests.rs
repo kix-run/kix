@@ -133,8 +133,9 @@ fn a_server_field_path_is_read_from_the_live_object() {
 
 /// The 409 answer to an unforced apply names what a forced apply takes,
 /// from its causes when it has them and from its message otherwise. A 409
-/// that names no manager is a `resourceVersion` that moved, and a field the
-/// object does not hold leaves the answer unknown.
+/// that names no manager is a `resourceVersion` that moved. A field the
+/// object does not hold, a cause whose manager Kix cannot read, and an
+/// empty field path each leave the answer unknown.
 #[test]
 fn a_conflict_answer_gives_what_a_forced_apply_takes() {
     let live: kube::api::DynamicObject = serde_json::from_value(json!({
@@ -198,6 +199,25 @@ fn a_conflict_answer_gives_what_a_forced_apply_takes() {
         Vec::new(),
     );
     assert_eq!(ssa::taken_in(&missing, &live), ssa::Takes::Unknown);
+
+    // A cause whose manager Kix cannot read makes the whole answer unknown,
+    // not a shorter list.
+    let unreadable = kube::core::response::StatusCause {
+        message: "conflict".into(),
+        ..cause("x", ".data.other")
+    };
+    let partly_read = status(
+        "Apply failed with 2 conflicts: ...",
+        vec![cause("kubectl-edit", ".data.k"), unreadable],
+    );
+    assert_eq!(ssa::taken_in(&partly_read, &live), ssa::Takes::Unknown);
+
+    // An empty field path names no field, not the whole object.
+    let empty = status(
+        "Apply failed with 1 conflict: ...",
+        vec![cause("kubectl-edit", "")],
+    );
+    assert_eq!(ssa::taken_in(&empty, &live), ssa::Takes::Unknown);
 }
 
 #[test]

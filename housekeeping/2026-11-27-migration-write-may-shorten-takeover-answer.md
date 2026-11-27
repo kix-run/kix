@@ -1,0 +1,5 @@
+# 2026-11-27 · `cli/kix/src/cluster/migration_write.rs` · The migration write may change the server's answer that it has just checked, so the apply then stops with "changed after the plan was made". Not confirmed.
+
+`needed` removes a legacy `kix` entry with operation `Update`, and a `kix` `Apply` entry when the cluster already has its own. The server treats a `kix` `Update` entry as another manager even when Kix applies as `kix`, so the plan's answer could name `kix` for a field. The migration write passes its check, removes that entry, and the field is left with no owner. The apply's own check then gets a shorter answer and stops with `ApplyError::ChangedSincePlan`, although nothing else changed the object. The next deploy succeeds. It needs a legacy `Update` entry under `kix` that holds a field the manifest sets to another value, and no one has found a Kix release that wrote one.
+
+Options: (1) check once, in the apply, and send the migration write without the check, since it changes no field value; a migration write may then land on an object the apply refuses. (2) Leave it.

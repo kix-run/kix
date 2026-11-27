@@ -927,7 +927,7 @@ async fn run_locked(
     command: Command,
     options: &RunOptions,
     global: &crate::cli::GlobalArgs,
-    mut checked: CheckedPlan,
+    checked: CheckedPlan,
     cluster_name: &str,
     receipt: Option<Value>,
     client: kube::Client,
@@ -941,12 +941,6 @@ async fn run_locked(
     let target = Target::connect(client, sops)
         .await
         .map_err(|e| miette!("{e}"))?;
-    // A plan made without connecting was made again from the live cluster
-    // with no dry run, so it asks now what each forced apply would take.
-    // Without an answer, the run applies that object without force.
-    if offline_runs.is_some() {
-        checked.ask_takes_back(&target).await;
-    }
     let discovery = target.discovery();
 
     // Open `Records` again to enforce the domain migration gate. When

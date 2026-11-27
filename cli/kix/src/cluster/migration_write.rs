@@ -80,8 +80,8 @@ pub enum WriteError {
         "could not update Kix metadata on {resource} because another writer modified it on each of the {ATTEMPTS} attempts. Stop whatever keeps updating {resource}, then run the deploy again"
     )]
     KeepsChanging { resource: String },
-    /// What the run's forced apply of the object would take back is not
-    /// what the plan showed.
+    /// What the run's forced apply of the object would take back no longer
+    /// matches what Kix found when making the plan.
     #[error(
         "{resource} was not updated because the fields Kix would take back changed on the cluster after the plan was made. Run the command again to review a fresh plan"
     )]

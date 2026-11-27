@@ -6,8 +6,10 @@
 //! so it misses drift, objects with no applied hash, and what a stopped
 //! deploy left. When the deploy connects, [`super::Planner::recheck`] plans
 //! again from the live cluster with the one planner and [`compare`] holds
-//! the result to the confirmed plan: the same writes and deletes, or the
-//! deploy is refused. A delete the live plan leaves out because another Kix
+//! the result to the confirmed plan: the same writes and deletes, and no
+//! write that overwrites a change made on the cluster, or the deploy is
+//! refused. So an offline deploy never forces an apply to take fields back
+//! from another field manager. A delete the live plan leaves out because another Kix
 //! cluster still deploys the object is not a difference, because the
 //! offline path drops such deletes when it connects too.
 
@@ -66,10 +68,26 @@ pub(crate) fn compare(
         .iter()
         .filter(|d| !shared.contains(&delete_id(d)))
         .collect();
-    let (writes_added, writes_dropped) = differ(
+    let (mut writes_added, writes_dropped) = differ(
         writes_by_key(&connected.writes),
         writes_by_key(&confirmed.writes),
     );
+    // An offline plan cannot see drift, so the person never confirmed
+    // overwriting a change made on the cluster, even when the offline plan
+    // writes the same object for another reason.
+    let reverts = connected
+        .writes
+        .iter()
+        .filter(|w| matches!(w.reason, Some(WriteReason::RevertsDrift { .. })));
+    for w in reverts {
+        let entry = Differing {
+            object: w.resource_id().display_id(),
+            why: Some(why(w)),
+        };
+        if !writes_added.contains(&entry) {
+            writes_added.push(entry);
+        }
+    }
     let (deletes_added, deletes_dropped) = differ(
         deletes_by_key(connected.deletes.iter()),
         deletes_by_key(confirmed_deletes.into_iter()),
@@ -158,7 +176,8 @@ fn why(write: &ObjectWrite) -> String {
             "Kix has no recorded applied hash for this object".to_string()
         }
         Some(WriteReason::RevertsDrift { changed_by }) if changed_by.is_empty() => {
-            "changed on the cluster since Kix applied it".to_string()
+            "changed on the cluster since Kix applied it, and this deploy would overwrite that change"
+                .to_string()
         }
         Some(WriteReason::RevertsDrift { changed_by }) => {
             let by: Vec<String> = changed_by
@@ -166,7 +185,7 @@ fn why(write: &ObjectWrite) -> String {
                 .map(|o| format!("{} changed {}", o.manager, o.fields.join(", ")))
                 .collect();
             format!(
-                "changed on the cluster since Kix applied it ({})",
+                "changed on the cluster since Kix applied it ({}), and this deploy would overwrite that change",
                 by.join("; ")
             )
         }
@@ -507,7 +526,10 @@ mod tests {
             differs.writes_added,
             [Differing {
                 object: "ConfigMap/web@app".into(),
-                why: Some("changed on the cluster since Kix applied it".into()),
+                why: Some(
+                    "changed on the cluster since Kix applied it, and this deploy would overwrite that change"
+                        .into()
+                ),
             }]
         );
         assert!(differs.writes_dropped.is_empty() && differs.deletes_added.is_empty());
@@ -566,6 +588,59 @@ mod tests {
                 )),
             }]
         );
+    }
+
+    /// A deploy of `new` applied `web` and then failed, so its `Failed`
+    /// record names the applied hash of `web`. Someone then changed `web`
+    /// by hand. The offline plan of `new` writes `web` as a change of the
+    /// build, and the live plan writes the same object to overwrite the hand
+    /// change. The deploy is refused before it writes anything, because the
+    /// person never saw that overwrite.
+    #[tokio::test]
+    async fn an_offline_deploy_refuses_to_overwrite_a_change_made_on_the_cluster() {
+        let old = build(&[config_map("web", "1"), config_map("calm", "1")], "a-cur");
+        let old = old.graph().clone();
+        let new = build(&[config_map("web", "2"), config_map("calm", "1")], "a-new");
+        let graph = new.graph().clone();
+        let mut live = live_of(&old);
+        let web = manifests(&graph)
+            .into_iter()
+            .find(|m| m["metadata"]["name"] == "web")
+            .unwrap();
+        live.retain(|m| m["metadata"]["name"] != "web");
+        live.push(applied(web));
+        let failed = build(
+            &[config_map("web", "2"), config_map("calm", "2")],
+            "a-failed",
+        );
+        let failed = failed.graph().clone();
+        let api = cluster(&old, Some(&failed), &live, &["calm"], &[]).await;
+        let store = Revisions::new(&api.client());
+        for revision in RevisionSet::of("a", &failed).all() {
+            let entries: BTreeMap<String, String> = revision
+                .spec
+                .objects
+                .iter()
+                .filter(|o| o.name == "web")
+                .map(|o| (o.hash.clone(), "stale".to_string()))
+                .collect();
+            if !entries.is_empty() {
+                store.write_applied(&revision.name, &entries).await.unwrap();
+            }
+        }
+
+        let differs = refusal(recheck(&api, &old, &new).await);
+        assert_eq!(
+            differs.writes_added,
+            [Differing {
+                object: "ConfigMap/web@app".into(),
+                why: Some(
+                    "changed on the cluster since Kix applied it, and this deploy would overwrite that change"
+                        .into()
+                ),
+            }]
+        );
+        assert!(differs.writes_dropped.is_empty(), "{differs:?}");
     }
 
     fn write(name: &str, reason: Option<WriteReason>) -> ObjectWrite {
@@ -628,7 +703,9 @@ mod tests {
         assert_eq!(differs.context, None);
         assert_eq!(
             differs.writes_added[0].why.as_deref(),
-            Some("changed on the cluster since Kix applied it (kubectl-edit changed data.k)")
+            Some(
+                "changed on the cluster since Kix applied it (kubectl-edit changed data.k), and this deploy would overwrite that change"
+            )
         );
         let names =
             |list: &[Differing]| -> Vec<String> { list.iter().map(|d| d.object.clone()).collect() };

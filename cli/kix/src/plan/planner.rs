@@ -399,8 +399,8 @@ impl CheckedPlan {
     /// manager holds, and under the name that owns Kix's fields when the
     /// run applies it. An object whose answer is not known keeps no answer,
     /// so the run applies it without force and Kubernetes refuses a conflict.
-    /// [`CheckedPlan::dry_run`] calls this, and so must a caller that runs a
-    /// plan it did not dry-run.
+    /// [`CheckedPlan::dry_run`] calls this. A plan that was never asked
+    /// applies every object without force, as a deploy with `--offline` does.
     pub async fn ask_takes_back(&mut self, target: &Target) {
         use crate::cluster::ops::SecretHydrator as _;
         let hydrator = crate::cluster::ops::SopsHydrator::new(target.sops.clone());
@@ -723,6 +723,10 @@ fn record_name(graph: &StoreGraph) -> Option<String> {
 /// other field managers on the object `rid`, read now, or `None` when Kix
 /// cannot tell: the object is gone, the API server refused the question, the
 /// answer names a field the object does not hold, or the object kept moving.
+/// Return `None` too when the answer names a field another Kix cluster
+/// holds, so the run applies the object without force and Kubernetes
+/// refuses the conflict. Kix never forces a field away from another Kix
+/// cluster.
 async fn ask(
     api: &kube::Api<kube::api::DynamicObject>,
     rid: &ResourceId,
@@ -730,11 +734,17 @@ async fn ask(
     manifest: &Value,
 ) -> Option<Vec<crate::cluster::drift::TakenField>> {
     use crate::cluster::apply::{self, Takes};
+    use crate::cluster::field_manager::Manager;
     for _ in 0..apply::TAKEOVER_ATTEMPTS {
         let live = api.get_opt(&rid.name).await.ok()??;
         let sent = apply::bound_to(apply::forced_manifest(manifest, &live, manager), &live);
         match apply::takes_back(api, &rid.name, manager, &sent, &live).await {
-            Ok(Takes::Fields(taken)) => return Some(taken),
+            Ok(Takes::Fields(taken)) => {
+                let other_cluster = |name: &str| {
+                    Manager::parse(name).is_kix() && !manager.counts_as_own(Some(name))
+                };
+                return (!taken.iter().any(|t| other_cluster(&t.manager))).then_some(taken);
+            }
             Ok(Takes::Moved) => continue,
             Ok(Takes::Unknown) | Err(_) => return None,
         }

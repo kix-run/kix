@@ -1,0 +1,3 @@
+# 2026-11-27 · `cli/kix/src/cluster/drift.rs` · A forced apply takes back a ceded field inside a list element whose key the server defaults.
+
+`drift::without_ceded_taken` removes each ceded field another manager holds from the manifest before a forced apply. It finds the field with `remove_path`, which needs every list key in the manifest's element. A ceded `spec.ports[*].nodePort` on a port written without `protocol` is not found, because the server keys the element as `port=80,protocol="TCP"`. The field stays in the manifest, the server's answer lists it, the plan and the run agree, and the forced apply takes the ceded field back. Matching the server's answer against the ceded patterns, and finding each element on the live object, would cover it.

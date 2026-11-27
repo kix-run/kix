@@ -38,7 +38,7 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--plan <FILE>] [--prune | --skip-orphan-c
 | `--force-conflicts` | Take ownership of fields another field manager owns. Fields listed in `ownership.cede` that another manager holds are left to that manager. Without the flag, a conflict is a refused write in the plan, naming the fields and their current owner, and under `--on-error stop` the deploy stops before applying anything. |
 | `--accept-migrations` | Proceed when the plan removes an object that holds data from a stateful package and adds another that holds data in its place. Without it such a deploy stops, even with `--yes`. Kix does not copy data. |
 | `--only <NAMESPACE/INSTANCE>` | Deploy only this package instance and the instances and resources it depends on, leaving the rest of the build for a later `kix deploy`. Repeatable. Cannot be combined with `--prune` or `--operator`. See [Deploy one instance at a time](#deploy-one-instance-at-a-time). |
-| `--offline` | Plan from the previous activation in the local cache instead of reading the cluster. Because the offline plan compares the new build only against the build this machine last deployed, it cannot see live cluster drift, interrupted deploys, or kept orphans from earlier deploys. With `--dry-run`, nothing contacts the cluster. Without `--dry-run`, Kix stops before applying if the cached build does not match the cluster's `Active` build in the current context (the cache is keyed by cluster name alone, so another context's cluster with the same name may have written it). After you confirm the offline preview, Kix connects, plans again against the live cluster, and proceeds only if the live plan writes and deletes the exact same objects. Otherwise it stops with `[K3811]` before taking the deploy lock, lists the differing objects, and applies nothing. Run `kix deploy` without `--offline` to review and confirm the full live plan. |
+| `--offline` | Plan from the previous activation in the local cache instead of reading the cluster. Because the offline plan compares the new build only against the build this machine last deployed, it cannot see live cluster drift, interrupted deploys, or kept orphans from earlier deploys. With `--dry-run`, nothing contacts the cluster. Without `--dry-run`, Kix stops before applying if the cached build does not match the cluster's `Active` build in the current context (the cache is keyed by cluster name alone, so another context's cluster with the same name may have written it). After you confirm the offline preview, Kix connects, plans again against the live cluster, and proceeds only if the live plan writes and deletes the exact same objects. Otherwise it stops with `[K3811]` before taking the deploy lock, lists the differing objects, and applies nothing. It also stops with `[K3811]` when an object it would write was changed on the cluster, because an offline deploy never overwrites such a change. Run `kix deploy` without `--offline` to review and confirm the full live plan. |
 | `--operator` | Hand the build to the Kix operator instead of applying it from this machine. Cannot be combined with `--only`, because the operator always deploys the full build. Fails with `[K7218]` if combined with `--timeout`, `--on-error continue`, `--reconcile`, `--skip-orphan-check`, `--force-conflicts`, `--log-format` (other than `pretty`), or `--group-by` (other than `package`), because operator mode uses fixed deploy settings and progress output. See [Operator mode](/docs/reference/cli/operator-mode/). |
 | `--operator-removed` | Confirm that no Kix operator is running for this Kix cluster. Before planning, Kix reclaims the cluster from an uninstalled earlier operator and clears the `[K9557]` refusal permanently. Cannot be combined with `--operator`. See [Take a cluster back from a removed operator](#take-a-cluster-back-from-a-removed-operator). |
 | `--log-format <FORMAT>` | `pretty` (default): interactive progress, coloured when stdout is a terminal; falls back to `line` when stdin is not a terminal. `line`: one plain line per resource outcome. `json`: JSON deploy events, one per line, ending with a `summary` object; stdout holds only the events, and the plan and other text go to stderr. `tui`: a live dependency tree while deploying; falls back to `line` when the terminal is not interactive. |
@@ -241,7 +241,13 @@ this order:
    conflicting ones do not block the apply. If those fields changed after planning, or if Kix cannot read the
    object before writing, the deploy stops and names the object. If the dry run
    cannot determine the conflicts during planning, Kix applies the object
-   without force so the plan reports the conflict as a refused write. If another
+   without force so the plan reports the conflict as a refused write. For some
+   objects, Kix can never determine the conflicting fields from a dry run (for
+   example, when the other field manager recorded its fields under another API
+   version or when the kind is served by an API server that refuses dry runs),
+   so the conflict appears on every deploy. Run `kix deploy --force-conflicts` to take the
+   fields back (this forces every object in the deploy), or list the fields in
+   `ownership.cede` if the other manager should keep them. If another
    writer modifies the object between the check and the apply, Kix retries up to
    5 times before stopping with "another writer modified it on each of the 5
    times Kix read it". Stop whatever is continuously updating the object and run
@@ -253,7 +259,10 @@ this order:
    another manager so that manager keeps it. Kix also never forces fields away
    from another Kix cluster: it applies those objects without force (counted on
    a `↻` line), so Kubernetes adds this cluster's field manager entry when
-   values match and rejects the apply with `[K5636]` when they conflict.
+   values match and rejects the apply with `[K5636]` when they conflict. When
+   only the dry run reveals that another Kix cluster holds a field (for
+   example, a Secret value set in `stringData`), the plan counts the object on
+   a `↺` line, and Kix still applies it without force.
 
 Kix leaves all other objects in the build untouched. `--force-conflicts` forces
 every apply, including objects matched by rule 1. Without it, a field ownership

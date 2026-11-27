@@ -613,10 +613,7 @@ impl ResourceIo for KubeResources {
             });
         }
         let takeover = self.takeover_of(&ResourceId::from_value(manifest));
-        let uid = match self
-            .apply_as(&ar, scope.clone(), manifest, takeover.clone())
-            .await
-        {
+        let uid = match self.apply_as(&ar, scope.clone(), manifest, takeover).await {
             Err(ApplyError::BeingDeleted { uid, .. }) => uid,
             other => return other,
         };
@@ -625,7 +622,12 @@ impl ResourceIo for KubeResources {
         match readiness::wait_gone(&api, &rid.name, uid.as_deref(), timeout, cancel, on_status)
             .await
         {
-            Ok(Deletion::Gone) => self.apply_as(&ar, scope, manifest, takeover).await,
+            // The object is gone, so the apply creates it and takes nothing
+            // from another field manager.
+            Ok(Deletion::Gone) => {
+                self.apply_as(&ar, scope, manifest, apply::Takeover::No)
+                    .await
+            }
             Ok(Deletion::Stuck(stuck)) => Err(ApplyError::StillBeingDeleted { rid, stuck }),
             Ok(Deletion::Cancelled) => Err(ApplyError::Interrupted {
                 resource: rid.display_id(),
@@ -944,6 +946,73 @@ mod apply_tests {
         let cm = api.object("ConfigMap", "cm").unwrap();
         assert_eq!(cm["data"], json!({ "new": "yes" }));
         assert!(cm["metadata"]["deletionTimestamp"].is_null());
+    }
+
+    /// The plan forces the apply of an object that is then being deleted.
+    /// Once it is gone, the apply creates it without force, because nothing
+    /// is left to take back.
+    #[tokio::test(start_paused = true)]
+    async fn a_forced_apply_onto_an_object_that_finishes_deleting_creates_it() {
+        let api = FakeApi::new([held_config_map()]);
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let taken = crate::cluster::drift::TakenField {
+            manager: "kubectl-edit".into(),
+            path: ".data.old".into(),
+            live: "\"yes\"".into(),
+        };
+        let force = Force::Only([(ResourceId::from_value(&desired()), vec![taken])].into());
+        let ops = KubeResources::new(client, discovery, "a".into(), force);
+        let remover = {
+            let api = api.clone();
+            async move {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                api.remove_finalizers("ConfigMap", "cm");
+            }
+        };
+        let before = api.requests().len();
+        let (manifest, cancel) = (desired(), CancelToken::new());
+        let applied = ops.apply(&manifest, Duration::from_secs(60), &cancel, &|_| {});
+        let (applied, ()) = tokio::join!(applied, remover);
+        assert_eq!(applied.unwrap().action, apply::ApplyAction::Created);
+        assert_eq!(
+            api.object("ConfigMap", "cm").unwrap()["data"],
+            json!({ "new": "yes" })
+        );
+        let forced: Vec<String> = api.requests()[before..]
+            .iter()
+            .filter(|r| r.starts_with("PATCH") && r.contains("force=true"))
+            .cloned()
+            .collect();
+        assert!(forced.is_empty(), "{forced:?}");
+    }
+
+    /// Under `--force-conflicts`, an apply whose read of the object fails
+    /// is not sent, because without the read Kix cannot leave ceded fields
+    /// to their manager.
+    #[tokio::test]
+    async fn a_forced_apply_whose_read_fails_is_not_sent() {
+        let mut live = desired();
+        live["data"] = json!({ "old": "yes" });
+        let api = FakeApi::new([live]);
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let ops = KubeResources::new(client, discovery, "a".into(), Force::All);
+        api.fail_next("/api/v1/namespaces/app/configmaps/cm", 1, 403);
+        let err = ops
+            .apply(
+                &desired(),
+                Duration::from_secs(5),
+                &CancelToken::new(),
+                &|_| {},
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ApplyError::ReadFailed { .. }), "{err}");
+        assert_eq!(
+            api.object("ConfigMap", "cm").unwrap()["data"],
+            json!({ "old": "yes" })
+        );
     }
 
     /// An object that stays past the wait is not applied, and the error is

@@ -1133,12 +1133,17 @@ over that plan through `ops::DryRun`, so every SSA and DELETE goes with
   with the one planner (its ledger from revisions, or from the notes for a
   Kix cluster not migrated, which also plans the migration writes). The two plans must write and delete the same objects
   (the tuple `objects::digest` hashes). A delete the live plan drops because
-  another Kix cluster still deploys the object is not a difference. When
+  another Kix cluster still deploys the object is not a difference. A write
+  the live plan labels `RevertsDrift` is always a difference, even when the
+  confirmed plan writes the same object, because the offline plan could not
+  show the drift. When
   they differ, `plan::offline::OfflinePlanDiffers` lists what each plan
   writes or deletes that the other does not, each write with its reason,
   and nothing is applied. When they agree, the run uses the live plan, so
-  it forces the drift reverts it names, supersedes the records it takes in,
-  and binds the lock to the generation it read. A saved plan made with
+  it supersedes the records it takes in and binds the lock to the generation
+  it read. No one asks the API server what a forced apply takes
+  (`CheckedPlan::ask_takes_back`), so the run forces nothing unless
+  `--force-conflicts` is given. A saved plan made with
   `--offline` and applied with `--offline` goes through the same check.
 - **Progress.** With `-o markdown`, `main`'s `output_mode` sets
   `progress_on_stderr` for `plan` and `deploy --dry-run`, so the `crate::say!`
@@ -1482,8 +1487,8 @@ with force exactly the objects labelled `RevertsDrift` (`ops::Force::Only`;
 the fields others changed and any other conflict still stops the deploy. Each
 forced apply goes on only while it takes what the plan's answer from the API
 server said it takes (`apply::Takeover::IfTakesBack`). The plan asks
-(`CheckedPlan::ask_takes_back`, called first by `CheckedPlan::dry_run`, and
-by `kix deploy` itself for a plan made `--offline` and planned again): for
+(`CheckedPlan::ask_takes_back`, called first by `CheckedPlan::dry_run`; a
+plan made `--offline` and planned again is never asked): for
 each forced object it reads the object and sends the manifest the run sends
 (SOPS values decrypted, each ceded field another manager holds left out,
 `stringData` as `data`, `apply::forced_manifest`) as an unforced dry-run
@@ -1492,25 +1497,35 @@ apply takes exactly the fields that apply is refused on, so the 409 names
 each manager and field, including list elements keyed by a field the server
 defaults and a Secret's `data`. Each field's live value is read from the
 object (`apply::value_at`, which tries every map key a path with dots could
-mean). No refusal is an empty list. A 409 that names no manager means the
+mean). No refusal is an empty list. A cause whose manager Kix cannot read,
+or an empty field path, makes the answer unknown. A 409 that names no manager means the
 object moved, and the question is asked again on a fresh read, up to
 `TAKEOVER_ATTEMPTS` times. A field that does not resolve on the object, a
 refused question, or an object that keeps moving leaves no answer, and the
 run applies that object without force, so Kubernetes refuses the conflict.
+An answer that names a field another Kix cluster holds (its own manager, or
+the legacy `kix` where `FieldManager::counts_as_own` says it is not this
+cluster's) leaves no answer too, so Kubernetes refuses the apply
+(`ApplyError::KixClusterConflict` for another cluster's own manager,
+`ApplyError::Conflict` for `kix`). This catches the fields that
+`drift::held_by_other_clusters` cannot find by walking the manifest, such as
+a Secret value given in `stringData`.
 An object renamed by the migration write in the same run is asked under
 `kix` (`FieldManager::legacy_for`), which owns its fields until the write,
 as the dry run applies it. The apply asks the same question with the same
 function on its own read, under its own manager, and sends the forced apply
 with that read's `resourceVersion`, so the check and the write are one step.
 A different answer fails with `ApplyError::ChangedSincePlan` and the deploy
-stops. A failed read fails with `ApplyError::ReadFailed`. A 409 on the
+stops. A failed read fails with `ApplyError::ReadFailed`, under
+`--force-conflicts` too. A 409 on the
 forced write means the object moved, and the apply reads and asks again, up
 to `TAKEOVER_ATTEMPTS` rounds in all (`ApplyError::KeepsChanging`). A write
 to `status` or to any field the answer does not hold does not stop it. A
 forced apply (and `--force-conflicts`) leaves out each ceded field another
 manager holds on the object it reads, so a ceded field taken after the plan
 stays with its manager. The plan hands the run the whole manifest. A recreate
-applies without force, since Kix deleted the object first. The plan's
+applies without force, since Kix deleted the object first, and so does the
+apply that follows the wait for an object that was being deleted. The plan's
 drift line for a field another manager took names the manager and points at
 `ownership.cede`. The operator never forces: it writes no object labelled
 `DriftReported`, which does not count as a failure, so its dependents go on.

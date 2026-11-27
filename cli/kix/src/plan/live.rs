@@ -1850,6 +1850,57 @@ mod tests {
             );
         }
 
+        /// Kix cluster `b` holds `data.password` of a Secret whose value
+        /// cluster `a`'s build gives in `stringData`. The manifest does not
+        /// name `data.password`, so only the API server's answer shows that
+        /// `b` holds it. The plan keeps no answer, and the deploy applies the
+        /// Secret without force and is refused with the conflict.
+        #[tokio::test]
+        async fn a_field_another_kix_cluster_holds_is_never_forced() {
+            use base64::Engine as _;
+            let encoded = |s: &str| base64::engine::general_purpose::STANDARD.encode(s);
+            let api = FakeApi::new([]);
+            api.track_owners();
+            let v1 = release(
+                "a-v1",
+                &[json!({
+                    "apiVersion": "v1",
+                    "kind": "Secret",
+                    "metadata": {
+                        "name": "db",
+                        "namespace": "app",
+                        "labels": { "app.kubernetes.io/managed-by": "kix" },
+                    },
+                    "stringData": { "password": "one" },
+                })],
+            );
+            cli_deploy(&api, &v1).await.unwrap();
+            api.update_as("kix/b", None, "Secret", "db", |o| {
+                o["data"]["password"] = json!(encoded("two"));
+            });
+            let checked = cli_plan(&api, &v1).await;
+            assert_eq!(writes(&checked), ["db"]);
+            assert_eq!(checked.force(), crate::cluster::ops::Force::None);
+
+            let before = api.requests().len();
+            let result = cli_run(&api, checked).await;
+            assert!(
+                failures_of(&result).contains("[K5636] Secret/db@app was not updated."),
+                "{}",
+                failures_of(&result)
+            );
+            let forced: Vec<String> = api.requests()[before..]
+                .iter()
+                .filter(|r| r.contains("/secrets/db?") && r.contains("force=true"))
+                .cloned()
+                .collect();
+            assert!(forced.is_empty(), "{forced:?}");
+            assert_eq!(
+                api.object("Secret", "db").unwrap()["data"]["password"],
+                json!(encoded("two"))
+            );
+        }
+
         /// The build cedes the replicas count, and Kix still owned it when
         /// the plan was made. An autoscaler takes it after the plan. The
         /// forced apply leaves out each ceded field another manager holds
