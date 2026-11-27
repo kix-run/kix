@@ -549,6 +549,26 @@
       ],
       "type": "object"
     },
+    "DriftOwner": {
+      "description": "A field manager other than Kix that owns fields Kix applied.",
+      "properties": {
+        "fields": {
+          "description": "The fields, such as `spec.replicas`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "manager": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "manager",
+        "fields"
+      ],
+      "type": "object"
+    },
     "EarlierDeployChange": {
       "description": "A field a deploy that did not finish wrote, which differs from the\ndeployed build.",
       "properties": {
@@ -1144,6 +1164,17 @@
           "description": "The `namespace/instance` of the package `packages` lists the object\nunder, or `_cluster` for an object no package owns and for the\nActivation record.",
           "type": "string"
         },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WriteReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why the deploy writes an object whose build file did not change, or\nthat a deploy with failures left behind. Left out for a change the\nnew build makes, and for a plan that compared builds."
+        },
         "store_hash": {
           "description": "The hash part of the store path of the build file the object is made\nfrom, which is also its identity hash annotation.",
           "type": "string"
@@ -1327,7 +1358,7 @@
           "description": "Fields where the live cluster differs from the deployed build. From\n`kix plan`, the fields this change touches. From `kix diff` against\nthe cluster, every field of a drifted object that the new build sets."
         },
         "drift_unchecked": {
-          "description": "How many live objects `kix diff` could not check for drift, because\nthey have no applied-hash stamp or no Kix field records in\n`managedFields`. Left out when there are none.",
+          "description": "How many live objects `kix diff` could not check for drift, because\nKix has no applied hash for them or `managedFields` has no Kix field\nrecords. Left out when there are none.",
           "format": "uint",
           "minimum": 0,
           "type": "integer"
@@ -1391,6 +1422,12 @@
         },
         "made_by": {
           "$ref": "#/$defs/MadeBy"
+        },
+        "metadata_rewrites": {
+          "description": "How many objects the deploy moves to this version of Kix's\nbookkeeping, once: it renames their field manager `kix` to the Kix\ncluster's own, and removes the two annotations in which an earlier\nversion recorded which deploys name the object and what it applied.\nLeft out when there are none.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
         },
         "migrations": {
           "$ref": "#/$defs/Checked",
@@ -1490,6 +1527,10 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "operator_removed": {
+          "description": "`--operator-removed`: no Kix operator runs for the Kix cluster, so\nthe deploy takes back the records an older operator was handed.\nLeft out when not set.",
+          "type": "boolean"
         },
         "prune": {
           "$ref": "#/$defs/PrunePolicy",
@@ -1786,6 +1827,11 @@
           "const": "sops_not_flat",
           "description": "A SOPS file has a top-level value that is a map, a list, or null, so\nKix cannot make the Secret's keys from it.",
           "type": "string"
+        },
+        {
+          "const": "kix_cluster_conflict",
+          "description": "Another Kix cluster applies the object and owns fields this build\nsets to other values. The message names that Kix cluster and the\nfields.",
+          "type": "string"
         }
       ]
     },
@@ -1928,6 +1974,11 @@
           "type": "string"
         },
         {
+          "const": "crd_installed_by_kix",
+          "description": "Its kind is one of Kix's own. The build does not carry its CRD, and\nKix installs that CRD when the deploy takes its lock.",
+          "type": "string"
+        },
+        {
           "const": "crd_installed_outside_kix",
           "description": "Its kind comes from a CRD that is not on the cluster, and the build\ndeclares it installed outside Kix with an import marker. Kix does\nnot create it, and the deploy waits for something else to install\nit, such as an operator in the build or another tool.",
           "type": "string"
@@ -1986,6 +2037,98 @@
           "const": "if_last_run_failed",
           "description": "An unchanged Job under the rerun rule. The deploy reads its last run\nand creates it again only if that run failed, so the plan cannot\ncount it as a write.",
           "type": "string"
+        }
+      ]
+    },
+    "WriteReason": {
+      "description": "Why a deploy writes an object, beyond the change its build makes. Kix\ndecides this from the live object and the cluster's deployment records.",
+      "oneOf": [
+        {
+          "description": "The live object is what a deploy that stopped (`Failed`) or that\n`kix deploy --only` left partly deployed (`Partial`) applied.",
+          "properties": {
+            "kind": {
+              "const": "applied_by_record",
+              "type": "string"
+            },
+            "record": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "record"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The cluster's current deploy finished with failures (`Degraded`) and\ndid not reach this object.",
+          "properties": {
+            "kind": {
+              "const": "left_by_degraded",
+              "type": "string"
+            },
+            "record": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "record"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The live object matches the build, but Kix has no record of what it\napplied. The deploy applies it again and records that.",
+          "properties": {
+            "kind": {
+              "const": "applied_hash_missing",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Fields Kix applied changed on the cluster. The deploy applies the\nbuild again and takes those fields back from the field managers that\nchanged them, which `changed_by` names. Empty when Kubernetes\nrecorded no other owner.",
+          "properties": {
+            "changed_by": {
+              "items": {
+                "$ref": "#/$defs/DriftOwner"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "reverts_drift",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "changed_by"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Fields Kix applied are owned by another Kix cluster's field manager,\nor by the manager `kix` an older Kix applies under, which\n`changed_by` names. The deploy applies the build without force: when\nthe values agree it adds this Kix cluster's own entry, and when they\ndiffer Kubernetes refuses it and the deploy stops.",
+          "properties": {
+            "changed_by": {
+              "items": {
+                "$ref": "#/$defs/DriftOwner"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "held_by_other_cluster",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "changed_by"
+          ],
+          "type": "object"
         }
       ]
     }

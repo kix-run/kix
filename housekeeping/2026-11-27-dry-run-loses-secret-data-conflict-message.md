@@ -1,0 +1,3 @@
+# 2026-11-27 · `cli/kix/src/cluster/preview.rs` · The dry run gives a conflict on a Secret's `data` the generic conflict advice, without `[K9044]`.
+
+`apply_resource` classifies a conflict on a Secret's `data` keys as `ApplyError::SecretDataConflict`, whose `[K9044]` message says what overwriting the other manager's values means. `Refusal::of_apply` takes only its source and classifies it again as a plain `Refusal::Conflict`, so `kix plan` and the deploy's dry run print "take the fields with `--force-conflicts`, or set `ownership.cede`" instead. The conflict with another Kix cluster had the same shape and now keeps its message (`Refusal::KixClusterConflict`).

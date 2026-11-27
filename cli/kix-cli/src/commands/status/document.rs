@@ -237,7 +237,8 @@ pub struct Drift {
 pub enum DriftState {
     InSync,
     Changed,
-    /// The object has no applied-hash stamp yet. The next deploy adds it.
+    /// Kix has no applied hash for the object. A `kix deploy` of a Kix
+    /// cluster read from revisions applies it again and records one.
     Unstamped,
     /// The object has no field ownership entry for Kix.
     NoFieldset,

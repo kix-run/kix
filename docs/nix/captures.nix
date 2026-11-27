@@ -2177,31 +2177,13 @@
         ];
       }
       {
-        capture = "conflict";
+        capture = "drift";
         run = [
           "kix"
-          "deploy"
+          "plan"
           "how-to-adoption-takeover"
-          "--reconcile"
-          "--dry-run"
-          "-y"
         ];
         allowFailure = true;
-        stdoutGrep = "The deploy would stop|field ownership conflict| owns \\.|--force-conflicts takes";
-      }
-      {
-        capture = "force-preview";
-        run = [
-          "kix"
-          "deploy"
-          "how-to-adoption-takeover"
-          "--reconcile"
-          "--dry-run"
-          "--force-conflicts"
-          "-y"
-        ];
-        allowFailure = true;
-        stdoutGrep = "Deployment.apps/legacy-web|Dry run complete";
       }
       {
         capture = "resolve";
@@ -2209,11 +2191,17 @@
           "kix"
           "deploy"
           "how-to-adoption-takeover"
-          "--reconcile"
-          "--force-conflicts"
           "-y"
         ];
-        stdoutGrep = "Deployment.apps/legacy-web|activation .*Active|Deploy complete";
+      }
+      {
+        capture = "clean";
+        run = [
+          "kix"
+          "plan"
+          "how-to-adoption-takeover"
+        ];
+        allowFailure = true;
       }
     ];
   }
@@ -2842,8 +2830,6 @@
           "kix"
           "deploy"
           "how-to-application"
-          "--reconcile"
-          "--force-conflicts"
           "-y"
         ];
       }

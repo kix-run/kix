@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::cluster::revision::{RevisionMap, UnreadableMap};
 use crate::eval::package_index::RecordPackageIndex;
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{
@@ -67,6 +68,11 @@ pub struct Record {
     /// before Kix wrote it do, or when it is in a format this release does
     /// not read.
     pub package_index: Option<RecordPackageIndex>,
+    /// `status.revisions`, the revisions the record's deploy is made of.
+    /// `None` when the record has none, as records an earlier Kix wrote and
+    /// `Superseded` records do. An error when it is there and this release
+    /// cannot read it, so the record may name revisions Kix cannot see.
+    pub revisions: Option<Result<RevisionMap, UnreadableMap>>,
     /// `status.waves`, recording per-wave progress for commands waiting on the operator.
     pub waves: Vec<WaveRecord>,
     pub total_waves: usize,
@@ -166,6 +172,9 @@ pub(crate) const FAILED_REQUEST_FIELD: &str = "failedRequest";
 /// The `status` field that names the instances a deploy with `--only`
 /// applied of the record's build.
 pub(crate) const PARTIAL_FIELD: &str = "partial";
+/// The `status` field that names the revisions the record's deploy is made
+/// of.
+pub(crate) const REVISIONS_FIELD: &str = "revisions";
 /// The `status` field that counts the failed runs of the operator's current
 /// deploy.
 pub(crate) const FAILED_ATTEMPTS_FIELD: &str = "failedAttempts";
@@ -226,6 +235,11 @@ impl Record {
                 .data
                 .pointer(&format!("/status/{}", keys::PACKAGE_INDEX_FIELD))
                 .and_then(RecordPackageIndex::from_value),
+            revisions: obj
+                .data
+                .pointer(&format!("/status/{REVISIONS_FIELD}"))
+                .filter(|v| !v.is_null())
+                .map(RevisionMap::read),
             waves: obj
                 .data
                 .pointer("/status/waves")
@@ -349,44 +363,18 @@ pub struct KeptOrphanSource {
     pub built_via: Option<String>,
 }
 
-/// Orphan sources accumulated during a deploy to write to `status.orphansKeptFrom`.
+/// What a run's kept-orphans revision names besides the orphans the run
+/// leaves on the cluster.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct KeptOrphans {
-    /// Builds in which this run's plan found orphans. Written only when at
-    /// least one orphan remains on the cluster after pruning.
-    pub found: Vec<KeptOrphanSource>,
-    /// Sources the plan could not inspect because their builds are absent from
-    /// the local Nix store. Always preserved because their orphans could not be
-    /// pruned.
-    pub unexamined: Vec<KeptOrphanSource>,
-    /// Whether to carry forward `status.orphansKeptFrom` from the record that
-    /// was current at finalize time (used when `--offline` bypassed
-    /// reading the live record during planning).
+    /// Whether to carry forward the objects of the kept-orphans revision of
+    /// the record that is current at finalize, unexamined. A plan made with
+    /// `--offline` did not read them.
     pub carry_current: bool,
-}
-
-impl KeptOrphans {
-    /// Return the deduplicated list of orphan sources to write to
-    /// `status.orphansKeptFrom`.
-    pub fn recorded(
-        &self,
-        current: Option<&[KeptOrphanSource]>,
-        orphans_left: bool,
-    ) -> Vec<KeptOrphanSource> {
-        let found = if orphans_left { &self.found[..] } else { &[] };
-        let carried = if self.carry_current {
-            current.unwrap_or_default()
-        } else {
-            &[]
-        };
-        let mut out: Vec<KeptOrphanSource> = Vec::new();
-        for source in found.iter().chain(&self.unexamined).chain(carried) {
-            if !out.iter().any(|s| s.identity_hash == source.identity_hash) {
-                out.push(source.clone());
-            }
-        }
-        out
-    }
+    /// Objects the records name that the plan could not find out about,
+    /// because the cluster does not serve their kind. The run's
+    /// kept-orphans revision names them again.
+    pub unknown: Vec<crate::cluster::revision::RevisionObject>,
 }
 
 /// Read `status.orphansKeptFrom` from an Activation object, skipping malformed

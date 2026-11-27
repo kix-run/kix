@@ -4,9 +4,10 @@
 //! [`compare`] finds a mismatch. A saved plan only restricts a deploy; the
 //! deploy never applies anything read from it.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
+use serde_json::Value;
 
 use super::document::{Checked, MadeBy, Plan, PlanFlags, PruneFate};
 use crate::cluster::scheduler::PrunePolicy;
@@ -149,6 +150,7 @@ pub fn flags_for(
             (given.reconcile, "--reconcile"),
             (given.accept_migrations, "--accept-migrations"),
             (!given.only.is_empty(), "--only"),
+            (given.operator_removed, "--operator-removed"),
         ]
         .into_iter()
         .filter_map(|(set, flag)| set.then_some(flag))
@@ -229,6 +231,11 @@ pub fn flags_for(
             given.accept_migrations,
             planned.accept_migrations,
             "--accept-migrations",
+        ),
+        (
+            given.operator_removed,
+            planned.operator_removed,
+            "--operator-removed",
         ),
     ] {
         if set && !in_plan {
@@ -378,23 +385,61 @@ pub fn compare(reviewed: &Plan, fresh: &Plan) -> Comparison {
 
     match &reviewed.drift {
         Checked::Checked { items } => {
-            let known: BTreeSet<(&str, &str)> = items
+            // A reverted field the reviewed plan showed, with the field
+            // managers that changed it and the live value it showed. A plan
+            // saved before drift entries carried values compares fields and
+            // managers only.
+            let sorted = |managers: &[String]| -> Vec<String> {
+                let mut m = managers.to_vec();
+                m.sort();
+                m.dedup();
+                m
+            };
+            type Shown<'a> = (Vec<String>, Option<&'a Value>);
+            let known: BTreeMap<(&str, &str), Shown> = items
                 .iter()
                 .filter(|d| d.reverted)
-                .map(|d| (d.resource.as_str(), d.path.as_str()))
+                .map(|d| {
+                    (
+                        (d.resource.as_str(), d.path.as_str()),
+                        (sorted(&d.managers), d.live.as_ref()),
+                    )
+                })
                 .collect();
             let new = fresh
                 .drift
                 .items()
                 .iter()
-                .filter(|d| d.reverted && !known.contains(&(d.resource.as_str(), d.path.as_str())))
-                .map(|d| {
+                .filter(|d| d.reverted)
+                .filter_map(|d| {
                     let by = if d.managers.is_empty() {
                         String::new()
                     } else {
                         format!(": changed by {}", d.managers.join(", "))
                     };
-                    format!("{} {}{by}", d.resource, d.path)
+                    match known.get(&(d.resource.as_str(), d.path.as_str())) {
+                        None => Some(format!("{} {}{by}", d.resource, d.path)),
+                        Some((managers, _)) if *managers != sorted(&d.managers) => {
+                            let had = if managers.is_empty() {
+                                "no other field manager".to_string()
+                            } else {
+                                managers.join(", ")
+                            };
+                            Some(format!(
+                                "{} {}{by} (saved plan had {had})",
+                                d.resource, d.path
+                            ))
+                        }
+                        Some((_, Some(shown))) if d.live.as_ref() != Some(*shown) => Some(format!(
+                            "{} {}{by}: live value is now {} (saved plan had {shown})",
+                            d.resource,
+                            d.path,
+                            d.live
+                                .as_ref()
+                                .map_or("absent".to_string(), Value::to_string),
+                        )),
+                        Some(_) => None,
+                    }
                 })
                 .collect();
             mismatch(Rule::NewRevertedDrift, new);
@@ -609,6 +654,7 @@ mod tests {
             reconcile: false,
             force_conflicts: false,
             accept_migrations: false,
+            operator_removed: false,
             only: Vec::new(),
         });
         p.conflicts = Checked::found(Vec::new());
@@ -628,6 +674,7 @@ mod tests {
                 package: "app/web".into(),
                 change: WriteChange::Added,
                 group: String::new(),
+                reason: None,
             }],
             deletes: vec![ObjectDelete {
                 kind: "ConfigMap".into(),
@@ -730,12 +777,43 @@ mod tests {
         };
         let mut drifted = plan();
         drifted.drift = Checked::found(vec![drift("$.spec.replicas", "5")]);
+        // The same field and manager with another live value is a new
+        // revert: the deploy would overwrite a value the reviewer did not
+        // see.
         let mut redrifted = plan();
         redrifted.drift = Checked::found(vec![drift("$.spec.replicas", "7")]);
-        assert!(
-            compare(&drifted, &redrifted).matches,
-            "the live value is not compared"
+        let differs = compare(&drifted, &redrifted);
+        assert_eq!(rules(&differs), vec![Rule::NewRevertedDrift]);
+        assert_eq!(
+            differs.mismatches[0].items,
+            [
+                "Deployment/a@app $.spec.replicas: changed by kubectl-scale: live value is now \"7\" (saved plan had \"5\")"
+            ]
         );
+        assert!(compare(&drifted, &drifted).matches);
+        // The same field and value changed by another manager is a new
+        // revert too.
+        let mut moved = plan();
+        moved.drift = Checked::found(vec![DriftChange {
+            managers: vec!["kubectl-edit".into()],
+            ..drift("$.spec.replicas", "5")
+        }]);
+        let differs = compare(&drifted, &moved);
+        assert_eq!(rules(&differs), vec![Rule::NewRevertedDrift]);
+        assert_eq!(
+            differs.mismatches[0].items,
+            [
+                "Deployment/a@app $.spec.replicas: changed by kubectl-edit (saved plan had kubectl-scale)"
+            ]
+        );
+        // A plan saved before drift entries carried values compares fields
+        // and managers only.
+        let mut older = plan();
+        older.drift = Checked::found(vec![DriftChange {
+            live: None,
+            ..drift("$.spec.replicas", "5")
+        }]);
+        assert!(compare(&older, &redrifted).matches);
         assert_eq!(
             rules(&compare(&plan(), &drifted)),
             vec![Rule::NewRevertedDrift]
@@ -775,6 +853,7 @@ mod tests {
 
         let accepting = PlanFlags {
             accept_migrations: true,
+            operator_removed: false,
             ..plan().flags.unwrap()
         };
         assert!(flags_for(&diff, &accepting, "p.kixplan", "c").is_err());
@@ -809,6 +888,38 @@ mod tests {
         };
         let err = flags_for(&plan(), &given, "p.kixplan", "c").unwrap_err();
         assert!(err.contains("--reconcile"), "{err}");
+    }
+
+    /// A plan saved without `--operator-removed` cannot be deployed with it,
+    /// and one saved with it deploys with the flag, given or not.
+    #[test]
+    fn operator_removed_must_agree_with_the_plan() {
+        let none = plan().flags.unwrap();
+        let removed = PlanFlags {
+            operator_removed: true,
+            ..none.clone()
+        };
+        let err = flags_for(&plan(), &removed, "p.kixplan", "c").unwrap_err();
+        assert!(err.contains("--operator-removed"), "{err}");
+        let mut saved = plan();
+        saved.flags = Some(removed.clone());
+        assert_eq!(
+            flags_for(&saved, &none, "p.kixplan", "c"),
+            Ok(removed.clone())
+        );
+        assert_eq!(
+            flags_for(&saved, &removed, "p.kixplan", "c"),
+            Ok(removed.clone())
+        );
+        let mut diff = plan();
+        diff.flags = None;
+        assert!(flags_for(&diff, &removed, "p.kixplan", "c").is_err());
+        // Left out of a saved plan when not set, as older plans have it.
+        let text = serde_json::to_string(&none).unwrap();
+        assert!(!text.contains("operatorRemoved"), "{text}");
+        let read: PlanFlags =
+            serde_json::from_str(&serde_json::to_string(&removed).unwrap()).unwrap();
+        assert!(read.operator_removed);
     }
 
     /// A saved plan of part of a build deploys only with the same `--only`,
@@ -1012,6 +1123,7 @@ mod tests {
             package: "app/web".into(),
             change: WriteChange::Added,
             group: String::new(),
+            reason: None,
         });
         let c = compare(&plan(), &with_objects(plan(), more));
         assert_eq!(rules(&c), vec![Rule::Objects]);

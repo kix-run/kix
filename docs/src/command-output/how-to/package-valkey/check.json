@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix check how-to-package-valkey",
-      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    14 manifests evaluated       \n scorecard  pass    0 errors, 1 warnings, 0 info \n\nsecurity.hasNetworkPolicy (warning), 1:\n  cache: namespace 'cache' has workloads but no network policy\n",
+      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    12 manifests evaluated       \n scorecard  pass    0 errors, 1 warnings, 0 info \n\nsecurity.hasNetworkPolicy (warning), 1:\n  cache: namespace 'cache' has workloads but no network policy\n",
       "stderr": "",
-      "stdoutDrift": "\nTOOL RESULT DETAILS\ncache: namespace 'cache' has workloads but no network policy\neval pass 14 manifests evaluated\nscorecard pass 0 errors, 1 warnings, 0 info\nsecurity.hasNetworkPolicy (warning), 1:\n",
+      "stdoutDrift": "\nTOOL RESULT DETAILS\ncache: namespace 'cache' has workloads but no network policy\neval pass 12 manifests evaluated\nscorecard pass 0 errors, 1 warnings, 0 info\nsecurity.hasNetworkPolicy (warning), 1:\n",
       "stderrDrift": "",
       "exitCode": 0
     }

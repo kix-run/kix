@@ -12,6 +12,7 @@ pub mod drift;
 pub mod errors;
 #[cfg(any(test, feature = "test-util"))]
 pub mod fake_api;
+pub mod field_manager;
 pub mod fieldsv1;
 pub mod graph;
 pub mod head;
@@ -20,12 +21,15 @@ pub mod kept;
 pub mod kubernetes_version;
 pub mod left_behind;
 pub mod migrate;
+pub mod migration_write;
 pub mod observe;
 pub(crate) mod ops;
+pub mod own_crds;
 pub mod owned_view;
 pub mod preview;
 pub mod prune_guard;
 pub mod readiness;
+pub mod revision;
 pub mod scheduler;
 /// Scripted test fakes for the deploy engine's external interfaces.
 #[cfg(any(test, feature = "test-util"))]
@@ -36,6 +40,8 @@ mod state_fixtures;
 pub mod stops;
 pub mod stream;
 pub mod tenancy;
+#[cfg(any(test, feature = "test-util"))]
+pub mod tenancy_fixture;
 #[cfg(test)]
 mod test_fixtures;
 pub mod topology;

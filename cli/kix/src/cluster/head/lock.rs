@@ -12,8 +12,8 @@ use thiserror::Error;
 
 use super::guard::WritesStopped;
 use super::{
-    Clock, CrdError, Head, HeadStatus, Holder, LEASE, LockState, Purpose, RENEW_EVERY, STOP_AFTER,
-    Writer, api, ensure_crd,
+    Clock, Head, HeadStatus, Holder, LEASE, LockState, Purpose, RENEW_EVERY, STOP_AFTER, Writer,
+    api,
 };
 use crate::cluster::activation::{self, Record, Records, RecordsError};
 use crate::cluster::cancel::CancelToken;
@@ -106,7 +106,7 @@ pub enum TakeError {
         now: u64,
     },
     #[error(transparent)]
-    Crd(#[from] CrdError),
+    Crd(#[from] crate::cluster::own_crds::CrdError),
     #[error(
         "cannot read or update deploy lock `ActivationHead` `{cluster}`: {}. Nothing was changed on the cluster. Check the cluster connection and ensure this account has `get`, `list`, `create`, and `update` permissions on `{}`, then try again",
         describe(.source),
@@ -155,9 +155,11 @@ pub(super) struct PhaseRepair {
 ///   deploys too is continued. Any other one still `Deploying` is marked
 ///   `Failed`. Taking over a dead run raises the generation, unless the new
 ///   run continues it or the dead run was a repair.
-/// - The head is rebuilt from the phases when it has no status, or when the
-///   record it names is gone or `Superseded` (an older Kix deployed after
-///   it). Rebuilding a head that had a status raises the generation and
+/// - The head is rebuilt from the phases when it has no status, or when an
+///   older Kix deployed after it: the record it names is gone or
+///   `Superseded`, or another record is current by phase and has no
+///   revision map while the named one still has a current phase
+///   ([`crate::cluster::tenancy::older_kix_deployed_after`]). Rebuilding a head that had a status raises the generation and
 ///   forgets the writer, so the checks of the writer read the current
 ///   record as before.
 /// - Otherwise the phases are repaired from the head when the record it
@@ -196,7 +198,10 @@ pub(super) fn decide(
         .current
         .as_ref()
         .and_then(|c| records.iter().find(|r| &r.name == c))
-        .filter(|r| r.phase != PHASE_SUPERSEDED);
+        .filter(|r| {
+            r.phase != PHASE_SUPERSEDED
+                && !crate::cluster::tenancy::older_kix_deployed_after(r, records)
+        });
     let mut repair = None;
     match named {
         Some(record) if had_status => {
@@ -255,7 +260,7 @@ struct Watch {
 }
 
 /// Take the deploy lock of `request.cluster` through `client`, creating the
-/// head's CRD and the head itself when absent.
+/// head when absent, after installing or updating Kix's own CRDs.
 ///
 /// When another run holds the lock, watch it for up to [`LEASE`]: refuse
 /// with [`TakeError::Held`] once it renews, take it over if it never does. A
@@ -275,7 +280,7 @@ pub async fn take(
     clock: Arc<dyn Clock>,
     on_watch: &(dyn Fn(&LockState) + Send + Sync),
 ) -> Result<Lock, TakeError> {
-    ensure_crd(client).await?;
+    crate::cluster::own_crds::ensure_all(client).await?;
     let cluster = request.cluster.clone();
     let api_error = |source| TakeError::Api {
         cluster: cluster.clone(),

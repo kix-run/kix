@@ -9,7 +9,7 @@
   "commands": [
     {
       "command": "kubectl get namespaces",
-      "stdout": "NAME                 STATUS   AGE\ndefault              Active   56s\nhow-to-app           Active   51s\nkube-node-lease      Active   56s\nkube-public          Active   56s\nkube-system          Active   56s\nlocal-path-storage   Active   52s\n",
+      "stdout": "NAME                 STATUS   AGE\ndefault              Active   76s\nhow-to-app           Active   67s\nkube-node-lease      Active   76s\nkube-public          Active   76s\nkube-system          Active   76s\nlocal-path-storage   Active   71s\n",
       "stderr": "",
       "stdoutDrift": "NAME STATUS AGE\ndefault Active <DURATION>\nhow-to-app Active <DURATION>\nkube-node-lease Active <DURATION>\nkube-public Active <DURATION>\nkube-system Active <DURATION>\nlocal-path-storage Active <DURATION>\n",
       "stderrDrift": "",

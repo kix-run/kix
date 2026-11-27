@@ -77,6 +77,15 @@ pub enum Refusal {
         owners: Vec<ConflictOwner>,
         message: String,
     },
+    /// Another Kix cluster applies the object and owns fields this apply
+    /// sets to other values (HTTP 409). Kix never takes these fields
+    /// without `--force-conflicts`, because the other Kix cluster's next
+    /// deploy would then be refused in the same way. `message` is the one
+    /// the apply gives ([`ApplyError::KixClusterConflict`]).
+    KixClusterConflict {
+        clusters: Vec<ConflictOwner>,
+        message: String,
+    },
     /// An admission webhook denied the request.
     WebhookDenied {
         webhook: Option<String>,
@@ -148,6 +157,7 @@ impl Refusal {
     pub fn message(&self) -> String {
         match self {
             Refusal::Conflict { message, .. }
+            | Refusal::KixClusterConflict { message, .. }
             | Refusal::WebhookDenied { message, .. }
             | Refusal::PolicyDenied { message, .. }
             | Refusal::WebhookNoDryRun { message, .. }
@@ -164,22 +174,33 @@ impl Refusal {
         }
     }
 
-    /// Classify an apply failure.
+    /// Classify an apply failure. A conflict with another Kix cluster keeps
+    /// the apply's own classification and message, so a dry run refuses it
+    /// in the words a real apply would.
     pub(crate) fn of_apply(err: &ApplyError) -> Refusal {
         let source = match err {
             ApplyError::UnknownKind { kind } => {
                 return Refusal::UnknownKind { kind: kind.clone() };
             }
+            ApplyError::KixClusterConflict { clusters, .. } => {
+                return Refusal::KixClusterConflict {
+                    clusters: clusters.clone(),
+                    message: err.to_string(),
+                };
+            }
             ApplyError::PatchFailed { source, .. }
             | ApplyError::Conflict { source, .. }
             | ApplyError::SecretDataConflict { source, .. }
             | ApplyError::ImmutableConflict { source, .. }
-            | ApplyError::CrdStoredVersion { source, .. }
-            | ApplyError::BookkeepingAnnotationsFailed { source, .. } => source,
+            | ApplyError::CrdStoredVersion { source, .. } => source,
             ApplyError::ExpectationUnmet { .. }
+            | ApplyError::Migration(_)
             | ApplyError::NoNamespace { .. }
             | ApplyError::BeingDeleted { .. }
             | ApplyError::StillBeingDeleted { .. }
+            | ApplyError::ChangedSincePlan { .. }
+            | ApplyError::KeepsChanging { .. }
+            | ApplyError::ReadFailed { .. }
             | ApplyError::Interrupted { .. } => {
                 return Refusal::Other {
                     message: err.to_string(),

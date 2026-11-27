@@ -10,7 +10,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::cluster::drift;
-use crate::cluster::fieldsv1::KIX_FIELD_MANAGER;
+use crate::cluster::field_manager::FieldManager;
 use crate::manifest::diff::engine::structural_diff;
 use crate::manifest::diff::{DiffConfig, DiffKind, Difference};
 use crate::manifest::keys;
@@ -82,6 +82,10 @@ pub(crate) struct ThreeWay<'a> {
     /// value that differs from `deployed` and equals a folded build's value
     /// is that deploy's write, not drift.
     pub folded: &'a [(FoldedBy, &'a Value)],
+    /// The field manager of the Kix cluster compared. Every other manager,
+    /// another Kix cluster's among them, is named as the maker of a drift
+    /// change.
+    pub manager: &'a FieldManager,
 }
 
 impl ThreeWay<'_> {
@@ -151,7 +155,10 @@ impl ThreeWay<'_> {
             })
             .collect();
 
-        let owners = self.managed.map(foreign_paths).unwrap_or_default();
+        let owners = self
+            .managed
+            .map(|m| foreign_paths(m, self.manager))
+            .unwrap_or_default();
         let drifted = touched
             .into_iter()
             .map(|i| {
@@ -199,6 +206,8 @@ pub struct Sides<'a> {
     /// The live objects [`drift::check_object`] finds drifted. Only their
     /// changes can carry a drift label.
     pub drifted: &'a BTreeSet<ResourceId>,
+    /// The field manager of the Kix cluster compared.
+    pub manager: &'a FieldManager,
 }
 
 /// Label every field change of a comparison whose old side is the live
@@ -229,6 +238,7 @@ pub fn label_live(diff: &mut super::PackageDiff, sides: &Sides) {
                 applies,
                 secret: types::is_secret(live) || types::is_secret(new),
                 folded: &[],
+                manager: sides.manager,
             };
             let (mut l, _) = three.label(changes);
             if !sides.drifted.contains(rid) {
@@ -260,6 +270,7 @@ pub fn live_drift(
     drifted: &[(drift::DriftReport, kube::api::DynamicObject)],
     new: &HashMap<ResourceId, &Value>,
     deployed: Option<&HashMap<ResourceId, &Value>>,
+    manager: &FieldManager,
 ) -> Vec<super::document::DriftChange> {
     let mut out = Vec::new();
     for (report, obj) in drifted {
@@ -295,7 +306,7 @@ pub fn live_drift(
         let first = out.len();
 
         let mut fields: Vec<(String, Vec<String>, drift::ForeignField)> = Vec::new();
-        for field in drift::foreign_fields(obj) {
+        for field in drift::foreign_fields(obj, manager) {
             if field.value_in(new).is_none() {
                 continue;
             }
@@ -417,15 +428,14 @@ pub(crate) fn value_at<'v>(obj: &'v Value, path: &str) -> Option<&'v Value> {
     Some(node)
 }
 
-/// Return `(manager, path)` pairs for each non-status field owned by a manager
-/// other than Kix on `live`.
-fn foreign_paths(live: &Value) -> Vec<(String, String)> {
+/// Return `(manager, path)` pairs for each non-status field on `live` owned
+/// by a manager whose fields do not count as `manager`'s.
+fn foreign_paths(live: &Value, manager: &FieldManager) -> Vec<(String, String)> {
     let Ok(obj) = serde_json::from_value::<kube::api::DynamicObject>(live.clone()) else {
         return Vec::new();
     };
-    drift::foreign_owners(&obj)
+    drift::foreign_owners(&obj, manager)
         .into_iter()
-        .filter(|o| o.manager != KIX_FIELD_MANAGER)
         .flat_map(|o| {
             let manager = o.manager.clone();
             o.paths.into_iter().map(move |p| (manager.clone(), p))
@@ -477,6 +487,7 @@ fn segments(path: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cluster::revision::AppliedHashes;
     use serde_json::json;
 
     fn deployment(replicas: i64, image: &str) -> Value {
@@ -501,7 +512,7 @@ mod tests {
         let new = deployment(1, "web:2");
         let mut live = deployment(3, "web:1");
         live["metadata"]["managedFields"] = json!([
-            {"manager": "kix", "operation": "Apply",
+            {"manager": "kix/a", "operation": "Apply",
              "fieldsV1": {"f:spec": {"f:replicas": {}}}},
             {"manager": "kubectl", "operation": "Update", "subresource": "scale",
              "fieldsV1": {"f:spec": {"f:replicas": {}}}},
@@ -515,6 +526,7 @@ mod tests {
             applies: true,
             secret: false,
             folded: &[],
+            manager: &FieldManager::of("a"),
         };
         let (labels, drifted) = three.label(&diffs);
         let by_path: Vec<(&str, &Vec<ChangeLabel>)> =
@@ -553,6 +565,7 @@ mod tests {
             applies: true,
             secret: false,
             folded: &folded,
+            manager: &FieldManager::of("a"),
         };
         let diffs = changes(&live, &new);
         let (labels, drifted) = three.label(&diffs);
@@ -567,6 +580,7 @@ mod tests {
         let unmatched = [(by("c-other"), &other)];
         let three = ThreeWay {
             folded: &unmatched,
+            manager: &FieldManager::of("a"),
             ..three
         };
         let (labels, drifted) = three.label(&diffs);
@@ -586,6 +600,7 @@ mod tests {
             applies: false,
             secret: false,
             folded: &[],
+            manager: &FieldManager::of("a"),
         };
         let (labels, _) = three.label(&changes(&live, &deployed));
         assert_eq!(labels, vec![vec![ChangeLabel::DriftKept]]);
@@ -604,6 +619,7 @@ mod tests {
             applies: true,
             secret: false,
             folded: &[],
+            manager: &FieldManager::of("a"),
         };
         let (labels, _) = three.label(&changes(&live, &new));
         assert_eq!(
@@ -624,6 +640,7 @@ mod tests {
             applies: true,
             secret: false,
             folded: &[],
+            manager: &FieldManager::of("a"),
         };
         let (labels, drifted) = three.label(&changes(&live, &new));
         assert_eq!(labels, vec![vec![ChangeLabel::Intended]]);
@@ -659,6 +676,7 @@ mod tests {
                 new: [(rid.clone(), &deployed[1])].into(),
                 managed: &HashMap::new(),
                 drifted: &drifted,
+                manager: &FieldManager::of("a"),
             };
             label_live(&mut diff, &sides);
             diff.labels[&rid].clone()
@@ -682,7 +700,7 @@ mod tests {
         others: Value,
     ) -> (drift::DriftReport, kube::api::DynamicObject) {
         let mut entries = vec![json!({
-            "manager": "kix", "operation": "Apply",
+            "manager": "kix/a", "operation": "Apply",
             "fieldsV1": {"f:spec": kix_fields},
         })];
         entries.extend(others.as_array().cloned().unwrap_or_default());
@@ -694,7 +712,14 @@ mod tests {
         });
         obj["metadata"]["managedFields"] = Value::Array(entries);
         let obj: kube::api::DynamicObject = serde_json::from_value(obj).unwrap();
-        (drift::check_object(&obj), obj)
+        (
+            drift::check_object(
+                &obj,
+                AppliedHashes::from_annotations().applied(&obj),
+                &crate::cluster::field_manager::FieldManager::of("a"),
+            ),
+            obj,
+        )
     }
 
     fn new_build(image: &str) -> Value {
@@ -730,7 +755,7 @@ mod tests {
         ));
         let new = new_build("web:1");
         let rid = ResourceId::from_value(&new);
-        let found = live_drift(&[live], &[(rid, &new)].into(), None);
+        let found = live_drift(&[live], &[(rid, &new)].into(), None, &FieldManager::of("a"));
         assert_eq!(
             found,
             vec![super::super::document::DriftChange {
@@ -756,7 +781,7 @@ mod tests {
         );
         let new = new_build("web:1");
         let rid = ResourceId::from_value(&new);
-        let found = live_drift(&[live], &[(rid, &new)].into(), None);
+        let found = live_drift(&[live], &[(rid, &new)].into(), None, &FieldManager::of("a"));
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].path, "$.spec.replicas");
         assert_eq!(found[0].live, found[0].deployed);
@@ -772,7 +797,7 @@ mod tests {
         let mut new = new_build("web:3");
         new["metadata"]["annotations"][keys::IDENTITY_HASH] = json!("h-dep-2");
         let rid = ResourceId::from_value(&new);
-        let found = live_drift(&[live], &[(rid, &new)].into(), None);
+        let found = live_drift(&[live], &[(rid, &new)].into(), None, &FieldManager::of("a"));
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].path, "$");
         assert!(found[0].reverted);

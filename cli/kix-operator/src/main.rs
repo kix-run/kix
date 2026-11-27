@@ -90,28 +90,36 @@ fn generation_filter(
     })
 }
 
-/// Open the cluster's Activation records after verifying the domain gate.
+/// Open the cluster's Activation records after verifying the domain gate and
+/// installing or updating Kix's own CRDs.
 ///
 /// Fails if API group discovery fails or if retired Kix API groups are still
 /// present on the cluster, so Kubernetes restarts the pod rather than running
-/// the operator against an unmigrated cluster. Discovers only Kix's own API
-/// groups (current and retired) so an unavailable third-party API service does
-/// not block startup.
+/// the operator against an unmigrated cluster. The gate runs before the
+/// install, so an unmigrated cluster gets no new definitions. Discovers only
+/// Kix's own API groups (current and retired) so an unavailable third-party
+/// API service does not block startup.
 async fn open_records(client: &kube::Client) -> anyhow::Result<Records> {
     let groups: Vec<&str> = std::iter::once(keys::GROUP)
         .chain(kix::legacy_domain::DOMAINS.iter().copied())
         .collect();
-    let discovery = kix::cluster::discovery::discover_groups(client, &groups)
+    let discover = || async {
+        kix::cluster::discovery::discover_groups(client, &groups)
+            .await
+            .context("could not check the cluster's API groups")
+    };
+    Records::open(client, &discover().await?)?;
+    kix::cluster::own_crds::ensure_all(client)
         .await
-        .context("could not check the cluster's API groups")?;
-    let records = Records::open(client, &discovery)?
+        .context("could not install Kix's CustomResourceDefinitions")?;
+    let records = Records::open(client, &discover().await?)?
         .into_records()
         .with_context(|| {
-        format!(
-            "the Activation CRD ({}) is not served on this cluster; deploy it before starting the operator",
-            keys::ACTIVATIONS_CRD
-        )
-    })?;
+            format!(
+                "CustomResourceDefinition `{}` is not served on this cluster yet. Exiting so Kubernetes restarts the operator and checks again",
+                keys::ACTIVATIONS_CRD
+            )
+        })?;
     records
         .reachable()
         .await

@@ -79,7 +79,7 @@ When the diff and conflicting fields are expected, deploy with
 <Command {...takeOwnership} />
 
 The flag tells server-side apply to transfer conflicting fields in the Kix
-manifest to the `kix` field manager. Fields that Kix does not specify remain
+manifest to the Kix cluster's field manager, `kix/<cluster>`. Fields that Kix does not specify remain
 with their existing managers.
 
 Check the result and save its field ownership:

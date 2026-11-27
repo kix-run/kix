@@ -10,9 +10,9 @@
     {
       "command": "kix export how-to-application --out ./handoff",
       "stdout": "",
-      "stderr": "Building cluster 'how-to-application'...\n  Evaluating cluster 'how-to-application'...\n  Reading package index...\n  Loading store graph...\n  Reading 4 packages...\n  Computing cross-package dependencies...\n\n  Exported 12 resources to ./handoff (plain Kubernetes YAML)\n  Skipped 5 kix-internal CRs (Activation, PackageInstance)\n",
+      "stderr": "Building cluster 'how-to-application'...\n  Evaluating cluster 'how-to-application'...\n  Reading package index...\n  Loading store graph...\n  Reading 4 packages...\n  Computing cross-package dependencies...\n\n  Exported 10 resources to ./handoff (plain Kubernetes YAML)\n  Skipped 5 kix-internal CRs (Activation, PackageInstance)\n",
       "stdoutDrift": "",
-      "stderrDrift": "\nBuilding cluster 'how-to-application'...\nComputing cross-package dependencies...\nEvaluating cluster 'how-to-application'...\nExported 12 resources to ./handoff (plain Kubernetes YAML)\nLoading store graph...\nReading 4 packages...\nReading package index...\nSkipped 5 kix-internal CRs (Activation, PackageInstance)\n",
+      "stderrDrift": "\nBuilding cluster 'how-to-application'...\nComputing cross-package dependencies...\nEvaluating cluster 'how-to-application'...\nExported 10 resources to ./handoff (plain Kubernetes YAML)\nLoading store graph...\nReading 4 packages...\nReading package index...\nSkipped 5 kix-internal CRs (Activation, PackageInstance)\n",
       "exitCode": 0
     }
   ]

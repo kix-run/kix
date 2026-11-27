@@ -11,8 +11,10 @@ use kix::cluster::activation::{self, Records};
 use kix::cluster::apply::ApplyError;
 use kix::cluster::binding::Connection;
 use kix::cluster::drift::{self, DriftReport, DriftVerdict};
+use kix::cluster::field_manager::FieldManager;
 use kix::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use kix::cluster::owned_view;
+use kix::cluster::revision::AppliedHashes;
 use kix::cluster::scheduler::PrunePolicy;
 use kix::cluster::{discovery, inventory};
 use kix::eval::build_files::BuildFiles;
@@ -207,9 +209,10 @@ pub(super) fn compare(args: &Comparison, ctx: &mut CommandContext) -> Result<Exi
                 args.cluster,
                 &kix::cluster::stops::LastWrite::of(None, current.as_ref()),
             );
-            // The current record's package index places each live object where
-            // the deployed build put it. Without one, the new build does.
-            let deployed = current.and_then(|record| record.package_index);
+            // The current record's revisions, or its package index, place
+            // each live object where the deployed build put it. Without
+            // either, the new build does.
+            let deployed = live.deployed.take();
             let before_set_aside = live.manifests.clone();
             live.set_aside_left_earlier(&new_graph, deployed.as_ref());
             let spinner = output::spinner(
@@ -338,10 +341,16 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
                     new: new_by_rid.clone(),
                     managed: &live.managed,
                     drifted: &drifted,
+                    manager: &live.manager,
                 };
                 origin::label_live(&mut packages, &sides);
             }
-            let drift = origin::live_drift(&live.drifted, &new_by_rid, deployed_by_rid.as_ref());
+            let drift = origin::live_drift(
+                &live.drifted,
+                &new_by_rid,
+                deployed_by_rid.as_ref(),
+                &live.manager,
+            );
             let mut doc = Plan::new(
                 plan::kix_build(),
                 MadeBy::LiveRead,
@@ -448,9 +457,14 @@ struct LiveSide {
     namespaceless: Vec<ResourceId>,
     /// Current Activation record (newest Active or Degraded).
     current: Option<kube::api::DynamicObject>,
+    /// The package index of the current record's build: from its
+    /// revisions, or its stored index ([`kix::cluster::tenancy::Tenancy::index_of`]).
+    deployed: Option<RecordPackageIndex>,
     /// Full live objects including `managedFields`, used to attribute drift to
     /// field managers.
     managed: HashMap<ResourceId, Value>,
+    /// The field manager the Kix cluster's fields are read under.
+    manager: FieldManager,
     /// Each compared object [`drift::check_object`] finds drifted, with its
     /// report.
     drifted: Vec<(DriftReport, DynamicObject)>,
@@ -593,6 +607,13 @@ async fn fetch_live_manifests(
         );
     }
 
+    let records: Vec<activation::Record> = compared
+        .iter()
+        .filter(|obj| lifecycle::lifecycle_of_live(obj) == Lifecycle::Record)
+        .map(activation::Record::of)
+        .collect();
+    let applied = AppliedHashes::of(&records, tenancy.revisions());
+
     // Keep only the current Activation record alongside non-record resources so
     // Superseded and Failed records do not appear in the diff.
     let current = activation::current_record(
@@ -608,7 +629,12 @@ async fn fetch_live_manifests(
                 .is_some_and(|c| c.metadata.name == obj.metadata.name)
     });
 
-    let (drifted, drift_unchecked) = check_drift(&compared);
+    let deployed = current
+        .as_ref()
+        .map(activation::Record::of)
+        .and_then(|record| tenancy.index_of(&record));
+    let manager = tenancy.manager_of(&new_graph.cluster_name);
+    let (drifted, drift_unchecked) = check_drift(&compared, &applied, &manager);
     let built = new_graph.manifests_by_hash();
     let managed: HashMap<ResourceId, Value> = compared
         .iter()
@@ -617,13 +643,15 @@ async fn fetch_live_manifests(
             serde_json::to_value(obj).ok().map(|v| (rid, v))
         })
         .collect();
-    let manifests = owned_view::kix_owned_manifests_against(compared, &built);
+    let manifests = owned_view::kix_owned_manifests_against(compared, &built, &manager);
 
     Ok(LiveSide {
         manifests,
         namespaceless,
         current,
+        deployed,
         managed,
+        manager,
         drifted,
         drift_unchecked,
         orphans: Vec::new(),
@@ -632,14 +660,25 @@ async fn fetch_live_manifests(
     })
 }
 
-/// Run [`drift::check_object`] on each of `objects`. Return the drifted ones
-/// with their reports, and how many the check cannot judge because they carry
-/// no applied-hash stamp or no Kix `managedFields` entry.
-fn check_drift(objects: &[DynamicObject]) -> (Vec<(DriftReport, DynamicObject)>, usize) {
+/// Run [`drift::check_object`] on each of `objects` against the fields
+/// `manager` applied, reading each one's applied hash from `applied`. Return the drifted ones with their reports,
+/// and how many the check cannot judge because their applied hash is not
+/// known or they have no Kix `managedFields` entry.
+fn check_drift(
+    objects: &[DynamicObject],
+    applied: &AppliedHashes,
+    manager: &FieldManager,
+) -> (Vec<(DriftReport, DynamicObject)>, usize) {
     let mut drifted = Vec::new();
     let mut unchecked = 0;
-    for obj in objects {
-        let report = drift::check_object(obj);
+    // A deploy writes its Activation record as its own state, not as an
+    // object of the build, so no revision holds an applied hash for it. The
+    // planner does not check records for drift either.
+    let checked = objects
+        .iter()
+        .filter(|obj| lifecycle::lifecycle_of_live(obj) != Lifecycle::Record);
+    for obj in checked {
+        let report = drift::check_object(obj, applied.applied(obj), manager);
         match report.verdict {
             DriftVerdict::Drifted { .. } => drifted.push((report, obj.clone())),
             DriftVerdict::Unstamped | DriftVerdict::NoFieldset => unchecked += 1,
@@ -816,8 +855,11 @@ mod tests {
         live.data["kind"] = json!("Deployment");
         live.data["apiVersion"] = json!("apps/v1");
 
-        let manifests =
-            owned_view::kix_owned_manifests_against([live.clone()], &new.manifests_by_hash());
+        let manifests = owned_view::kix_owned_manifests_against(
+            [live.clone()],
+            &new.manifests_by_hash(),
+            &FieldManager::unmigrated("a"),
+        );
         let old = StoreGraph::synthesize(&manifests, &new);
         let unstamped = {
             let mut o = live.clone();
@@ -829,13 +871,24 @@ mod tests {
             o.metadata.managed_fields = None;
             o
         };
-        let (drifted, drift_unchecked) = check_drift(&[live, unstamped, no_fieldset]);
+        let record: DynamicObject = serde_json::from_value(json!({
+            "apiVersion": keys::API_VERSION, "kind": lifecycle::RECORD_KIND,
+            "metadata": {"name": "c-1", "annotations": {keys::IDENTITY_HASH: "r"}},
+        }))
+        .unwrap();
+        let (drifted, drift_unchecked) = check_drift(
+            &[live, unstamped, no_fieldset, record],
+            &AppliedHashes::from_annotations(),
+            &FieldManager::unmigrated("a"),
+        );
         assert_eq!((drifted.len(), drift_unchecked), (1, 2));
         let side = OldSide::Live(Box::new(LiveSide {
             manifests,
             namespaceless: Vec::new(),
             current: None,
+            deployed: None,
             managed: HashMap::new(),
+            manager: FieldManager::unmigrated("a"),
             drifted,
             drift_unchecked,
             orphans: Vec::new(),
@@ -851,10 +904,7 @@ mod tests {
         let text = render::render_drift_text(&result.doc);
         assert!(text.contains("Deployment.apps/web@app"), "{text}");
         assert!(
-            text.contains(&format!(
-                "2 object(s) not checked for drift: missing `{}` annotation",
-                kix::manifest::keys::APPLIED_HASH
-            )),
+            text.contains("2 object(s) not checked for drift: Kix has no recorded applied hash"),
             "{text}"
         );
         assert!(
@@ -908,7 +958,9 @@ mod tests {
             manifests: vec![web, left, removed],
             namespaceless: Vec::new(),
             current: None,
+            deployed: None,
             managed: HashMap::new(),
+            manager: FieldManager::unmigrated("a"),
             drifted: Vec::new(),
             drift_unchecked: 0,
             orphans: Vec::new(),

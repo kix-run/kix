@@ -55,8 +55,8 @@ kix gc <CLUSTER> [-y] [--dry-run] [--full-scan [--include unstamped,unattributed
 
 | Mode | What `kix gc` checks | What is deleted |
 | --- | --- | --- |
-| Default | Builds listed in `status.orphansKeptFrom` on the `Active` Activation record | Resources in those builds whose kind, namespace, and name are absent from the active deployment's build. If the cluster has no `Active` Activation record, `kix gc` prints a message and exits without deleting anything. |
-| `--full-scan` | Every live Kix-managed resource for the named cluster | Resources whose identity hash is absent from the active deployment's build (or from the local files' build when the cluster has no `Active` Activation record). |
+| Default | Kept orphans on the `Active` Activation record: resources listed in its kept-orphans [revision](/docs/reference/annotations-crds-and-receipts/#packageinstancerevision) (or builds in `status.orphansKeptFrom` on records written by earlier versions) | Those resources whose kind, namespace, and name are absent from the active deployment's build. If the cluster has no `Active` Activation record, `kix gc` prints a message and exits without deleting anything. |
+| `--full-scan` | Every live Kix-managed resource for the named cluster | Resources whose identity hash is absent from the active deployment's build (or from the local files' build when the cluster has no `Active` Activation record). Any resource referenced by a revision of this cluster is deleted only if no revision other than the kept-orphans revision lists it. |
 | `--operator` | Activation records | Retired records; the operator deletes their resources |
 
 To load the active deployment's build, both the default mode and `--full-scan`
@@ -72,8 +72,9 @@ Both the default mode and `--full-scan` keep resources belonging to an
 unfinished deploy of this cluster, including a failed deploy, a partial
 [`kix deploy --only`](/docs/reference/cli/deploy/#deploy-one-instance-at-a-time)
 run, or a deploy that is queued or running. `kix gc` identifies these
-resources from the `Activation` records in their `kix.run/activations`
-annotation and lists them under **Kept for an unfinished deploy**, grouped by
+resources from the revisions those deployment records name (or, for a Kix
+cluster an earlier version of Kix deployed last, from the records the
+resource's `kix.run/activations` annotation names) and lists them under **Kept for an unfinished deploy**, grouped by
 deployment record. Run `kix deploy <cluster>` to finish or replace that
 deploy, then run `kix gc <cluster>` again. If the active deployment's build
 is not on this machine and your local files match a `Partial` deployment
@@ -82,28 +83,29 @@ message.
 
 Default mode, `--full-scan`, and the Kix operator inspect only objects carrying the label `app.kubernetes.io/managed-by=kix`. `kix gc` never lists or deletes unlabelled objects, such as resources applied with `kubectl`. See [Objects Kix did not apply](/docs/reference/cli/diff/#objects-kix-did-not-apply).
 
-`--full-scan` judges the resources of the cluster you name. Each resource Kix
-deploys lists, in its `kix.run/activations` annotation, the Activation records
-whose builds contain it, and each record carries a `kix.run/cluster` label.
-Each record also claims the earlier builds listed in `status.orphansKeptFrom`.
-That keeps leftover resources from a deploy or rollback without `--prune` tied
-to their Kix cluster after `kix gc` retires the record that deployed them, so
-`--full-scan` deletes them without `--include unattributed`, just like default
-`kix gc`. A full scan uses the cluster's Activation records to classify each
-resource:
+`--full-scan` judges only the resources of the cluster you name. Each Activation
+record carries a `kix.run/cluster` label and links to revisions listing that
+deploy's resources, while the `Active` record's kept-orphans revision lists
+leftover resources from deploys and rollbacks run without `--prune`. Keeping
+those leftovers on the `Active` record ties them to this Kix cluster even after
+`kix gc` retires the deployment record that created them, so `--full-scan`
+deletes them without `--include unattributed`. On clusters not yet upgraded to
+revisions, Kix reads the same ownership from `kix.run/activations` on live
+objects and `status.orphansKeptFrom` on deployment records. A full scan
+classifies each resource as follows:
 
-- A resource that names only other Kix clusters' records is skipped, and
+- A resource that only other Kix clusters deploy is skipped, and
   `kix gc` prints how many it skipped and which Kix clusters they belong to.
-- A resource that another cluster's current build also contains is kept and
-  listed as `kept ..., still deployed by Kix cluster <name>`.
-- A resource that does not match any Activation record on the cluster (either
-  the record's own build or a build listed in `status.orphansKeptFrom`) is
-  listed under "Objects with no matching deployment record" and kept by
-  default. Pass `--include
-  unattributed` to check these resources against the active deployment's build and delete any
-  that are not in it. A resource may have no matching record because `kix gc`
-  retired its records and no remaining record lists its build in `status.orphansKeptFrom`, because it predates `kix.run/activations`, or because it
-  belongs to another Kix cluster whose records were deleted. This rule applies
+- A resource that another Kix cluster also deploys is kept and listed as
+  `kept ..., still deployed by Kix cluster <name>`.
+- A resource that no deployment record on the cluster names is listed under
+  "Objects with no matching deployment record" and kept by default. Pass
+  `--include unattributed` to check these resources against the active
+  deployment's build and delete any that are not in it. A resource may have no
+  matching record because `kix gc` retired its records and no remaining
+  record keeps it, because an earlier version of Kix applied it before it
+  recorded deployment records on objects, or because it belongs to another Kix
+  cluster whose records were deleted. This rule applies
   even when only one Kix cluster has records on the Kubernetes cluster, since
   missing records may have belonged to another Kix cluster.
 
@@ -111,9 +113,9 @@ The default mode, `kix deploy --prune`, and `kix rollback --prune` apply the sam
 a resource both clusters deploy: when the named cluster's build drops it and
 another cluster's current build still contains it, the plan lists it as kept.
 
-Every delete checks again just before it happens: gc reads the resource, then
-the Activation records, and deletes it only if no other cluster's current
-record names it and it has not changed since that read. A resource left for
+Right before deleting each resource, `kix gc` reads it again and deletes it only
+if it has not changed since that read and no other Kix cluster deploys it
+(checked against other clusters' records, revisions, and `managedFields`). A resource left for
 either reason is printed as `= prune: kept ...` and is not a failure.
 
 Resources are deleted dependents first. Namespaces and
@@ -140,20 +142,29 @@ removes the custom resource's finalizer. A
 slow cleanup may still finish on its own; run `kix gc` again later, or pass a
 longer `--timeout` (up to `5m`).
 
-A deploy or rollback without `--prune` keeps its orphans and records the builds
-they came from on the `Active` Activation record, under `status.orphansKeptFrom`.
-The default mode deletes those orphans, listed under "Objects that left the
-build in earlier deploys". When `kix gc` finishes without deletion failures in
-either mode, it clears that list. The default mode
-leaves the list if this machine could not read one of the builds, and a full
-scan leaves it if it was forbidden to list some kinds. Deploying with
+A deploy or rollback without `--prune` keeps its orphans and records them in a
+kept-orphans revision linked on the `Active` Activation record. Default mode
+deletes those orphans (listed under "Objects that left the build in earlier
+deploys") and updates the kept-orphans revision with any remaining orphans
+(resources that failed to delete or whose kind Kix lacked permission to read)
+so later runs still track them. On records written by earlier versions of Kix,
+kept orphans are tracked as build paths in `status.orphansKeptFrom`, which
+`kix gc` clears once deletion succeeds without unread builds or forbidden kinds.
+
+If the kept-orphans revision linked on the `Active` record is missing or
+unreadable, default `kix gc`, `kix deploy --prune`, and the Kix operator refuse
+to delete resources. Run `kix gc --full-scan` to rebuild the kept-orphans
+revision and complete the scan. Kix collects every live resource owned by this
+Kix cluster (via `kix/<cluster>`, or via `kix` plus `kix.run/activations` on
+objects not yet migrated) that is absent from both the active build and this
+cluster's other revisions, links the rebuilt revision onto the `Active` record,
+and runs the full scan. With `--dry-run`, it reports how
+many resources the rebuilt list would contain without writing it. Deploying with
 `--prune` every time keeps the list empty, so the default mode has no kept
 orphans to find; see [`deploy`](/docs/reference/cli/deploy/).
 
-Retiring a record removes it as a rollback target. Each record kept adds one
-entry to the `kix.run/activations` annotation on every managed resource, which
-is why the count is capped. A record is deleted only if it has not changed
-since it was listed.
+Retiring a record removes it as a rollback target. A record is deleted only if
+it has not changed since it was listed.
 
 ## Deploy lock and version checks
 

@@ -10,9 +10,9 @@
     {
       "command": "kix export how-to-stateful-migration --with-kix-metadata --out stateful-before",
       "stdout": "",
-      "stderr": "Building cluster 'how-to-stateful-migration'...\n  Evaluating cluster 'how-to-stateful-migration'...\n  Reading package index...\n  Loading store graph...\n  Reading 3 packages...\n  Computing cross-package dependencies...\n\n  Exported 9 resources to stateful-before (with Kix metadata)\n",
+      "stderr": "Building cluster 'how-to-stateful-migration'...\n  Evaluating cluster 'how-to-stateful-migration'...\n  Reading package index...\n  Loading store graph...\n  Reading 3 packages...\n  Computing cross-package dependencies...\n\n  Exported 7 resources to stateful-before (with Kix metadata)\n",
       "stdoutDrift": "",
-      "stderrDrift": "\nBuilding cluster 'how-to-stateful-migration'...\nComputing cross-package dependencies...\nEvaluating cluster 'how-to-stateful-migration'...\nExported 9 resources to stateful-before (with Kix metadata)\nLoading store graph...\nReading 3 packages...\nReading package index...\n",
+      "stderrDrift": "\nBuilding cluster 'how-to-stateful-migration'...\nComputing cross-package dependencies...\nEvaluating cluster 'how-to-stateful-migration'...\nExported 7 resources to stateful-before (with Kix metadata)\nLoading store graph...\nReading 3 packages...\nReading package index...\n",
       "exitCode": 0
     }
   ]

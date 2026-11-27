@@ -268,56 +268,6 @@ mod orphans_kept_from_tests {
             BTreeMap::from([("acme".to_string(), "bb".to_string())])
         );
     }
-
-    fn source(name: &str) -> KeptOrphanSource {
-        KeptOrphanSource {
-            activation: name.into(),
-            identity_hash: format!("{name}-hash"),
-            built_via: None,
-        }
-    }
-
-    fn names(sources: &[KeptOrphanSource]) -> Vec<&str> {
-        sources.iter().map(|s| s.activation.as_str()).collect()
-    }
-
-    /// Found sources are written only while an orphan is left; unexamined
-    /// ones are written either way, so a `--prune` run on a machine that
-    /// cannot read a listed build does not forget it.
-    #[test]
-    fn unexamined_sources_survive_a_run_that_left_no_orphans() {
-        let kept = KeptOrphans {
-            found: vec![source("v1")],
-            unexamined: vec![source("elsewhere")],
-            carry_current: false,
-        };
-        assert_eq!(names(&kept.recorded(None, true)), vec!["v1", "elsewhere"]);
-        assert_eq!(names(&kept.recorded(None, false)), vec!["elsewhere"]);
-        assert!(KeptOrphans::default().recorded(None, true).is_empty());
-    }
-
-    /// The current record's list is carried only when asked for, deduplicated
-    /// against what the plan found.
-    #[test]
-    fn the_current_list_is_carried_when_the_plan_did_not_read_it() {
-        let current = [source("v1"), source("v0")];
-        let mut kept = KeptOrphans {
-            found: vec![source("v1")],
-            unexamined: vec![],
-            carry_current: false,
-        };
-        assert_eq!(names(&kept.recorded(Some(&current), true)), vec!["v1"]);
-        kept.carry_current = true;
-        assert_eq!(
-            names(&kept.recorded(Some(&current), true)),
-            vec!["v1", "v0"]
-        );
-        assert_eq!(
-            names(&kept.recorded(Some(&current), false)),
-            vec!["v1", "v0"]
-        );
-        assert!(kept.recorded(None, false).is_empty());
-    }
 }
 
 mod retire_plan_tests {
@@ -864,45 +814,22 @@ mod listing_tests {
     }
 }
 
-mod package_index_tests {
+mod revision_map_tests {
     use super::super::*;
     use crate::cluster::fake_api::FakeApi;
-    use crate::eval::package_index::{FORMAT, IndexedPackage};
+    use crate::cluster::revision::RevisionMap;
+    use crate::eval::package_index::{FORMAT, IndexedPackage, RecordPackageIndex};
     use std::collections::BTreeMap;
 
-    fn index(resources: usize) -> RecordPackageIndex {
-        let hash = |i: usize| format!("{i:0>32}");
-        RecordPackageIndex {
-            format: FORMAT,
-            packages: BTreeMap::from([(
-                "app/web".to_string(),
-                IndexedPackage {
-                    instance: hash(0),
-                    resources: (1..=resources).map(hash).collect(),
-                },
-            )]),
-            cluster_level: vec![hash(resources + 1)],
-            names: BTreeMap::new(),
-            groups: None,
+    fn map(kept: Option<&str>) -> RevisionMap {
+        RevisionMap {
+            instances: BTreeMap::from([
+                ("app/web".to_string(), "c-1".to_string()),
+                ("data/db".to_string(), "c-2".to_string()),
+            ]),
+            cluster_level: "c-3".into(),
+            kept_orphans: kept.map(str::to_string),
         }
-    }
-
-    /// An index of `resources` objects with a name for each.
-    fn named(resources: usize) -> RecordPackageIndex {
-        let mut index = index(resources);
-        index.names = (0..=resources + 1)
-            .map(|i| {
-                (
-                    format!("{i:0>32}"),
-                    crate::eval::package_index::ObjectName(
-                        "ConfigMap".into(),
-                        "app".into(),
-                        format!("web-config-{i}"),
-                    ),
-                )
-            })
-            .collect();
-        index
     }
 
     async fn records_with(api: &FakeApi) -> Records {
@@ -921,66 +848,165 @@ mod package_index_tests {
         })
     }
 
-    /// `begin_deploy` writes the build's package index, with its format
-    /// number, beside the wave counters, and the record reads it back.
+    /// `begin_deploy` writes the map of revisions, with its format number,
+    /// in the same write as the phase, and no package index. The record
+    /// reads the map back.
     #[tokio::test]
-    async fn begin_deploy_writes_the_package_index() {
+    async fn begin_deploy_writes_the_revisions_and_no_package_index() {
         let api = FakeApi::new([record("c-new")]);
         let records = records_with(&api).await;
         records
-            .begin_deploy("c-new", 1, Some(&index(2)))
+            .begin_deploy("c-new", "c", 1, Some(&map(None)))
             .await
             .unwrap();
         let read = records.get("c-new").await.unwrap().unwrap();
         assert_eq!(read.phase, PHASE_DEPLOYING);
-        assert_eq!(read.package_index, Some(index(2)));
+        assert_eq!(read.revisions, Some(Ok(map(None))));
 
-        let obj = records.api().get("c-new").await.unwrap();
-        let stored = &obj.data["status"][keys::PACKAGE_INDEX_FIELD];
-        assert_eq!(stored["format"], json!(FORMAT));
+        let status = &records.api().get("c-new").await.unwrap().data["status"];
+        assert_eq!(status["revisions"]["format"], json!(1));
+        assert_eq!(status["revisions"]["clusterLevel"], "c-3");
+        assert_eq!(status["revisions"]["instances"]["app/web"], "c-1");
+        assert!(status.get(keys::PACKAGE_INDEX_FIELD).is_none(), "{status}");
+        let patches = |api: &FakeApi| -> Vec<String> {
+            api.requests()
+                .into_iter()
+                .filter(|r| r.starts_with("PATCH"))
+                .collect()
+        };
+        assert_eq!(patches(&api).len(), 2, "labels, then status");
+
+        // A second begin finds the labels and writes only the status.
+        let api = FakeApi::new([record("c-new")]);
+        let records = records_with(&api).await;
+        records
+            .begin_deploy("c-new", "c", 1, Some(&map(None)))
+            .await
+            .unwrap();
+        records
+            .begin_deploy("c-new", "c", 1, Some(&map(None)))
+            .await
+            .unwrap();
+        assert_eq!(patches(&api).len(), 3, "{:?}", patches(&api));
+    }
+
+    /// `begin_deploy` gives a record without Kix's labels both of them, so
+    /// the cleanup of revisions, which lists records by the cluster label,
+    /// sees the record. A record applied by hand may lack them.
+    #[tokio::test]
+    async fn begin_deploy_labels_a_record_that_lacks_the_labels() {
+        let api = FakeApi::new([record("c-new")]);
+        let records = records_with(&api).await;
+        records.begin_deploy("c-new", "c", 1, None).await.unwrap();
+        let labels = &records.api().get("c-new").await.unwrap().metadata.labels;
+        let labels = labels.clone().unwrap_or_default();
         assert_eq!(
-            stored["packages"]["app/web"]["resources"],
-            json!([format!("{:0>32}", 1), format!("{:0>32}", 2)])
+            labels.get(keys::CLUSTER_LABEL).map(String::as_str),
+            Some("c")
         );
-        assert_eq!(stored["clusterLevel"], json!([format!("{:0>32}", 3)]));
+        assert_eq!(
+            labels
+                .get("app.kubernetes.io/managed-by")
+                .map(String::as_str),
+            Some("kix")
+        );
+        assert_eq!(records.of_cluster("c").await.unwrap().len(), 1);
     }
 
-    /// An index over the size limit is not written, and the deploy still
-    /// begins. A record without an index reads as having none.
+    /// Clearing the kept orphans after gc deleted them also removes the
+    /// kept-orphans revision from the record's map, and leaves the rest of
+    /// the map. A record with no map does not gain one.
     #[tokio::test]
-    async fn an_oversized_index_is_skipped_and_the_deploy_begins() {
-        let api = FakeApi::new([record("c-big")]);
+    async fn clearing_the_kept_orphans_removes_their_revision_from_the_map() {
+        let api = FakeApi::new([record("c-new"), record("c-old")]);
         let records = records_with(&api).await;
-        let big = index(crate::eval::package_index::MAX_BYTES / 32);
-        records.begin_deploy("c-big", 1, Some(&big)).await.unwrap();
-        let read = records.get("c-big").await.unwrap().unwrap();
-        assert_eq!(read.phase, PHASE_DEPLOYING);
-        assert_eq!(read.package_index, None);
+        records
+            .record_finish("c", "c-new", None, None, Some(&map(Some("c-4"))))
+            .await
+            .unwrap();
+        let read = records.get("c-new").await.unwrap().unwrap();
+        records.clear_orphans_kept_from(&read).await.unwrap();
+        let read = records.get("c-new").await.unwrap().unwrap();
+        assert_eq!(read.revisions, Some(Ok(map(None))));
+
+        let old = records.get("c-old").await.unwrap().unwrap();
+        records.clear_orphans_kept_from(&old).await.unwrap();
+        let status = &records.api().get("c-old").await.unwrap().data["status"];
+        assert!(status.get("revisions").is_none(), "{status}");
     }
 
-    /// An index that fits only without its names is written without them.
+    /// Superseding a record clears its map, because a Superseded record
+    /// keeps no revisions. A requeued record then has no map until a run
+    /// deploys it.
     #[tokio::test]
-    async fn an_index_too_large_for_its_names_is_written_without_them() {
-        let api = FakeApi::new([record("c-names")]);
+    async fn superseding_a_record_clears_its_map() {
+        let api = FakeApi::new([record("c-new")]);
         let records = records_with(&api).await;
-        let small = named(2);
         records
-            .begin_deploy("c-names", 1, Some(&small))
+            .record_finish("c", "c-new", None, None, Some(&map(Some("c-4"))))
             .await
             .unwrap();
-        let read = records.get("c-names").await.unwrap().unwrap();
-        assert_eq!(read.package_index, Some(small));
+        records.supersede("c-new").await.unwrap();
+        assert_eq!(records.get("c-new").await.unwrap().unwrap().revisions, None);
+        records.requeue("c-new", "r1").await.unwrap();
+        assert_eq!(records.get("c-new").await.unwrap().unwrap().revisions, None);
+    }
 
-        let api = FakeApi::new([record("c-many")]);
+    /// A deploy that begins again on a record keeps the kept orphans a
+    /// finished deploy named. `record_finish` replaces them, and a map
+    /// that names none clears them.
+    #[tokio::test]
+    async fn only_a_finished_deploy_changes_the_kept_orphans() {
+        let api = FakeApi::new([record("c-new")]);
         let records = records_with(&api).await;
-        let many = named(crate::eval::package_index::MAX_BYTES / 80);
-        assert!(many.to_value().to_string().len() > crate::eval::package_index::MAX_BYTES);
         records
-            .begin_deploy("c-many", 1, Some(&many))
+            .record_finish("c", "c-new", None, None, Some(&map(Some("c-4"))))
             .await
             .unwrap();
-        let read = records.get("c-many").await.unwrap().unwrap();
-        assert_eq!(read.package_index, Some(many.without_names()));
+        records
+            .begin_deploy("c-new", "c", 1, Some(&map(None)))
+            .await
+            .unwrap();
+        let read = records.get("c-new").await.unwrap().unwrap();
+        assert_eq!(read.revisions, Some(Ok(map(Some("c-4")))));
+
+        records
+            .record_finish("c", "c-new", None, None, Some(&map(None)))
+            .await
+            .unwrap();
+        let read = records.get("c-new").await.unwrap().unwrap();
+        assert_eq!(read.revisions, Some(Ok(map(None))));
+    }
+
+    /// A record an earlier Kix wrote has a package index and no map. The
+    /// index still reads, and a map in a format this release does not know
+    /// reads as unreadable, not as no map.
+    #[tokio::test]
+    async fn an_earlier_records_index_still_reads() {
+        let index = RecordPackageIndex {
+            format: FORMAT,
+            packages: BTreeMap::from([(
+                "app/web".to_string(),
+                IndexedPackage {
+                    instance: format!("{:0>32}", 0),
+                    resources: vec![format!("{:0>32}", 1)],
+                },
+            )]),
+            cluster_level: Vec::new(),
+            names: BTreeMap::new(),
+            groups: None,
+        };
+        let mut old = record("c-old");
+        old["status"] = json!({
+            (keys::PACKAGE_INDEX_FIELD): index.to_value(),
+            "revisions": { "format": 2, "instances": {}, "clusterLevel": "c-9" },
+        });
+        let api = FakeApi::new([old]);
+        let records = records_with(&api).await;
+        let read = records.get("c-old").await.unwrap().unwrap();
+        assert_eq!(read.package_index, Some(index));
+        let unreadable = read.revisions.unwrap().unwrap_err().to_string();
+        assert!(unreadable.contains("format 2"), "{unreadable}");
     }
 }
 
@@ -1102,7 +1128,7 @@ mod partial_tests {
         assert!(after["partial"]["at"].is_string(), "{after}");
         assert!(after.get("failure").is_none(), "{after}");
 
-        let earlier = records.begin_deploy("new", 1, None).await.unwrap();
+        let earlier = records.begin_deploy("new", "c", 1, None).await.unwrap();
         assert_eq!(earlier, ["app/a", "web/b"]);
         let during = status(&api, "new");
         assert_eq!(during["phase"], PHASE_DEPLOYING);
@@ -1129,7 +1155,7 @@ mod partial_tests {
             json!({ "phase": PHASE_PARTIAL, "partial": partial }),
         )]);
         let records = records_with(&api).await;
-        records.begin_deploy("rec", 1, None).await.unwrap();
+        records.begin_deploy("rec", "c", 1, None).await.unwrap();
         records
             .fail_deploy("rec", "Job/migrate failed")
             .await
@@ -1174,15 +1200,7 @@ mod partial_tests {
         let records = records_with(&api).await;
         let old = records.get("old").await.unwrap();
         records
-            .finalize_deploy(
-                "c",
-                "new",
-                old.as_ref(),
-                false,
-                None,
-                &["other".into()],
-                &[],
-            )
+            .finalize_deploy("c", "new", old.as_ref(), false, None, &["other".into()])
             .await
             .unwrap();
         let new = status(&api, "new");

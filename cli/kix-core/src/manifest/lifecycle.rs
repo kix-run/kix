@@ -20,11 +20,8 @@
 //! kind string directly to `"Activation"` or `"PackageInstance"` (enforced by a
 //! test in this module).
 
-use std::collections::HashSet;
-
 use crate::manifest::keys;
 use crate::manifest::kinds::{self, GroupKind};
-use crate::manifest::types::ResourceId;
 use serde_json::Value;
 
 /// The kind of the deploy record.
@@ -146,85 +143,47 @@ pub fn never_pruned(kind: GroupKind<'_>) -> bool {
     matches!(kind, kinds::NAMESPACE | kinds::CUSTOM_RESOURCE_DEFINITION)
 }
 
-/// Return the platform Kix cluster name for a consumer `Activation` record
-/// (from `spec.interfaces`), or `None` if the record does not belong to a
-/// consumer cluster.
-pub fn platform_of(record: &Value) -> Option<&str> {
-    record
-        .pointer("/spec/interfaces")
-        .and_then(Value::as_object)
-        .and_then(|interfaces| interfaces.keys().next())
-        .map(String::as_str)
+/// Return whether `manifest` is the CustomResourceDefinition of Activation or
+/// PackageInstance.
+///
+/// Builds of earlier releases carry these two definitions. The Kix program
+/// installs them now (`cluster::own_crds` in `kix-lib`), so every loaded
+/// build, live sweep, and snapshot leaves them out. Without that, a build
+/// from before the change would put them back on a rollback, and every plan
+/// would list them, and the records they hold, as left behind.
+pub fn is_kix_crd(manifest: &Value) -> bool {
+    is_kix_crd_named(
+        GroupKind::of_manifest(manifest),
+        manifest.pointer("/metadata/name").and_then(Value::as_str),
+    )
 }
 
-/// Return whether `manifest` is one of Kix's own CustomResourceDefinitions.
-pub fn is_kix_crd(manifest: &Value) -> bool {
-    GroupKind::of_manifest(manifest) == kinds::CUSTOM_RESOURCE_DEFINITION
+/// Return whether `kind` and `name` name a definition [`is_kix_crd`] matches.
+pub fn is_kix_crd_named(kind: GroupKind<'_>, name: Option<&str>) -> bool {
+    kind == kinds::CUSTOM_RESOURCE_DEFINITION
         && matches!(
-            manifest.pointer("/metadata/name").and_then(Value::as_str),
+            name,
             Some(keys::ACTIVATIONS_CRD | keys::PACKAGE_INSTANCES_CRD)
         )
 }
 
-/// Return the resource IDs in `manifests` that belong to the platform rather
-/// than the consumer cluster (Kix's own CRDs when the build's record is a
-/// consumer record, or an empty set otherwise).
-///
-/// On a shared Kubernetes cluster, the platform installs Kix's CRDs. A consumer
-/// deploy waits for those CRDs and never writes them, so it cannot overwrite
-/// the platform's CRD schema.
-pub fn left_to_platform<'a>(manifests: impl IntoIterator<Item = &'a Value>) -> HashSet<ResourceId> {
-    let manifests: Vec<&Value> = manifests.into_iter().collect();
-    if !manifests
-        .iter()
-        .any(|m| is_record(m) && platform_of(m).is_some())
-    {
-        return HashSet::new();
-    }
-    manifests
-        .into_iter()
-        .filter(|m| is_kix_crd(m))
-        .map(ResourceId::from_value)
-        .collect()
-}
-
 #[cfg(test)]
-mod left_to_platform_tests {
+mod kix_crd_tests {
     use super::*;
     use serde_json::json;
 
-    fn crd(name: &str) -> Value {
-        json!({"apiVersion": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition",
-            "metadata": {"name": name}})
-    }
-
-    fn record(spec: Value) -> Value {
-        json!({"apiVersion": keys::API_VERSION, "kind": RECORD_KIND,
-            "metadata": {"name": "rec"}, "spec": spec})
-    }
-
     #[test]
-    fn a_consumer_leaves_kix_crds_to_its_platform() {
-        let manifests = [
-            crd(keys::ACTIVATIONS_CRD),
-            crd(keys::PACKAGE_INSTANCES_CRD),
-            crd("widgets.example.com"),
-            record(json!({"interfaces": {"platform": {"consumer": "acme"}}})),
-        ];
-        assert_eq!(platform_of(&manifests[3]), Some("platform"));
-        let left = left_to_platform(&manifests);
-        let mut names: Vec<&str> = left.iter().map(|id| id.name.as_str()).collect();
-        names.sort();
-        assert_eq!(names, [keys::ACTIVATIONS_CRD, keys::PACKAGE_INSTANCES_CRD]);
-    }
-
-    #[test]
-    fn a_cluster_without_interfaces_writes_kix_crds() {
-        for spec in [json!({}), json!({"interfaces": {}})] {
-            let manifests = [crd(keys::ACTIVATIONS_CRD), record(spec)];
-            assert_eq!(platform_of(&manifests[1]), None);
-            assert!(left_to_platform(&manifests).is_empty());
-        }
+    fn only_the_two_record_definitions_match() {
+        let crd = |name: &str| {
+            json!({"apiVersion": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition",
+                "metadata": {"name": name}})
+        };
+        assert!(is_kix_crd(&crd(keys::ACTIVATIONS_CRD)));
+        assert!(is_kix_crd(&crd(keys::PACKAGE_INSTANCES_CRD)));
+        assert!(!is_kix_crd(&crd("widgets.example.com")));
+        let record = json!({"apiVersion": keys::API_VERSION, "kind": RECORD_KIND,
+            "metadata": {"name": keys::ACTIVATIONS_CRD}});
+        assert!(!is_kix_crd(&record));
     }
 }
 

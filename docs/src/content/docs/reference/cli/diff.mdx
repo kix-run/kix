@@ -103,17 +103,17 @@ Kix sets the label `app.kubernetes.io/managed-by=kix` on every object it applies
 | Command | Objects Kix applied that left the build | Objects Kix never applied (no Kix label) |
 | --- | --- | --- |
 | `kix diff` | Shown as removed (`-`) when present in the baseline (an earlier build, a bundle, a `kix snapshot` directory, or a `kix export --with-kix-metadata` directory) and absent from the new build. | Never contacts the cluster. A `kix snapshot` baseline uses the same label selector, so unlabelled objects never appear. |
-| `kix plan` | Lists each orphan and its [prune fate](/docs/reference/cli/plan/#prune-fates), comparing the new build against the Active record's build and any earlier builds recorded under `status.orphansKeptFrom` (from deploys run without `--prune`). | Never listed or compared, unless an object in the build has the same kind, namespace, and name (see below). |
-| `kix plan --read-only` | Shown as removed (`-`) in the package report when the live object carries the Kix label and its `kix.run/activations` annotation names one of this cluster's Activation records. Prune fates are not checked. | Never listed or compared. |
+| `kix plan` | Lists each orphan and its [prune fate](/docs/reference/cli/plan/#prune-fates), read from the live objects listed in the `Active` record's revisions, its kept-orphans revision (from deploys run without `--prune`), and any `Failed` or `Partial` record's revisions. | Never listed or compared, unless an object in the build has the same kind, namespace, and name (see below). |
+| `kix plan --read-only` | Shown as removed (`-`) in the package report when the live object carries the Kix label and one of this cluster's deployment records references it (via revisions, or via `kix.run/activations` on clusters not yet upgraded to revisions). Prune fates are not checked. | Never listed or compared. |
 | [`kix status`](/docs/reference/cli/status/) `--check presence` / `--check drift` | Never reported. Checks only the objects listed in the current deploy record, reporting missing or changed objects. | Never listed, compared, or counted. |
 | [`kix gc`](/docs/reference/cli/gc/) | Deletes orphans found by comparing the deployed builds against a fresh build. | Never listed or deleted. |
 | `kix gc --full-scan` | Scans every labelled object of the named cluster and deletes those whose `kix.run/identity-hash` is absent from the fresh build. | Never listed or deleted. |
 
 Even when an object carries `app.kubernetes.io/managed-by=kix`, Kix separates what it wrote from objects created by other tools or controllers:
 
-- **Managed objects** carry `kix.run/identity-hash` and a `managedFields` entry for the `kix` field manager.
-- **Unstamped objects** carry the label and a `managedFields` entry for the `kix` field manager, but no `kix.run/identity-hash` (excluding controller-owned child objects and Service `Endpoints`, which Kix ignores). Kix wrote them, but cannot match them to a build.
-- **Copies** carry the label without a `managedFields` entry for the `kix` field manager (excluding, for objects without `kix.run/identity-hash`, the ignored child objects and `Endpoints` above). Another controller or tool copied Kix's labels, and sometimes its annotations, onto a new object, such as a database operator's volume claim or an Event posted for a custom resource.
+- **Managed objects** carry `kix.run/identity-hash` and a `managedFields` entry for a Kix field manager (`kix/<cluster>`, or `kix` from an earlier version of Kix).
+- **Unstamped objects** carry the label and a `managedFields` entry for a Kix field manager, but no `kix.run/identity-hash` (excluding controller-owned child objects and Service `Endpoints`, which Kix ignores). Kix wrote them, but cannot match them to a build.
+- **Copies** carry the label without a `managedFields` entry for a Kix field manager (excluding, for objects without `kix.run/identity-hash`, the ignored child objects and `Endpoints` above). Another controller or tool copied Kix's labels, and sometimes its annotations, onto a new object, such as a database operator's volume claim or an Event posted for a custom resource.
 
 If Kubernetes serves the same object under multiple API groups (such as `Event` under `v1` and `events.k8s.io/v1`), Kix includes it once, preferring the API group Kix applied it with.
 

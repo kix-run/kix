@@ -7,13 +7,13 @@ In a live Kubernetes cluster, your deployment tool is rarely the only thing modi
 
 :::note[Helpful background]
 - [05. The basic graph and deploy loop](/docs/tutorials/05-basic-graph-and-deploy-loop/): See how `kix plan` and `kix deploy` work against a live local cluster.
-- [Annotations, CRDs, and receipts](/docs/reference/annotations-crds-and-receipts/): Reference for the `kix.run/applied-hash` annotation and the `Activation` receipt schema.
+- [Annotations, CRDs, and receipts](/docs/reference/annotations-crds-and-receipts/): Reference for `PackageInstanceRevision`, the field manager name, and the `Activation` receipt schema.
 - [Kubernetes Server-Side Apply](https://kubernetes.io/docs/reference/using-api/server-side-apply/): How the Kubernetes API server tracks per-field ownership in `metadata.managedFields`.
 :::
 
 ## Per-field ownership in Server-Side Apply
 
-When `kix deploy` applies a manifest, it uses Kubernetes Server-Side Apply with the field manager name `kix`. Instead of storing a giant "last-applied-configuration" JSON blob in an annotation, the Kubernetes API server records which manager owns each individual field inside `metadata.managedFields`.
+When `kix deploy` applies a manifest, it uses Kubernetes Server-Side Apply with the field manager name `kix/<cluster>`, where `<cluster>` is the name of the Kix cluster, such as `kix/production`. Instead of storing a giant "last-applied-configuration" JSON blob in an annotation, the Kubernetes API server records which manager owns each individual field inside `metadata.managedFields`.
 
 Because ownership is tracked per field rather than per object, Kix and an in-cluster controller can safely co-own the same Deployment:
 
@@ -27,26 +27,72 @@ When Kix tries to change a field that another manager currently owns, the Kubern
 
 How you resolve a conflict depends on who *should* control the field going forward:
 
-1. **Kix should own the field:** If someone ran a one-off `kubectl edit` or you are migrating a resource from Helm to Kix, use `--force-conflicts` on `kix deploy` for that transition. A forced Server-Side Apply transfers ownership of the conflicting fields to `kix` and writes the values from your build. Avoid leaving `--force-conflicts` enabled on every routine deploy, because it would also steamroll legitimate conflicts from controllers.
-2. **A controller should own the field (`ownership.cede`):** Sometimes a resource must include an initial value when it is first created, even though an in-cluster controller will take over that field afterward (for example, `spec.replicas` on an autoscaled workload, or webhook `spec.conversion` fields on a CRD). In those cases, the package declares the field path under `ownership.cede` on `scope.mkResource`. Kix sends the field when creating the object, and if a later apply conflicts *only* on declared ceded paths, Kix automatically retries without those fields so the controller keeps ownership.
+1. **Kix should own the field:** When someone changes a field that Kix applied (for example with `kubectl edit`), `kix plan` shows the object as changed on the cluster and the next `kix deploy` takes the field back (see [Drift detection](#drift-detection-uses-the-same-ownership-boundary) below). When Kix has never owned the field, such as when you move a resource from Helm to Kix, pass `--force-conflicts` to `kix deploy` once for that transition. A forced Server-Side Apply transfers ownership of the conflicting fields to Kix and writes the values from your build. Avoid leaving `--force-conflicts` enabled on every routine deploy, because it would also steamroll legitimate conflicts from controllers.
+2. **A controller should own the field (`ownership.cede`):** Sometimes a resource must include an initial value when it is first created, even though an in-cluster controller will take over that field afterward (for example, `spec.replicas` on an autoscaled workload, or webhook `spec.conversion` fields on a CRD). In those cases, the package declares the field path under `ownership.cede` on `scope.mkResource`. Kix sends the field when creating the object, and if a later apply conflicts *only* on declared ceded paths, Kix automatically retries without those fields so the controller keeps ownership. Forced applies (including `--force-conflicts`) also omit any ceded field that another manager owns, and Kix never counts a ceded field as drift or takes it back.
 
-Making `ownership.cede` an explicit list of field paths keeps conflicts honest: expected controller takeovers happen smoothly, while an unexpected conflict on any other field still stops the deployment and asks you to decide.
+Making `ownership.cede` an explicit list of field paths keeps conflicts honest: expected controller takeovers happen smoothly, while any other change to a field Kix applied shows up as drift so you can decide who should own it.
 
 ## Drift detection uses the same ownership boundary
 
 Most diff and drift tools compare your desired YAML against the entire live object returned by the cluster, which creates constant noise whenever controllers update status fields or the API server adds default fields.
 
-Kix uses the `kix` field-ownership entries in `metadata.managedFields` in both `kix status` and `kix plan --read-only`:
+Kix compares only the fields that its field manager owns. After each apply, Kix hashes the live fields it owns (excluding fields listed in `ownership.cede`) and records that applied hash in the status of a [`PackageInstanceRevision`](/docs/reference/annotations-crds-and-receipts/#packageinstancerevision), an in-cluster record of the objects one build produces for one package instance. Each live object carries only `kix.run/identity-hash`, the hash of its manifest in the build.
 
-- Right after `kix deploy` applies a resource, Kix extracts the live fields owned by `kix`, hashes them, and writes that digest to the `kix.run/applied-hash` annotation.
-- When you run `kix status`, its drift check reads the live object, selects the fields owned by `kix`, hashes their current values, and compares them to `kix.run/applied-hash`. If a controller updates `status`, or if a field was cleanly ceded via `ownership.cede`, Kix ignores it. If someone changes a Kix-owned field out-of-band (even through a subresource like `kubectl scale`), `kix status` reports the object as changed and names the field and the field manager that changed it.
-- When you run `kix plan --read-only` against a live cluster, Kix compares the desired build against the cluster's state: resources whose `kix.run/identity-hash` matches the build are treated as unchanged by the build, changed resources are compared against their `kix`-owned projection from `metadata.managedFields`, and a separate drift section checks `kix.run/applied-hash` and `metadata.managedFields` to report out-of-band edits and the field manager that made them.
+Using those two hashes, `kix plan` and `kix deploy` evaluate each object in the build in order:
+
+1. **The object is missing, or its `kix.run/identity-hash` differs from the build.** Kix applies the manifest from the build.
+2. **The build hashes match, but Kix has no recorded applied hash.** Kix reapplies the object and records the hash. This happens once if an earlier deploy stopped after applying the object but before recording its hash, or if a cluster backup restored revisions without their status.
+3. **The recorded applied hash differs from the live fields Kix owns.** Another writer changed a field that Kix applied. `kix plan` marks the object as changed on the cluster and names the modified fields and their current field managers. `kix deploy` reapplies the object with force to take those fields back.
+
+   Before forcing an apply, Kix sends an unforced dry-run apply to see which fields and field managers Kubernetes reports as conflicting (including fields written in a different form in the build, such as a port without a default `protocol` or a Secret key in `stringData`). Kix runs this check during planning and again right before writing, and proceeds only if the conflicting fields, field managers, and live values still match the plan. If anything changed after planning, the deploy stops rather than overwriting an unreviewed edit. If the dry run cannot check conflicts during planning, Kix applies the object without force so any conflict stops the deploy normally. Updates to `status` or to fields other than the conflicting ones do not block the apply, and any field in `ownership.cede` owned by another manager is omitted so that manager keeps it.
+
+Otherwise, the object matches the build and Kix leaves it untouched.
+
+`kix status` runs the same comparison without a build, so it reports drift on any machine. If a controller updates `status`, or a field is listed in `ownership.cede`, Kix ignores it. If someone changes a Kix-owned field out of band (even through a subresource like `kubectl scale`), Kix names the field and the field manager that changed it.
+
+The [Kix operator](/docs/reference/cli/operator-mode/) never takes fields back from another field manager. When another manager owns a drifted field, the operator leaves the object alone and emits a `DriftNotReverted` Warning Event. It still repairs drift when no manager owns the change, such as a deleted field. If an object has no `managedFields` entry for this Kix cluster (for example, a shared object that an earlier version of Kix applied under `kix`), the operator applies it without force: Kubernetes adds this cluster's entry when values match and rejects the apply when they conflict.
+
+## Several Kix clusters on one Kubernetes cluster
+
+Multiple Kix clusters can deploy to the same Kubernetes cluster and share an object, such as a Namespace or ClusterRole. Because each Kix cluster applies under its own `kix/<cluster>` field manager, `metadata.managedFields` records which Kix clusters manage the object.
+
+- **Matching values:** When both clusters render the same field values, they co-own those fields and neither apply changes the object.
+- **Conflicting values:** When the two clusters set a field to different values, Kubernetes rejects the second apply and `kix deploy` stops with `[K5636]`, naming the other Kix cluster and the conflicting fields (`kix plan` reports the same refusal beforehand). Update the cluster definitions to match, or deploy the object from only one Kix cluster. Passing `--force-conflicts` takes ownership for the cluster you deploy, which causes the other cluster's next deploy to fail with `[K5636]`.
+- **Drift owned by another Kix cluster:** Kix never forces fields away from another Kix cluster. Instead, it applies the object without force (counted separately in the plan from reverted drift). Kubernetes adds this cluster's field manager entry when the values match and rejects the apply with `[K5636]` when they differ.
+- **Removing a shared object from one cluster:** When one Kix cluster removes the object from its build, pruning keeps the object because the other cluster still deploys it. Kix sends an empty Server-Side Apply under the first cluster's field manager to release its field ownership, and keeps the object on its kept-orphans list to retry if that write fails. Once the last Kix cluster removes the object, its prune deletes it.
+
+Before deleting an orphan, prune checks the deployment records and revisions of every other Kix cluster and passes the `resourceVersion` it read on the delete request. If another Kix cluster applies the object in the meantime, adding its field manager bumps `resourceVersion` and Kubernetes rejects the stale delete.
+
+## The first deploy after upgrading
+
+Earlier versions of Kix applied every object under the shared field manager `kix` and patched two annotations onto every object after applying it: `kix.run/activations` (listing the deployment records that included the object) and `kix.run/applied-hash`. Updating those annotations modified every object on every deploy, which triggered Pod restarts in controllers that copy annotations and raced with controllers updating the same object.
+
+The first deploy of a Kix cluster after upgrading migrates its tracking to revisions in two steps:
+
+1. **Convert deployment records.** Under the deploy lock, before modifying any workload object, Kix creates `PackageInstanceRevision` objects for the active deployment record and any `Failed` or `Partial` records. Kix reads each record's objects from its package index (or by listing live objects whose `kix.run/activations` annotation names the record) and copies each object's `kix.run/applied-hash` into the revision status. If the active deployment record lists earlier builds in `status.orphansKeptFrom`, Kix also creates a kept-orphans revision from live objects naming those builds. Kix then links the revisions onto each deployment record in a single update.
+2. **Update object metadata.** Kix updates each object's metadata once to rename its `kix` entry in `metadata.managedFields` to `kix/<cluster>` and remove `kix.run/activations` and `kix.run/applied-hash`. Objects being applied are updated right before their apply so Kubernetes does not report conflicts against the old `kix` manager. Unchanged objects are updated afterward. `kix plan` shows the count on an `Upgrade:` line. Controllers that copy object annotations onto Pod templates may roll those Pods once, and later deploys touch only objects that change.
+
+The Kix operator (during deploys and drift repair) and `kix deploy --only` convert records in the same way.
+
+When every deployment record already includes object names in `status.packageIndex`, conversion does not list cluster resources. Kix 0.9 and earlier omitted object names from the index (or wrote no index at all). For those records and for kept orphans, Kix lists every object carrying `app.kubernetes.io/managed-by=kix` across all resource kinds on the cluster. If your Kubernetes account cannot `list` some resource kinds cluster-wide, `kix plan`, `kix deploy`, and the operator stop with `[K9558]` and name the missing permissions so Kix never misses objects in other namespaces. Grant cluster-wide `list` on those kinds for this first deploy, or run that deploy once with an account that has it.
+
+If a deployment record has no package index, Kix places all of its objects into a single `PackageInstanceRevision`. If they exceed the Kubernetes size limit for one revision, Kix stops and tells you to deploy an updated build once with Kix 0.9 (which writes a package index), then upgrade Kix again and redeploy.
+
+Record conversion does not modify live workload objects and links revisions onto each record atomically, so an interrupted deploy leaves deployment records consistent. Any objects whose metadata was not yet updated keep their old annotations, and the next deploy updates the rest. If an older version of Kix deploys to the cluster afterward, it writes the legacy annotations again, and the next deploy on this version converts that new record.
+
+### Kix clusters on two versions of Kix
+
+A repository can pin Kix clusters to [different versions of Kix](/docs/how-to/start-and-inspect/hold-clusters-on-different-kix-versions/). Versions before revisions check `kix.run/activations` to see whether another Kix cluster still uses a shared object, so removing that annotation early could let the older version's prune delete it.
+
+While another Kix cluster on the same Kubernetes cluster still runs on an older version without revisions, Kix preserves the `kix` `managedFields` entry and both legacy annotations on any object shared between the clusters, and appends its own deployment record to `kix.run/activations`. Its Server-Side Apply adds `kix/<cluster>` alongside `kix` without taking ownership from `kix`. If either cluster changes a shared field to a conflicting value, Kubernetes rejects the apply with a field ownership conflict naming `kix`.
+
+Updating `kix.run/activations` on a shared object is best-effort and does not abort the deploy if it fails. If that write fails, the annotation lists only the older cluster's records until this cluster's next deploy retries it (so if the older cluster drops the object first, its prune could delete it, just as before upgrading). Once the other Kix cluster upgrades and deploys with revisions, its deploy removes the legacy annotations and `kix` manager entry from those shared objects.
 
 ## Why deploy inputs are committed
 
 Just as Kix avoids hidden state in the cluster, it avoids hidden inputs at deploy time. Every input that affects a compiled manifest, including frequently updated values like container image digests, lives in a committed file in your repository and is read during evaluation:
 
-- **Content-addressed identity hashes:** During evaluation, Kix computes each resource's `kix.run/identity-hash` from its serialized JSON in Kix's local store, and `kix deploy` uses those hashes (recorded in the cluster's `Activation` resource) to determine which objects changed since the last deployment. Reading all inputs during evaluation guarantees that the hashes in your build match the manifests applied to the cluster.
+- **Content-addressed identity hashes:** During evaluation, Kix computes each resource's `kix.run/identity-hash` from its serialized JSON in Kix's local store, and `kix deploy` compares them with the build hash on each live object to determine which objects the build changes. Reading all inputs during evaluation guarantees that the hashes in your build match the manifests applied to the cluster.
 - **Committed JSON image pins (`pins.json`):** To make automated image updates easy without letting a CI bot rewrite Nix code, Kix stores image versions in a structured `pins.json` file managed by `kix pin`. Running `kix pin set <key> --tag <tag>` queries the container registry, records the immutable `sha256` digest alongside the tag, and writes the update to `pins.json`.
 - **Verifiable deploy receipts (`status.receipt`):** When `kix deploy` finishes applying an `Activation`, it records a deploy receipt on the `Activation` status subresource containing the activation hash, timestamp, Git commit, locked flake inputs, and container image digests. Because every input was committed before evaluation, `kix compliance attest --from-cluster` can generate a verifiable SLSA provenance statement directly from the live cluster receipt.
 
@@ -55,5 +101,5 @@ Use [Handle server-side-apply conflicts safely](/docs/how-to/adopt-existing-reso
 :::
 
 :::note[Reference]
-See [Annotations, CRDs, and receipts](/docs/reference/annotations-crds-and-receipts/) for the `kix.run/applied-hash` annotation and `Activation` receipt schema.
+See [Annotations, CRDs, and receipts](/docs/reference/annotations-crds-and-receipts/) for `PackageInstanceRevision`, the field manager name, and the `Activation` receipt schema.
 :::

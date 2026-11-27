@@ -6,8 +6,8 @@
 //! - `ResourceIo` manages the objects of the plan (apply, read, recreate, wait
 //!   for readiness, refresh discovery, and prune).
 //! - `DeployRecord` manages the engine's view of the run's Activation record
-//!   (begin, checkpoint, stamp unchanged objects, abort, finalize, and the
-//!   end of a partial deploy), built on
+//!   (begin, checkpoint, applied hashes, abort, finalize, and the end of a
+//!   partial deploy), built on
 //!   `activation::Records`.
 //! - `SecretHydrator` decrypts SOPS-backed Secret data before an apply.
 //!
@@ -60,7 +60,7 @@ mod sops;
 
 pub(crate) use dry_run::DryRun;
 pub(crate) use record::{ActivationRecord, RecordConfig};
-pub(crate) use resources::KubeResources;
+pub(crate) use resources::{Force, KubeResources};
 pub(crate) use sops::SopsHydrator;
 
 /// The Activation lifecycle was finalized.
@@ -141,6 +141,32 @@ pub(crate) trait ResourceIo: Send + Sync + 'static {
         propagation: kube::api::PropagationPolicy,
     ) -> Result<Pruned, DeleteError>;
 
+    /// Write the migration write ([`super::migration_write`]) to the
+    /// object `rid`, which the run did not apply: an object of the build left
+    /// unchanged, or an orphan the run keeps. Write it only when the plan
+    /// listed the object and the run has not written it yet. Return whether
+    /// it wrote.
+    async fn migrate_unchanged(
+        &self,
+        _rid: &ResourceId,
+    ) -> Result<bool, super::migration_write::WriteError> {
+        Ok(false)
+    }
+
+    /// Return the orphans another Kix cluster still deploys, whose fields
+    /// the run gives up in the prune step ([`ResourceIo::release`]).
+    fn releases(&self) -> Vec<ResourceId> {
+        Vec::new()
+    }
+
+    /// Give up this Kix cluster's fields on the orphan `rid`, which another
+    /// Kix cluster still deploys, with an apply of nothing under its own
+    /// manager. Return whether it wrote. An object with no `Apply` entry
+    /// under the manager needs nothing.
+    async fn release(&self, _rid: &ResourceId) -> Result<bool, String> {
+        Ok(false)
+    }
+
     /// Wait for the object `rid` with uid `uid`, which [`ResourceIo::prune`]
     /// deleted, to be gone ([`super::readiness::wait_gone`]). A dry run
     /// deleted nothing, so it does not wait.
@@ -161,27 +187,19 @@ pub(crate) trait ResourceIo: Send + Sync + 'static {
 /// failed [`DeployRecord::finalize`] means the run did not succeed. The
 /// engine bounds each call in time, and [`ActivationRecord`] also bounds its
 /// checkpoint, abort, and finalize with a shorter limit of its own.
-/// [`DeployRecord::discovery_refreshed`] runs inside the discovery refresh,
-/// which the watchdog monitors.
 #[async_trait]
 pub(crate) trait DeployRecord: Send + Sync + 'static {
-    /// Create the Activation record, mark it `Deploying`, and read the set of
-    /// live Activations used to prune `kix.run/activations`. Nothing is in
-    /// flight yet, so the engine may await this inline.
+    /// Create the Activation record and the revisions it names, and mark it
+    /// `Deploying`. Nothing is in flight yet, so the engine may await this
+    /// inline.
     ///
     /// Creating the record before the first node ensures that a run stopping
-    /// midway still leaves a record of what it attempted. On a cluster's first
-    /// deploy, the record's own CRD is not served yet, so the implementation
-    /// may defer creation to [`DeployRecord::discovery_refreshed`].
+    /// midway still leaves a record of what it attempted. The record's kind is
+    /// always served, because taking the deploy lock installed it.
     ///
     /// Returns an error to stop the run before its first node when a record is
-    /// configured but cannot be written ([`RecordWriteError::Domain`]).
+    /// configured but it or the revisions it names cannot be written.
     async fn begin(&self) -> Result<(), RecordWriteError>;
-
-    /// Retry creating a pending Activation record after CRD discovery refreshes.
-    /// On a cluster's first deploy, this is the first moment the Activation CRD
-    /// is established.
-    async fn discovery_refreshed(&self);
 
     /// Record progress. `applied` and `failed` are running totals.
     async fn checkpoint(
@@ -191,9 +209,14 @@ pub(crate) trait DeployRecord: Send + Sync + 'static {
         finalizing: bool,
     ) -> Result<(), RecordWriteError>;
 
-    /// Stamp the current activation on a resource the run did not apply
-    /// because it was unchanged.
-    async fn stamp_unchanged(&self, rid: &ResourceId) -> Result<(), StampError>;
+    /// Write the applied hash of each object the run applied since the last
+    /// call to `status.applied` of every kept revision of the run's Kix
+    /// cluster that names the object, and carry the hashes of the objects
+    /// the run did not apply into the new revisions of changed instances
+    /// ([`super::revision::applied::pending`]). The engine calls it once the
+    /// nodes finish and before it marks a stopped run `Failed`. A call with
+    /// nothing new writes nothing.
+    async fn write_applied(&self) -> Result<(), RecordWriteError>;
 
     /// Mark the Activation record `Failed` when the run ends without finalizing
     /// (cancelled, stopped on a failed node, discovery failed, or a task
@@ -216,14 +239,56 @@ pub(crate) trait DeployRecord: Send + Sync + 'static {
     /// Degraded) and the old one Superseded. Returns `Ok(None)` when there is
     /// no Activation to finalize (no name configured or CRD absent).
     ///
-    /// `orphans_left` is true when the run reported orphans it did not delete
-    /// (warn-only, skip, or a failed delete), so the record must keep naming
-    /// the builds they came from.
+    /// `left` names the orphans the run did not delete (warn-only, skip, or
+    /// a failed delete). The record lists them in a kept-orphans revision.
     async fn finalize(
         &self,
         had_failures: bool,
-        orphans_left: bool,
+        left: Left<'_>,
     ) -> Result<Option<Finalized>, RecordWriteError>;
+}
+
+/// The migration writes a run makes ([`super::migration_write`]), as the
+/// plan listed them.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Migrations {
+    /// The objects of the build and the orphans the run keeps that need the
+    /// write. The run writes it right before it applies an object, and once
+    /// the nodes finish to each object it did not apply and to each kept
+    /// orphan.
+    pub(crate) objects: std::collections::HashSet<ResourceId>,
+    /// The objects of `objects` whose `Apply` entry under `kix` the write
+    /// moves to the cluster's manager. A dry run applies them under `kix`.
+    pub(crate) renamed: std::collections::HashSet<ResourceId>,
+    /// The orphans another Kix cluster still deploys. In the prune step the
+    /// run gives up its fields on each with an empty apply, so its entry
+    /// does not keep the object for ever.
+    pub(crate) releases: Vec<ResourceId>,
+    /// The identity hash of the record the run deploys, which a note kept
+    /// for an older Kix names.
+    pub(crate) record: Option<String>,
+}
+
+impl Migrations {
+    /// Return how many objects the run writes the migration write to, at
+    /// most.
+    pub(crate) fn count(&self) -> usize {
+        self.objects.len()
+    }
+}
+
+/// The orphans a run left on the cluster.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Left<'a> {
+    /// Each orphan the run did not delete, leaving out the kinds Kix never
+    /// prunes.
+    pub(crate) orphans: &'a [ResourceId],
+    /// Each orphan of a kind Kix never prunes (`lifecycle::never_pruned`).
+    /// The kept-orphans revision names them so reports can list them.
+    pub(crate) never_pruned: &'a [ResourceId],
+    /// The manifests the run's orphans came from: the earlier builds for the
+    /// CLI, the live objects for the operator.
+    pub(crate) manifests: &'a [Value],
 }
 
 /// Decrypts SOPS-backed data in a Secret manifest before it is applied.
@@ -325,6 +390,34 @@ pub(crate) enum RecordWriteError {
     /// The deploy lock could not be written at the commit point.
     #[error(transparent)]
     Commit(super::head::CommitError),
+    /// The run's record could not be created before the first node.
+    #[error("cannot create deployment record `{name}`: {source}")]
+    Create {
+        name: String,
+        #[source]
+        source: ApplyError,
+    },
+    /// A revision the record names could not be created.
+    #[error(transparent)]
+    Revisions(super::revision::RevisionError),
+    /// The records an older Kix wrote could not be given revisions, so the
+    /// run stops before it writes any object.
+    #[error(
+        "cannot convert earlier deployment records to PackageInstanceRevision resources: {0}. Nothing was applied"
+    )]
+    Convert(super::revision::convert::ConvertError),
+    /// The applied hashes of the objects the run applied could not be
+    /// written to the revisions.
+    #[error(
+        "could not write `status.applied` on PackageInstanceRevision resources: {0}. Objects without a recorded applied hash will be reapplied on the next deploy"
+    )]
+    Applied(super::revision::keep::CleanError),
+    /// The list of objects a deploy left on the cluster could not be read
+    /// or written, so finalizing would lose track of them.
+    #[error(
+        "cannot record the orphaned objects kept on the cluster: {0}. The deployment record was left unfinished so the next deploy or `kix gc` still tracks those objects"
+    )]
+    KeptOrphans(String),
     /// The write did not answer within the implementation's bound.
     #[error("no answer within {}s", .0.as_secs())]
     NoAnswer(Duration),
@@ -374,19 +467,6 @@ pub(crate) enum RecreateError {
     Reapply(ApplyError),
     #[error("dry-run re-apply failed: {0}")]
     DryRunReapply(ApplyError),
-    /// A failure a test scripted, with its message.
-    #[cfg(any(test, feature = "test-util"))]
-    #[error("{0}")]
-    Scripted(String),
-}
-
-/// Why [`DeployRecord::stamp_unchanged`] did not stamp a resource.
-#[derive(Debug, Error)]
-pub(crate) enum StampError {
-    #[error("this Kubernetes cluster does not serve this resource's kind")]
-    NotDiscovered,
-    #[error(transparent)]
-    Apply(ApplyError),
     /// A failure a test scripted, with its message.
     #[cfg(any(test, feature = "test-util"))]
     #[error("{0}")]

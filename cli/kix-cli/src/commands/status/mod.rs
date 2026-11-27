@@ -138,6 +138,13 @@ async fn read_cluster(
             let mut cluster_notes = interface_notes(records, &view.cluster, &view.record).await?;
             let shown = view.failed.as_ref().map(|f| f.record.name.as_str());
             cluster_notes.extend(stopped_notes(records, &view.cluster, &view.record, shown).await?);
+            cluster_notes.extend(
+                observation
+                    .problems
+                    .iter()
+                    .filter(|p| p.cluster().is_none_or(|c| c == view.cluster))
+                    .map(|p| format!("{p}. Showing the objects Kix could read.")),
+            );
             notes.insert(view.cluster.clone(), cluster_notes);
         }
     }

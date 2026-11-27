@@ -67,9 +67,6 @@ pub trait MigrationOps: Send + Sync {
     /// List every record of `record` kind in `group`.
     async fn list_records(&self, group: &str, record: RecordKind) -> Result<Vec<Value>, String>;
 
-    /// Server-side apply a CustomResourceDefinition.
-    async fn apply_crd(&self, manifest: &Value) -> Result<(), String>;
-
     /// Wait until the CRD is registered and servable.
     async fn await_crd(&self, name: &str) -> Result<(), String>;
 
@@ -155,16 +152,11 @@ impl Report {
 
 /// Copy the records to the current group and retire the old CRDs.
 ///
-/// `crds` are the two CustomResourceDefinition manifests from the cluster's
-/// own build, so the migration installs exactly what the next deploy
-/// expects. Under `dry_run` nothing is written and the report says what
-/// would be copied. `cluster` names the Kix cluster in messages.
-pub async fn run(
-    ops: &dyn MigrationOps,
-    cluster: &str,
-    crds: &[Value],
-    dry_run: bool,
-) -> Result<Report, String> {
+/// The caller holds the cluster's deploy lock, and taking it installed the
+/// current group's CRDs (`cluster::own_crds`), so the copy has somewhere to
+/// land. Under `dry_run` nothing is written and the report says what would
+/// be copied. `cluster` names the Kix cluster in messages.
+pub async fn run(ops: &dyn MigrationOps, cluster: &str, dry_run: bool) -> Result<Report, String> {
     let Some(from_group) = find_legacy_group(ops).await? else {
         return Ok(Report::nothing_to_do());
     };
@@ -277,10 +269,6 @@ pub async fn run(
         }
     }
 
-    // The new CRDs first, so the copy has somewhere to land.
-    for crd in crds {
-        ops.apply_crd(crd).await?;
-    }
     for record in [ACTIVATION, PACKAGE_INSTANCE] {
         ops.await_crd(&crd_name(record, keys::GROUP)).await?;
     }
@@ -543,9 +531,13 @@ mod tests {
     impl Fake {
         fn with_legacy(group: &str, records: Vec<Value>) -> Self {
             let f = Fake::default();
+            // The current group's CRDs too, which taking the deploy lock
+            // installs before the migration runs.
             f.crds.lock().unwrap().extend([
                 crd_name(ACTIVATION, group),
                 crd_name(PACKAGE_INSTANCE, group),
+                crd_name(ACTIVATION, keys::GROUP),
+                crd_name(PACKAGE_INSTANCE, keys::GROUP),
             ]);
             for r in records {
                 f.records
@@ -599,16 +591,6 @@ mod tests {
                 .filter(|(g, k, _)| g == group && *k == r.kind)
                 .map(|(_, _, v)| v.clone())
                 .collect())
-        }
-        async fn apply_crd(&self, manifest: &Value) -> Result<(), String> {
-            let name = manifest
-                .pointer("/metadata/name")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            self.calls.lock().unwrap().push(format!("apply_crd {name}"));
-            self.crds.lock().unwrap().push(name);
-            Ok(())
         }
         async fn await_crd(&self, _name: &str) -> Result<(), String> {
             Ok(())
@@ -695,17 +677,10 @@ mod tests {
         }
     }
 
-    fn crd_manifests() -> Vec<Value> {
-        [ACTIVATION, PACKAGE_INSTANCE]
-            .iter()
-            .map(|r| json!({"metadata": {"name": crd_name(*r, keys::GROUP)}}))
-            .collect()
-    }
-
     #[tokio::test]
     async fn a_cluster_with_no_retired_group_needs_nothing() {
         let fake = Fake::default();
-        let report = run(&fake, "c", &crd_manifests(), false).await.unwrap();
+        let report = run(&fake, "c", false).await.unwrap();
         assert!(!report.needed());
         assert!(fake.calls().is_empty(), "nothing should have been written");
     }
@@ -719,7 +694,7 @@ mod tests {
             legacy,
             vec![json!({"metadata": {"name": "stage2-a"}, "status": {"phase": "Active"}})],
         );
-        let report = run(&fake, "c", &crd_manifests(), true).await.unwrap();
+        let report = run(&fake, "c", true).await.unwrap();
         assert!(report.dry_run);
         assert_eq!(report.activations, vec!["stage2-a".to_string()]);
         assert!(report.copied.is_empty());
@@ -735,7 +710,7 @@ mod tests {
             legacy,
             vec![json!({"metadata": {"name": "stage2-a"}, "status": {"phase": PHASE_DEPLOYING}})],
         );
-        let err = run(&fake, "c", &crd_manifests(), false).await.unwrap_err();
+        let err = run(&fake, "c", false).await.unwrap_err();
         assert!(err.contains("is in phase Deploying"), "{err}");
         assert!(fake.calls().is_empty());
     }
@@ -752,7 +727,7 @@ mod tests {
                 json!({"metadata": {"name": "stage2-b"}, "spec": {"n": 2}, "status": {"phase": "Active"}}),
             ],
         );
-        let report = run(&fake, "c", &crd_manifests(), false).await.unwrap();
+        let report = run(&fake, "c", false).await.unwrap();
         assert_eq!(report.copied, vec!["stage2-a", "stage2-b"]);
         assert_eq!(report.crds_deleted.len(), 2);
 
@@ -795,7 +770,7 @@ mod tests {
                 "status": {"phase": "Active"},
             })],
         );
-        let report = run(&fake, "c", &crd_manifests(), false).await.unwrap();
+        let report = run(&fake, "c", false).await.unwrap();
         assert!(report.finalizers_present);
         assert_eq!(report.copied, ["stage2-a"]);
         assert_eq!(report.crds_deleted.len(), 2);
@@ -821,13 +796,10 @@ mod tests {
             .lock()
             .unwrap()
             .replace((legacy.to_string(), finalizer));
-        let err = run(&fake, "c", &crd_manifests(), false).await.unwrap_err();
+        let err = run(&fake, "c", false).await.unwrap_err();
         assert!(err.contains("Scale the Kix operator Deployment"), "{err}");
         assert!(
-            !fake
-                .calls()
-                .iter()
-                .any(|c| c.starts_with("apply_crd") || c.starts_with("create")),
+            !fake.calls().iter().any(|c| c.starts_with("create")),
             "nothing may be copied: {:?}",
             fake.calls()
         );
@@ -849,7 +821,7 @@ mod tests {
             .lock()
             .unwrap()
             .replace((legacy.to_string(), format!("{legacy}/operator-gc")));
-        let err = run(&fake, "c", &crd_manifests(), false).await.unwrap_err();
+        let err = run(&fake, "c", false).await.unwrap_err();
         assert!(err.contains("Scale the Kix operator Deployment"), "{err}");
         assert!(
             !fake.calls().iter().any(|c| c.starts_with("delete_crd")),
@@ -870,17 +842,19 @@ mod tests {
             return;
         };
         let fake = Fake::default();
-        // Only the PackageInstance CRD is left.
-        fake.crds
-            .lock()
-            .unwrap()
-            .push(crd_name(PACKAGE_INSTANCE, legacy));
+        // Only the PackageInstance CRD is left, beside the current group's
+        // CRDs that taking the deploy lock installs.
+        fake.crds.lock().unwrap().extend([
+            crd_name(PACKAGE_INSTANCE, legacy),
+            crd_name(ACTIVATION, keys::GROUP),
+            crd_name(PACKAGE_INSTANCE, keys::GROUP),
+        ]);
 
-        let plan = run(&fake, "c", &crd_manifests(), true).await.unwrap();
+        let plan = run(&fake, "c", true).await.unwrap();
         assert_eq!(plan.from_group.as_deref(), Some(*legacy));
         assert!(plan.activations.is_empty());
 
-        let report = run(&fake, "c", &crd_manifests(), false).await.unwrap();
+        let report = run(&fake, "c", false).await.unwrap();
         assert!(report.copied.is_empty());
         assert_eq!(report.crds_deleted, [crd_name(PACKAGE_INSTANCE, legacy)]);
     }
@@ -906,7 +880,7 @@ mod tests {
             .lock()
             .unwrap()
             .push("stage2-a".to_string());
-        let err = run(&fake, "c", &crd_manifests(), false).await.unwrap_err();
+        let err = run(&fake, "c", false).await.unwrap_err();
         assert!(err.contains("without its phase"), "{err}");
         assert!(!fake.calls().iter().any(|c| c.starts_with("delete_crd")));
     }
@@ -926,7 +900,7 @@ mod tests {
             ACTIVATION.kind,
             json!({"metadata": {"name": "stage2-a"}}),
         ));
-        let report = run(&fake, "c", &crd_manifests(), false).await.unwrap();
+        let report = run(&fake, "c", false).await.unwrap();
         assert_eq!(report.already_present, vec!["stage2-a".to_string()]);
         assert!(
             fake.calls().iter().any(|c| c == "status stage2-a"),
@@ -950,7 +924,7 @@ mod tests {
             ACTIVATION.kind,
             json!({"metadata": {"name": "stage2-a"}}),
         ));
-        let report = run(&fake, "c", &crd_manifests(), false).await.unwrap();
+        let report = run(&fake, "c", false).await.unwrap();
         assert_eq!(report.already_present, vec!["stage2-a".to_string()]);
         assert!(report.copied.is_empty());
         assert_eq!(report.crds_deleted.len(), 2);

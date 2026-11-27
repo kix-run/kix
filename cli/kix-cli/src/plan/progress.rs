@@ -62,11 +62,11 @@ pub fn print(event: PlanEvent<'_>) {
         }
         PlanEvent::KeptBuildUnusable { activation, error } => {
             warning_always(&format!(
-                "earlier deployment {}'s build (which has kept orphaned objects) could not be loaded ({error}).",
+                "could not load the build for earlier deployment {}, which has kept orphaned objects ({error}).",
                 output::bold(activation)
             ));
             eprintln!(
-                "  This plan cannot list or delete the orphaned objects kept from {activation}."
+                "  The package diff omits the orphaned objects kept from {activation}, though Kix still finds and tracks them from the live objects on the cluster."
             );
         }
         PlanEvent::Connecting(connection) => crate::say!("{}", connection.connecting()),
@@ -130,6 +130,45 @@ pub fn print(event: PlanEvent<'_>) {
             );
         }
         PlanEvent::LockHeld(lock) => crate::commands::lock::say_watching(lock),
+        PlanEvent::TookBack { cluster, taken } => {
+            crate::say!(
+                "  {} Took Kix cluster {cluster} back from the uninstalled Kix operator (`--operator-removed`).",
+                output::yellow("!"),
+            );
+            if let Some(current) = &taken.current {
+                crate::say!(
+                    "    Cleared the operator build path from current deployment record {}.",
+                    output::bold(current),
+                );
+            }
+            if !taken.superseded.is_empty() {
+                crate::say!(
+                    "    Marked queued deployment record(s) {} Superseded because the operator never started them.",
+                    taken.superseded.join(", "),
+                );
+            }
+            if !taken.failed.is_empty() {
+                crate::say!(
+                    "    Marked deployment record(s) {} Failed because the operator stopped while deploying them.",
+                    taken.failed.join(", "),
+                );
+            }
+            crate::say!(
+                "    Kix cannot check whether a Kix operator is still running. Stop any running operator so it does not overwrite this deploy's changes. To look for operator pods:"
+            );
+            crate::say!(
+                "      kubectl get pods --all-namespaces -o jsonpath='{{range .items[*]}}{{.metadata.namespace}}/{{.metadata.name}} {{.spec.containers[*].image}}{{\"\\n\"}}{{end}}' | grep kix-operator"
+            );
+            crate::say!(
+                "    Kix does not install the operator, so its pods and image may have another name."
+            );
+        }
+        PlanEvent::NothingToTakeBack { cluster } => {
+            crate::say!(
+                "  {} `--operator-removed`: Kix cluster {cluster} has no active, queued, or in-progress deployment records from an older operator, so nothing was changed.",
+                output::dim("="),
+            );
+        }
         PlanEvent::FailedFolded(record) => match record.partly_deployed() {
             Some(partial) => crate::say!(
                 "  {} including resources from partial deployment {} ({}...), which applied {}",
@@ -150,6 +189,10 @@ pub fn print(event: PlanEvent<'_>) {
                 }
             }
         },
+        PlanEvent::FailedValuesUnknown(record) => crate::say!(
+            "    the build for {} is not in Kix's local store on this machine. Kix still includes the objects from that deploy's revisions, but the plan cannot tell its values apart from live cluster edits, so those fields appear under Drift.",
+            record.name,
+        ),
         PlanEvent::FailedUnresolved { records, cluster } => {
             let names = some_names(records.iter().map(|r| r.name.as_str()));
             warning(&format!(
@@ -187,26 +230,6 @@ pub fn print(event: PlanEvent<'_>) {
                 output::yellow("!"),
                 objects.len(),
                 some_names(names.iter().map(String::as_str)),
-            );
-        }
-        PlanEvent::KindsUnread(kinds) => {
-            warning(&format!(
-                "this Kubernetes account cannot list {} across the cluster.",
-                some_names(kinds.iter().map(String::as_str))
-            ));
-            crate::esay!(
-                "  Without `--reconcile`, this plan skips objects of these kinds that are unchanged from the current deployment, even if they were deleted or are being deleted on the cluster.\n  To check them, grant this account cluster-wide `list` permission for these kinds, or pass `--reconcile` on `kix plan` or `kix deploy` to reapply every resource."
-            );
-        }
-        PlanEvent::KeptUnresolved { sources, cluster } => {
-            let names = some_names(sources.iter().map(|s| s.activation.as_str()));
-            warning(&format!(
-                "{} earlier deployment(s) ({names}) kept orphaned objects (deployed without `--prune`) from builds that are not in Kix's local store on this machine.",
-                sources.len()
-            ));
-            crate::esay!("  This plan cannot list or delete those orphaned objects.");
-            crate::esay!(
-                "  To remove them, run `kix deploy {cluster} --prune` from a machine that has those builds, or run `kix gc --full-scan {cluster}`."
             );
         }
     }

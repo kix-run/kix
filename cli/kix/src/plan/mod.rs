@@ -8,13 +8,17 @@
 //! [`live`] builds the operator's plan from live cluster objects.
 
 pub mod baseline;
+mod decide;
 mod diff;
 pub mod document;
 pub mod file;
 #[cfg(any(test, feature = "test-util"))]
 pub mod fixtures;
 pub mod live;
+#[cfg(test)]
+pub(crate) mod migration_tests;
 pub mod objects;
+pub mod offline;
 #[cfg(test)]
 mod only_tests;
 pub mod origin;
@@ -35,8 +39,8 @@ use diff::is_propagation_path;
 pub(crate) use diff::partition_propagation;
 pub use diff::{diff_garbage, diff_graphs};
 pub use planner::{
-    CheckedPlan, Connected, Differences, OldSide, Planned, Planner, Settle, Start, Target,
-    TargetChecks, Work, keep_held, keep_shared, kinds_leaving,
+    CheckedPlan, Connected, Differences, OldSide, Planned, Planner, Replanned, Settle, Start,
+    Target, TargetChecks, Work, keep_held, keep_shared, kinds_leaving,
 };
 #[cfg(test)]
 use redact::LAST_APPLIED;
@@ -80,6 +84,16 @@ pub enum PlanEvent<'a> {
         connection: &'a crate::cluster::binding::Connection,
         uid: Option<&'a str>,
     },
+    /// `--operator-removed` took Kix cluster `cluster` back from the Kix
+    /// operator before the plan read it.
+    TookBack {
+        cluster: &'a str,
+        taken: &'a crate::cluster::activation::features::TakenBack,
+    },
+    /// `--operator-removed` found no record of Kix cluster `cluster` that a
+    /// Kix operator older than this Kix would deploy or repair, so it
+    /// changed nothing.
+    NothingToTakeBack { cluster: &'a str },
     /// `--offline` found no cached build, so this is a first deploy.
     NoCachedBuild,
     /// `--offline` is loading the cached build.
@@ -103,6 +117,10 @@ pub enum PlanEvent<'a> {
     DeployInFlight(&'a Record),
     /// The build of a `Failed` or `Partial` record was folded into the plan.
     FailedFolded(&'a Record),
+    /// The plan takes in a `Failed` or `Partial` record from its revisions,
+    /// and its build is not on this machine. The package diff cannot tell
+    /// which live values that deploy wrote, so it lists them as drift.
+    FailedValuesUnknown(&'a Record),
     /// A rollback's current build failed to load or did not match the record,
     /// so the rollback compares against an empty build.
     ActiveBuildUnusable {
@@ -135,21 +153,11 @@ pub enum PlanEvent<'a> {
     /// the plan.
     KeptFolded(&'a [KeptOrphanSource]),
     /// A build from which an earlier deploy kept orphans failed to load, so
-    /// the plan cannot list or delete those orphans.
+    /// the package diff cannot show those orphans.
     KeptBuildUnusable { activation: &'a str, error: &'a str },
-    /// Builds from which an earlier deploy kept orphans that are not on this
-    /// machine and were not read from the cluster.
-    KeptUnresolved {
-        sources: &'a [KeptOrphanSource],
-        cluster: &'a str,
-    },
     /// Objects the build leaves unchanged that are absent from the cluster
     /// or being deleted. The plan writes them again.
     NotHeld(&'a [ResourceId]),
-    /// Kinds of unchanged objects that this account may not list, as
-    /// `Kind` or `Kind.group`. The plan does not know whether the cluster
-    /// still holds those objects, and leaves them unchanged.
-    KindsUnread(&'a [String]),
 }
 
 /// Why a plan could not be made.
@@ -157,6 +165,12 @@ pub enum PlanEvent<'a> {
 pub enum PlanError {
     #[error("failed to connect to cluster: {0}")]
     Connect(Box<FetchError>),
+    /// A revision of the build would be too large to store on the cluster.
+    #[error("{0}")]
+    RevisionTooLarge(Box<crate::cluster::revision::TooLarge>),
+    /// The records an older Kix wrote cannot be given revisions.
+    #[error("{0}")]
+    Conversion(Box<crate::cluster::revision::convert::Refusal>),
     /// The build is bound to another Kubernetes cluster, names none while
     /// this one accepts only builds that name it, or would deploy a cluster
     /// that Kix 0.6 named `cluster` under a new name.
@@ -181,6 +195,17 @@ pub enum PlanError {
          permissions, or wait for the Kubernetes API server to recover, then run the command again."
     )]
     FoldedLeftovers(Box<FetchError>),
+    /// Kix could not read part of what says which objects this Kix
+    /// cluster's records deploy, so it cannot tell which objects are
+    /// orphans.
+    #[error(
+        "{0}. Nothing was planned or applied to the cluster because Kix cannot determine which objects earlier deploys left behind."
+    )]
+    Tenancy(Box<crate::cluster::tenancy::Problem>),
+    #[error(
+        "cannot read deployment records to determine which objects each Kix cluster deploys: {0}. Nothing was planned or applied to the cluster."
+    )]
+    ReadTenancy(Box<crate::cluster::activation::RecordsError>),
     #[error("cannot check whether another Kix cluster deploys an orphan: {0}")]
     SharedOrphans(Box<FetchError>),
     #[error(
@@ -196,6 +221,9 @@ pub enum PlanError {
          to recover, then run the command again."
     )]
     ReadLive(Box<FetchError>),
+    /// This account may neither list nor get objects the plan must read.
+    #[error("{0}. Nothing was planned or applied to the cluster.")]
+    ReadForbidden(Box<crate::cluster::inventory::ReadForbidden>),
     #[error(
         "cannot read the deploy lock (`ActivationHead`) for this Kix cluster: {}. \
          Nothing was planned or applied to the cluster. \
@@ -213,6 +241,10 @@ pub enum PlanError {
     Marker(MalformedMarker),
     #[error("{0}")]
     Unshown(objects::Unshown),
+    /// The plan `kix deploy --offline` made again from the live cluster
+    /// differs from the plan the person confirmed.
+    #[error("{0}")]
+    OfflinePlanDiffers(Box<offline::OfflinePlanDiffers>),
     #[error(
         "[K8031] cannot move {}: Kubernetes stores both API groups as the same object, \
          so applying the new group and deleting from the old group deletes that object \
@@ -230,12 +262,29 @@ pub enum PlanError {
          for later updates."
     )]
     OnlyFirstDeploy(String),
+    /// A record of the Kix cluster is driven by a Kix operator older than
+    /// this Kix.
+    #[error(transparent)]
+    OperatorWithoutRevisions(Box<crate::cluster::activation::features::OperatorWithoutRevisions>),
+    #[error(transparent)]
+    OperatorFeatures(Box<crate::cluster::activation::features::FeaturesCheckError>),
+    #[error(
+        "could not reclaim Kix cluster '{cluster}' from the Kix operator: {source}. Run the command again."
+    )]
+    TakeBack {
+        cluster: String,
+        source: Box<crate::cluster::activation::features::TakeBackError>,
+    },
     #[error(
         "cannot use `--only` on Kix cluster '{cluster}' because its active deployment ({record}) \
          is managed by the Kix operator. Nothing was planned or applied to the cluster. The \
          operator reconciles {record} to match its build, so it would revert changes from `--only` \
          and delete any new resources it creates. Next: deploy the full build with \
-         `kix deploy {cluster} --operator`, or take over from this machine with `kix deploy {cluster}`."
+         `kix deploy {cluster} --operator`, or take the cluster over from this machine with \
+         `kix deploy {cluster}`. If the operator is older than Kix {version}, upgrade it first. If it \
+         was uninstalled, deploy the full build once with `kix deploy {cluster} --operator-removed` \
+         (or `kix deploy {cluster}` if the operator was Kix {version} or newer), then use `--only`.",
+        version = crate::version::running()
     )]
     OnlyUnderOperator { cluster: String, record: String },
     #[error("{0}")]

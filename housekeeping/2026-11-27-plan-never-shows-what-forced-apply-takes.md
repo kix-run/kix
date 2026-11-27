@@ -1,0 +1,5 @@
+# 2026-11-27 · `cli/kix/src/plan/origin.rs` · The plan never shows the API server's answer of what a forced apply takes, so for some fields the person confirms the object and not the fields.
+
+The drift lines come from `origin::live_drift`, which walks the manifest. The forced apply is checked against the server's answer (`apply::takes_back`). For a field the build spells differently from the server, such as a port without `protocol` or a Secret value in `stringData`, the drift lines name fewer fields than the forced apply takes, or none. The error text of `ApplyError::ChangedSincePlan` says the fields were "shown in the plan", which is not true for these. See also `2026-11-24-secret-drift-entry-misses-key-and-manager.md`.
+
+Options: (1) put the answer in the plan document, one entry per field with its manager and live value (Secret values hidden), and print it under the drift line; this adds a document field and makes `kix deploy --plan` able to compare it. (2) Build the drift lines from the answer where there is one. (3) Change only the text, so it no longer says the plan showed the fields.

@@ -3,9 +3,12 @@
 //! It serves discovery for a fixed set of kinds (ConfigMap, Secret, Namespace,
 //! Service, Pod, Event in two groups, CustomResourceDefinition, Deployment,
 //! StatefulSet,
-//! Job, ClusterRole, Kix's Activation and ActivationHead, and two kinds of a group served at two
+//! Job, ClusterRole, Kix's Activation, ActivationHead, and
+//! PackageInstanceRevision, and two kinds of a group served at two
 //! versions), and GET, LIST (with an equality or existence label
-//! selector), PATCH (as a JSON merge patch, on the object or its `status`),
+//! selector), PATCH (as a JSON merge patch, on the object or its `status`,
+//! or as a JSON patch of `test`, `add`, `replace`, and `remove` operations,
+//! refused with 422 when one fails, with `managedFields` patched as given),
 //! POST (create, 409 when the name is taken), PUT (replace, honoring
 //! `metadata.resourceVersion`), DELETE (honoring `preconditions` and `metadata.finalizers`), and
 //! server-side apply on the objects it holds. A DELETE of an object with
@@ -17,7 +20,9 @@
 //! keeps the `foregroundDeletion` finalizer until every dependent with
 //! `blockOwnerDeletion: true` is gone.
 //! Every object gets a uid and a resourceVersion when it is added, and a new
-//! resourceVersion on every change. `/version` answers once
+//! resourceVersion on every change. A CustomResourceDefinition also gets
+//! `metadata.generation` 1 when it is created, and one more on every PUT
+//! that changes its `spec`. `/version` answers once
 //! [`FakeApi::serve_version`] has set what it says. Anything else answers
 //! 404.
 //!
@@ -25,10 +30,31 @@
 //! is answered, which models a concurrent writer between a read and a delete.
 //! [`FakeApi::on_apply`] changes what the next apply of an object stores,
 //! which models a CRD's pruning or a mutating admission webhook.
+//! [`FakeApi::on_create`] does the same for the next create of an object.
 //! [`FakeApi::fail_next`] answers the next requests for one path with a
 //! plain-text error, as the apiserver does for a path it has not registered.
 //! [`FakeApi::serve_retired_records`] adds the Activation kind under a
 //! retired domain to discovery, as on a cluster that has not migrated.
+//! [`FakeApi::serve_no_kix_kinds`] leaves Kix's own kinds out of
+//! discovery, as on a cluster Kix has never deployed to.
+//!
+//! An apply that sends `metadata.resourceVersion` is refused with 409 when
+//! the object has another one, as Kubernetes does. [`FakeApi::track_owners`]
+//! turns on a small model of server-side apply's field ownership: an apply
+//! owns the fields it sends, keeps the fields other managers own, removes
+//! the fields it owned before and no longer sends, and is refused with 409
+//! naming the other manager and the field when it would change a field
+//! another manager owns, unless it is forced. Each manager has its own
+//! entry, so the first apply of the same content by a second manager adds
+//! an entry and changes `resourceVersion`, and an apply that changes
+//! nothing, entries included, keeps `resourceVersion`. Lists count as one
+//! field, except that an entry may name a field inside a list element by
+//! the element's keys (`k:{"port":80,"protocol":"TCP"}`), as Kubernetes
+//! records it. An apply that sends the list then conflicts on that field
+//! when its value differs. An apply gives each port of a Service without a
+//! `protocol` the protocol `TCP`, as Kubernetes defaults it.
+//! [`FakeApi::update_as`] changes an object as another manager's update
+//! does, taking the fields it changes.
 
 use std::sync::{Arc, Mutex};
 
@@ -79,6 +105,13 @@ const KINDS: &[(&str, &str, &str, &str, bool)] = &[
         super::head::PLURAL,
         false,
     ),
+    (
+        keys::DOMAIN,
+        "v1alpha1",
+        super::revision::KIND,
+        super::revision::PLURAL,
+        false,
+    ),
     ("events.k8s.io", "v1", "Event", "events", true),
     // A group served at two versions, preferred first: `Gizmo` at both,
     // `Gadget` only at the older one.
@@ -115,13 +148,18 @@ struct State {
     requests: Vec<String>,
     after_get: Vec<(String, Hook)>,
     on_apply: Vec<(String, Hook)>,
+    on_create: Vec<(String, Hook)>,
     /// `(path, remaining, status)`: answer that many requests for `path`
     /// with `status` and a plain-text body.
     failures: Vec<(String, u32, u16)>,
     /// Discovery also serves [`RETIRED_RECORDS`].
     retired_records: bool,
+    /// Discovery leaves out the kinds of [`keys::DOMAIN`].
+    no_kix_kinds: bool,
     /// What `/version` answers, once set.
     version: Option<Value>,
+    /// Applies keep `metadata.managedFields` ([`FakeApi::track_owners`]).
+    owners: bool,
 }
 
 impl State {
@@ -297,6 +335,16 @@ impl FakeApi {
             .push((name.to_string(), Box::new(f)));
     }
 
+    /// Run `f` on what the next create (POST) of the object named `name`
+    /// stores and answers.
+    pub fn on_create(&self, name: &str, f: impl FnOnce(&mut Value) + Send + 'static) {
+        self.state
+            .lock()
+            .unwrap()
+            .on_create
+            .push((name.to_string(), Box::new(f)));
+    }
+
     /// Answer the next `times` requests for `path` (no query string) with
     /// `status` and a plain-text body. With 404 this is the apiserver's
     /// `404 page not found` for a path nothing serves. `u32::MAX` keeps
@@ -309,10 +357,48 @@ impl FakeApi {
             .push((path.to_string(), times, status));
     }
 
+    /// Model server-side apply's field ownership on every later apply (see
+    /// the module docs).
+    pub fn track_owners(&self) {
+        self.state.lock().unwrap().owners = true;
+    }
+
+    /// Change the held object of `kind` named `name` with `f`, as an update
+    /// by field manager `manager` through `subresource` (such as `scale`)
+    /// does: the manager takes every field `f` changes from the managers that
+    /// owned it, and the object gets a new resourceVersion.
+    pub fn update_as(
+        &self,
+        manager: &str,
+        subresource: Option<&str>,
+        kind: &str,
+        name: &str,
+        f: impl FnOnce(&mut Value),
+    ) {
+        let mut st = self.state.lock().unwrap();
+        let i = st
+            .objects
+            .iter()
+            .position(|o| o["kind"] == kind && o["metadata"]["name"] == name)
+            .expect("the object to update");
+        let before = st.objects[i].clone();
+        f(&mut st.objects[i]);
+        let changed = changed_fields(&before, &st.objects[i]);
+        owners::take(&mut st.objects[i], manager, subresource, &changed);
+        let rv = st.bump();
+        st.objects[i]["metadata"]["resourceVersion"] = json!(rv);
+    }
+
     /// Serve the Activation kind under a retired domain too, which is what
     /// the domain gate refuses.
     pub fn serve_retired_records(&self) {
         self.state.lock().unwrap().retired_records = true;
+    }
+
+    /// Leave Kix's own kinds out of discovery, as on a cluster whose
+    /// CustomResourceDefinitions Kix has not installed yet.
+    pub fn serve_no_kix_kinds(&self) {
+        self.state.lock().unwrap().no_kix_kinds = true;
     }
 
     /// Answer `/version` with `git_version`, `major`, and `minor`, as the
@@ -403,13 +489,16 @@ impl FakeApi {
                 let query = req.uri().query().unwrap_or("").to_string();
                 // Kubernetes tells a server-side apply from a merge patch by
                 // the request's content type, so the fake does too.
-                let apply = req
+                let content_type = req
                     .headers()
                     .get(http::header::CONTENT_TYPE)
-                    .is_some_and(|v| v.as_bytes().starts_with(b"application/apply-patch"));
+                    .map(|v| v.as_bytes().to_vec())
+                    .unwrap_or_default();
+                let apply = content_type.starts_with(b"application/apply-patch");
+                let json_patch = content_type.starts_with(b"application/json-patch");
                 let body = req.into_body().collect().await.unwrap().to_bytes();
                 let (status, content_type, body) =
-                    api.respond(&method, &path, &query, &body, apply);
+                    api.respond(&method, &path, &query, &body, apply, json_patch);
                 let resp = http::Response::builder()
                     .status(status)
                     .header("content-type", content_type)
@@ -428,6 +517,7 @@ impl FakeApi {
         query: &str,
         body: &[u8],
         apply: bool,
+        json_patch: bool,
     ) -> (u16, &'static str, String) {
         {
             let mut st = self.state.lock().unwrap();
@@ -449,7 +539,7 @@ impl FakeApi {
                 return (code, "text/plain", format!("{code} page not found\n"));
             }
         }
-        let (status, value) = self.handle(method, path, query, body, apply);
+        let (status, value) = self.handle(method, path, query, body, apply, json_patch);
         (status, "application/json", value.to_string())
     }
 
@@ -460,6 +550,7 @@ impl FakeApi {
         query: &str,
         body: &[u8],
         apply: bool,
+        json_patch: bool,
     ) -> (u16, Value) {
         let mut st = self.state.lock().unwrap();
         if path == "/version" {
@@ -471,6 +562,9 @@ impl FakeApi {
         let mut kinds = KINDS.to_vec();
         if st.retired_records {
             kinds.push(RETIRED_RECORDS);
+        }
+        if st.no_kix_kinds {
+            kinds.retain(|(group, ..)| *group != keys::DOMAIN);
         }
         if let Some(doc) = discovery(&kinds, path) {
             return (200, doc);
@@ -560,6 +654,7 @@ impl FakeApi {
                     obj["status"] = json!({
                         "conditions": [{ "type": "Established", "status": "True" }],
                     });
+                    obj["metadata"]["generation"] = json!(1);
                 }
                 let rv = st.bump();
                 let meta = &mut obj["metadata"];
@@ -571,6 +666,11 @@ impl FakeApi {
                 meta["resourceVersion"] = json!(rv);
                 if let Some(ns) = &target.namespace {
                     meta["namespace"] = json!(ns);
+                }
+                let name = meta["name"].as_str().unwrap_or_default().to_string();
+                if let Some(h) = st.on_create.iter().position(|(n, _)| *n == name) {
+                    let (_, hook) = st.on_create.remove(h);
+                    hook(&mut obj);
                 }
                 st.objects.push(obj.clone());
                 (201, obj)
@@ -587,8 +687,14 @@ impl FakeApi {
                     return status(409, "Conflict", "the object has been modified");
                 }
                 let rv = st.bump();
-                obj["metadata"]["uid"] = st.objects[i]["metadata"]["uid"].clone();
+                let stored = &st.objects[i];
+                obj["metadata"]["uid"] = stored["metadata"]["uid"].clone();
                 obj["metadata"]["resourceVersion"] = json!(rv);
+                if target.kind == "CustomResourceDefinition" {
+                    let generation = stored["metadata"]["generation"].as_i64().unwrap_or(1);
+                    let moved = i64::from(obj["spec"] != stored["spec"]);
+                    obj["metadata"]["generation"] = json!(generation + moved);
+                }
                 st.objects[i] = obj.clone();
                 (200, obj)
             }
@@ -596,18 +702,57 @@ impl FakeApi {
                 let Ok(mut obj) = serde_json::from_slice::<Value>(body) else {
                     return status(400, "BadRequest", "the fake serves JSON bodies only");
                 };
+                default_service_ports(&mut obj);
                 let existing = st.objects.iter().position(&matches);
-                let rv = st.bump();
-                let uid = match existing {
-                    Some(i) => st.objects[i]["metadata"]["uid"].clone(),
-                    None => json!(format!("uid-{rv}")),
-                };
-                obj["metadata"]["uid"] = uid;
-                obj["metadata"]["resourceVersion"] = json!(rv);
+                let sent_version = obj["metadata"]["resourceVersion"].take();
+                if !sent_version.is_null()
+                    && existing.map(|i| &st.objects[i]["metadata"]["resourceVersion"])
+                        != Some(&sent_version)
+                {
+                    return status(
+                        409,
+                        "Conflict",
+                        "Operation cannot be fulfilled: the object has been modified; please apply your changes to the latest version and try again",
+                    );
+                }
+                if st.owners {
+                    let manager = query
+                        .split('&')
+                        .find_map(|q| q.strip_prefix("fieldManager="))
+                        .unwrap_or("unknown")
+                        .replace("%2F", "/");
+                    let force = query.split('&').any(|q| q == "force=true");
+                    match owners::apply(existing.map(|i| &st.objects[i]), &obj, &manager, force) {
+                        Ok(merged) => obj = merged,
+                        Err(message) => return status(409, "Conflict", &message),
+                    }
+                }
+                if let Some(i) = existing {
+                    obj["metadata"]["uid"] = st.objects[i]["metadata"]["uid"].clone();
+                }
                 if let Some(h) = st.on_apply.iter().position(|(n, _)| n == name) {
                     let (_, hook) = st.on_apply.remove(h);
                     hook(&mut obj);
                 }
+                // With ownership tracked, an apply that changes nothing,
+                // its managers included, keeps the object's resourceVersion.
+                let unchanged = st.owners
+                    && existing.is_some_and(|i| {
+                        let without_version = |o: &Value| {
+                            let mut o = o.clone();
+                            o["metadata"]["resourceVersion"] = Value::Null;
+                            o
+                        };
+                        without_version(&st.objects[i]) == without_version(&obj)
+                    });
+                let rv = match existing {
+                    Some(i) if unchanged => st.objects[i]["metadata"]["resourceVersion"].clone(),
+                    _ => json!(st.bump()),
+                };
+                if existing.is_none() {
+                    obj["metadata"]["uid"] = json!(format!("uid-{rv}"));
+                }
+                obj["metadata"]["resourceVersion"] = rv;
                 if !query.split('&').any(|q| q == "dryRun=All") {
                     match existing {
                         Some(i) => st.objects[i] = obj.clone(),
@@ -615,6 +760,20 @@ impl FakeApi {
                     }
                 }
                 (if existing.is_some() { 200 } else { 201 }, obj)
+            }
+            ("PATCH", Some(_)) if json_patch => {
+                let Some(i) = st.objects.iter().position(&matches) else {
+                    return not_found(path);
+                };
+                let ops: Vec<Value> = serde_json::from_slice(body).unwrap_or_default();
+                let mut patched = st.objects[i].clone();
+                if let Err(message) = apply_json_patch(&mut patched, &ops) {
+                    return status(422, "Invalid", &message);
+                }
+                let rv = st.bump();
+                patched["metadata"]["resourceVersion"] = json!(rv);
+                st.objects[i] = patched.clone();
+                (200, patched)
             }
             ("PATCH", Some(_)) => {
                 let Some(i) = st.objects.iter().position(&matches) else {
@@ -683,7 +842,407 @@ impl Target {
     }
 }
 
+/// Give each port of a Service that names no `protocol` the protocol `TCP`,
+/// as the API server defaults it.
+fn default_service_ports(obj: &mut Value) {
+    if obj["kind"] != "Service" {
+        return;
+    }
+    let ports = obj.pointer_mut("/spec/ports").and_then(Value::as_array_mut);
+    for port in ports.into_iter().flatten() {
+        if let Some(port) = port.as_object_mut() {
+            port.entry("protocol").or_insert_with(|| json!("TCP"));
+        }
+    }
+}
+
+/// Return the fields whose value differs between `before` and `after`.
+fn changed_fields(before: &Value, after: &Value) -> Vec<Vec<String>> {
+    let mut fields = owners::fields_of(before);
+    for f in owners::fields_of(after) {
+        if !fields.contains(&f) {
+            fields.push(f);
+        }
+    }
+    fields.retain(|f| owners::value_at(before, f) != owners::value_at(after, f));
+    fields
+}
+
+/// The field ownership model of [`FakeApi::track_owners`]. A field is the
+/// chain of fieldsV1 keys (`f:spec`, `f:replicas`) from the object's root
+/// to a value that is not a non-empty map. Lists are one field.
+mod owners {
+    use serde_json::{Value, json};
+
+    pub(super) type Field = Vec<String>;
+
+    /// Return the fields of `obj` an apply or update can own: everything
+    /// but `apiVersion`, `kind`, `status`, and the metadata other than
+    /// labels and annotations.
+    pub(super) fn fields_of(obj: &Value) -> Vec<Field> {
+        let mut out = Vec::new();
+        let Some(map) = obj.as_object() else {
+            return out;
+        };
+        for (key, value) in map {
+            match key.as_str() {
+                "apiVersion" | "kind" | "status" => {}
+                "metadata" => {
+                    for part in ["labels", "annotations"] {
+                        if let Some(sub) = value.get(part) {
+                            walk(
+                                sub,
+                                vec!["f:metadata".into(), format!("f:{part}")],
+                                &mut out,
+                            );
+                        }
+                    }
+                }
+                _ => walk(value, vec![format!("f:{key}")], &mut out),
+            }
+        }
+        out
+    }
+
+    fn walk(value: &Value, prefix: Field, out: &mut Vec<Field>) {
+        match value {
+            Value::Object(map) if !map.is_empty() => {
+                for (key, child) in map {
+                    let mut chain = prefix.clone();
+                    chain.push(format!("f:{key}"));
+                    walk(child, chain, out);
+                }
+            }
+            _ => out.push(prefix),
+        }
+    }
+
+    pub(super) fn value_at<'v>(obj: &'v Value, field: &[String]) -> Option<&'v Value> {
+        field.iter().try_fold(obj, |node, key| {
+            if let Some(name) = key.strip_prefix("f:") {
+                return node.get(name);
+            }
+            let Value::Object(keys) = serde_json::from_str(key.strip_prefix("k:")?).ok()? else {
+                return None;
+            };
+            node.as_array()?
+                .iter()
+                .find(|e| keys.iter().all(|(k, v)| e.get(k) == Some(v)))
+        })
+    }
+
+    /// Return whether an apply that sends the fields `sent` sets `field`:
+    /// `sent` holds it, or holds the list that `field` names an element of.
+    fn sets(sent: &[Field], field: &[String]) -> bool {
+        sent.iter().any(|s| {
+            field.starts_with(s) && field.get(s.len()).is_none_or(|next| next.starts_with("k:"))
+        })
+    }
+
+    fn set_at(obj: &mut Value, field: &[String], value: Value) {
+        let mut node = obj;
+        for key in &field[..field.len() - 1] {
+            let name = key.trim_start_matches("f:");
+            if !node.get(name).is_some_and(Value::is_object) {
+                node[name] = json!({});
+            }
+            node = &mut node[name];
+        }
+        node[field[field.len() - 1].trim_start_matches("f:")] = value;
+    }
+
+    fn remove_at(obj: &mut Value, field: &[String]) {
+        let Some((last, parents)) = field.split_last() else {
+            return;
+        };
+        let mut node = obj;
+        for key in parents {
+            match node.get_mut(key.trim_start_matches("f:")) {
+                Some(next) => node = next,
+                None => return,
+            }
+        }
+        if let Some(map) = node.as_object_mut() {
+            map.remove(last.trim_start_matches("f:"));
+        }
+    }
+
+    /// Return the fields a fieldsV1 tree names.
+    fn fields_of_tree(tree: &Value, prefix: Field, out: &mut Vec<Field>) {
+        let children: Vec<(&String, &Value)> = tree
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(k, _)| k.as_str() != ".")
+            .collect();
+        if children.is_empty() {
+            if !prefix.is_empty() {
+                out.push(prefix);
+            }
+            return;
+        }
+        for (key, child) in children {
+            let mut chain = prefix.clone();
+            chain.push(key.clone());
+            fields_of_tree(child, chain, out);
+        }
+    }
+
+    fn tree_of(fields: &[Field]) -> Value {
+        let mut tree = json!({});
+        for field in fields {
+            let mut node = &mut tree;
+            for key in field {
+                node = node
+                    .as_object_mut()
+                    .expect("a fieldsV1 node")
+                    .entry(key.clone())
+                    .or_insert_with(|| json!({}));
+            }
+        }
+        tree
+    }
+
+    fn entries(obj: Option<&Value>) -> Vec<Value> {
+        obj.and_then(|o| o["metadata"]["managedFields"].as_array())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn fields_of_entry(entry: &Value) -> Vec<Field> {
+        let mut out = Vec::new();
+        fields_of_tree(&entry["fieldsV1"], Vec::new(), &mut out);
+        out
+    }
+
+    fn entry(manager: &str, operation: &str, subresource: Option<&str>, fields: &[Field]) -> Value {
+        let mut e = json!({
+            "manager": manager,
+            "operation": operation,
+            "apiVersion": "v1",
+            "fieldsType": "FieldsV1",
+            "fieldsV1": tree_of(fields),
+        });
+        if let Some(sub) = subresource {
+            e["subresource"] = json!(sub);
+        }
+        e
+    }
+
+    fn is_apply_of(e: &Value, manager: &str) -> bool {
+        e["manager"] == manager && e["operation"] == "Apply" && e["subresource"].is_null()
+    }
+
+    /// Return `field` as the API server writes a path in a conflict:
+    /// `.spec.ports[port=80,protocol="TCP"].targetPort`.
+    fn path(field: &[String]) -> String {
+        field
+            .iter()
+            .map(|k| match k.strip_prefix("k:") {
+                Some(json) => match serde_json::from_str::<Value>(json) {
+                    Ok(Value::Object(keys)) => {
+                        let pairs: Vec<String> =
+                            keys.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                        format!("[{}]", pairs.join(","))
+                    }
+                    _ => format!("[{json}]"),
+                },
+                None => format!(".{}", k.trim_start_matches("f:")),
+            })
+            .collect()
+    }
+
+    /// Apply `sent` as field manager `manager` over `existing`, and return
+    /// what the server stores, or the conflict message.
+    pub(super) fn apply(
+        existing: Option<&Value>,
+        sent: &Value,
+        manager: &str,
+        force: bool,
+    ) -> Result<Value, String> {
+        let sent_fields = fields_of(sent);
+        let all_before = entries(existing);
+        let (mine, others): (Vec<Value>, Vec<Value>) = all_before
+            .iter()
+            .cloned()
+            .partition(|e| is_apply_of(e, manager));
+        let owned_before: Vec<Field> = mine.iter().flat_map(fields_of_entry).collect();
+        let before = |f: &Field| existing.and_then(|o| value_at(o, f));
+        let differs = |f: &Field| before(f).is_some() && before(f) != value_at(sent, f);
+        if !force {
+            let conflicts: Vec<String> = others
+                .iter()
+                .flat_map(|e| {
+                    fields_of_entry(e)
+                        .into_iter()
+                        .filter(|f| sets(&sent_fields, f) && differs(f))
+                        .map(move |f| format!("conflict with {}: {}", e["manager"], path(&f)))
+                })
+                .collect();
+            if !conflicts.is_empty() {
+                return Err(format!(
+                    "Apply failed with {} conflict(s): {}",
+                    conflicts.len(),
+                    conflicts.join(", ")
+                ));
+            }
+        }
+        let mut merged = match existing {
+            Some(obj) => {
+                let mut merged = obj.clone();
+                let others_own: Vec<Field> = others.iter().flat_map(fields_of_entry).collect();
+                for f in &owned_before {
+                    if !sent_fields.contains(f) && !others_own.contains(f) {
+                        remove_at(&mut merged, f);
+                    }
+                }
+                for f in &sent_fields {
+                    if let Some(v) = value_at(sent, f) {
+                        set_at(&mut merged, f, v.clone());
+                    }
+                }
+                for key in ["apiVersion", "kind"] {
+                    merged[key] = sent[key].clone();
+                }
+                merged
+            }
+            None => sent.clone(),
+        };
+        let mut kept: Vec<Value> = Vec::new();
+        for mut e in others {
+            let fields: Vec<Field> = fields_of_entry(&e)
+                .into_iter()
+                .filter(|f| !(sets(&sent_fields, f) && differs(f)))
+                .collect();
+            if !fields.is_empty() {
+                e["fieldsV1"] = tree_of(&fields);
+                kept.push(e);
+            }
+        }
+        // An entry the manager had keeps its place, as on the API server,
+        // which drops an entry that owns no field.
+        let at = all_before
+            .iter()
+            .position(|e| is_apply_of(e, manager))
+            .unwrap_or(0)
+            .min(kept.len());
+        if !sent_fields.is_empty() {
+            kept.insert(at, entry(manager, "Apply", None, &sent_fields));
+        }
+        merged["metadata"]["managedFields"] = Value::Array(kept);
+        Ok(merged)
+    }
+
+    /// Give `manager` the fields `changed` of `obj`, through `subresource`,
+    /// taking them from every other entry.
+    pub(super) fn take(
+        obj: &mut Value,
+        manager: &str,
+        subresource: Option<&str>,
+        changed: &[Field],
+    ) {
+        let mut out: Vec<Value> = Vec::new();
+        let mut taken: Vec<Field> = changed.to_vec();
+        for mut e in entries(Some(obj)) {
+            let mine = e["manager"] == manager
+                && e["operation"] == "Update"
+                && e["subresource"].as_str() == subresource;
+            let fields: Vec<Field> = fields_of_entry(&e)
+                .into_iter()
+                .filter(|f| !changed.contains(f))
+                .collect();
+            if mine {
+                taken.extend(fields);
+                continue;
+            }
+            if !fields.is_empty() {
+                e["fieldsV1"] = tree_of(&fields);
+                out.push(e);
+            }
+        }
+        out.push(entry(manager, "Update", subresource, &taken));
+        obj["metadata"]["managedFields"] = Value::Array(out);
+    }
+}
+
 /// Apply `patch` to `target` as a JSON merge patch (RFC 7386).
+/// Apply the JSON patch `ops` (RFC 6902: `test`, `add`, `replace`, and
+/// `remove`) to `target`, or return why an operation failed. The API server
+/// refuses a patch with any failed operation and changes nothing.
+fn apply_json_patch(target: &mut Value, ops: &[Value]) -> Result<(), String> {
+    fn segments(path: &str) -> Vec<String> {
+        path.split('/')
+            .skip(1)
+            .map(|s| s.replace("~1", "/").replace("~0", "~"))
+            .collect()
+    }
+    fn parent<'v>(target: &'v mut Value, segs: &[String]) -> Option<&'v mut Value> {
+        let mut at = target;
+        for s in segs {
+            at = match at {
+                Value::Object(m) => m.get_mut(s)?,
+                Value::Array(a) => a.get_mut(s.parse::<usize>().ok()?)?,
+                _ => return None,
+            };
+        }
+        Some(at)
+    }
+    for op in ops {
+        let path = op["path"].as_str().unwrap_or_default();
+        let segs = segments(path);
+        let Some((last, init)) = segs.split_last() else {
+            return Err(format!("bad path {path}"));
+        };
+        let failed = || format!("the {} operation on {path} failed", op["op"]);
+        let Some(holder) = parent(target, init) else {
+            return Err(failed());
+        };
+        match op["op"].as_str() {
+            Some("test") => {
+                let found = match holder {
+                    Value::Object(m) => m.get(last),
+                    Value::Array(a) => last.parse::<usize>().ok().and_then(|i| a.get(i)),
+                    _ => None,
+                };
+                if found != Some(&op["value"]) {
+                    return Err(format!("testing value {path} failed"));
+                }
+            }
+            Some("add" | "replace") => match holder {
+                Value::Object(m) => {
+                    if op["op"] == "replace" && !m.contains_key(last) {
+                        return Err(failed());
+                    }
+                    m.insert(last.clone(), op["value"].clone());
+                }
+                Value::Array(a) => {
+                    let i = last.parse::<usize>().map_err(|_| failed())?;
+                    if i >= a.len() {
+                        return Err(failed());
+                    }
+                    a[i] = op["value"].clone();
+                }
+                _ => return Err(failed()),
+            },
+            Some("remove") => match holder {
+                Value::Object(m) => {
+                    m.remove(last).ok_or_else(failed)?;
+                }
+                Value::Array(a) => {
+                    let i = last.parse::<usize>().map_err(|_| failed())?;
+                    if i >= a.len() {
+                        return Err(failed());
+                    }
+                    a.remove(i);
+                }
+                _ => return Err(failed()),
+            },
+            _ => return Err(failed()),
+        }
+    }
+    Ok(())
+}
+
 fn merge_patch(target: &mut Value, patch: &Value) {
     let Value::Object(fields) = patch else {
         *target = patch.clone();
@@ -801,4 +1360,100 @@ fn status(code: u16, reason: &str, message: &str) -> (u16, Value) {
 
 fn not_found(path: &str) -> (u16, Value) {
     status(404, "NotFound", &format!("{path} not found"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kube::api::{Api, DynamicObject, Patch, PatchParams};
+    use kube::discovery::ApiResource;
+
+    fn config_maps(api: &FakeApi) -> Api<DynamicObject> {
+        let ar = ApiResource {
+            group: String::new(),
+            version: "v1".into(),
+            api_version: "v1".into(),
+            kind: "ConfigMap".into(),
+            plural: "configmaps".into(),
+        };
+        Api::namespaced_with(api.client(), "app", &ar)
+    }
+
+    fn config_map(value: &str) -> Value {
+        json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": { "name": "shared", "namespace": "app" },
+            "data": { "key": value },
+        })
+    }
+
+    async fn apply(
+        api: &Api<DynamicObject>,
+        manager: &str,
+        value: &str,
+        force: bool,
+    ) -> Result<DynamicObject, kube::Error> {
+        let mut params = PatchParams::apply(manager);
+        if force {
+            params = params.force();
+        }
+        api.patch("shared", &params, &Patch::Apply(config_map(value)))
+            .await
+    }
+
+    fn managers(obj: &DynamicObject) -> Vec<String> {
+        obj.metadata
+            .managed_fields
+            .iter()
+            .flatten()
+            .filter_map(|e| e.manager.clone())
+            .collect()
+    }
+
+    /// The model the tests of two Kix clusters rely on, as kind showed it:
+    /// the same content applied again by the same manager changes nothing.
+    /// The first apply of it by a second manager adds an entry and changes
+    /// `resourceVersion` once. A different value from the second manager is
+    /// refused, naming the first manager and the field, unless forced.
+    #[tokio::test]
+    async fn each_manager_has_its_own_entry() {
+        let fake = FakeApi::new(Vec::<Value>::new());
+        fake.track_owners();
+        let api = config_maps(&fake);
+        let first = apply(&api, "kix/a", "1", false).await.unwrap();
+        let again = apply(&api, "kix/a", "1", false).await.unwrap();
+        assert_eq!(
+            again.metadata.resource_version,
+            first.metadata.resource_version
+        );
+        assert_eq!(managers(&again), ["kix/a"]);
+
+        let second = apply(&api, "kix/b", "1", false).await.unwrap();
+        assert_ne!(
+            second.metadata.resource_version,
+            first.metadata.resource_version
+        );
+        assert_eq!(managers(&second), ["kix/b", "kix/a"]);
+        let both = apply(&api, "kix/a", "1", false).await.unwrap();
+        assert_eq!(
+            both.metadata.resource_version,
+            second.metadata.resource_version
+        );
+
+        let refused = apply(&api, "kix/b", "2", false).await.unwrap_err();
+        let kube::Error::Api(status) = refused else {
+            panic!("{refused}");
+        };
+        assert_eq!(status.code, 409);
+        assert!(
+            status
+                .message
+                .contains("conflict with \"kix/a\": .data.key"),
+            "{}",
+            status.message
+        );
+        let forced = apply(&api, "kix/b", "2", true).await.unwrap();
+        assert_eq!(managers(&forced), ["kix/b"]);
+    }
 }

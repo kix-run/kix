@@ -629,6 +629,16 @@ async fn a_failed_node_under_stop_aborts_the_activation() {
         !calls.iter().any(|c| matches!(c, Call::Finalize { .. })),
         "and must not also finalize: {calls:?}",
     );
+    assert!(
+        first(&calls, |c| *c == Call::WriteApplied)
+            < first(&calls, |c| matches!(c, Call::Abort { .. })),
+        "a halted run writes what it applied before it aborts: {calls:?}",
+    );
+}
+
+/// Return the position of the first call that `matches`, or the end.
+fn first(calls: &[Call], matches: impl Fn(&Call) -> bool) -> usize {
+    calls.iter().position(matches).unwrap_or(calls.len())
 }
 
 /// A run under `--on-error=continue` that leaves nodes never attempted
@@ -739,6 +749,15 @@ async fn a_run_that_attempted_everything_still_finalizes() {
         "expected a Degraded finalize: {calls:?}",
     );
     assert!(!calls.iter().any(|c| matches!(c, Call::Abort { .. })));
+    let last_apply = calls
+        .iter()
+        .rposition(|c| matches!(c, Call::ApplyEnd(_)))
+        .unwrap();
+    let written = first(&calls, |c| *c == Call::WriteApplied);
+    assert!(
+        last_apply < written && written < first(&calls, |c| matches!(c, Call::Finalize { .. })),
+        "the applied hashes are written after the nodes and before the finalize: {calls:?}",
+    );
 }
 
 /// Run the plan of `manifests`, with `skip` unchanged, as a deploy with
@@ -782,9 +801,13 @@ async fn a_partial_run_marks_the_record_and_nothing_else() {
     let calls = ops.calls();
     assert!(calls.contains(&Call::EndPartial), "{calls:?}");
     assert!(
+        first(&calls, |c| *c == Call::WriteApplied) < first(&calls, |c| *c == Call::EndPartial),
+        "{calls:?}"
+    );
+    assert!(
         !calls.iter().any(|c| matches!(
             c,
-            Call::Finalize { .. } | Call::Abort { .. } | Call::Stamp(_) | Call::Delete(_)
+            Call::Finalize { .. } | Call::Abort { .. } | Call::Migrate(_) | Call::Delete(_)
         )),
         "{calls:?}"
     );
@@ -874,6 +897,29 @@ async fn a_failed_begin_stops_the_run_before_any_node() {
     );
     assert_eq!(ops.calls(), vec![Call::Begin]);
     assert!(rec.stopped().is_some());
+}
+
+/// A begin that does not answer in time stops the run before any node, so
+/// no object is applied without the revisions that name it.
+#[tokio::test(start_paused = true)]
+async fn a_begin_that_does_not_answer_stops_the_run_before_any_node() {
+    let manifests = vec![m("Deployment", "a", &[])];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.begin_behaviour(Behaviour::Hang);
+    let rec = Arc::new(Recorder::default());
+
+    let err = run(
+        &ops,
+        plan_of(&manifests),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(err, DeployError::BeginFailed { .. }), "{err}");
+    assert_eq!(ops.calls(), vec![Call::Begin]);
+    assert!(rec.best_effort_failures().is_empty());
 }
 
 /// An abort that will not go through is reported, not fatal. The run has
@@ -1346,7 +1392,7 @@ async fn skipped_rerun_job_that_succeeded_is_left_alone() {
     assert_eq!(result.configured, 0);
     let calls = ops.calls();
     assert!(calls.contains(&Call::GetLive(rid("Job", "probe"))));
-    assert!(calls.contains(&Call::Stamp(rid("Job", "probe"))));
+    assert!(calls.contains(&Call::Migrate(rid("Job", "probe"))));
     assert!(!calls.iter().any(|c| matches!(c, Call::RecreateStart(_))));
     assert!(!calls.iter().any(|c| matches!(c, Call::ApplyStart(_))));
     assert!(rerun_details(&rec).is_empty());
@@ -1531,13 +1577,15 @@ async fn read_last_runs_reruns_failed_rerun_jobs_and_names_the_others() {
     );
 }
 
-/// A Job whose kind Kix may not list leaves the answer unknown, so the plan
-/// does not say that nothing failed. A Job of a group the cluster does not
-/// serve is not on the cluster, so it never counts as failed.
+/// A Job whose kind Kix may neither list nor get leaves the answer unknown,
+/// so the plan does not say that nothing failed. A Job of a group the
+/// cluster does not serve is not on the cluster, so it never counts as
+/// failed.
 #[tokio::test]
 async fn read_last_runs_does_not_answer_for_a_job_it_cannot_read() {
     let api = crate::cluster::fake_api::FakeApi::new([live_job_named("done", false)]);
     api.fail_next("/apis/batch/v1/jobs", 1, 403);
+    api.fail_next("/apis/batch/v1/namespaces/default/jobs/done", 1, 403);
     let client = api.client();
     let discovery = crate::cluster::discovery::discover_resources(&client)
         .await
@@ -1738,140 +1786,12 @@ async fn hung_rediscovery_is_reported_and_aborted() {
     assert_eq!(rec.terminal_count(&NodeId::Resource(rid("Widget", "w"))), 1);
 }
 
-/// Build one of Kix's own CRDs serving `v1alpha1`.
-fn kix_crd(name: &str) -> Value {
-    let mut v = m("CustomResourceDefinition", name, &[]);
-    v["apiVersion"] = json!("apiextensions.k8s.io/v1");
-    v["spec"] = json!({"versions": [{"name": "v1alpha1", "served": true}]});
-    v
-}
-
-/// Build a deploy record depending on `deps` with `interfaces`.
-fn record_m(interfaces: Value, deps: &[&str]) -> Value {
-    let mut v = m(lifecycle::RECORD_KIND, "rec", deps);
-    v["apiVersion"] = json!(keys::API_VERSION);
-    v["metadata"].as_object_mut().unwrap().remove("namespace");
-    v["spec"] = json!({ "interfaces": interfaces });
-    v
-}
-
-/// Build a manifest set with Kix's two CRDs, a `PackageInstance`, and an
-/// `Activation` record. Non-empty `interfaces` marks the build as a
-/// consumer cluster.
-fn kix_build(interfaces: Value) -> Vec<Value> {
-    vec![
-        kix_crd(keys::ACTIVATIONS_CRD),
-        kix_crd(keys::PACKAGE_INSTANCES_CRD),
-        m("PackageInstance", "web", &[keys::PACKAGE_INSTANCES_CRD]),
-        record_m(interfaces, &[keys::ACTIVATIONS_CRD, "web"]),
-    ]
-}
-
-/// A consumer waits for Kix's CRDs, which its platform writes. It never
-/// applies them, nor stamps them, and its other objects wait for them.
+/// The migration write to an unchanged resource is bounded by the watchdog.
 #[tokio::test(start_paused = true)]
-async fn a_consumer_waits_for_kix_crds_and_never_writes_them() {
-    let manifests = kix_build(json!({"core": {"consumer": "acme"}}));
-    let plan = plan_of(&manifests);
-    let crds = [
-        rid("CustomResourceDefinition", keys::ACTIVATIONS_CRD),
-        rid("CustomResourceDefinition", keys::PACKAGE_INSTANCES_CRD),
-    ];
-    for crd in &crds {
-        let node = plan
-            .nodes()
-            .iter()
-            .find(|n| n.id == NodeId::Resource(crd.clone()))
-            .unwrap();
-        assert_eq!(node.kind, TransitionKind::Wait);
-        assert!(matches!(node.action, ChangeAction::Skip(_)));
-        let target = node.meta.import_target.as_ref().unwrap();
-        assert_eq!(target.platform.as_deref(), Some("core"));
-        assert_eq!(target.served_versions, ["v1alpha1"]);
-    }
-
-    let ops = Arc::new(ScriptedOps::new());
-    let result = run(
-        &ops,
-        plan,
-        &config(quiet_watchdog()),
-        Arc::new(NullObserver),
-    )
-    .await
-    .unwrap();
-
-    let calls = ops.calls();
-    for crd in &crds {
-        assert!(!calls.contains(&Call::ApplyStart(crd.clone())));
-        assert!(!calls.contains(&Call::Stamp(crd.clone())));
-        assert!(calls.contains(&Call::ReadyEnd(crd.clone())));
-    }
-    let crd_ready = ops
-        .time_of(|c| *c == Call::ReadyEnd(crds[1].clone()))
-        .unwrap();
-    let web_applied = ops
-        .time_of(|c| *c == Call::ApplyStart(rid("PackageInstance", "web")))
-        .unwrap();
-    assert!(crd_ready <= web_applied);
-    assert_eq!(result.unchanged, 2);
-    assert_eq!(result.created, 2);
-}
-
-/// A Kix CRD the platform never installs fails its node, and nothing
-/// that needs it is applied.
-#[tokio::test(start_paused = true)]
-async fn a_consumer_stops_when_kix_crds_never_appear() {
-    let manifests = kix_build(json!({"core": {"consumer": "acme"}}));
-    let ops = Arc::new(ScriptedOps::new());
-    ops.script(
-        rid("CustomResourceDefinition", keys::PACKAGE_INSTANCES_CRD),
-        NodeScript::default().ready(Behaviour::Now(Ready::TimedOut)),
-    );
-    let result = run(
-        &ops,
-        plan_of(&manifests),
-        &config(quiet_watchdog()),
-        Arc::new(NullObserver),
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(result.failed, 1);
-    assert!(
-        !ops.calls()
-            .contains(&Call::ApplyStart(rid("PackageInstance", "web")))
-    );
-}
-
-/// A cluster that is no one's consumer applies Kix's CRDs itself.
-#[tokio::test(start_paused = true)]
-async fn a_cluster_without_a_platform_applies_kix_crds() {
-    let manifests = kix_build(json!({}));
-    let plan = plan_of(&manifests);
-    assert!(!plan.nodes().iter().any(|n| n.kind == TransitionKind::Wait));
-
-    let ops = Arc::new(ScriptedOps::new());
-    run(
-        &ops,
-        plan,
-        &config(quiet_watchdog()),
-        Arc::new(NullObserver),
-    )
-    .await
-    .unwrap();
-    let calls = ops.calls();
-    assert!(calls.contains(&Call::ApplyStart(rid(
-        "CustomResourceDefinition",
-        keys::PACKAGE_INSTANCES_CRD
-    ))));
-}
-
-/// Stamping an unchanged resource is bounded by the watchdog.
-#[tokio::test(start_paused = true)]
-async fn hung_stamp_of_unchanged_resource_is_bounded() {
+async fn hung_migration_write_of_unchanged_resource_is_bounded() {
     let manifests = vec![m("ConfigMap", "same", &[]), m("ConfigMap", "new", &[])];
     let ops = Arc::new(ScriptedOps::new());
-    ops.stamp_behaviour(Behaviour::Hang);
+    ops.migrate_behaviour(Behaviour::Hang);
     let rec = Arc::new(Recorder::default());
     let cfg = config(quiet_watchdog());
 
@@ -1887,11 +1807,17 @@ async fn hung_stamp_of_unchanged_resource_is_bounded() {
 
     assert_eq!(result.unchanged, 1);
     assert_eq!(result.created, 1);
-    assert!(ops.calls().contains(&Call::Stamp(rid("ConfigMap", "same"))));
+    assert!(
+        ops.calls()
+            .contains(&Call::Migrate(rid("ConfigMap", "same")))
+    );
     assert_eq!(start.elapsed(), INLINE_BEST_EFFORT_TIMEOUT);
     let failures = rec.best_effort_failures();
     assert_eq!(failures.len(), 1, "{failures:?}");
-    assert!(failures[0].starts_with("activation stamp on unchanged resources: 1 of 1"));
+    assert!(
+        failures[0].starts_with("metadata of unchanged resources: 1 of 1"),
+        "{failures:?}"
+    );
 }
 
 /// A hung prune delete is reported as failed. Namespaces are never pruned.
@@ -2797,7 +2723,10 @@ async fn an_unchanged_predecessor_is_checked_before_its_dependent_runs() {
     let check = ops.time_of(|c| *c == Call::ReadyEnd(rid("Deployment", "db")));
     let apply = ops.time_of(|c| *c == Call::ApplyStart(rid("Deployment", "api")));
     assert!(check.is_some() && check <= apply, "{:?}", ops.calls());
-    assert!(ops.calls().contains(&Call::Stamp(rid("Deployment", "db"))));
+    assert!(
+        ops.calls()
+            .contains(&Call::Migrate(rid("Deployment", "db")))
+    );
     assert!(failures(&rec).is_empty());
 }
 
@@ -2830,7 +2759,10 @@ async fn an_unchanged_predecessor_that_failed_fails_the_deploy_on_itself() {
     assert_eq!(result.cancelled, 2);
     assert_eq!(result.unchanged, 0);
     assert!(!ops.calls().iter().any(|c| matches!(c, Call::ApplyStart(_))));
-    assert!(!ops.calls().contains(&Call::Stamp(rid("Deployment", "db"))));
+    assert!(
+        !ops.calls()
+            .contains(&Call::Migrate(rid("Deployment", "db")))
+    );
 
     let failed = failures(&rec);
     assert_eq!(failed.len(), 1);
@@ -3126,7 +3058,8 @@ async fn unchanged_nodes_are_checked_through_other_unchanged_nodes() {
     );
     for name in ["a", "b", "below", "lone"] {
         assert!(
-            ops.calls().contains(&Call::Stamp(rid("Deployment", name))),
+            ops.calls()
+                .contains(&Call::Migrate(rid("Deployment", name))),
             "{name} is stamped"
         );
     }
@@ -3152,7 +3085,7 @@ async fn an_unchanged_immediate_kind_is_not_read() {
     let cm = rid("ConfigMap", "cm");
     assert!(!ops.calls().contains(&Call::ReadyStart(cm.clone())));
     assert!(!ops.calls().contains(&Call::GetLive(cm.clone())));
-    assert!(ops.calls().contains(&Call::Stamp(cm)));
+    assert!(ops.calls().contains(&Call::Migrate(cm)));
 }
 
 /// An unchanged CRD is checked like any other predecessor but does not hold

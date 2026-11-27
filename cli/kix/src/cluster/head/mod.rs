@@ -16,20 +16,23 @@
 //!   last renewal. It measures that time with the monotonic clock and with
 //!   the wall clock and uses the longer, because the monotonic clock stops
 //!   on some systems while the machine sleeps.
-//! - The head's CRD is part of the Kix program. [`ensure_crd`] creates it
-//!   when it is absent, before any lock is taken.
+//! - The head's CRD is part of the Kix program. [`take`] installs or
+//!   updates it, and Kix's other own CRDs, with
+//!   [`own_crds::ensure_all`](crate::cluster::own_crds::ensure_all) before it
+//!   takes any lock.
 //!
 //! The phases on Activation records are still written and read as before.
 //! [`take`] rebuilds the head from them when an older Kix wrote after it,
 //! and repairs them from the head when a deploy stopped between its commit
 //! and its phase writes.
 
-mod crd;
+pub(crate) mod crd;
 mod guard;
 mod lock;
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -41,7 +44,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::manifest::keys;
 
-pub use crd::{CrdError, ensure_crd};
 pub use guard::WritesStopped;
 pub use lock::{CommitError, Held, Lock, Request, TakeError, settle, take};
 
@@ -246,6 +248,22 @@ pub async fn read(client: &Client, cluster: &str) -> Result<Option<Head>, kube::
         Err(kube::Error::Api(e)) if e.code == 404 => Ok(None),
         Err(e) => Err(e),
     }
+}
+
+/// Read the head of every Kix cluster on the Kubernetes cluster, keyed by
+/// Kix cluster name, with one list request. A head without `status` is left
+/// out. Return an empty map when the head's kind is not served.
+pub async fn list_all(client: &Client) -> Result<BTreeMap<String, HeadStatus>, kube::Error> {
+    let list = match api(client).list(&kube::api::ListParams::default()).await {
+        Ok(list) => list,
+        Err(kube::Error::Api(e)) if e.code == 404 => return Ok(BTreeMap::new()),
+        Err(e) => return Err(e),
+    };
+    Ok(list
+        .items
+        .iter()
+        .filter_map(|obj| Some((obj.metadata.name.clone()?, Head::of(obj).status?)))
+        .collect())
 }
 
 /// What a command that only reads says about a lock: who holds it and how

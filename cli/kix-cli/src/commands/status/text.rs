@@ -281,12 +281,13 @@ fn render_failed(
 
 /// Return the `Next:` line for a cluster with a missing or changed object.
 ///
-/// A deploy stops on a field ownership conflict when another manager owns a
-/// field it applies and Kix does not, so the line adds `--force-conflicts`
-/// when a manager other than Kix owns such a field of a changed object. A
-/// manager that shares all its fields with Kix changed none of them. A
-/// replica count changed through `/scale` with no recorded owner needs only
-/// `--reconcile`.
+/// A deploy plans from the live objects, so it writes a missing object and
+/// an object whose Kix fields changed without `--reconcile`. Once the plan
+/// is confirmed it takes back, with force, the fields another field manager
+/// changed. It does not take a field another Kix cluster applies, or that
+/// an older Kix applies under the manager `kix`: those it applies without
+/// force, and it stops when the values differ. A manager that shares all
+/// its fields with Kix changed none of them.
 fn next_step(c: &ClusterStatus) -> String {
     let mut managers: Vec<&str> = c
         .packages
@@ -300,21 +301,27 @@ fn next_step(c: &ClusterStatus) -> String {
         .collect();
     managers.sort();
     managers.dedup();
+    let (kix, others): (Vec<&str>, Vec<&str>) = managers
+        .into_iter()
+        .partition(|m| kix::cluster::field_manager::Manager::parse(m).is_kix());
     let cluster = &c.cluster;
-    if managers.is_empty() {
-        format!(
-            "Next: run `kix deploy {cluster} --reconcile` to put back what is missing or changed. \
-             `kix plan {cluster} --reconcile` shows what it would change first."
-        )
-    } else {
-        format!(
-            "Next: run `kix deploy {cluster} --reconcile --force-conflicts` to put back what is \
-             missing or changed and take back the fields that {} {}. \
-             `kix plan {cluster} --reconcile --force-conflicts` shows what it would change first.",
-            and_list(&managers),
-            if managers.len() == 1 { "owns" } else { "own" }
-        )
+    let mut line = format!(
+        "Next: run `kix deploy {cluster}` to restore what is missing or changed, or `kix plan {cluster}` to preview the changes first."
+    );
+    if !others.is_empty() {
+        line.push_str(&format!(
+            " The deploy takes back the fields that {} {}.",
+            and_list(&others),
+            if others.len() == 1 { "owns" } else { "own" }
+        ));
     }
+    if !kix.is_empty() {
+        line.push_str(&format!(
+            " `kix deploy` will not overwrite fields owned by {} (another Kix cluster or an earlier version of Kix). Update the cluster definitions to match.",
+            and_list(&kix),
+        ));
+    }
+    line
 }
 
 /// Join `items` with commas and a final "and".
@@ -471,9 +478,9 @@ fn resource_state(r: &ResourceStatus, age: &dyn Fn(&str) -> String) -> String {
             (Present::Ambiguous, _) => Some(
                 "not checked: multiple API groups serve this kind, and this object's API group is not in the deploy record; run `kix deploy <cluster> --reconcile` to record it",
             ),
-            (_, Some(DriftState::Unstamped)) => {
-                Some("not checked for changes: no applied-hash stamp yet, the next deploy adds it")
-            }
+            (_, Some(DriftState::Unstamped)) => Some(
+                "not checked for changes: Kix has no recorded applied hash; `kix deploy` reapplies this object and records it",
+            ),
             (_, Some(DriftState::NoFieldset)) => {
                 Some("not checked for changes: Kubernetes records no fields Kix owns")
             }

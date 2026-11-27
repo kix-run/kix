@@ -13,8 +13,8 @@ use crate::output;
 
 use kix::plan::document::{
     AdmissionRefusal, BeingDeleted, Checked, FieldNotKept, LeftBehind, LeftObject, MadeBy,
-    NotCheckedReason, NotKept, Plan, PruneControllerState, PruneEntry, PruneFate, RefusalReason,
-    UncheckedReason, WriteChange,
+    NotCheckedReason, NotKept, ObjectWrite, Plan, PruneControllerState, PruneEntry, PruneFate,
+    RefusalReason, UncheckedReason, WriteChange, WriteReason,
 };
 use kix::plan::origin::ChangeLabel;
 use kix::plan::saved::{Comparison, Rule};
@@ -46,8 +46,35 @@ pub fn render_text(plan: &Plan) -> String {
         write_left_behind(out, plan)?;
         write_not_checked(out, plan)?;
         write_objects(out, plan)?;
+        write_metadata_rewrites(out, plan, false)?;
         write_left_alone(out, plan, false)
     })
+}
+
+/// Write how many objects the deploy moves to this version of Kix's
+/// bookkeeping. Writes nothing when there are none.
+fn write_metadata_rewrites(out: &mut String, plan: &Plan, markdown: bool) -> fmt::Result {
+    let n = plan.metadata_rewrites;
+    if n == 0 {
+        return Ok(());
+    }
+    let objects = if n == 1 {
+        "1 object".to_string()
+    } else {
+        format!("{n} objects")
+    };
+    let line = format!(
+        "This deploy also rewrites the metadata of {objects} once: it renames field manager `kix` to `kix/{cluster}` and removes retired annotations `{activations}` and `{applied}`. Controllers that copy annotations onto Pods may restart those Pods once.",
+        cluster = plan.cluster,
+        activations = kix::manifest::keys::ACTIVATIONS,
+        applied = kix::manifest::keys::APPLIED_HASH,
+    );
+    writeln!(out)?;
+    if markdown {
+        writeln!(out, "> {line}")
+    } else {
+        writeln!(out, "{} {line}", output::yellow("Upgrade:"))
+    }
 }
 
 /// Write which instances a plan made with `--only` applies in full, named
@@ -160,7 +187,7 @@ fn write_objects(out: &mut String, plan: &Plan) -> fmt::Result {
     )?;
     let reapplied = writes
         .iter()
-        .filter(|w| w.change == WriteChange::Reapplied)
+        .filter(|w| w.change == WriteChange::Reapplied && w.reason.is_none())
         .count();
     if reapplied > 0 {
         writeln!(
@@ -169,7 +196,85 @@ fn write_objects(out: &mut String, plan: &Plan) -> fmt::Result {
             output::yellow("↻"),
         )?;
     }
+    for line in reason_lines(&writes) {
+        writeln!(out, "  {line}")?;
+    }
     Ok(())
+}
+
+/// Return one line for each reason the plan gives for writes, counting the
+/// writes and naming the deployment records behind them.
+fn reason_lines(writes: &[&ObjectWrite]) -> Vec<String> {
+    let records = |pick: fn(&WriteReason) -> Option<&str>| {
+        let mut names: Vec<&str> = writes
+            .iter()
+            .filter_map(|w| w.reason.as_ref().and_then(pick))
+            .collect();
+        let count = names.len();
+        names.sort();
+        names.dedup();
+        (count, names.join(", "))
+    };
+    let count = |pick: fn(&WriteReason) -> bool| {
+        writes
+            .iter()
+            .filter(|w| w.reason.as_ref().is_some_and(pick))
+            .count()
+    };
+    let mut lines = Vec::new();
+    let (n, names) = records(|r| match r {
+        WriteReason::AppliedByRecord { record } => Some(record),
+        _ => None,
+    });
+    if n > 0 {
+        lines.push(format!(
+            "{} {n} object(s) were applied by failed or `--only` deployment(s) {names}, so this deploy reapplies them from the current build",
+            output::yellow("↻"),
+        ));
+    }
+    let (n, names) = records(|r| match r {
+        WriteReason::LeftByDegraded { record } => Some(record),
+        _ => None,
+    });
+    if n > 0 {
+        lines.push(format!(
+            "{} {n} object(s) were not reached during degraded deployment(s) {names}, so this deploy applies them",
+            output::yellow("↻"),
+        ));
+    }
+    let n = count(|r| matches!(r, WriteReason::AppliedHashMissing));
+    if n > 0 {
+        lines.push(format!(
+            "{} {n} unchanged object(s) will be reapplied because Kix has no recorded applied hash for them",
+            output::yellow("↻"),
+        ));
+    }
+    let n = count(|r| matches!(r, WriteReason::RevertsDrift { .. }));
+    if n > 0 {
+        lines.push(format!(
+            "{} {n} object(s) changed on the cluster since Kix applied them; this deploy restores the build's values and takes back fields modified by other field managers",
+            output::yellow("↺"),
+        ));
+    }
+    let n = count(|r| matches!(r, WriteReason::HeldByOtherCluster { .. }));
+    if n > 0 {
+        lines.push(format!(
+            "{} {n} object(s) share fields with another Kix cluster, so this deploy applies them without force (co-owning matching values and stopping if values conflict)",
+            output::yellow("↻"),
+        ));
+    }
+    lines
+}
+
+/// Return whether the deploy applies the object of `d` with force, because
+/// the plan labels it as reverting drift.
+fn takes_back(plan: &Plan, d: &kix::plan::document::DriftChange) -> bool {
+    plan.objects.as_ref().is_some_and(|o| {
+        o.writes.iter().any(|w| {
+            matches!(w.reason, Some(WriteReason::RevertsDrift { .. }))
+                && w.resource_id().display_id() == d.resource
+        })
+    })
 }
 
 fn write_stops(out: &mut String, plan: &Plan) -> fmt::Result {
@@ -366,6 +471,9 @@ fn refusal_title(r: &AdmissionRefusal) -> String {
         }
         (RefusalReason::WebhookUnreachable, None) => "an admission webhook is unreachable".into(),
         (RefusalReason::SopsNotFlat, _) => "its SOPS file has a nested or empty value".into(),
+        (RefusalReason::KixClusterConflict, _) => {
+            "another Kix cluster sets some of its fields to other values".into()
+        }
         (RefusalReason::Other, _) => "refused".into(),
     }
 }
@@ -407,6 +515,13 @@ fn write_drift(out: &mut String, plan: &Plan) -> fmt::Result {
                         "the deploy writes this object, which stops on a field ownership conflict with {owners} unless run with --force-conflicts"
                     ))
                     .into_owned(),
+                    (true, None) if takes_back(plan, d) && !d.managers.is_empty() => {
+                        let managers = d.managers.join(", ");
+                        output::yellow(&format!(
+                            "this deploy overwrites the field and takes ownership back from {managers}; if {managers} should keep owning it, list the field in `ownership.cede`"
+                        ))
+                        .into_owned()
+                    }
                     (true, None) => {
                         output::yellow("the deploy writes this object and restores the deployed value")
                             .into_owned()
@@ -448,7 +563,7 @@ fn write_drift(out: &mut String, plan: &Plan) -> fmt::Result {
 /// owns unless forced, so a deploy that sets the deployed value back stops
 /// there. A field at the deployed value is shared without a conflict.
 fn conflict_with(plan: &Plan, d: &kix::plan::document::DriftChange) -> Option<String> {
-    let forced = plan.flags.as_ref().is_some_and(|f| f.force_conflicts);
+    let forced = plan.flags.as_ref().is_some_and(|f| f.force_conflicts) || takes_back(plan, d);
     (!d.managers.is_empty() && d.live != d.deployed && !forced).then(|| d.managers.join(", "))
 }
 
@@ -458,8 +573,7 @@ fn drift_unchecked_line(plan: &Plan) -> Option<String> {
     match plan.drift_unchecked {
         0 => None,
         n => Some(format!(
-            "{n} object(s) not checked for drift: missing `{}` annotation (an older Kix deployed them; the next deploy adds it) or missing Kubernetes field ownership entry for Kix.",
-            kix::manifest::keys::APPLIED_HASH
+            "{n} object(s) not checked for drift: Kix has no recorded applied hash for them, or Kubernetes records no Kix-owned fields. `kix deploy` reapplies objects that have no recorded hash and saves their hashes."
         )),
     }
 }
@@ -577,6 +691,12 @@ fn write_drift_markdown(out: &mut String, plan: &Plan) -> fmt::Result {
                 (true, Some(owners)) => format!(
                     "the deploy writes this object, which stops on a field ownership conflict with `{owners}` unless run with `--force-conflicts`"
                 ),
+                (true, None) if takes_back(plan, d) && !d.managers.is_empty() => {
+                    let managers = d.managers.join(", ");
+                    format!(
+                        "this deploy overwrites the field and takes ownership back from `{managers}`; if `{managers}` should keep owning it, list the field in `ownership.cede`"
+                    )
+                }
                 (true, None) => {
                     "the deploy writes this object and restores the deployed value".into()
                 }
@@ -940,6 +1060,9 @@ fn write_not_checked(out: &mut String, plan: &Plan) -> fmt::Result {
                 UncheckedReason::CrdCreatedByThisDeploy => {
                     "uses a CustomResourceDefinition created by this deploy"
                 }
+                UncheckedReason::CrdInstalledByKix => {
+                    "uses a Kix CustomResourceDefinition that Kix installs when the deploy starts"
+                }
                 UncheckedReason::CrdInstalledOutsideKix => {
                     "uses a CustomResourceDefinition not yet on the cluster (Kix does not create it, and the deploy waits for an operator or external tool to install it)"
                 }
@@ -1079,6 +1202,7 @@ pub fn render_markdown(plan: &Plan) -> String {
 
 fn write_markdown(out: &mut String, plan: &Plan) -> fmt::Result {
     write_lock_holder(out, plan)?;
+    write_metadata_rewrites(out, plan, true)?;
     write_left_alone(out, plan, true)?;
     write_warnings_markdown(out, plan)?;
     let conflicts = plan.conflicts.items();
@@ -1498,6 +1622,7 @@ mod tests {
             reconcile: false,
             force_conflicts: false,
             accept_migrations: false,
+            operator_removed: false,
             only: Vec::new(),
         });
         let text = render_text(&plan);
@@ -1644,6 +1769,7 @@ mod tests {
             reconcile: false,
             force_conflicts: true,
             accept_migrations: false,
+            operator_removed: false,
         });
         let text = render_drift_text(&forced);
         assert!(
@@ -1710,10 +1836,10 @@ mod tests {
         let mut plan = plan_with(Vec::new());
         assert!(render_drift_text(&plan).is_empty());
         plan.drift_unchecked = 1;
-        assert!(render_drift_text(&plan).contains(&format!(
-            "1 object(s) not checked for drift: missing `{}` annotation",
-            kix::manifest::keys::APPLIED_HASH
-        )));
+        assert!(
+            render_drift_text(&plan)
+                .contains("1 object(s) not checked for drift: Kix has no recorded applied hash")
+        );
     }
 
     /// A field an earlier deploy wrote is listed with its record, apart
@@ -1747,6 +1873,7 @@ mod tests {
             reconcile: false,
             force_conflicts: false,
             accept_migrations: false,
+            operator_removed: false,
             only: vec!["app/web".into()],
         });
         plan.left_alone = Some(kix::plan::document::LeftAlone {

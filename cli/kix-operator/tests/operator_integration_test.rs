@@ -109,97 +109,23 @@ fn start_operator(kubeconfig: &Path) -> Child {
         .expect("operator should start")
 }
 
-/// Apply the Kix CRDs to the cluster.
-fn apply_crds(kubeconfig: &Path) {
-    let activation_crd = r#"
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  name: activations.kix.run
-spec:
-  group: kix.run
-  scope: Cluster
-  names:
-    kind: Activation
-    plural: activations
-    singular: activation
-  versions:
-    - name: v1alpha1
-      served: true
-      storage: true
-      subresources:
-        status: {}
-      schema:
-        openAPIV3Schema:
-          type: object
-          properties:
-            spec:
-              type: object
-              x-kubernetes-preserve-unknown-fields: true
-            status:
-              type: object
-              x-kubernetes-preserve-unknown-fields: true
-"#;
-
-    let pi_crd = r#"
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  name: packageinstances.kix.run
-spec:
-  group: kix.run
-  scope: Namespaced
-  names:
-    kind: PackageInstance
-    plural: packageinstances
-    singular: packageinstance
-  versions:
-    - name: v1alpha1
-      served: true
-      storage: true
-      subresources:
-        status: {}
-      schema:
-        openAPIV3Schema:
-          type: object
-          properties:
-            spec:
-              type: object
-              x-kubernetes-preserve-unknown-fields: true
-            status:
-              type: object
-              x-kubernetes-preserve-unknown-fields: true
-"#;
-
-    let result = kubectl_apply_stdin(kubeconfig, activation_crd);
-    assert!(
-        result.status.success(),
-        "Activation CRD apply should succeed: {}",
-        String::from_utf8_lossy(&result.stderr)
+/// Wait until the Kix CRDs are Established. The operator installs them when
+/// it starts.
+fn await_crds(kubeconfig: &Path) {
+    let crds = [
+        format!("crd/{}", keys::ACTIVATIONS_CRD),
+        format!("crd/{}", keys::PACKAGE_INSTANCES_CRD),
+    ];
+    let established = wait_until(
+        "the operator to install the Kix CRDs",
+        Duration::from_secs(90),
+        || {
+            let mut args = vec!["wait", "--for=condition=Established", "--timeout=5s"];
+            args.extend(crds.iter().map(String::as_str));
+            kubectl(kubeconfig, &args).status.success()
+        },
     );
-
-    let result = kubectl_apply_stdin(kubeconfig, pi_crd);
-    assert!(
-        result.status.success(),
-        "PackageInstance CRD apply should succeed: {}",
-        String::from_utf8_lossy(&result.stderr)
-    );
-
-    let result = kubectl(
-        kubeconfig,
-        &[
-            "wait",
-            "--for=condition=Established",
-            "--timeout=60s",
-            "crd/activations.kix.run",
-            "crd/packageinstances.kix.run",
-        ],
-    );
-    assert!(
-        result.status.success(),
-        "CRDs should become Established: {}",
-        String::from_utf8_lossy(&result.stderr)
-    );
+    assert!(established, "the operator should install the Kix CRDs");
 }
 
 /// Create an Activation CR pointing to a store path.
@@ -257,7 +183,7 @@ fn operator_reconcile_and_gc() {
         return;
     }
 
-    // Setup: build activation, create kind cluster, and apply CRDs
+    // Setup: build activation and create kind cluster
     eprintln!("\n=== Setup: Building activation ===");
     let result_dir = build_activation();
     eprintln!("Activation built at: {}", result_dir.display());
@@ -290,14 +216,12 @@ fn operator_reconcile_and_gc() {
         kubeconfig,
     };
 
-    eprintln!("\n=== Setup: Applying CRDs ===");
-    apply_crds(kubeconfig);
-
     // Phase 1: Start operator, create Activation, and verify resources
     eprintln!("\n=== Phase 1: Start operator and create Activation ===");
 
     let operator = start_operator(kubeconfig);
     guard.operator = Some(operator);
+    await_crds(kubeconfig);
 
     // The operator lists Activations when it starts, so one created before
     // its watch begins is still reconciled.

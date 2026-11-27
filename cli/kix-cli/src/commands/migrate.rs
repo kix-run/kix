@@ -6,14 +6,11 @@
 use std::io::Write;
 
 use miette::{IntoDiagnostic, Result, miette};
-use serde_json::Value;
 
 use crate::client;
-use kix::build_source::InstallableBuild;
 use kix::cluster::head::Purpose;
 use kix::legacy_domain::{KubeMigrationOps, migrate};
 use kix::manifest::keys;
-use kix::manifest::kinds::{self, GroupKind};
 
 use crate::cli::MigrateArgs;
 use crate::output;
@@ -21,8 +18,6 @@ use crate::output;
 use super::CommandContext;
 
 pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
-    let crds = kix_crds_from_build(args, ctx)?;
-
     let (client, _) = ctx
         .runtime()?
         .block_on(client::connect(ctx.global.context.as_deref()))
@@ -42,7 +37,7 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
     // prompting for confirmation.
     let plan = ctx
         .runtime()?
-        .block_on(migrate::run(&ops, &args.cluster, &crds, true))
+        .block_on(migrate::run(&ops, &args.cluster, true))
         .map_err(|e| miette!("{e}"))?;
 
     if !plan.needed() {
@@ -76,7 +71,7 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
         )
         .await?;
         let ops = KubeMigrationOps::new(lock.guarded(&client));
-        let report = migrate::run(&ops, &args.cluster, &crds, false)
+        let report = migrate::run(&ops, &args.cluster, false)
             .await
             .map_err(|e| miette!("{e}"));
         super::lock::release(&lock).await;
@@ -85,55 +80,6 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
 
     print_report(&args.cluster, &report);
     Ok(())
-}
-
-/// Build the cluster and extract Kix's two CustomResourceDefinition manifests.
-///
-/// Taking the CRDs from the cluster's own build guarantees that the migration
-/// installs the exact definitions the next deploy expects.
-fn kix_crds_from_build(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<Vec<Value>> {
-    crate::say!("Building cluster '{}'...", output::bold(&args.cluster));
-    // Stamp the build so the installed CRDs carry an identity hash like every
-    // other Kix-managed object. Without a stamp, `kix gc --full-scan
-    // --include unstamped` would delete `activations.<current>` and cascade
-    // to every Activation record on the cluster.
-    //
-    // `installable()` also rejects builds pinned to a pre-migration revision
-    // that still renders CRDs under the retired API group.
-    let build = super::build_flake(&ctx.global, &args.cluster, &|_| {}, super::BUILD_FAILED)?
-        .installable()
-        .map_err(|e| miette!("{e}"))?;
-    kix_crds(&build)
-}
-
-/// Extract the `Activation` and `PackageInstance` CRD manifests from `build`.
-fn kix_crds(build: &InstallableBuild) -> Result<Vec<Value>> {
-    let graph = build.graph();
-    let wanted = [
-        migrate::crd_name(migrate::ACTIVATION, keys::GROUP),
-        migrate::crd_name(migrate::PACKAGE_INSTANCE, keys::GROUP),
-    ];
-    let crds: Vec<Value> = graph
-        .resources
-        .values()
-        .map(|r| &r.manifest)
-        .filter(|m| {
-            GroupKind::of_manifest(m) == kinds::CUSTOM_RESOURCE_DEFINITION
-                && m.pointer("/metadata/name")
-                    .and_then(Value::as_str)
-                    .is_some_and(|n| wanted.iter().any(|w| w == n))
-        })
-        .cloned()
-        .collect();
-
-    if crds.len() != wanted.len() {
-        return Err(miette!(
-            "this build does not render Kix's own CustomResourceDefinitions ({}). \
-             The project's Kix library is older than the domain move; update it first.",
-            wanted.join(", ")
-        ));
-    }
-    Ok(crds)
 }
 
 fn print_plan(cluster: &str, from: &str, plan: &migrate::Report) {

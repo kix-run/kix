@@ -155,7 +155,7 @@
         },
         {
           "const": "unstamped",
-          "description": "The object has no applied-hash stamp yet. The next deploy adds it.",
+          "description": "Kix has no applied hash for the object. A `kix deploy` of a Kix\ncluster read from revisions applies it again and records one.",
           "type": "string"
         },
         {

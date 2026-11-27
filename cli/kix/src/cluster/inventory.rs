@@ -9,7 +9,9 @@ use super::errors::{FailureClass, FetchError, classify};
 use super::tenancy::{self, Tenancy};
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{Lifecycle, lifecycle_of_live, never_pruned};
-use crate::manifest::types::{ResourceId, to_manifest_value};
+use crate::manifest::types::ResourceId;
+#[cfg(test)]
+use crate::manifest::types::to_manifest_value;
 use kube::{
     api::{Api, DynamicObject, ListParams},
     client::Client,
@@ -53,8 +55,8 @@ pub struct ManagedSweep {
     /// cluster, so Kix cannot tell which cluster they belong to. Omitted from
     /// `managed` and `unstamped`.
     pub unattributed: Vec<DynamicObject>,
-    /// Under [`SweepScope::Records`], objects of the named cluster that name
-    /// none of the given records (such as leftovers from superseded builds).
+    /// Under [`SweepScope::Records`] or [`SweepScope::Revisions`], objects
+    /// of the named cluster that none of the given records or revisions name (such as leftovers from superseded builds).
     pub other_builds: usize,
     /// Activation records read after the object lists. Its `cluster` matches
     /// the scope, or is empty under [`SweepScope::All`].
@@ -104,10 +106,17 @@ impl ManagedSweep {
         }
     }
 
-    /// Format summary lines describing objects omitted by `scope` for CLI
-    /// output.
+    /// Format summary lines describing objects omitted by `scope`, and what
+    /// Kix could not read about which objects each Kix cluster deploys
+    /// ([`Tenancy::problems`]), for CLI output.
     pub fn scope_notes(&self) -> Vec<String> {
         let mut notes: Vec<String> = self.foreign_note().into_iter().collect();
+        notes.extend(
+            self.tenancy
+                .problems()
+                .iter()
+                .map(|p| format!("Warning: {p}. Showing the objects Kix could read.")),
+        );
         if !self.unattributed.is_empty() {
             let n = self.unattributed.len();
             notes.push(format!(
@@ -129,10 +138,16 @@ pub enum SweepScope<'a> {
     Cluster(&'a str),
     /// Objects naming one of `hashes` in `kix.run/activations` (the built
     /// resources of those records of `cluster`, whether or not the records
-    /// still exist).
+    /// still exist). For a Kix cluster read from records.
     Records {
         cluster: &'a str,
         hashes: &'a HashSet<String>,
+    },
+    /// Objects one of the revisions `names` lists names. For a Kix cluster
+    /// read from revisions.
+    Revisions {
+        cluster: &'a str,
+        names: &'a BTreeSet<String>,
     },
     /// Every Kix-labeled object, regardless of which cluster deployed it.
     All,
@@ -152,24 +167,17 @@ pub enum Attribution {
     Unattributed,
 }
 
-/// Attribute a swept object to Kix clusters through the record hashes it
-/// names (see `tenancy::named_hashes`).
+/// Attribute a swept object to the Kix clusters that deploy it
+/// ([`Tenancy::owners_of`]).
 pub fn attribute(obj: &DynamicObject, tenancy: &Tenancy) -> Attribution {
-    let mut ours = false;
-    let mut others: Vec<String> = Vec::new();
-    for hash in tenancy::named_hashes(obj) {
-        if tenancy.own.contains(hash) {
-            ours = true;
-        } else if let Some(owner) = tenancy.others.get(hash) {
-            others.push(owner.clone());
-        }
-    }
-    others.sort();
-    others.dedup();
-    match (ours, others.is_empty()) {
+    let mut owners = tenancy.owners_of(obj);
+    let own = &tenancy.cluster;
+    let ours = !own.is_empty() && owners.contains(own);
+    owners.retain(|o| o != own || own.is_empty());
+    match (ours, owners.is_empty()) {
         (true, true) => Attribution::Ours,
-        (true, false) => Attribution::Shared(others),
-        (false, false) => Attribution::Foreign(others),
+        (true, false) => Attribution::Shared(owners),
+        (false, false) => Attribution::Foreign(owners),
         (false, true) => Attribution::Unattributed,
     }
 }
@@ -179,25 +187,11 @@ pub fn attribute(obj: &DynamicObject, tenancy: &Tenancy) -> Attribution {
 pub fn scope_sweep(sweep: ManagedSweep, scope: SweepScope<'_>, tenancy: Tenancy) -> ManagedSweep {
     match scope {
         SweepScope::All => ManagedSweep { tenancy, ..sweep },
-        SweepScope::Records { hashes, .. } => {
-            let (managed, rest) = split_by_records(sweep.managed, hashes);
-            let (unstamped, _) = split_by_records(sweep.unstamped, hashes);
-            let other_builds = rest
-                .iter()
-                .filter(|o| {
-                    matches!(
-                        attribute(o, &tenancy),
-                        Attribution::Ours | Attribution::Shared(_)
-                    )
-                })
-                .count();
-            ManagedSweep {
-                managed,
-                unstamped,
-                other_builds,
-                tenancy,
-                ..sweep
-            }
+        SweepScope::Records { hashes, .. } => narrow_to(sweep, tenancy, |t, o| {
+            t.records_naming(o).iter().any(|h| hashes.contains(h))
+        }),
+        SweepScope::Revisions { names, .. } => {
+            narrow_to(sweep, tenancy, |t, o| t.named_by_revisions(o, names))
         }
         SweepScope::Cluster(_) => {
             let mut foreign = Foreign::default();
@@ -229,16 +223,36 @@ pub fn scope_sweep(sweep: ManagedSweep, scope: SweepScope<'_>, tenancy: Tenancy)
     }
 }
 
-/// Split objects into the ones naming one of `hashes` in
-/// `kix.run/activations` (the closures of exactly those records) and the
-/// rest.
-pub(crate) fn split_by_records(
-    objects: Vec<DynamicObject>,
-    hashes: &HashSet<String>,
-) -> (Vec<DynamicObject>, Vec<DynamicObject>) {
-    objects
+/// Keep the objects of `sweep` that `named` picks, and count the other
+/// objects of the tenancy's cluster as [`ManagedSweep::other_builds`].
+fn narrow_to(
+    sweep: ManagedSweep,
+    tenancy: Tenancy,
+    named: impl Fn(&Tenancy, &DynamicObject) -> bool,
+) -> ManagedSweep {
+    let (managed, rest): (Vec<_>, Vec<_>) =
+        sweep.managed.into_iter().partition(|o| named(&tenancy, o));
+    let unstamped = sweep
+        .unstamped
         .into_iter()
-        .partition(|o| tenancy::named_hashes(o).any(|h| hashes.contains(h)))
+        .filter(|o| named(&tenancy, o))
+        .collect();
+    let other_builds = rest
+        .iter()
+        .filter(|o| {
+            matches!(
+                attribute(o, &tenancy),
+                Attribution::Ours | Attribution::Shared(_)
+            )
+        })
+        .count();
+    ManagedSweep {
+        managed,
+        unstamped,
+        other_builds,
+        tenancy,
+        ..sweep
+    }
 }
 
 /// Fetch every resource Kix applied by running parallel LIST calls with the
@@ -264,25 +278,65 @@ pub async fn fetch_managed_resources(
 ///
 /// LIST selects by the `managed-by=kix` label and [`scope_sweep`] filters
 /// client-side because ordinary objects carry no per-cluster label. Activation
-/// records are listed after the objects (see [`tenancy::read`]).
+/// records are listed after the objects (see [`tenancy::read`]). The
+/// Activation and PackageInstance definitions are left out
+/// ([`crate::manifest::lifecycle::is_kix_crd`]).
 pub async fn sweep_managed(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
     records: &OpenedRecords,
     scope: SweepScope<'_>,
 ) -> Result<ManagedSweep, FetchError> {
-    let lp = ListParams::default().labels(MANAGED_BY_LABEL);
-    let listed = fetch_parallel(client, discovery, &lp).await?;
-    let mut sweep = partition_sweep(listed.objects);
-    sweep.forbidden = listed.forbidden;
+    let sweep = list_managed(client, discovery).await?;
     let cluster = match scope {
-        SweepScope::Cluster(cluster) | SweepScope::Records { cluster, .. } => cluster,
+        SweepScope::Cluster(cluster)
+        | SweepScope::Records { cluster, .. }
+        | SweepScope::Revisions { cluster, .. } => cluster,
         SweepScope::All => "",
     };
     let tenancy = tenancy::read(records, cluster)
         .await
         .map_err(FetchError::RecordsError)?;
     Ok(scope_sweep(sweep, scope, tenancy))
+}
+
+/// List every Kix-labeled object and partition it ([`partition_sweep`]),
+/// without narrowing to a Kix cluster. A caller that needs the [`Tenancy`]
+/// to choose its scope reads it after this list ([`tenancy::read`]) and
+/// narrows with [`scope_sweep`].
+pub async fn list_managed(
+    client: &Client,
+    discovery: &[(ApiResource, Scope)],
+) -> Result<ManagedSweep, FetchError> {
+    Ok(managed_of(list_labelled(client, discovery).await?))
+}
+
+/// List every object of every kind in `discovery` that carries the
+/// `managed-by=kix` label, with one request per kind.
+pub(crate) async fn list_labelled(
+    client: &Client,
+    discovery: &[(ApiResource, Scope)],
+) -> Result<Listed, FetchError> {
+    let lp = ListParams::default().labels(MANAGED_BY_LABEL);
+    fetch_parallel(client, discovery, &lp).await
+}
+
+/// Partition what [`list_labelled`] found ([`partition_sweep`]), without
+/// narrowing to a Kix cluster.
+pub(crate) fn managed_of(listed: Listed) -> ManagedSweep {
+    // Earlier releases applied the Activation and PackageInstance
+    // definitions from builds, so the live ones may still carry the label.
+    let objects = listed
+        .objects
+        .into_iter()
+        .filter(|o| {
+            let id = super::drift::resource_id(o);
+            !crate::manifest::lifecycle::is_kix_crd_named(id.group_kind(), Some(&id.name))
+        })
+        .collect();
+    let mut sweep = partition_sweep(objects);
+    sweep.forbidden = listed.forbidden;
+    sweep
 }
 
 /// Partition `managed-by=kix` objects into Kix-managed resources, controller
@@ -407,10 +461,9 @@ pub struct HeldObject {
     pub records: Vec<String>,
 }
 
-/// Split orphan candidates into those to prune and those still deployed by
-/// another Kix cluster, using `live` objects already in memory. Kinds
-/// protected by [`never_pruned`] stay in the prune list so the prune step can
-/// report them as kept.
+/// Split orphan candidates as [`split_shared_orphans_listed`] does, from the
+/// objects `live`.
+#[cfg(test)]
 pub(crate) fn split_shared_orphans(
     orphans: Vec<ResourceId>,
     live: &[DynamicObject],
@@ -423,14 +476,27 @@ pub(crate) fn split_shared_orphans(
     split_by_lookup(orphans, |rid| by_id.get(rid).copied(), tenancy)
 }
 
+/// Split orphan candidates into those to prune and those still deployed by
+/// another Kix cluster, reading each candidate from `live`. Kinds protected
+/// by [`never_pruned`] stay in the prune list so the prune step can report
+/// them as kept.
+pub(crate) fn split_shared_orphans_listed(
+    orphans: Vec<ResourceId>,
+    live: &LiveObjects,
+    tenancy: &Tenancy,
+) -> (Vec<ResourceId>, Vec<SharedOrphan>) {
+    let lookup = |rid: &ResourceId| match live.get(rid) {
+        Live::Present(obj) => Some(obj),
+        Live::Absent | Live::Unserved | Live::Unread => None,
+    };
+    split_by_lookup(orphans, lookup, tenancy)
+}
+
 fn split_by_lookup<'a>(
     orphans: Vec<ResourceId>,
     live: impl Fn(&ResourceId) -> Option<&'a DynamicObject>,
     tenancy: &Tenancy,
 ) -> (Vec<ResourceId>, Vec<SharedOrphan>) {
-    if tenancy.others_current.is_empty() {
-        return (orphans, Vec::new());
-    }
     let mut prune = Vec::new();
     let mut shared = Vec::new();
     for rid in orphans {
@@ -471,6 +537,7 @@ pub(crate) async fn split_shared_orphans_live(
     let tenancy = tenancy::read(records, cluster)
         .await
         .map_err(FetchError::RecordsError)?;
+    tenancy.complete_for_others().map_err(FetchError::Tenancy)?;
     Ok(split_by_lookup(orphans, |rid| live.get(rid), &tenancy))
 }
 
@@ -492,6 +559,7 @@ pub(crate) async fn split_held_live(
     let tenancy = tenancy::read(records, cluster)
         .await
         .map_err(FetchError::RecordsError)?;
+    tenancy.complete_for_own().map_err(FetchError::Tenancy)?;
     let mut rest = Vec::new();
     let mut held = Vec::new();
     for rid in candidates {
@@ -549,25 +617,40 @@ async fn read_candidates(
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Live<'a> {
     Present(&'a DynamicObject),
-    /// The listing of its kind does not hold it, or the cluster does not
-    /// serve its kind.
+    /// The cluster serves its kind and holds no object of that name with the
+    /// `managed-by=kix` label.
     Absent,
-    /// This account may not list its kind.
+    /// The cluster does not serve its kind. Its CustomResourceDefinition may
+    /// be missing, or the group's API may be down.
+    Unserved,
+    /// This account may neither list its kind nor get the object.
     Unread,
 }
 
 /// The objects of some kinds that carry the `managed-by=kix` label, read with
-/// one cluster-wide LIST per kind.
+/// one cluster-wide LIST per kind, and with a GET per object for a kind the
+/// account may not list.
 #[derive(Debug, Default)]
 pub(crate) struct LiveObjects {
     objects: HashMap<ResourceId, DynamicObject>,
-    /// `(group, kind)` of each kind this account may not list.
-    unread: HashSet<(String, String)>,
+    /// `(group, kind)` of each kind this account may not list, with its
+    /// resource name (`deployments.apps`).
+    forbidden: HashMap<(String, String), String>,
+    /// The objects of a kind in `forbidden` that a GET answered for.
+    got: HashSet<ResourceId>,
+    /// `(group, kind)` of each kind asked for that the cluster does not serve.
+    unserved: HashSet<(String, String)>,
 }
 
+/// How many objects [`LiveObjects::list`] reads at once when it reads them
+/// one by one.
+const GETS_AT_ONCE: usize = 16;
+
 impl LiveObjects {
-    /// List the objects of each kind of `ids` that the cluster serves. A
-    /// kind the account may not list (403) is recorded as unread. Any other
+    /// List the objects of each kind of `ids` that the cluster serves. For a
+    /// kind the account may not list (403), read each of `ids` of that kind
+    /// with a GET, as an account whose roles are bound per namespace can. A
+    /// GET the account may not make leaves its object unread. Any other
     /// failure returns an error, so no caller reads a missing listing as an
     /// empty one.
     pub(crate) async fn list<'a>(
@@ -575,8 +658,9 @@ impl LiveObjects {
         discovery: &[(ApiResource, Scope)],
         ids: impl IntoIterator<Item = &'a ResourceId>,
     ) -> Result<LiveObjects, FetchError> {
+        let ids: Vec<&ResourceId> = ids.into_iter().collect();
         let mut kinds: Vec<(ApiResource, Scope)> = Vec::new();
-        for rid in ids {
+        for rid in &ids {
             let listed = kinds
                 .iter()
                 .any(|(ar, _)| ar.group == rid.group && ar.kind == rid.kind);
@@ -588,41 +672,157 @@ impl LiveObjects {
         }
         let lp = ListParams::default().labels(MANAGED_BY_LABEL);
         let listed = fetch_parallel(client, &kinds, &lp).await?;
-        let unread = kinds
-            .iter()
-            .filter(|(ar, _)| listed.forbidden.contains(&resource_fqn(ar)))
-            .map(|(ar, _)| (ar.group.clone(), ar.kind.clone()))
-            .collect();
-        let objects = listed
-            .objects
-            .into_iter()
-            .map(|obj| (super::drift::resource_id(&obj), obj))
-            .collect();
-        Ok(LiveObjects { objects, unread })
+        LiveObjects::of_listing(client, discovery, listed, ids).await
+    }
+
+    /// Hold what `listed` found of the kinds of `ids`, and read each of
+    /// `ids` whose kind `listed` could not list with a GET.
+    pub(crate) async fn of_listing(
+        client: &Client,
+        discovery: &[(ApiResource, Scope)],
+        listed: Listed,
+        ids: Vec<&ResourceId>,
+    ) -> Result<LiveObjects, FetchError> {
+        use futures::{StreamExt, TryStreamExt};
+
+        let mut out = LiveObjects::default();
+        let mut gets = Vec::new();
+        for rid in ids {
+            let key = (rid.group.clone(), rid.kind.clone());
+            let Some((ar, scope)) = super::discovery::find(discovery, &rid.group, &rid.kind) else {
+                out.unserved.insert(key);
+                continue;
+            };
+            let fqn = resource_fqn(ar);
+            if listed.forbidden.contains(&fqn) {
+                out.forbidden.insert(key, fqn);
+                gets.push((rid.clone(), api_for(client, ar, scope, rid)));
+            }
+        }
+        gets.sort_by(|a, b| a.0.cmp(&b.0));
+        gets.dedup_by(|a, b| a.0 == b.0);
+        let read: Vec<(ResourceId, Option<Option<DynamicObject>>)> =
+            futures::stream::iter(gets.into_iter().map(|(rid, api)| async move {
+                match api.get_opt(&rid.name).await {
+                    Ok(found) => Ok((rid, Some(found.filter(is_labelled)))),
+                    Err(e) if classify(&e) == FailureClass::Forbidden => Ok((rid, None)),
+                    Err(source) => Err(FetchError::GetError {
+                        resource: rid.display_id(),
+                        source,
+                    }),
+                }
+            }))
+            .buffer_unordered(GETS_AT_ONCE)
+            .try_collect()
+            .await?;
+        for (rid, found) in read {
+            if let Some(found) = found {
+                out.got.insert(rid.clone());
+                if let Some(obj) = found {
+                    out.objects.insert(rid, obj);
+                }
+            }
+        }
+        for obj in listed.objects {
+            out.objects.insert(super::drift::resource_id(&obj), obj);
+        }
+        Ok(out)
+    }
+
+    /// Hold `objects` as listed, with the kinds in `unread` as kinds this
+    /// account may neither list nor get, for tests.
+    #[cfg(test)]
+    pub(crate) fn of(
+        objects: impl IntoIterator<Item = DynamicObject>,
+        unread: impl IntoIterator<Item = (String, String)>,
+    ) -> LiveObjects {
+        LiveObjects {
+            objects: objects
+                .into_iter()
+                .map(|obj| (super::drift::resource_id(&obj), obj))
+                .collect(),
+            forbidden: unread
+                .into_iter()
+                .map(|(group, kind)| {
+                    let resource = format!("{}s", kind.to_lowercase());
+                    let resource = if group.is_empty() {
+                        resource
+                    } else {
+                        format!("{resource}.{group}")
+                    };
+                    ((group, kind), resource)
+                })
+                .collect(),
+            ..LiveObjects::default()
+        }
+    }
+
+    /// Mark the kinds in `unserved` as kinds the cluster does not serve, for
+    /// tests.
+    #[cfg(test)]
+    pub(crate) fn unserved(mut self, unserved: impl IntoIterator<Item = (String, String)>) -> Self {
+        self.unserved.extend(unserved);
+        self
     }
 
     pub(crate) fn get(&self, rid: &ResourceId) -> Live<'_> {
-        if self.unread.contains(&(rid.group.clone(), rid.kind.clone())) {
+        let key = (rid.group.clone(), rid.kind.clone());
+        if self.unserved.contains(&key) {
+            return Live::Unserved;
+        }
+        if self.forbidden.contains_key(&key) && !self.got.contains(rid) {
             return Live::Unread;
         }
         self.objects.get(rid).map_or(Live::Absent, Live::Present)
     }
+
+    /// Return the resource name (`deployments.apps`) of `rid`'s kind when
+    /// this account may not list it.
+    pub(crate) fn forbidden_resource(&self, rid: &ResourceId) -> Option<&str> {
+        self.forbidden
+            .get(&(rid.group.clone(), rid.kind.clone()))
+            .map(String::as_str)
+    }
 }
 
-impl Live<'_> {
-    /// Return whether the cluster no longer holds the object: it is absent,
-    /// or it is being deleted. An object of a kind Kix may not list is not
-    /// known to be lost.
-    pub(crate) fn lost(self) -> bool {
-        match self {
-            Live::Absent => true,
-            Live::Present(obj) => obj.metadata.deletion_timestamp.is_some(),
-            Live::Unread => false,
-        }
+/// Return whether `obj` carries the label [`MANAGED_BY_LABEL`] names, which
+/// every listing of [`LiveObjects`] selects by.
+fn is_labelled(obj: &DynamicObject) -> bool {
+    let (key, value) = MANAGED_BY_LABEL
+        .split_once('=')
+        .expect("the label selector names a value");
+    obj.metadata
+        .labels
+        .as_ref()
+        .and_then(|l| l.get(key))
+        .is_some_and(|v| v == value)
+}
+
+/// Kix may neither list nor get objects that a deploy must read.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "[K9557] this Kubernetes account cannot `list` or `get` {}, so Kix cannot determine what to write or delete. Grant this account cluster-wide `list` on {}, or `get` on {} in every namespace this Kix cluster uses, then run the command again",
+    and_list(.resources),
+    and_list(.resources),
+    if .resources.len() == 1 { "it" } else { "them" }
+)]
+pub struct ReadForbidden {
+    /// The resource names (`deployments.apps`), sorted.
+    pub resources: Vec<String>,
+}
+
+fn and_list(resources: &[String]) -> String {
+    let quoted: Vec<String> = resources.iter().map(|r| format!("`{r}`")).collect();
+    match quoted.as_slice() {
+        [] => String::new(),
+        [one] => one.clone(),
+        [a, b] => format!("{a} and {b}"),
+        [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
     }
 }
 
 /// Results of a single parallel LIST pass.
+#[derive(Clone)]
 pub(crate) struct Listed {
     pub objects: Vec<DynamicObject>,
     /// Resource types that answered 403.
@@ -777,8 +977,9 @@ fn one_per_object(objects: impl IntoIterator<Item = DynamicObject>) -> Vec<Dynam
     kept
 }
 
-/// Return whether `obj` was read through the API group of a `kix`
-/// `managedFields` entry.
+/// Return whether `obj` was read through the API group of a `managedFields`
+/// entry that a Kix cluster wrote. Any Kix cluster's entry tells which group
+/// Kix applies the object through.
 fn read_as_kix_applied(obj: &DynamicObject) -> bool {
     let group = |api_version: &str| {
         api_version
@@ -794,7 +995,9 @@ fn read_as_kix_applied(obj: &DynamicObject) -> bool {
         return false;
     };
     obj.metadata.managed_fields.iter().flatten().any(|e| {
-        e.manager.as_deref() == Some(super::fieldsv1::KIX_FIELD_MANAGER)
+        e.manager
+            .as_deref()
+            .is_some_and(|m| super::field_manager::Manager::parse(m).is_kix())
             && e.api_version.as_deref().map(group) == Some(group(read))
     })
 }
@@ -876,10 +1079,8 @@ mod tests {
 
     /// Attach Kix's `Apply` `managedFields` entry to `obj`.
     fn kix_applied(mut obj: DynamicObject) -> DynamicObject {
-        obj.metadata.managed_fields = Some(vec![entry(
-            crate::cluster::fieldsv1::KIX_FIELD_MANAGER,
-            "Apply",
-        )]);
+        obj.metadata.managed_fields =
+            Some(vec![entry(crate::cluster::field_manager::LEGACY, "Apply")]);
         obj
     }
 
@@ -945,7 +1146,7 @@ mod tests {
         let mut taken = swept("ConfigMap", "ns", "taken-over", true, false);
         taken.metadata.managed_fields = Some(vec![
             entry("kubectl", "Apply"),
-            entry(crate::cluster::fieldsv1::KIX_FIELD_MANAGER, "Update"),
+            entry(crate::cluster::field_manager::LEGACY, "Update"),
         ]);
         let sweep = partition_sweep(vec![taken]);
         assert_eq!(names(&sweep.managed), ["ns/ConfigMap/taken-over"]);
@@ -1428,7 +1629,7 @@ mod tests {
             let mut o = o;
             o.metadata.managed_fields = Some(vec![ManagedFieldsEntry {
                 api_version: Some(api_version.into()),
-                ..entry(crate::cluster::fieldsv1::KIX_FIELD_MANAGER, "Apply")
+                ..entry(crate::cluster::field_manager::LEGACY, "Apply")
             }]);
             o
         };
@@ -1555,5 +1756,45 @@ mod tests {
         );
         assert_eq!(prune, vec![rid("ClusterRole", "once-shared")]);
         assert!(kept.is_empty());
+    }
+
+    /// An account that may not list a kind across the cluster, as one whose
+    /// roles are bound per namespace, has each object read with a GET. An
+    /// object it may not get either is unread, and a kind the cluster does
+    /// not serve is told apart from an absent object.
+    #[tokio::test]
+    async fn a_kind_the_account_may_not_list_is_read_one_object_at_a_time() {
+        let cm = |name: &str, labelled: bool| {
+            let mut v = serde_json::json!({
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": { "name": name, "namespace": "app" },
+            });
+            if labelled {
+                v["metadata"]["labels"] =
+                    serde_json::json!({ "app.kubernetes.io/managed-by": "kix" });
+            }
+            v
+        };
+        let api = crate::cluster::fake_api::FakeApi::new([cm("web", true), cm("other", false)]);
+        api.fail_next("/api/v1/configmaps", u32::MAX, 403);
+        api.fail_next("/api/v1/namespaces/secret/configmaps/hidden", u32::MAX, 403);
+        let client = api.client();
+        let discovery = discover_resources(&client).await.unwrap();
+        let ids = [
+            ResourceId::new("", "ConfigMap", "app", "web"),
+            ResourceId::new("", "ConfigMap", "app", "gone"),
+            ResourceId::new("", "ConfigMap", "app", "other"),
+            ResourceId::new("", "ConfigMap", "secret", "hidden"),
+            ResourceId::new("example.com", "Widget", "app", "w"),
+        ];
+        let live = LiveObjects::list(&client, &discovery, &ids).await.unwrap();
+        assert!(matches!(live.get(&ids[0]), Live::Present(_)));
+        assert!(matches!(live.get(&ids[1]), Live::Absent));
+        // An object without the label is not one a listing would hold.
+        assert!(matches!(live.get(&ids[2]), Live::Absent));
+        assert!(matches!(live.get(&ids[3]), Live::Unread));
+        assert_eq!(live.forbidden_resource(&ids[3]), Some("configmaps"));
+        assert!(matches!(live.get(&ids[4]), Live::Unserved));
     }
 }

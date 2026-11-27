@@ -1,31 +1,24 @@
-//! The closures a plan compares against.
+//! The builds a plan shows its changes against.
 //!
-//! A deploy or a rollback decides what to do by comparing compiler outputs:
-//! the closure it is about to apply and the closure the cluster is already
-//! running. That second closure comes from the Active Activation record.
+//! A connected plan decides what a deploy writes and prunes with the one
+//! planner, from the live objects and the Kix cluster's records
+//! ([`super::decide`]). The builds here feed what people review: the old
+//! side of the package diff, migration pairs, the labels of values that
+//! deploys which did not finish wrote, and the whole plan under
+//! `--offline`, which reads nothing from the cluster.
 //!
-//! A deploy that stops partway applies some of its closure without becoming
-//! Active, so neither side of a two-way comparison describes its leftovers.
-//! Because the record is created before the first wave and marked `Failed`
-//! when the run stops, those closures can be recovered by hash and folded in.
-//! A deploy with `--only` leaves the same gap on purpose. It marks its record
-//! `Partial`, and that record folds in the same way.
-//!
-//! A deploy that keeps its orphans (warn-only, the default) leaves the same
-//! gap: the next plan compares against the new record only, and the build that
-//! knew about those objects is no longer Active. The record therefore names
-//! those builds under `status.orphansKeptFrom`, and [`load_kept`] resolves
-//! them the same way.
-//!
-//! Everything here resolves a record to a closure in the local store. Nothing
-//! reads the cluster's objects except `Baseline::of_cluster` when the Active
-//! record's build is not on this machine. Listing the records reads Kix's own
-//! bookkeeping rather than the managed objects.
+//! The Active record's closure comes from this machine's store, or from the
+//! live objects when its build is not here (`Baseline::of_cluster`). A
+//! deploy that stopped partway, or a deploy with `--only`, left a `Failed`
+//! or `Partial` record, whose closure is folded in when this machine has
+//! it. A record an older Kix wrote lists the builds whose orphans its
+//! deploy kept under `status.orphansKeptFrom`, which [`load_kept`]
+//! resolves the same way. A record this Kix wrote names those objects in
+//! its kept-orphans revision, which [`kept_of`] reads from the live
+//! objects.
 //!
 //! When the Active build is read from the cluster, the failed and kept builds
-//! are read from the same sweep. A machine that built none of a cluster's
-//! deploys (for example, when every build came from CI) can still consume its
-//! Failed records and shorten its kept list instead of carrying both forward.
+//! are read from the same sweep.
 
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -39,9 +32,11 @@ use serde_json::Value;
 
 use super::{PlanError, PlanEvent};
 use crate::build_source::{Build, InstallableBuild};
-use crate::cluster::activation::{self, KeptOrphanSource, OpenedRecords, Record, Records};
+use crate::cluster::activation::{KeptOrphanSource, OpenedRecords, Record, Records};
 use crate::cluster::apply::{self, ChangeAction};
-use crate::cluster::{discovery, inventory, owned_view, tenancy};
+use crate::cluster::inventory::{Live, LiveObjects};
+use crate::cluster::tenancy::{self, Kept, Tenancy};
+use crate::cluster::{discovery, inventory, owned_view};
 use crate::eval::package_index::RecordPackageIndex;
 use crate::eval::store_graph::StoreGraph;
 use crate::manifest::types::ResourceId;
@@ -62,6 +57,9 @@ pub struct Baseline {
     pub(crate) active_manifests: Vec<Value>,
     pub(crate) failed: FailedBaseline,
     pub(crate) kept: KeptBaseline,
+    /// Which objects the Kix clusters on the Kubernetes cluster deploy, read
+    /// when the baseline was. Empty under `--offline`.
+    pub(crate) tenancy: Tenancy,
 }
 
 /// Where a [`Baseline`]'s Active closure came from.
@@ -90,6 +88,7 @@ impl Baseline {
             active_manifests: Vec::new(),
             failed: FailedBaseline::default(),
             kept: KeptBaseline::default(),
+            tenancy: Tenancy::empty(""),
         }
     }
 
@@ -175,38 +174,25 @@ impl Baseline {
     /// record to read an index from, so their objects are placed by `new`
     /// or by their stamps.
     fn synthesized(&self, manifests: &[Value], new: &StoreGraph) -> StoreGraph {
-        let indexes: Vec<&RecordPackageIndex> = self
-            .active
+        let active = self.active.as_ref().and_then(|a| self.tenancy.index_of(a));
+        let indexes: Vec<&RecordPackageIndex> = active
             .iter()
-            .filter_map(|a| a.package_index.as_ref())
             .chain(self.failed.indexes.iter().rev())
             .collect();
         StoreGraph::synthesize_placed(manifests, new, &indexes)
     }
 
     /// Compute the change action for each object of `new_manifests` and each
-    /// orphan. Compares `new_manifests` against the Active closure, folds in
-    /// failed and kept closures, and applies again each object the comparison
-    /// leaves unchanged for which `write_again` is true.
-    ///
-    /// Only the Active closure is compared directly. Folding a failed closure
-    /// into the old side would make an object that a failed deploy declared
-    /// but never created appear already present; if the new build declared it
-    /// at the same hash, the plan would skip it.
+    /// orphan against the Active closure, for a plan that did not read the
+    /// cluster (`--offline`), and apply again each object the comparison
+    /// leaves unchanged for which `write_again` is true. A plan that reads
+    /// the cluster decides with [`super::decide`] instead.
     pub(crate) fn changes(
         &self,
         new_manifests: &[Value],
         mut write_again: impl FnMut(&ResourceId) -> bool,
     ) -> Vec<ChangeAction> {
-        let actions = apply::fold_kept_closures(
-            apply::fold_failed_closures(
-                apply::detect_changes(new_manifests, &self.active_manifests),
-                new_manifests,
-                &self.failed.closures,
-            ),
-            new_manifests,
-            &self.kept.closures,
-        );
+        let actions = apply::detect_changes(new_manifests, &self.active_manifests);
         let by_id: std::collections::HashMap<ResourceId, &Value> = new_manifests
             .iter()
             .map(|m| (ResourceId::from_value(m), m))
@@ -220,67 +206,6 @@ impl Baseline {
                 _ => action,
             })
             .collect()
-    }
-
-    /// Compute the [`activation::KeptOrphans`] for `status.orphansKeptFrom`
-    /// when a plan of `new_manifests` finalizes. Includes every compared build
-    /// (Active, folded-in failed, and kept) that still leaves orphans, plus
-    /// every kept source this machine could not resolve.
-    ///
-    /// When a rollback's current build cannot be read on this machine
-    /// ([`ActiveSource::Unavailable`]), the current record is listed as
-    /// unexamined so a later prune can still remove its objects.
-    pub(crate) fn orphans_kept_from(&self, new_manifests: &[Value]) -> activation::KeptOrphans {
-        let active_source = self.active.as_ref().and_then(|a| {
-            Some(KeptOrphanSource {
-                activation: a.name.clone(),
-                identity_hash: a.identity_hash.clone()?,
-                built_via: a.built_via.clone(),
-            })
-        });
-        let (active_source, unexamined_active) = match self.source {
-            ActiveSource::Unavailable => (None, active_source),
-            _ => (active_source, None),
-        };
-        let compared = active_source
-            .map(|source| (source, self.active_manifests.as_slice()))
-            .into_iter()
-            .chain(
-                self.failed
-                    .sources
-                    .iter()
-                    .cloned()
-                    .zip(self.failed.closures.iter().map(Vec::as_slice)),
-            )
-            .chain(
-                self.kept
-                    .sources
-                    .iter()
-                    .cloned()
-                    .zip(self.kept.closures.iter().map(Vec::as_slice)),
-            );
-
-        let mut found: Vec<KeptOrphanSource> = Vec::new();
-        for (source, closure) in compared {
-            if apply::leaves_orphans(closure, new_manifests)
-                && !found
-                    .iter()
-                    .any(|s| s.identity_hash == source.identity_hash)
-            {
-                found.push(source);
-            }
-        }
-        activation::KeptOrphans {
-            found,
-            unexamined: self
-                .kept
-                .unresolved
-                .iter()
-                .cloned()
-                .chain(unexamined_active)
-                .collect(),
-            carry_current: false,
-        }
     }
 
     /// Build the baseline under `--offline` from the local
@@ -338,6 +263,7 @@ impl Baseline {
         };
 
         let mut live: Option<LiveClosures> = None;
+        let mut tenancy: Option<Tenancy> = None;
         let mut baseline = match active {
             Some(active) if active.identity_hash.is_some() => {
                 let hash = active.identity_hash.as_deref().unwrap_or_default();
@@ -362,7 +288,7 @@ impl Baseline {
                         report(PlanEvent::ReadingLive {
                             error: found.err().as_deref(),
                         });
-                        let (active_manifests, closures) = of_live(
+                        let read = of_live(
                             client,
                             build.graph(),
                             &opened,
@@ -372,9 +298,10 @@ impl Baseline {
                             report,
                         )
                         .await?;
-                        live = Some(closures);
+                        live = Some(read.closures);
+                        tenancy = Some(read.tenancy);
                         Baseline {
-                            active_manifests,
+                            active_manifests: read.manifests,
                             source: ActiveSource::Live,
                             active: Some(active),
                             ..Baseline::empty()
@@ -387,12 +314,27 @@ impl Baseline {
                 Baseline::empty()
             }
         };
+        baseline.tenancy = match tenancy {
+            Some(tenancy) => tenancy,
+            None => read_tenancy(&opened, cluster).await?,
+        };
 
-        // Builds whose orphans an earlier warn-only deploy kept. The Active
-        // closure no longer declares those objects, so without these the
-        // plan cannot see them.
+        // Objects an earlier deploy that did not prune left on the cluster.
+        // The Active closure no longer declares those objects, so without
+        // these the plan cannot see them.
         if let Some(active) = &baseline.active {
-            baseline.kept = load_kept(active, Some(build), cluster, report, live.as_ref());
+            let new = build.graph().manifests_by_hash();
+            baseline.kept = kept_of(
+                client,
+                &discovery,
+                &baseline.tenancy,
+                active,
+                Some(build),
+                &new,
+                report,
+                live.as_ref(),
+            )
+            .await?;
         }
 
         // Closures from deploys that stopped partway. Because they applied
@@ -400,22 +342,29 @@ impl Baseline {
         // comparison knows about them. Resolve them from the local store by
         // hash, or from the live sweep when the Active build was read live.
         if let Some(records) = opened.records() {
-            baseline.failed =
-                load_failed_unless_in_flight(records, Some(build), cluster, report, live.as_ref())
-                    .await;
+            baseline.failed = load_failed_unless_in_flight(
+                records,
+                &baseline.tenancy,
+                Some(build),
+                cluster,
+                report,
+                live.as_ref(),
+            )
+            .await;
         }
         Ok(baseline)
     }
 
     /// Build the baseline for a rollback of `cluster` from `current`.
-    /// Resolves `current`'s build locally, resolves `orphansKeptFrom`, and
-    /// resolves Failed records unless another deploy is in flight.
+    /// Resolves `current`'s build locally, resolves the objects it lists as
+    /// kept orphans, and resolves Failed records unless another deploy is in
+    /// flight.
     pub async fn of_record(
         records: &Records,
         cluster: &str,
         current: &Record,
         report: &dyn Fn(PlanEvent<'_>),
-    ) -> Baseline {
+    ) -> Result<Baseline, PlanError> {
         // `built_via` is written by whoever deployed, so the build there is
         // used only when it is the record's. A record without an identity
         // hash names no build to look for.
@@ -453,15 +402,37 @@ impl Baseline {
             }
             None => (ActiveSource::Unavailable, Vec::new()),
         };
-        let failed = load_failed_unless_in_flight(records, None, cluster, report, None).await;
-        let kept = load_kept(current, None, cluster, report, None);
-        Baseline {
+        let tenancy = read_tenancy(&OpenedRecords::from(records.clone()), cluster).await?;
+        let failed =
+            load_failed_unless_in_flight(records, &tenancy, None, cluster, report, None).await;
+        let kept = match tenancy.kept(current) {
+            Kept::Builds(sources) => load_kept(sources, None, cluster, report, None),
+            Kept::Objects(_) => {
+                let client = records.client();
+                let discovery = discovery::discover_resources(client)
+                    .await
+                    .map_err(|e| PlanError::Discovery(Box::new(e)))?;
+                kept_of(
+                    client,
+                    &discovery,
+                    &tenancy,
+                    current,
+                    None,
+                    &HashMap::new(),
+                    report,
+                    None,
+                )
+                .await?
+            }
+        };
+        Ok(Baseline {
             active: Some(current.clone()),
             source,
             active_manifests,
             failed,
             kept,
-        }
+            tenancy,
+        })
     }
 }
 
@@ -488,139 +459,28 @@ pub struct FailedBaseline {
     /// closure was actually folded in: a record we could not resolve has not
     /// been reconciled and must keep asking.
     pub consumed: Vec<String>,
-    /// The build behind each entry of `closures`, in the same order, for
-    /// `status.orphansKeptFrom` when this plan keeps the orphans it found.
+    /// The build behind each entry of `closures`, in the same order, which
+    /// the package diff names when it labels the values a folded record
+    /// wrote.
     pub sources: Vec<KeptOrphanSource>,
-    /// Records whose closure is not in this machine's store.
+    /// Records whose closure is not in this machine's store, of a Kix
+    /// cluster not read from revisions.
     pub unresolved: Vec<Record>,
     /// The package index of each folded-in record that has one, oldest
-    /// first.
+    /// first. A record of a Kix cluster read from revisions whose build is
+    /// not on this machine has an index here and no entry in `closures`.
     pub indexes: Vec<RecordPackageIndex>,
     /// The folded-in records in phase `Partial`, which a deploy with
     /// `--only` left partly deployed. A subset of `consumed`.
     pub partly_deployed: Vec<String>,
+    /// Another deploy of the Kix cluster may still be applying objects, so
+    /// no `Failed` or `Partial` record was read.
+    pub left_out: bool,
 }
 
 impl FailedBaseline {
     pub fn is_empty(&self) -> bool {
         self.closures.is_empty()
-    }
-
-    /// Return, for each object of a folded build that may have been left
-    /// behind, the identity hashes of the folded records that list it: the
-    /// objects that neither `new_manifests` nor `active` hold.
-    fn candidates(
-        &self,
-        new_manifests: &[Value],
-        active: &[Value],
-    ) -> HashMap<ResourceId, Vec<String>> {
-        let held: HashSet<ResourceId> = new_manifests
-            .iter()
-            .chain(active)
-            .map(ResourceId::from_value)
-            .collect();
-        let mut out: HashMap<ResourceId, Vec<String>> = HashMap::new();
-        for (closure, source) in self.closures.iter().zip(&self.sources) {
-            for manifest in closure {
-                let rid = ResourceId::from_value(manifest);
-                if keys::get(manifest, keys::IDENTITY_HASH).is_some() && !held.contains(&rid) {
-                    out.entry(rid)
-                        .or_default()
-                        .push(source.identity_hash.clone());
-                }
-            }
-        }
-        out
-    }
-
-    /// Drop from each folded build the objects that neither `new_manifests`
-    /// nor `active` hold and that its deploy did not create: `on_cluster`
-    /// does not list the object with that record's identity hash. Those are
-    /// objects the deploy stopped before, or that a deploy with `--only`
-    /// did not select, so nothing of them is on the cluster to delete.
-    fn keep_created(
-        &mut self,
-        new_manifests: &[Value],
-        active: &[Value],
-        on_cluster: &HashMap<ResourceId, HashSet<String>>,
-    ) {
-        let candidates = self.candidates(new_manifests, active);
-        for (closure, source) in self.closures.iter_mut().zip(&self.sources) {
-            closure.retain(|manifest| {
-                let rid = ResourceId::from_value(manifest);
-                !candidates.contains_key(&rid)
-                    || on_cluster
-                        .get(&rid)
-                        .is_some_and(|stamps| stamps.contains(&source.identity_hash))
-            });
-        }
-    }
-}
-
-impl Baseline {
-    /// Read from the cluster behind `client` which objects of the folded
-    /// builds that `new_manifests` and the Active closure lack are there,
-    /// and drop the others from the folded builds
-    /// ([`FailedBaseline::keep_created`]). A folded deploy stamps every
-    /// object it applies with its record's identity hash in
-    /// `kix.run/activations`, so an object is its deploy's leftover only
-    /// when the cluster holds it with that stamp. An object it did not
-    /// apply because it was unchanged is in the Active closure, which this
-    /// leaves alone. Reads each candidate once. A failed read stops the
-    /// plan, because guessing would list or delete the wrong objects.
-    pub(crate) async fn read_folded_leftovers(
-        &mut self,
-        client: &Client,
-        new_manifests: &[Value],
-    ) -> Result<(), PlanError> {
-        let candidates = self
-            .failed
-            .candidates(new_manifests, &self.active_manifests);
-        if candidates.is_empty() {
-            return Ok(());
-        }
-        let discovery = discovery::discover_resources(client)
-            .await
-            .map_err(|e| PlanError::Discovery(Box::new(e)))?;
-        let reads = candidates.keys().filter_map(|rid| {
-            // A kind the cluster does not serve has no object to read.
-            let (ar, scope) = discovery::find(&discovery, &rid.group, &rid.kind)?;
-            let api = discovery::api_for(client, ar, scope, rid);
-            Some(async move {
-                let obj = api.get_opt(&rid.name).await.map_err(|source| {
-                    crate::cluster::errors::FetchError::GetError {
-                        resource: rid.display_id(),
-                        source,
-                    }
-                })?;
-                let stamps: HashSet<String> = obj
-                    .and_then(|o| {
-                        o.metadata
-                            .annotations
-                            .as_ref()
-                            .and_then(|a| keys::get_meta(a, keys::ACTIVATIONS))
-                            .map(|v| {
-                                v.split(',')
-                                    .map(str::trim)
-                                    .filter(|h| !h.is_empty())
-                                    .map(str::to_string)
-                                    .collect()
-                            })
-                    })
-                    .unwrap_or_default();
-                Ok::<_, crate::cluster::errors::FetchError>((rid.clone(), stamps))
-            })
-        });
-        let on_cluster: HashMap<ResourceId, HashSet<String>> = futures::future::try_join_all(reads)
-            .await
-            .map_err(|e| PlanError::FoldedLeftovers(Box::new(e)))?
-            .into_iter()
-            .collect();
-        let active = std::mem::take(&mut self.active_manifests);
-        self.failed
-            .keep_created(new_manifests, &active, &on_cluster);
-        self.active_manifests = active;
-        Ok(())
     }
 }
 
@@ -635,6 +495,14 @@ pub struct KeptBaseline {
     /// not in this plan, and the next record carries them forward unchanged
     /// so a machine that has the build can still prune them.
     pub unresolved: Vec<KeptOrphanSource>,
+    /// Every object the kept-orphans revision names, live or not, when the
+    /// Kix cluster is read from revisions. `closures` then holds one closure
+    /// of the ones still on the cluster.
+    pub listed: Option<Vec<crate::cluster::revision::RevisionObject>>,
+    /// The objects of `listed` that the read could not find out about,
+    /// because the cluster does not serve their kind or this account may
+    /// not read it. They are not known to be gone.
+    pub unknown: HashSet<ResourceId>,
 }
 
 /// Call [`load_failed`] unless another deploy of `cluster` is still running
@@ -642,20 +510,25 @@ pub struct KeptBaseline {
 /// objects alone rather than pruning work it is still applying.
 async fn load_failed_unless_in_flight(
     records: &Records,
+    tenancy: &Tenancy,
     build: Option<&Build>,
     cluster: &str,
     report: &dyn Fn(PlanEvent<'_>),
     live: Option<&LiveClosures>,
 ) -> FailedBaseline {
+    let left_out = FailedBaseline {
+        left_out: true,
+        ..FailedBaseline::default()
+    };
     match deploy_in_flight(records, cluster).await {
-        InFlight::Locked => return FailedBaseline::default(),
+        InFlight::Locked => return left_out,
         InFlight::Unlocked(record) => {
             report(PlanEvent::DeployInFlight(&record));
-            return FailedBaseline::default();
+            return left_out;
         }
         InFlight::No => {}
     }
-    load_failed(records, build, cluster, report, live).await
+    load_failed(records, tenancy, build, cluster, report, live).await
 }
 
 /// Resolve every `Failed` or `Partial` record for a cluster to its closure:
@@ -667,6 +540,7 @@ async fn load_failed_unless_in_flight(
 /// record in place is more honest than superseding it and forgetting.
 async fn load_failed(
     records: &Records,
+    tenancy: &Tenancy,
     build: Option<&Build>,
     cluster: &str,
     report: &dyn Fn(PlanEvent<'_>),
@@ -690,22 +564,30 @@ async fn load_failed(
         let closure = match (from_store, live) {
             (Ok(Some(closure)), _) => closure,
             (Ok(None) | Err(_), Some(live)) => live.closure_of(&hash),
-            (Ok(None), None) => {
-                out.unresolved.push(record);
-                continue;
-            }
-            (Err(e), None) => {
-                report(PlanEvent::FailedBuildUnusable {
-                    activation: &record.name,
-                    error: &e,
-                });
-                out.unresolved.push(record);
+            // The one planner takes the record in from its revisions, or
+            // from the notes on the live objects, so the record is resolved.
+            // Its build would only tell the package diff which live values
+            // the record wrote.
+            (found, None) => {
+                if let Err(e) = &found {
+                    report(PlanEvent::FailedBuildUnusable {
+                        activation: &record.name,
+                        error: e,
+                    });
+                }
+                report(PlanEvent::FailedFolded(&record));
+                report(PlanEvent::FailedValuesUnknown(&record));
+                out.indexes.extend(tenancy.index_of(&record));
+                out.consumed.push(record.name.clone());
+                if record.partly_deployed().is_some() {
+                    out.partly_deployed.push(record.name.clone());
+                }
                 continue;
             }
         };
         report(PlanEvent::FailedFolded(&record));
         out.closures.push(closure);
-        out.indexes.extend(record.package_index.clone());
+        out.indexes.extend(tenancy.index_of(&record));
         out.consumed.push(record.name.clone());
         if record.partly_deployed().is_some() {
             out.partly_deployed.push(record.name.clone());
@@ -726,18 +608,21 @@ async fn load_failed(
     out
 }
 
-/// Resolve the Active record's `status.orphansKeptFrom` to closures, from
-/// the local store or from `live` when the plan read the cluster, and say
-/// how many there are so the plan's extra orphans have an explanation.
+/// Resolve the builds a record lists under `status.orphansKeptFrom`
+/// ([`Kept::Builds`]) to closures, from the local store or from `live` when
+/// the plan read the cluster, for the package diff, and say how many there
+/// are so the plan's extra orphans have an explanation. A build this machine
+/// cannot resolve is left out of the package diff only: the one planner
+/// finds its orphans from the notes on the live objects.
 pub fn load_kept(
-    active: &Record,
+    sources: &[KeptOrphanSource],
     build: Option<&Build>,
     cluster: &str,
     report: &dyn Fn(PlanEvent<'_>),
     live: Option<&LiveClosures>,
 ) -> KeptBaseline {
     let mut out = KeptBaseline::default();
-    for source in &active.orphans_kept_from {
+    for source in sources {
         let from_store = resolve_closure(
             build,
             cluster,
@@ -766,37 +651,33 @@ pub fn load_kept(
     if !out.sources.is_empty() {
         report(PlanEvent::KeptFolded(&out.sources));
     }
-    if !out.unresolved.is_empty() {
-        report(PlanEvent::KeptUnresolved {
-            sources: &out.unresolved,
-            cluster,
-        });
-    }
     out
 }
 
 /// Objects from a live reconstruction that belong to builds other than the
-/// Active one. Holds the swept objects that name each build in
-/// `kix.run/activations` without naming the Active build, projected as
-/// Kix-owned manifests.
+/// Active one. Holds the swept objects that each record deploys
+/// ([`Tenancy::records_naming`]) and the Active record does not, projected
+/// as Kix-owned manifests.
 #[derive(Debug, Default)]
 pub struct LiveClosures {
     by_hash: HashMap<String, Vec<Value>>,
 }
 
 impl LiveClosures {
-    fn of(objects: &[DynamicObject], manifests: &[Value], active_hash: Option<&str>) -> Self {
+    fn of(
+        objects: &[DynamicObject],
+        manifests: &[Value],
+        tenancy: &Tenancy,
+        active_hash: Option<&str>,
+    ) -> Self {
         let mut by_hash: HashMap<String, Vec<Value>> = HashMap::new();
         for (obj, manifest) in objects.iter().zip(manifests) {
-            let named: Vec<&str> = tenancy::named_hashes(obj).collect();
-            if named.iter().any(|h| Some(*h) == active_hash) {
+            let named = tenancy.records_naming(obj);
+            if named.iter().any(|h| Some(h.as_str()) == active_hash) {
                 continue;
             }
             for hash in named {
-                by_hash
-                    .entry(hash.to_string())
-                    .or_default()
-                    .push(manifest.clone());
+                by_hash.entry(hash).or_default().push(manifest.clone());
             }
         }
         LiveClosures { by_hash }
@@ -1081,6 +962,13 @@ async fn deploy_in_flight(records: &Records, cluster: &str) -> InFlight {
     }
 }
 
+/// What [`of_live`] read.
+struct LiveRead {
+    manifests: Vec<Value>,
+    closures: LiveClosures,
+    tenancy: Tenancy,
+}
+
 /// Reconstruct the previous deploy's manifest set from live cluster state.
 ///
 /// Used when the old activation's store path is not present locally. Every
@@ -1093,11 +981,13 @@ async fn deploy_in_flight(records: &Records, cluster: &str) -> InFlight {
 /// [`owned_view::kix_owned_manifests_against`]), so the plan does not show
 /// server normalisation as a change.
 ///
-/// Includes only objects naming the Active record, a Failed or Partial
-/// record of this cluster, or a build listed under `status.orphansKeptFrom`. Objects of other
-/// Kix clusters on the same Kubernetes cluster name none of these, so they
-/// never become orphans. Objects of this cluster that name only older builds
-/// are excluded and reported via [`PlanEvent::OlderBuildsLeftOut`].
+/// Includes only objects of the Active record, a Failed or Partial record
+/// of this cluster, or the objects the Active record lists as kept orphans
+/// ([`Tenancy::kept`]). Objects of other Kix clusters on the same Kubernetes
+/// cluster belong to none of these, so they never become orphans. Objects
+/// of this cluster that only older builds name are excluded and reported
+/// via [`PlanEvent::OlderBuildsLeftOut`]. The [`Tenancy`] is read after the
+/// objects are listed, and returned for the rest of the baseline.
 ///
 /// Returns an error if the sweep fails so the planner never falls back to an
 /// empty baseline when the apiserver is unhealthy.
@@ -1109,40 +999,144 @@ async fn of_live(
     cluster: &str,
     active: &Record,
     report: &dyn Fn(PlanEvent<'_>),
-) -> Result<(Vec<Value>, LiveClosures), PlanError> {
-    let mut hashes: HashSet<String> = active.identity_hash.iter().cloned().collect();
-    hashes.extend(
-        active
-            .orphans_kept_from
-            .iter()
-            .map(|s| s.identity_hash.clone()),
-    );
-    if let Some(records) = opened.records() {
-        let failed = records
-            .stopped(cluster)
-            .await
-            .map_err(|e| PlanError::Reconstruct(e.to_string()))?;
-        hashes.extend(failed.into_iter().filter_map(|f| f.identity_hash));
-    }
-    let scope = inventory::SweepScope::Records {
-        cluster,
-        hashes: &hashes,
-    };
-    let sweep = inventory::sweep_managed(client, discovery, opened, scope)
+) -> Result<LiveRead, PlanError> {
+    let sweep = inventory::list_managed(client, discovery)
         .await
         .map_err(|e| PlanError::Reconstruct(e.to_string()))?;
+    let tenancy = read_tenancy(opened, cluster).await?;
+    let stopped = match opened.records() {
+        Some(records) => records
+            .stopped(cluster)
+            .await
+            .map_err(|e| PlanError::Reconstruct(e.to_string()))?,
+        None => Vec::new(),
+    };
+    let (hashes, names);
+    let scope = match (&active.revisions, tenancy.own_source()) {
+        (Some(Ok(map)), tenancy::Source::Revisions) => {
+            tenancy
+                .complete_for_own()
+                .map_err(|e| PlanError::Tenancy(Box::new(e)))?;
+            names = map
+                .names()
+                .chain(
+                    stopped
+                        .iter()
+                        .filter_map(|r| r.revisions.as_ref()?.as_ref().ok())
+                        .flat_map(|m| m.names()),
+                )
+                .map(str::to_string)
+                .collect();
+            inventory::SweepScope::Revisions {
+                cluster,
+                names: &names,
+            }
+        }
+        _ => {
+            let mut found: HashSet<String> = active.identity_hash.iter().cloned().collect();
+            if let Kept::Builds(sources) = tenancy.kept(active) {
+                found.extend(sources.iter().map(|s| s.identity_hash.clone()));
+            }
+            found.extend(stopped.iter().filter_map(|f| f.identity_hash.clone()));
+            hashes = found;
+            inventory::SweepScope::Records {
+                cluster,
+                hashes: &hashes,
+            }
+        }
+    };
+    let sweep = inventory::scope_sweep(sweep, scope, tenancy);
     if sweep.other_builds > 0 {
         report(PlanEvent::OlderBuildsLeftOut(sweep.other_builds));
     }
+    let tenancy = sweep.tenancy;
     let objects: Vec<DynamicObject> = sweep
         .managed
         .into_iter()
         .filter(|obj| lifecycle::lifecycle_of_live(obj).prunable())
         .collect();
+    let manifests = owned_view::kix_owned_manifests_against(
+        objects.iter().cloned(),
+        &new.manifests_by_hash(),
+        &tenancy.manager_of(cluster),
+    );
+    let closures = LiveClosures::of(
+        &objects,
+        &manifests,
+        &tenancy,
+        active.identity_hash.as_deref(),
+    );
+    Ok(LiveRead {
+        manifests,
+        closures,
+        tenancy,
+    })
+}
+
+/// Read the [`Tenancy`] of `cluster` for a plan.
+pub(crate) async fn read_tenancy(
+    opened: &OpenedRecords,
+    cluster: &str,
+) -> Result<Tenancy, PlanError> {
+    tenancy::read(opened, cluster)
+        .await
+        .map_err(|e| PlanError::ReadTenancy(Box::new(e)))
+}
+
+/// Resolve the objects `active` lists as kept orphans ([`Tenancy::kept`]).
+///
+/// For a Kix cluster read from records, these are the builds of
+/// `status.orphansKeptFrom` ([`load_kept`]). For one read from revisions,
+/// they are the objects its kept-orphans revision names that the cluster
+/// still holds, listed with one request for each of their kinds and read as
+/// the Kix-owned part of each object, against `built` when it holds the
+/// object's build hash. Refuse when that revision could not be read.
+#[allow(clippy::too_many_arguments)]
+pub async fn kept_of(
+    client: &Client,
+    discovery: &[(ApiResource, kube::discovery::Scope)],
+    tenancy: &Tenancy,
+    active: &Record,
+    build: Option<&Build>,
+    built: &HashMap<String, &Value>,
+    report: &dyn Fn(PlanEvent<'_>),
+    live: Option<&LiveClosures>,
+) -> Result<KeptBaseline, PlanError> {
+    let cluster = tenancy.cluster.as_str();
+    let objects = match tenancy.kept(active) {
+        Kept::Builds(sources) => return Ok(load_kept(sources, build, cluster, report, live)),
+        Kept::Objects(objects) => objects,
+    };
+    tenancy
+        .complete_for_kept()
+        .map_err(|e| PlanError::Tenancy(Box::new(e)))?;
+    let ids: Vec<ResourceId> = objects.iter().map(|o| o.resource_id()).collect();
+    let listed = LiveObjects::list(client, discovery, &ids)
+        .await
+        .map_err(|e| PlanError::Reconstruct(e.to_string()))?;
+    let mut present = Vec::new();
+    let mut unknown = HashSet::new();
+    for rid in &ids {
+        match listed.get(rid) {
+            Live::Present(obj) => present.push(obj.clone()),
+            Live::Unserved | Live::Unread => {
+                unknown.insert(rid.clone());
+            }
+            Live::Absent => {}
+        }
+    }
     let manifests =
-        owned_view::kix_owned_manifests_against(objects.iter().cloned(), &new.manifests_by_hash());
-    let closures = LiveClosures::of(&objects, &manifests, active.identity_hash.as_deref());
-    Ok((manifests, closures))
+        owned_view::kix_owned_manifests_against(present, built, &tenancy.manager_of(cluster));
+    Ok(KeptBaseline {
+        closures: if manifests.is_empty() {
+            Vec::new()
+        } else {
+            vec![manifests]
+        },
+        listed: Some(objects.into_iter().cloned().collect()),
+        unknown,
+        ..KeptBaseline::default()
+    })
 }
 
 #[cfg(test)]
@@ -1197,178 +1191,118 @@ mod tests {
             active_manifests: closure,
             failed,
             kept,
+            tenancy: Tenancy::empty(""),
         }
     }
 
-    /// A folded deploy leaves behind only what it created: an object the
-    /// cluster holds with that record's identity hash in
-    /// `kix.run/activations`. An object it never created, or one on the
-    /// cluster that only another record stamped, is neither an orphan nor a
-    /// reason to record the build as one that kept orphans.
+    /// A `Failed` record whose build is not on this machine is resolved
+    /// whether its Kix cluster is read from revisions or from records: the
+    /// one planner takes it in from its revisions or from the notes on the
+    /// live objects, and the plan says it cannot tell the values it wrote
+    /// from drift.
     #[tokio::test]
-    async fn a_folded_deploy_leaves_behind_only_what_it_created() {
-        let live = |name: &str, activations: &str| {
-            let mut obj = m("ConfigMap", name, &format!("h-{name}"));
-            obj["metadata"]["annotations"][keys::ACTIVATIONS] = json!(activations);
-            obj
-        };
-        let api = FakeApi::new([
-            live("made", "f1-hash"),
-            live("foreign", "other-hash"),
-            live("from-f2", "f2-hash,f1-hash"),
-        ]);
-        let failed = FailedBaseline {
-            closures: vec![
-                vec![
-                    m("ConfigMap", "web", "h1"),
-                    m("ConfigMap", "made", "h-made"),
-                    m("ConfigMap", "never", "h-never"),
-                    m("ConfigMap", "foreign", "h-foreign"),
-                ],
-                vec![m("ConfigMap", "never-2", "h-n2")],
-            ],
-            consumed: vec!["f1".into(), "f2".into()],
-            sources: vec![source("f1"), source("f2")],
-            ..FailedBaseline::default()
-        };
-        let mut b = baseline(
-            active("cur", vec![]),
-            vec![m("ConfigMap", "web", "h0")],
-            failed,
-            KeptBaseline::default(),
-        );
-        let new = vec![m("ConfigMap", "web", "h1")];
-        b.read_folded_leftovers(&api.client(), &new).await.unwrap();
-
-        let orphans: Vec<String> = b
-            .changes(&new, |_| false)
-            .into_iter()
-            .filter_map(|a| match a {
-                ChangeAction::Orphan(rid) => Some(rid.name),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(orphans, ["made"]);
-        let kept = b.orphans_kept_from(&new);
-        assert_eq!(names(&kept.found), ["f1"]);
-        // The object the new build holds stays in the folded build, so a
-        // write over what the stopped deploy changed still happens.
-        assert!(
-            b.failed.closures[0]
-                .iter()
-                .any(|m| m["metadata"]["name"] == "web")
-        );
+    async fn a_failed_record_needs_no_build() {
+        use crate::cluster::tenancy_fixture::{Rec, Written, state};
+        let recs = [
+            Rec {
+                name: "a-cur",
+                cluster: "a",
+                hash: "cur",
+                phase: PHASE_ACTIVE,
+                current: true,
+                objects: &["web"],
+                ..Rec::default()
+            },
+            Rec {
+                name: "a-stopped",
+                cluster: "a",
+                hash: "not-on-this-machine",
+                phase: PHASE_FAILED,
+                objects: &["web", "added"],
+                ..Rec::default()
+            },
+        ];
+        for written in [Written::Revisions, Written::Records] {
+            let mut state = state(&recs, |_| written);
+            for record in &mut state.records {
+                record["metadata"]["labels"]["app.kubernetes.io/managed-by"] = json!("kix");
+            }
+            let api = FakeApi::new(state.all());
+            let client = api.client();
+            let discovery = discovery::discover_resources(&client).await.unwrap();
+            let opened = Records::open(&client, &discovery).unwrap();
+            let events = std::sync::Mutex::new(Vec::new());
+            let report = |e: PlanEvent<'_>| events.lock().unwrap().push(format!("{e:?}"));
+            let failed = load_failed(
+                opened.records().unwrap(),
+                &state.tenancy("a"),
+                None,
+                "a",
+                &report,
+                None,
+            )
+            .await;
+            let events = events.into_inner().unwrap();
+            let said = |event: &str| events.iter().any(|e| e.starts_with(event));
+            assert!(failed.closures.is_empty() && failed.sources.is_empty());
+            assert_eq!(failed.consumed, ["a-stopped"]);
+            assert!(failed.unresolved.is_empty());
+            assert!(
+                said("FailedFolded") && said("FailedValuesUnknown"),
+                "{events:?}"
+            );
+            assert!(!said("FailedUnresolved"), "{events:?}");
+        }
     }
 
-    /// A read the cluster refuses stops the plan instead of reading as
-    /// "nothing left behind".
+    /// A Kix cluster read from revisions reads its kept orphans from the
+    /// kept-orphans revision, and the plan sees the ones still on the
+    /// cluster. A Kix cluster read from records reads the builds of
+    /// `status.orphansKeptFrom`.
     #[tokio::test]
-    async fn a_failed_read_of_leftovers_stops_the_plan() {
-        let api = FakeApi::new([]);
-        api.fail_next("/api/v1/namespaces/app/configmaps/made", u32::MAX, 500);
-        let failed = FailedBaseline {
-            closures: vec![vec![m("ConfigMap", "made", "h-made")]],
-            consumed: vec!["f1".into()],
-            sources: vec![source("f1")],
-            ..FailedBaseline::default()
-        };
-        let mut b = baseline(
-            active("cur", vec![]),
-            vec![],
-            failed,
-            KeptBaseline::default(),
-        );
-        let err = b
-            .read_folded_leftovers(&api.client(), &[])
-            .await
-            .unwrap_err();
-        assert!(matches!(err, PlanError::FoldedLeftovers(_)), "{err}");
+    async fn kept_orphans_come_from_the_kept_orphans_revision() {
+        use crate::cluster::tenancy_fixture::{Rec, Written, state};
+        let recs = [Rec {
+            name: "a-cur",
+            cluster: "a",
+            hash: "cur",
+            phase: PHASE_ACTIVE,
+            current: true,
+            objects: &["web"],
+            kept: &["left", "deleted"],
+            ..Rec::default()
+        }];
+        for written in [Written::Revisions, Written::Records] {
+            let mut state = state(&recs, |_| written);
+            state.objects.retain(|o| o["metadata"]["name"] != "deleted");
+            let api = FakeApi::new(state.all());
+            let client = api.client();
+            let discovery = discovery::discover_resources(&client).await.unwrap();
+            let records = Records::open(&client, &discovery)
+                .unwrap()
+                .into_records()
+                .unwrap();
+            let current = records.get("a-cur").await.unwrap().unwrap();
+            let baseline = Baseline::of_record(&records, "a", &current, &|_| {})
+                .await
+                .unwrap();
+            match written {
+                Written::Revisions => {
+                    assert_eq!(baseline.kept.closures.len(), 1);
+                    assert_eq!(names_of(&baseline.kept.closures[0]), ["left"]);
+                    assert_eq!(baseline.kept.listed.as_ref().map(Vec::len), Some(2));
+                    assert!(baseline.kept.sources.is_empty());
+                }
+                Written::Records => {
+                    assert!(baseline.kept.listed.is_none());
+                    assert_eq!(baseline.kept.unresolved.len(), 1);
+                }
+            }
+        }
     }
 
     fn names(sources: &[KeptOrphanSource]) -> Vec<&str> {
         sources.iter().map(|s| s.activation.as_str()).collect()
-    }
-
-    /// A warn-only deploy of v2 over v1 records v1, whose ConfigMap v2 dropped.
-    #[test]
-    fn the_replaced_build_is_recorded_when_it_leaves_orphans() {
-        let v1 = vec![m("Deployment", "web", "h1"), m("ConfigMap", "old", "h2")];
-        let v2 = vec![m("Deployment", "web", "h3")];
-        let got = baseline(
-            active("v1", vec![]),
-            v1,
-            FailedBaseline::default(),
-            KeptBaseline::default(),
-        )
-        .orphans_kept_from(&v2);
-        assert_eq!(names(&got.found), vec!["v1"]);
-    }
-
-    /// v3 over v2 (which kept v1's orphans) carries v1 forward while v1 still
-    /// has something v3 lacks, and records v2 only if v2 does too.
-    #[test]
-    fn kept_sources_carry_forward_until_the_new_build_declares_their_objects() {
-        let v1 = vec![m("Deployment", "web", "h1"), m("ConfigMap", "old", "h2")];
-        let v2 = vec![m("Deployment", "web", "h3")];
-        let kept = KeptBaseline {
-            closures: vec![v1.clone()],
-            sources: vec![source("v1")],
-            unresolved: vec![source("elsewhere")],
-        };
-        let v3 = vec![m("Deployment", "web", "h4")];
-        let got = baseline(
-            active("v2", vec![source("v1")]),
-            v2.clone(),
-            FailedBaseline::default(),
-            kept,
-        )
-        .orphans_kept_from(&v3);
-        // v2 has nothing v3 lacks. The unresolved source is carried unread.
-        assert_eq!(names(&got.found), vec!["v1"]);
-        assert_eq!(names(&got.unexamined), vec!["elsewhere"]);
-
-        // A build that declares the ConfigMap again ends v1's entry.
-        let v4 = vec![m("Deployment", "web", "h4"), m("ConfigMap", "old", "h5")];
-        let kept = KeptBaseline {
-            closures: vec![v1],
-            sources: vec![source("v1")],
-            unresolved: vec![],
-        };
-        let got = baseline(
-            active("v2", vec![source("v1")]),
-            v2,
-            FailedBaseline::default(),
-            kept,
-        )
-        .orphans_kept_from(&v4);
-        assert!(got.found.is_empty(), "{got:?}");
-    }
-
-    /// A failed deploy's leftovers that this plan keeps are recorded too:
-    /// the failed record is superseded on finalize and would otherwise be
-    /// the only thing that knew about them.
-    #[test]
-    fn a_folded_failed_build_with_orphans_is_recorded() {
-        let v1 = vec![m("Deployment", "web", "h1")];
-        let failed = FailedBaseline {
-            closures: vec![vec![
-                m("Deployment", "web", "h1"),
-                m("Secret", "half", "h9"),
-            ]],
-            consumed: vec!["f1".into()],
-            sources: vec![source("f1")],
-            unresolved: vec![],
-            indexes: vec![],
-            partly_deployed: vec![],
-        };
-        let got = baseline(
-            active("v1", vec![]),
-            v1.clone(),
-            failed,
-            KeptBaseline::default(),
-        )
-        .orphans_kept_from(&v1);
-        assert_eq!(names(&got.found), vec!["f1"]);
     }
 
     /// Create a result directory whose `activation` symlink points to `hash`.
@@ -1514,7 +1448,11 @@ mod tests {
             }],
             ..Default::default()
         };
-        let (old, closures) = of_live(
+        let LiveRead {
+            manifests: old,
+            closures,
+            ..
+        } = of_live(
             &client,
             &StoreGraph::empty("c"),
             &opened,
@@ -1584,7 +1522,7 @@ mod tests {
             identity_hash: Some("a2".into()),
             ..Default::default()
         };
-        let (old, _) = of_live(
+        let LiveRead { manifests: old, .. } = of_live(
             &client,
             &StoreGraph::empty("c"),
             &opened,
@@ -1628,7 +1566,7 @@ mod tests {
         let mut left = m("ConfigMap", "kept-left", "h-left");
         left["metadata"]["annotations"][keys::ACTIVATIONS] = json!("ak-hash");
         let objects: Vec<DynamicObject> = vec![serde_json::from_value(left.clone()).unwrap()];
-        let live = LiveClosures::of(&objects, &[left], Some("a2"));
+        let live = LiveClosures::of(&objects, &[left], &Tenancy::empty("a"), Some("a2"));
         let active = Record {
             name: "rec-a2".into(),
             identity_hash: Some("a2".into()),
@@ -1637,32 +1575,24 @@ mod tests {
         };
         let events = std::cell::RefCell::new(Vec::new());
         let report = |event: PlanEvent<'_>| events.borrow_mut().push(format!("{event:?}"));
-        let kept = load_kept(&active, None, "a", &report, Some(&live));
+        let kept = load_kept(&active.orphans_kept_from, None, "a", &report, Some(&live));
         assert!(kept.unresolved.is_empty(), "{kept:?}");
         assert_eq!(names(&kept.sources), vec!["ak", "gone"]);
         assert_eq!(names_of(&kept.closures[0]), vec!["kept-left"]);
         assert!(kept.closures[1].is_empty());
         let events = events.into_inner();
         assert!(
-            events.iter().any(|e| e.starts_with("KeptFolded"))
-                && !events.iter().any(|e| e.starts_with("KeptUnresolved")),
+            events.iter().any(|e| e.starts_with("KeptFolded")),
             "{events:?}"
         );
 
-        // Without the sweep the same sources are unresolved, reported once.
+        // Without the sweep the same sources are unresolved. The one planner
+        // finds their objects from the notes, so nothing is reported.
         let events = std::cell::RefCell::new(Vec::new());
         let report = |event: PlanEvent<'_>| events.borrow_mut().push(format!("{event:?}"));
-        let kept = load_kept(&active, None, "a", &report, None);
+        let kept = load_kept(&active.orphans_kept_from, None, "a", &report, None);
         assert_eq!(names(&kept.unresolved), vec!["ak", "gone"]);
-        let events = events.into_inner();
-        assert_eq!(
-            events
-                .iter()
-                .filter(|e| e.starts_with("KeptUnresolved"))
-                .count(),
-            1,
-            "{events:?}"
-        );
+        assert!(events.into_inner().is_empty());
     }
 
     /// Build a rollback baseline whose current and failed builds both fail to
@@ -1695,16 +1625,17 @@ mod tests {
         };
         let events = std::cell::RefCell::new(Vec::new());
         let report = |event: PlanEvent<'_>| events.borrow_mut().push(format!("{event:?}"));
-        let baseline = Baseline::of_record(&records, cluster, &current, &report).await;
+        let baseline = Baseline::of_record(&records, cluster, &current, &report)
+            .await
+            .unwrap();
         (baseline, events.into_inner())
     }
 
     /// Nothing stands in for a current build that will not load: the
     /// rollback reports it, compares with an empty build, and its package
-    /// diff starts from one, as the engine applies every object. The current
-    /// record is listed as unexamined, so its objects stay reachable by a
-    /// later prune. The Failed record
-    /// whose build will not load is reported and not folded in.
+    /// diff starts from one, as the engine applies every object. The Failed
+    /// record whose build will not load is reported, and the one planner
+    /// takes it in from the live objects.
     #[tokio::test]
     async fn a_rollback_whose_current_build_will_not_load_compares_with_nothing() {
         let (baseline, events) = rollback_baseline(json!({
@@ -1716,26 +1647,15 @@ mod tests {
         assert!(matches!(baseline.source, ActiveSource::Unavailable));
         assert!(baseline.active_manifests.is_empty());
         assert_eq!(baseline.active().map(|a| a.name.as_str()), Some("rec-cur"));
-        let unresolved: Vec<&str> = baseline
-            .failed()
-            .unresolved
-            .iter()
-            .map(|r| r.name.as_str())
-            .collect();
-        assert_eq!(unresolved, vec!["rec-fl"]);
+        // The one planner takes the failed record in from the live objects,
+        // so its build is needed only for the package diff.
+        assert!(baseline.failed().unresolved.is_empty());
+        assert_eq!(baseline.failed().consumed, ["rec-fl"]);
         assert!(baseline.failed().is_empty());
-        let kept = baseline.orphans_kept_from(&[]);
-        let unexamined: Vec<&str> = kept
-            .unexamined
-            .iter()
-            .map(|s| s.identity_hash.as_str())
-            .collect();
-        assert_eq!(unexamined, vec!["cur"], "{kept:?}");
-        assert!(kept.found.is_empty(), "{kept:?}");
         assert!(
             events.iter().any(|e| e.starts_with("ActiveBuildUnusable"))
                 && events.iter().any(|e| e.starts_with("FailedBuildUnusable"))
-                && events.iter().any(|e| e.starts_with("FailedUnresolved")),
+                && !events.iter().any(|e| e.starts_with("FailedUnresolved")),
             "{events:?}"
         );
         let new = StoreGraph::synthesize(&[m("ConfigMap", "web", "h1")], &StoreGraph::empty("c"));
@@ -1795,8 +1715,7 @@ mod tests {
         );
     }
 
-    /// A current build that is not on this machine is reported, and the
-    /// current record is listed as unexamined.
+    /// A current build that is not on this machine is reported.
     #[tokio::test]
     async fn a_rollback_whose_current_build_is_absent_keeps_naming_it() {
         // `e` and `u` are outside Nix's base32 alphabet, so this hash names
@@ -1813,16 +1732,15 @@ mod tests {
         };
         let events = std::cell::RefCell::new(Vec::new());
         let report = |event: PlanEvent<'_>| events.borrow_mut().push(format!("{event:?}"));
-        let baseline = Baseline::of_record(&records, "absent-test", &current, &report).await;
+        let baseline = Baseline::of_record(&records, "absent-test", &current, &report)
+            .await
+            .unwrap();
         assert!(matches!(baseline.source, ActiveSource::Unavailable));
         let events = events.into_inner();
         assert!(
             events.iter().any(|e| e.starts_with("ActiveUnresolved")),
             "{events:?}"
         );
-        let kept = baseline.orphans_kept_from(&[]);
-        assert_eq!(kept.unexamined.len(), 1, "{kept:?}");
-        assert_eq!(kept.unexamined[0].identity_hash, hash);
     }
 
     /// A current record without an identity hash names no build: nothing
@@ -1839,7 +1757,9 @@ mod tests {
         };
         let events = std::cell::RefCell::new(Vec::new());
         let report = |event: PlanEvent<'_>| events.borrow_mut().push(format!("{event:?}"));
-        let baseline = Baseline::of_record(&records, "c", &current, &report).await;
+        let baseline = Baseline::of_record(&records, "c", &current, &report)
+            .await
+            .unwrap();
         assert!(matches!(baseline.source, ActiveSource::Unavailable));
         let events = events.into_inner();
         assert!(
@@ -1898,6 +1818,7 @@ mod tests {
             unresolved: vec![],
             indexes: vec![],
             partly_deployed: vec![],
+            left_out: false,
         };
         let new = StoreGraph::synthesize(&[m("ConfigMap", "web", "h1")], &StoreGraph::empty("c"));
         let live = baseline(
@@ -1945,6 +1866,7 @@ mod tests {
                 "app/two": { "instance": "pi-two", "resources": ["hb", "hc"] },
             }))],
             partly_deployed: vec![],
+            left_out: false,
         };
         let new = StoreGraph::synthesize(&[m("ConfigMap", "z", "hz")], &StoreGraph::empty("c"));
         let live = baseline(

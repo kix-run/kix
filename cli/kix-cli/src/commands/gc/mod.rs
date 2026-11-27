@@ -7,16 +7,21 @@
 //! rollback restored, or of a deployed build whose files changed since.
 //!
 //! Supports three modes:
-//! - **Soft (default):** Delete the objects of the builds the Active record
-//!   lists under `status.orphansKeptFrom` (orphans that warn-only deploys and
-//!   rollbacks kept) that the Active build does not contain. Deletes them in
-//!   reverse dependency order without scanning every resource kind on the
-//!   cluster.
+//! - **Soft (default):** Delete the objects the Active record lists as kept
+//!   orphans (orphans that warn-only deploys and rollbacks kept) that the
+//!   Active build does not contain: the objects its kept-orphans revision
+//!   names, or the objects of the builds it lists under
+//!   `status.orphansKeptFrom` for a Kix cluster not read from revisions
+//!   ([`Tenancy::kept`]). Deletes them in reverse dependency order without
+//!   scanning every resource kind on the cluster, then names a kept-orphans
+//!   revision of what remains on the record.
 //! - **Full scan (`--full-scan`):** Scan all live Kix-managed resources
-//!   attributed to this cluster via `kix.run/activations`
-//!   (`inventory::SweepScope::Cluster`). Resources whose `kix.run/identity-hash`
+//!   that belong to this cluster ([`Tenancy`],
+//!   `inventory::SweepScope::Cluster`). Resources whose `kix.run/identity-hash`
 //!   is absent from the Active build are garbage (or, for resources stamped
 //!   before the domain move, resources whose Kubernetes identity is absent).
+//!   For a Kix cluster read from revisions, only the objects the
+//!   kept-orphans revision alone names are garbage.
 //!   With no Active record, the build from the current files takes its place.
 //!   Unstamped label carriers, resources that name no Activation record,
 //!   and copies other programs made of Kix objects are reported and only
@@ -52,13 +57,15 @@ use crate::exit::{Exit, Stopped};
 use crate::output;
 use crate::plan::{KeptFrom, print_never_pruned, print_shared, progress};
 use kix::build_source::Build;
-use kix::cluster::activation::{Record, Records};
+use kix::cluster::activation::{OpenedRecords, Record, Records};
 use kix::cluster::binding;
 use kix::cluster::discovery;
 use kix::cluster::graph::DeleteOrder;
 use kix::cluster::inventory;
 use kix::cluster::prune_guard::{self, Pruned, Removal, Step};
 use kix::cluster::readiness::{self, DeletePath};
+use kix::cluster::revision::{Revision, RevisionObject, RevisionSpec, Revisions, Slot, keep};
+use kix::cluster::tenancy::{self, Kept, Source, Tenancy};
 use kix::eval::store;
 use kix::eval::store_graph::{StoreGraph, store_hash};
 use kix::manifest::keys;
@@ -125,20 +132,42 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         .values()
         .map(|r| k8s_identity(&r.manifest))
         .collect();
-    let kept_baseline = baseline::load_kept(active, None, &cluster, &progress::print, None);
+    let records = retirement.records.clone().ok_or_else(|| {
+        miette!("could not read deployment records for '{cluster}'. Nothing was deleted.")
+    })?;
+    let tenancy = ctx.runtime()?.block_on(read_tenancy(&records, &cluster))?;
+    let kept_baseline = ctx.runtime()?.block_on(async {
+        let discovery = match tenancy.own_source() {
+            Source::Revisions => discovery::discover_resources(records.client())
+                .await
+                .map_err(|e| miette!("{e}"))?,
+            Source::Records => Vec::new(),
+        };
+        baseline::kept_of(
+            records.client(),
+            &discovery,
+            &tenancy,
+            active,
+            None,
+            &Default::default(),
+            &progress::print,
+            None,
+        )
+        .await
+        .map_err(|e| miette!("{e}"))
+    })?;
     let garbage = kept_garbage(&kept_baseline.closures, &hashes, &ids);
-    let active_hash = active.identity_hash.as_deref();
+    let update = KeptUpdate::of(
+        &kept_baseline,
+        &graph,
+        active.identity_hash.as_deref(),
+        kept_baseline.unresolved.is_empty(),
+    );
 
     if garbage.is_empty() && retirement.plan.retire.is_empty() {
         if !args.dry_run {
-            let examined_all = kept_baseline.unresolved.is_empty();
-            let active_hash = active_hash.map(str::to_string);
-            ctx.runtime()?.block_on(clear_kept_locked(
-                &cluster,
-                &mut retirement,
-                examined_all,
-                active_hash.as_deref(),
-            ))?;
+            ctx.runtime()?
+                .block_on(clear_kept_locked(&cluster, &mut retirement, &update))?;
         }
         crate::say!(
             "{}",
@@ -228,16 +257,13 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     let deleting: HashSet<&ResourceId> = ordered_rids.iter().collect();
     order.retain(|rid| deleting.contains(rid));
     let budget = super::deploy::parse_timeout(args.timeout.as_deref())?;
-    let examined_all = kept_baseline.unresolved.is_empty();
-    let active_hash = active_hash.map(str::to_string);
     let (done, retired, records_failed) = ctx.runtime()?.block_on(async {
         let lock = retirement.lock(&client, &cluster).await?;
         let deleted = async {
             let done = delete_resources(&lock.guarded(&client), &cluster, order, budget).await?;
             let (retired, records_failed) = delete_records(&retirement).await?;
-            if done.all_gone() {
-                clear_kept(&cluster, &retirement, examined_all, active_hash.as_deref()).await;
-            }
+            update_kept(&cluster, &retirement, &update, &done).await?;
+            clean_revisions(&cluster, &retirement).await;
             Ok::<_, miette::Report>((done, retired, records_failed))
         }
         .await;
@@ -427,25 +453,181 @@ fn in_use(objects: usize) -> String {
     }
 }
 
-/// Clear `status.orphansKeptFrom` on the Active record and remove local GC
-/// roots for `cluster` when [`may_clear_kept`] permits.
-async fn clear_kept(
+/// What gc writes about the objects earlier deploys left, once it has
+/// deleted what it could.
+pub(super) enum KeptUpdate {
+    /// The Active record lists whole builds under `status.orphansKeptFrom`.
+    /// gc clears the list when [`may_clear_kept`] permits and every object
+    /// it set out to delete is gone.
+    Builds {
+        listed: bool,
+        examined_all: bool,
+        build_hash: Option<String>,
+    },
+    /// The Active record's kept-orphans revision names `listed`. gc writes
+    /// a new one that names what remains: the objects that are not known to
+    /// be gone, because they are still on the cluster (`live`) or the read
+    /// could not tell (`unknown`), that gc did not delete and that the
+    /// Active build does not hold (`in_build`).
+    Objects {
+        listed: Vec<RevisionObject>,
+        live: HashSet<ResourceId>,
+        unknown: HashSet<ResourceId>,
+        in_build: HashSet<ResourceId>,
+    },
+}
+
+impl KeptUpdate {
+    /// Return the update for a soft gc that read `kept` against the Active
+    /// build `graph`, whose Activation record has identity hash
+    /// `build_hash`.
+    fn of(
+        kept: &baseline::KeptBaseline,
+        graph: &StoreGraph,
+        build_hash: Option<&str>,
+        examined_all: bool,
+    ) -> KeptUpdate {
+        match &kept.listed {
+            Some(listed) => KeptUpdate::Objects {
+                listed: listed.clone(),
+                live: kept
+                    .closures
+                    .iter()
+                    .flatten()
+                    .map(ResourceId::from_value)
+                    .collect(),
+                unknown: kept.unknown.clone(),
+                in_build: ids_of(graph),
+            },
+            None => KeptUpdate::Builds {
+                listed: !kept.sources.is_empty() || !kept.unresolved.is_empty(),
+                examined_all,
+                build_hash: build_hash.map(str::to_string),
+            },
+        }
+    }
+
+    /// Return the objects that remain kept after gc found `gone` gone, or
+    /// `None` when the list stays as it is.
+    fn remaining(&self, gone: &HashSet<ResourceId>) -> Option<Vec<RevisionObject>> {
+        let KeptUpdate::Objects {
+            listed,
+            live,
+            unknown,
+            in_build,
+        } = self
+        else {
+            return None;
+        };
+        let remaining: Vec<RevisionObject> = listed
+            .iter()
+            .filter(|o| {
+                let rid = o.resource_id();
+                (live.contains(&rid) || unknown.contains(&rid))
+                    && !gone.contains(&rid)
+                    && !in_build.contains(&rid)
+            })
+            .cloned()
+            .collect();
+        (remaining.len() != listed.len()).then_some(remaining)
+    }
+
+    /// Return whether gc must write to the Active record when it deletes
+    /// nothing.
+    fn writes_without_deletes(&self, active: &Record) -> bool {
+        match self {
+            KeptUpdate::Builds {
+                listed,
+                examined_all,
+                build_hash,
+            } => *listed && may_clear_kept(active, *examined_all, build_hash.as_deref()),
+            KeptUpdate::Objects { .. } => self.remaining(&HashSet::new()).is_some(),
+        }
+    }
+}
+
+/// Return the group, kind, namespace, and name of every object of `graph`.
+fn ids_of(graph: &StoreGraph) -> HashSet<ResourceId> {
+    graph
+        .resources
+        .values()
+        .map(|r| ResourceId::from_value(&r.manifest))
+        .collect()
+}
+
+/// Write what `update` says about the kept orphans to the Active record,
+/// after gc deleted what `done` reports. Call it after
+/// [`RecordRetirement::lock`], so the writes go through the lock.
+///
+/// For a record that lists builds, clear `status.orphansKeptFrom` and
+/// remove local GC roots for `cluster` when every object gc set out to
+/// delete is gone and [`may_clear_kept`] permits, and only warn when the
+/// write fails. For a record with a kept-orphans revision, create a revision
+/// of what remains and name it on the record, or remove the name and the
+/// list when nothing remains. Refuse when that write fails, because the old
+/// revision would go on naming deleted objects.
+async fn update_kept(
     cluster: &str,
     retirement: &RecordRetirement,
-    examined_all: bool,
-    build_hash: Option<&str>,
-) {
+    update: &KeptUpdate,
+    done: &Deletions,
+) -> Result<()> {
     let (Some(records), Some(active)) = (&retirement.records, &retirement.active) else {
-        return;
+        return Ok(());
     };
-    if !may_clear_kept(active, examined_all, build_hash) {
-        return;
+    match update {
+        KeptUpdate::Builds {
+            listed,
+            examined_all,
+            build_hash,
+        } => {
+            if *listed
+                && done.all_gone()
+                && may_clear_kept(active, *examined_all, build_hash.as_deref())
+            {
+                clear_kept(cluster, records, active).await;
+            }
+            Ok(())
+        }
+        KeptUpdate::Objects { .. } => {
+            let Some(remaining) = update.remaining(&done.gone) else {
+                return Ok(());
+            };
+            if remaining.is_empty() {
+                records
+                    .clear_orphans_kept_from(active)
+                    .await
+                    .map_err(|e| miette!("{e}"))?;
+                baseline::sync_kept_roots(cluster, &[]);
+                crate::say!(
+                    "  {} {}: cleared kept-orphans list (no kept orphaned objects remain to track)",
+                    output::dim("="),
+                    active.name
+                );
+                return Ok(());
+            }
+            let revision = Revision::new(RevisionSpec::new(cluster, Slot::KeptOrphans, remaining));
+            Revisions::new(records.client())
+                .create(&revision)
+                .await
+                .map_err(|e| miette!("{e}"))?;
+            records
+                .name_kept_orphans(&active.name, &revision.name)
+                .await
+                .map_err(|e| miette!("{e}"))?;
+            Ok(())
+        }
     }
-    match records.clear_orphans_kept_from(&active.name).await {
+}
+
+/// Clear `status.orphansKeptFrom` on `active`, and remove local GC roots for
+/// `cluster`. A failed write only warns, because the next gc clears it.
+async fn clear_kept(cluster: &str, records: &Records, active: &Record) {
+    match records.clear_orphans_kept_from(active).await {
         Ok(()) => {
             baseline::sync_kept_roots(cluster, &[]);
             crate::say!(
-                "  {} {}: no objects that left the build remain to record",
+                "  {} {}: cleared kept-orphans list (no kept orphaned objects remain to track)",
                 output::dim("="),
                 active.name
             );
@@ -456,25 +638,64 @@ async fn clear_kept(
     }
 }
 
-/// Clear `status.orphansKeptFrom` as [`clear_kept`] does, under the deploy
-/// lock, which is taken only when there is something to clear.
+/// Write what `update` says about the kept orphans when gc deletes nothing,
+/// and delete the revisions no record needs, under the deploy lock. The
+/// lock is taken only when there is something to write or delete.
 async fn clear_kept_locked(
     cluster: &str,
     retirement: &mut RecordRetirement,
-    examined_all: bool,
-    build_hash: Option<&str>,
+    update: &KeptUpdate,
 ) -> Result<()> {
-    let (Some(records), Some(active)) = (&retirement.records, &retirement.active) else {
+    let Some(records) = &retirement.records else {
         return Ok(());
     };
-    if !may_clear_kept(active, examined_all, build_hash) {
+    let write = retirement
+        .active
+        .as_ref()
+        .is_some_and(|active| update.writes_without_deletes(active));
+    let unneeded = match keep::unneeded(records.client(), records, cluster).await {
+        Ok(names) => !names.is_empty(),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "could not list unused PackageInstanceRevision objects; unless this run updates the kept-orphans list, revision cleanup will wait until the next deploy or `kix gc`"
+            );
+            false
+        }
+    };
+    if !write && !unneeded {
         return Ok(());
     }
     let client = records.client().clone();
     let lock = retirement.lock(&client, cluster).await?;
-    clear_kept(cluster, retirement, examined_all, build_hash).await;
+    let written = update_kept(cluster, retirement, update, &Deletions::default()).await;
+    clean_revisions(cluster, retirement).await;
     super::lock::release(&lock).await;
-    Ok(())
+    written
+}
+
+/// Read which objects the Kix clusters on the cluster deploy, for gc of
+/// `cluster`, and refuse when part of it cannot be read.
+async fn read_tenancy(records: &Records, cluster: &str) -> Result<Tenancy> {
+    let tenancy = tenancy::read(&OpenedRecords::from(records.clone()), cluster)
+        .await
+        .map_err(|e| miette!("{e}"))?;
+    tenancy
+        .complete()
+        .map_err(|e| miette!("{e}. Nothing was deleted."))?;
+    Ok(tenancy)
+}
+
+/// Delete the revisions no record of `cluster` needs. Call it after
+/// [`RecordRetirement::lock`], so the records write through the lock. A
+/// failure only warns, because the next deploy or `kix gc` deletes them.
+async fn clean_revisions(cluster: &str, retirement: &RecordRetirement) {
+    let Some(records) = &retirement.records else {
+        return;
+    };
+    if let Err(e) = keep::clean(records.client(), records, cluster).await {
+        tracing::warn!(error = %e, "could not delete unused PackageInstanceRevision objects; the next deploy or `kix gc` will delete them");
+    }
 }
 
 fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
@@ -525,11 +746,13 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
 
     let build_hash = build_hash(&graph);
     let cluster_name = graph.cluster_name.clone();
+    let in_build = ids_of(&graph);
     ctx.runtime()?.block_on(run_hard_async(
         args,
         &global,
         &expected_hashes,
         &expected_ids,
+        &in_build,
         &cluster_name,
         graph.kubernetes_uid.as_deref(),
         build_hash.as_deref(),
@@ -543,6 +766,7 @@ async fn run_hard_async(
     global: &crate::cli::GlobalArgs,
     expected_hashes: &HashSet<String>,
     expected_ids: &HashSet<String>,
+    in_build: &HashSet<ResourceId>,
     cluster_name: &str,
     kubernetes_uid: Option<&str>,
     build_hash: Option<&str>,
@@ -570,6 +794,17 @@ async fn run_hard_async(
     // cluster, comparing pre-move live identity hashes against a current build
     // would flag almost every resource as garbage.
     let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
+    if !args.dry_run {
+        super::operator::refuse_older_operator(&client, cluster_name).await?;
+    }
+    // A write that the scan below decides is bound to the generation read
+    // before it, so a run that changed the Kix cluster since refuses it.
+    let generation = kix::cluster::head::generation_of(
+        kix::cluster::head::read(&client, cluster_name)
+            .await
+            .map_err(|e| miette!("{e}"))?
+            .as_ref(),
+    );
     // Scope the sweep to this Kix cluster so another Kix cluster's resources on
     // the same Kubernetes cluster are not flagged as garbage.
     let sweep = inventory::sweep_managed(
@@ -581,6 +816,24 @@ async fn run_hard_async(
     .await
     .map_err(|e| miette!("failed to fetch live resources: {e}"))?;
     let tenancy = sweep.tenancy.clone();
+    if tenancy.only_kept_unreadable() {
+        return rebuild_kept_list(
+            args,
+            global,
+            &client,
+            &records,
+            &sweep,
+            (expected_hashes, expected_ids, in_build),
+            (cluster_name, generation),
+            kubernetes_uid,
+            build_hash,
+            compared,
+        )
+        .await;
+    }
+    tenancy
+        .complete()
+        .map_err(|e| miette!("{e}. Nothing was deleted."))?;
 
     if !output::quiet() {
         println!(
@@ -604,6 +857,14 @@ async fn run_hard_async(
         }
     }
     let forbidden_none = sweep.forbidden.is_empty();
+    let unread: HashSet<String> = sweep.forbidden.iter().cloned().collect();
+    // A kept object of a kind the sweep could not list, or of a kind the
+    // cluster does not serve now, is not known to be gone.
+    let not_known = |rid: &ResourceId| match discovery::find(&discovery, &rid.group, &rid.kind) {
+        None => true,
+        Some((ar, _)) if ar.group.is_empty() => unread.contains(&ar.plural),
+        Some((ar, _)) => unread.contains(&format!("{}.{}", ar.plural, ar.group)),
+    };
     let unattributed_judged = sweep.unattributed.is_empty() || args.includes(Include::Unattributed);
     let copies: HashSet<ResourceId> = sweep
         .copies
@@ -666,10 +927,32 @@ async fn run_hard_async(
     // Hard GC has examined all cluster objects when no resource kinds were
     // forbidden and no unattributed objects were skipped.
     let examined_all = forbidden_none && unattributed_judged;
+    let update = match retirement.active.as_ref().map(|a| tenancy.kept(a)) {
+        Some(Kept::Objects(objects)) => KeptUpdate::Objects {
+            unknown: objects
+                .iter()
+                .map(|o| o.resource_id())
+                .filter(|rid| not_known(rid))
+                .collect(),
+            listed: objects.into_iter().cloned().collect(),
+            live: live.iter().map(kix::cluster::drift::resource_id).collect(),
+            in_build: in_build.clone(),
+        },
+        Some(Kept::Builds(sources)) => KeptUpdate::Builds {
+            listed: !sources.is_empty(),
+            examined_all,
+            build_hash: build_hash.map(str::to_string),
+        },
+        None => KeptUpdate::Builds {
+            listed: false,
+            examined_all,
+            build_hash: None,
+        },
+    };
 
     if garbage.is_empty() {
         if !args.dry_run {
-            clear_kept_locked(cluster_name, &mut retirement, examined_all, build_hash).await?;
+            clear_kept_locked(cluster_name, &mut retirement, &update).await?;
         }
         crate::say!(
             "{}",
@@ -714,9 +997,8 @@ async fn run_hard_async(
         )
         .await?;
         let (retired, records_failed) = delete_records(&retirement).await?;
-        if done.all_gone() {
-            clear_kept(cluster_name, &retirement, examined_all, build_hash).await;
-        }
+        update_kept(cluster_name, &retirement, &update, &done).await?;
+        clean_revisions(cluster_name, &retirement).await;
         Ok::<_, miette::Report>((done, retired, records_failed))
     }
     .await;
@@ -729,6 +1011,136 @@ async fn run_hard_async(
         done.left(),
         Some((retired, retirement.plan.kept.len())),
     )
+}
+
+/// Rebuild the kept-orphans list of Kix cluster `cluster_name` when the
+/// revision its current record names is missing or cannot be read, then
+/// run the full scan again. The new list names every live object the
+/// cluster applied that no other revision of the cluster names and that
+/// the build compared with does not hold
+/// ([`kix::cluster::tenancy::Tenancy::unlisted_own`]). The write is bound to
+/// `generation`, which the head had before the scan. With `--dry-run`, say
+/// what the list would name and change nothing.
+#[allow(clippy::too_many_arguments)]
+async fn rebuild_kept_list(
+    args: &GcArgs,
+    global: &crate::cli::GlobalArgs,
+    client: &kube::Client,
+    records: &OpenedRecords,
+    sweep: &inventory::ManagedSweep,
+    build: (&HashSet<String>, &HashSet<String>, &HashSet<ResourceId>),
+    (cluster_name, generation): (&str, u64),
+    kubernetes_uid: Option<&str>,
+    build_hash: Option<&str>,
+    compared: &str,
+) -> Result<()> {
+    let (expected_hashes, expected_ids, in_build) = build;
+    let tenancy = &sweep.tenancy;
+    let problem = tenancy
+        .problems()
+        .first()
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    let objects = kept_to_rebuild(sweep, in_build);
+    crate::say!(
+        "{} {problem}. Rebuilding the kept-orphans list from {} live object(s) applied by this Kix cluster that are absent from {compared} and from this cluster's other revisions.",
+        output::yellow("Note:"),
+        objects.len(),
+    );
+    if args.dry_run {
+        crate::say!("`--dry-run` is set, so nothing was changed on the cluster.");
+        return Ok(());
+    }
+    let Some(record) = tenancy.own_current().map(str::to_string) else {
+        return Err(miette!(
+            "{problem}. Kix cluster '{cluster_name}' has no current deployment record to save the rebuilt kept-orphans list on. Nothing was deleted."
+        ));
+    };
+    let Some(opened) = records.records() else {
+        return Err(miette!(
+            "could not read deployment records for '{cluster_name}'. Nothing was deleted."
+        ));
+    };
+    let name = write_rebuilt(client, opened, cluster_name, &record, objects, generation).await?;
+    crate::say!("Saved rebuilt kept-orphans revision {name} on deployment record {record}.");
+    Box::pin(run_hard_async(
+        args,
+        global,
+        expected_hashes,
+        expected_ids,
+        in_build,
+        cluster_name,
+        kubernetes_uid,
+        build_hash,
+        compared,
+    ))
+    .await
+}
+
+/// Return what a rebuilt kept-orphans list names: each labelled, prunable
+/// live object of `sweep` that the Kix cluster applied, that no other
+/// revision of it names, and that the build compared with, whose objects
+/// are `in_build`, lacks.
+fn kept_to_rebuild(
+    sweep: &inventory::ManagedSweep,
+    in_build: &HashSet<ResourceId>,
+) -> Vec<RevisionObject> {
+    let tenancy = &sweep.tenancy;
+    let mut objects: Vec<RevisionObject> = sweep
+        .managed
+        .iter()
+        .chain(&sweep.unattributed)
+        .filter(|obj| lifecycle::lifecycle_of_live(obj).prunable())
+        .filter(|obj| tenancy.unlisted_own(obj))
+        .filter_map(|obj| {
+            let rid = kix::cluster::drift::resource_id(obj);
+            let hash = obj
+                .metadata
+                .annotations
+                .as_ref()
+                .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH))?;
+            (!in_build.contains(&rid)).then(|| RevisionObject::of_id(hash, &rid))
+        })
+        .collect();
+    objects.sort();
+    objects.dedup();
+    objects
+}
+
+/// Name a kept-orphans revision of `objects` on record `record` of Kix
+/// cluster `cluster`, under the deploy lock taken at `generation`, the one
+/// the scan read. Return the revision's name. A run that changed the Kix
+/// cluster since the scan raised the generation, so the lock refuses.
+async fn write_rebuilt(
+    client: &kube::Client,
+    records: &Records,
+    cluster: &str,
+    record: &str,
+    objects: Vec<RevisionObject>,
+    generation: u64,
+) -> Result<String> {
+    let lock = super::lock::take(
+        client,
+        cluster,
+        "kix gc",
+        kix::cluster::head::Purpose::Gc,
+        None,
+        Some(generation),
+    )
+    .await?;
+    let guarded = lock.guarded(client);
+    let written = kix::cluster::revision::keep::rebuild_kept(
+        &guarded,
+        &records.through(&guarded),
+        cluster,
+        record,
+        objects,
+    )
+    .await;
+    super::lock::release(&lock).await;
+    written.map_err(|e| {
+        miette!("could not save the rebuilt kept-orphans list on deployment record `{record}`: {e}. Nothing was deleted.")
+    })
 }
 
 async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Result<()> {
@@ -844,6 +1256,9 @@ pub(super) struct Deletions {
     /// The resources in `held` that stay because an object another Kix
     /// cluster deploys depends on them.
     pub(super) held_shared: usize,
+    /// The resources gc deleted or found gone, which the kept-orphans
+    /// revision stops naming.
+    pub(super) gone: HashSet<ResourceId>,
 }
 
 impl Deletions {
@@ -896,6 +1311,7 @@ pub(super) async fn delete_resources(
             Removal::Pruned(Pruned::Deleted { .. } | Pruned::AlreadyDeleting { .. }) => {
                 println!("  {} deleted {}", output::red("-"), rid);
                 done.deleted += 1;
+                done.gone.insert(rid.clone());
             }
             Removal::Pruned(gone @ (Pruned::Gone | Pruned::NotServed)) => {
                 println!(
@@ -904,6 +1320,7 @@ pub(super) async fn delete_resources(
                     rid,
                     gone.already_gone().unwrap_or_default()
                 );
+                done.gone.insert(rid.clone());
             }
             Removal::Pruned(shared @ Pruned::Kept(_)) => {
                 let reason = shared.kept_reason().unwrap_or_default();

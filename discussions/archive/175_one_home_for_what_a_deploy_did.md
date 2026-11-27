@@ -1,6 +1,6 @@
 # 175: One home for what a deploy did
 
-**Status:** Accepted, third version. Rewritten on 2026-11-24 after a red-team review (section 9). Brought up to date on 2026-11-26 for `kix deploy --only`, with the build order (section 10). Part 1 is built (branch `head-lock`, 2026-11-26); section 10 says what, and section 4.4 marks where it differs.
+**Status:** Implemented (2026-11-27). Part 1, the head and the lock, shipped in kix#360. Part 2, revisions, is kix#374; `175a_revisions_build_notes.md` says where the build differs from this design. What stays open is in `ROADMAP.md` § Open design questions.
 **Related:** `122_runtime_content_drift.md` (the applied hash), `81_deploy_as_lifecycle_engine.md`, `55_shared_resource_ownership.md`, `archive/150_scope_managed_sweep_to_one_cluster.md` (several Kix clusters on one Kubernetes cluster), `archive/157_kix_plan_primary_preview.md` (the plan), `interesting_thoughts/54_activation_signing.md`, `housekeeping/reviews/2026-11-23.md` (themes 4 and 5)
 
 Type: design doc. It reads code at `origin/main` on 2026-11-26, with the
@@ -452,7 +452,7 @@ Measured on `homelab-kind`, built from main with no deploy:
 | The build as JSON | 1.1 MB, and 113 KB after gzip |
 
 Limits, at about 1.5 MiB an object: about 20,000 instances in one record, and
-about 8,000 objects in one instance. The cluster's total size has no limit of
+about 6,500 objects in one instance, counting the applied hashes. The cluster's total size has no limit of
 its own. The build can refuse an instance that would pass the limit.
 
 How far one change spreads, counted by rebuilding the cluster with the change:
@@ -724,8 +724,9 @@ Part 1 changes nothing about the notes on objects, the package index, the
 baseline of a plan, or the prune guard between Kix clusters. Requirements 1
 and 2 of section 3 are not met until part 2.
 
-**Part 2: revisions.** Not started. Before any code: questions 1 to 4 of
-section 8.
+**Part 2: revisions.** Built on 2026-11-26, except the copy pass. `175a_revisions_build_notes.md` has the
+tests, the answers to questions 1 to 4 of section 8, decisions 13 to 16, and
+the order of the build.
 
 - The `PackageInstanceRevision` kind, the revision map on records, and the
   kept-orphans revision.

@@ -44,6 +44,7 @@ use super::CommandContext;
 use crate::exit::Exit;
 
 pub fn run(args: &PlanArgs, save: Option<&Path>, ctx: &mut CommandContext) -> Result<Exit> {
+    refuse_saving_operator_removed(args, save)?;
     // `Command::formats` allows only text and Markdown.
     let format = output::format();
     let Some(mut p) = prepare(args, flags_of(args), None, ctx)? else {
@@ -116,6 +117,7 @@ pub(crate) fn flags_of(args: &PlanArgs) -> PlanFlags {
         reconcile: args.reconcile,
         force_conflicts: args.force_conflicts,
         accept_migrations: args.accept_migrations,
+        operator_removed: args.operator_removed,
         only: PlanFlags::only_of(&args.only),
     }
 }
@@ -123,6 +125,19 @@ pub(crate) fn flags_of(args: &PlanArgs) -> PlanFlags {
 /// Refuse planning flags that a deploy with `--only` cannot carry out:
 /// `--prune`, because such a deploy leaves every orphan for the deploy that
 /// finishes the build.
+/// Refuse to save a plan made with `--operator-removed`. `kix deploy --plan`
+/// takes the cluster back before it plans again, which raises the deploy
+/// lock's generation, so the deploy would refuse the saved plan.
+pub(crate) fn refuse_saving_operator_removed(args: &PlanArgs, save: Option<&Path>) -> Result<()> {
+    if args.operator_removed && save.is_some() {
+        return Err(miette!(
+            "cannot combine `--operator-removed` with `--out`. Nothing was planned or written. `kix deploy --plan` reclaims Kix cluster {cluster} from the operator before checking the saved plan, which advances the deploy lock and makes the saved plan out of date. Run `kix plan {cluster} --operator-removed` without `--out` to preview, or `kix deploy {cluster} --operator-removed` to reclaim and deploy.",
+            cluster = args.cluster,
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn refuse_with_only(flags: &PlanFlags, cluster: &str) -> Result<()> {
     if flags.only.is_empty() || flags.prune != PrunePolicy::Delete {
         return Ok(());
@@ -304,7 +319,7 @@ pub(crate) fn dry_run(
 ) -> Result<DryRunReport> {
     let sops = p.sops_sources(placeholders).map_err(|e| miette!("{e}"))?;
     ctx.runtime()?
-        .block_on(dry_run_of(&p.checked, client, sops, true))
+        .block_on(dry_run_of(&mut p.checked, client, sops, true))
 }
 
 /// Run the engine over `checked` with every write sent as a dry run, for
@@ -317,7 +332,7 @@ pub(crate) fn dry_run(
 /// ([`kix::plan::CheckedPlan::dry_run`]). `names_flags` says whether the
 /// engine's messages may suggest `kix deploy`'s flags.
 pub(crate) async fn dry_run_of(
-    checked: &CheckedPlan,
+    checked: &mut CheckedPlan,
     client: kube::Client,
     sops: SopsSources,
     names_flags: bool,
@@ -556,6 +571,7 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
     doc.flags = Some(p.checked.flags().clone());
     doc.left_alone = p.checked.left_alone();
     doc.only_needed = p.checked.needed().to_vec();
+    doc.metadata_rewrites = p.checked.metadata_rewrites();
     doc.objects_digest = Some(kix::plan::objects::digest(p.checked.objects()));
     doc.objects = Some(p.checked.objects().clone());
     if !connected {
@@ -718,6 +734,7 @@ pub(crate) fn admission_reason(refusal: &Refusal) -> (RefusalReason, Option<Stri
         Refusal::UnknownKind { .. } => (RefusalReason::UnknownKind, None),
         Refusal::Hydration { .. } => (RefusalReason::Decryption, None),
         Refusal::SopsNotFlat { .. } => (RefusalReason::SopsNotFlat, None),
+        Refusal::KixClusterConflict { .. } => (RefusalReason::KixClusterConflict, None),
         // `classify` lists a webhook without dry-run support as not checked,
         // so no such refusal reaches the document.
         Refusal::WebhookNoDryRun { webhook, .. } => (RefusalReason::Other, webhook.clone()),
@@ -966,6 +983,7 @@ mod tests {
             reconcile: false,
             force_conflicts: false,
             accept_migrations: false,
+            operator_removed: false,
             only: Vec::new(),
         });
         doc.prune = Checked::found(entries);

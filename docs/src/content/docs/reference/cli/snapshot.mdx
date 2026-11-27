@@ -34,8 +34,9 @@ no effect, and `--flake` and `--override-input` apply only when Kix evaluates
 
 The save lists every resource carrying the Kix managed-by label, keeps the
 ones Kix applied for the named cluster, and writes each one as the fields Kix
-applied. A resource belongs to the cluster when its `kix.run/activations`
-annotation names one of that cluster's Activation records. Resources of other
+applied. A resource belongs to the cluster when one of that cluster's Activation
+records references it via revisions (or via the resource's `kix.run/activations`
+annotation on clusters not yet upgraded to revisions). Resources of other
 Kix clusters on the same Kubernetes cluster are left out, and the save prints
 how many it skipped per cluster. A resource both clusters deploy is saved.
 Kubernetes records which tool set each field through server-side apply, and
@@ -53,8 +54,9 @@ Excluded:
 
 - `status` and anything a controller wrote;
 - server-side defaults Kix never sent;
-- the bookkeeping annotations Kix writes after applying (activations and
-  applied hash), which change on every deploy without being a content change;
+- the annotations `kix.run/activations` and `kix.run/applied-hash`, which
+  earlier versions of Kix wrote after applying and which changed on every
+  deploy without being a content change;
 - resources that only carry the label because a controller copied it, such as
   Pods and EndpointSlices.
 

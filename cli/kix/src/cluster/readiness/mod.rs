@@ -36,6 +36,7 @@ use super::discovery;
 use crate::manifest::kinds;
 use crate::manifest::types::ResourceId;
 
+pub(crate) use declared::served_crd_versions;
 pub use declared::{
     check_readiness, declared_rule, is_immediate, is_immediate_kind, not_ready_reason,
 };
@@ -59,7 +60,7 @@ pub(crate) use terminal::termination_output;
 #[cfg(test)]
 use declared::{
     DECLARED_FAILURE_GRACE, DeclaredFailure, FailedRule, GenerationField, PendingRestartRule,
-    PendingState, ReadyRule, declared_readiness, served_crd_versions, unserved_crd_versions,
+    PendingState, ReadyRule, declared_readiness, unserved_crd_versions,
 };
 #[cfg(test)]
 use imports::{check_secret_keys, expectations, split_api_version};

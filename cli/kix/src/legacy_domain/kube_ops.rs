@@ -35,12 +35,6 @@ const OPERATOR_PROBE_WAIT: Duration = Duration::from_secs(15);
 /// attributes them to the migration rather than to a deploy.
 const FIELD_MANAGER: &str = "kix-migrate-domain";
 
-/// Field manager for the two CRDs. Deliberately the one `kix deploy` uses:
-/// the deploy that follows applies the same two CRDs, and a different
-/// manager here would make that apply a conflict the moment the schema
-/// changes under a newer pin.
-const CRD_FIELD_MANAGER: &str = "kix";
-
 /// The version of Kix's own records. Not part of the domain: the move keeps
 /// the schema and the version, and changes only the group.
 const RECORD_VERSION: &str = "v1alpha1";
@@ -144,19 +138,6 @@ impl MigrationOps for KubeMigrationOps {
                     .map_err(|e| format!("could not read a {} record: {e}", record.kind))
             })
             .collect()
-    }
-
-    async fn apply_crd(&self, manifest: &Value) -> Result<(), String> {
-        let name = manifest
-            .pointer("/metadata/name")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "a CustomResourceDefinition manifest has no name".to_string())?;
-        let pp = PatchParams::apply(CRD_FIELD_MANAGER);
-        self.crds()
-            .patch(name, &pp, &Patch::Apply(manifest))
-            .await
-            .map_err(|e| format!("could not apply CustomResourceDefinition {name}: {e}"))?;
-        Ok(())
     }
 
     async fn await_crd(&self, name: &str) -> Result<(), String> {

@@ -28,9 +28,9 @@ mod retention;
 #[cfg(test)]
 mod tests;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
-use crate::eval::package_index::{self, RecordPackageIndex};
+use crate::cluster::revision::RevisionMap;
 use crate::legacy_domain::{self, LegacyDomainError};
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{
@@ -58,8 +58,9 @@ pub(crate) use record::KeptOrphans;
 
 use record::{
     FAILED_ATTEMPTS_FIELD, FAILED_REQUEST_FIELD, FINISHED_REQUEST_FIELD, PARTIAL_FIELD,
-    REQUEST_FIELD, STARTED_REQUEST_FIELD, is_current_phase, parse_time, phase_on_abort,
-    phase_on_begin, phase_on_end_partial, pick_current, read_phase, sort_newest_first,
+    REQUEST_FIELD, REVISIONS_FIELD, STARTED_REQUEST_FIELD, is_current_phase, parse_time,
+    phase_on_abort, phase_on_begin, phase_on_end_partial, pick_current, read_phase,
+    sort_newest_first,
 };
 
 /// Return whether `phase` makes a record current (`Active` or `Degraded`).
@@ -252,10 +253,13 @@ fn has_deployed(item: &DynamicObject) -> bool {
     is_current_phase(read_phase(item)) || Record::of(item).was_ever_current()
 }
 
+const MANAGED_BY_LABEL: &str = "app.kubernetes.io/managed-by";
+const MANAGED_BY: &str = "kix";
+
 /// Build the label selector matching all Activation records for `cluster`.
 fn cluster_selector(cluster: &str) -> String {
     format!(
-        "app.kubernetes.io/managed-by=kix,{}={cluster}",
+        "{MANAGED_BY_LABEL}={MANAGED_BY},{}={cluster}",
         keys::CLUSTER_LABEL
     )
 }
@@ -329,15 +333,14 @@ impl Records {
         }
     }
 
-    /// List every record of `cluster`, or none when the Activation CRD is
-    /// not installed.
+    /// List every record of `cluster` by its `kix.run/cluster` label alone,
+    /// the label revisions are listed by. The deploy lock and the cleanup of
+    /// revisions decide from this list, so a list that fails, even with a
+    /// 404, is an error. Taking the lock installs the record's kind.
     pub(crate) async fn of_cluster(&self, cluster: &str) -> Result<Vec<Record>, RecordsError> {
-        let lp = ListParams::default().labels(&cluster_selector(cluster));
-        match self.api().list(&lp).await {
-            Ok(list) => Ok(list.items.iter().map(Record::of).collect()),
-            Err(kube::Error::Api(e)) if e.code == 404 => Ok(Vec::new()),
-            Err(e) => Err(RecordsError::list(e)),
-        }
+        let lp = ListParams::default().labels(&format!("{}={cluster}", keys::CLUSTER_LABEL));
+        let list = self.api().list(&lp).await.map_err(RecordsError::list)?;
+        Ok(list.items.iter().map(Record::of).collect())
     }
 
     /// Make the phases agree with the head after a deploy stopped between
@@ -562,26 +565,6 @@ impl Records {
         }))
     }
 
-    /// Return the identity hashes of all Activation CRs across all clusters and
-    /// phases, or `None` if listing fails.
-    ///
-    /// Used when pruning dead hashes from `kix.run/activations` annotations.
-    /// Queries across all clusters because a cluster-scoped resource can be
-    /// referenced by more than one cluster. Callers must treat `None` as "skip
-    /// pruning" rather than as an empty set.
-    pub(crate) async fn live_hashes(&self) -> Option<HashSet<String>> {
-        let all = self
-            .all()
-            .await
-            .map_err(|e| tracing::warn!("could not list activations, skipping prune: {e}"))
-            .ok()?;
-        Some(
-            all.iter()
-                .filter_map(|item| Record::of(item).identity_hash)
-                .collect(),
-        )
-    }
-
     /// List every Activation object on the cluster across all Kix clusters and
     /// phases.
     pub(crate) async fn all(&self) -> Result<Vec<DynamicObject>, RecordsError> {
@@ -672,14 +655,35 @@ impl Records {
     }
 
     /// Mark a record Superseded, and clear the `status.partial` that a
-    /// `Partial` record has.
+    /// `Partial` record has and its `status.revisions`. A Superseded record
+    /// keeps no revisions, so a map would name revisions the cleanup may
+    /// delete. A later deploy of the record writes its map again.
     pub async fn supersede(&self, name: &str) -> Result<(), RecordsError> {
         self.patch_status(
             name,
-            &json!({ "status": { "phase": PHASE_SUPERSEDED, PARTIAL_FIELD: null } }),
+            &json!({ "status": {
+                "phase": PHASE_SUPERSEDED,
+                PARTIAL_FIELD: null,
+                REVISIONS_FIELD: null,
+            } }),
         )
         .await?;
         tracing::info!(activation = %name, "marked as Superseded");
+        Ok(())
+    }
+
+    /// Remove `spec.source` from record `name`, the build a Kix operator
+    /// deploys for it. The record then reads as one the CLI deployed, which
+    /// no operator acts on.
+    pub async fn clear_source(&self, name: &str) -> Result<(), RecordsError> {
+        self.api()
+            .patch(
+                name,
+                &PatchParams::default(),
+                &Patch::Merge(&json!({ "spec": { "source": null } })),
+            )
+            .await
+            .map_err(RecordsError::on("patch", name))?;
         Ok(())
     }
 
@@ -706,12 +710,40 @@ impl Records {
         Ok(())
     }
 
-    /// Clear `status.orphansKeptFrom` on `name` after its orphans have been
-    /// deleted.
-    pub async fn clear_orphans_kept_from(&self, name: &str) -> Result<(), RecordsError> {
+    /// Clear `status.orphansKeptFrom` on `record` after its orphans have
+    /// been deleted, and in the same write remove the kept-orphans revision
+    /// from its map, which lists the same objects. A map this release
+    /// cannot read is left as it is.
+    pub async fn clear_orphans_kept_from(&self, record: &Record) -> Result<(), RecordsError> {
+        let mut status = json!({ keys::ORPHANS_KEPT_FROM_FIELD: Value::Null });
+        if let Some(Ok(_)) = &record.revisions {
+            status[REVISIONS_FIELD] = json!({ "keptOrphans": null });
+        }
+        self.patch_status(&record.name, &json!({ "status": status }))
+            .await
+    }
+
+    /// Write `map` as the revision map of record `name`, replacing any
+    /// earlier one. Create the revisions it names before this write.
+    pub(crate) async fn name_revisions(
+        &self,
+        name: &str,
+        map: &RevisionMap,
+    ) -> Result<(), RecordsError> {
         self.patch_status(
             name,
-            &json!({ "status": { keys::ORPHANS_KEPT_FROM_FIELD: Value::Null } }),
+            &json!({ "status": { REVISIONS_FIELD: map.to_value() } }),
+        )
+        .await
+    }
+
+    /// Name `revision` as the kept-orphans revision in the map of record
+    /// `name`, and leave the rest of the map as it is. Create the revision
+    /// before this write, so the map names only revisions that exist.
+    pub async fn name_kept_orphans(&self, name: &str, revision: &str) -> Result<(), RecordsError> {
+        self.patch_status(
+            name,
+            &json!({ "status": { REVISIONS_FIELD: { "keptOrphans": revision } } }),
         )
         .await
     }
@@ -916,14 +948,13 @@ impl Records {
         had_failures: bool,
         receipt: Option<&Value>,
         consumed_failed: &[String],
-        orphans_kept_from: &[KeptOrphanSource],
     ) -> Result<(), RecordsError> {
         self.record_finish(
             cluster_name,
             new_activation_name,
             old_activation,
             receipt,
-            orphans_kept_from,
+            None,
         )
         .await?;
         self.settle_phases(
@@ -937,15 +968,17 @@ impl Records {
 
     /// Write what a finished deploy did onto its record, before the deploy
     /// becomes current: the predecessor link, deployment timestamp, cluster
-    /// label, and receipt. `orphans_kept_from` replaces
-    /// `status.orphansKeptFrom` (an empty slice clears the field).
+    /// label, and receipt. Clear `status.orphansKeptFrom`, which an earlier
+    /// release wrote on a record deployed again under the same name.
+    /// `revisions`, when given, replaces `status.revisions`, and a map that
+    /// names no kept orphans clears an earlier `keptOrphans`.
     pub(crate) async fn record_finish(
         &self,
         cluster_name: &str,
         new_activation_name: &str,
         old_activation: Option<&Record>,
         receipt: Option<&Value>,
-        orphans_kept_from: &[KeptOrphanSource],
+        revisions: Option<&RevisionMap>,
     ) -> Result<(), RecordsError> {
         let now = chrono::Utc::now().to_rfc3339();
 
@@ -962,6 +995,7 @@ impl Records {
         let spec_patch = json!({
             "metadata": {
                 "labels": {
+                    MANAGED_BY_LABEL: MANAGED_BY,
                     keys::CLUSTER_LABEL: cluster_name,
                 },
                 "annotations": annotations,
@@ -988,15 +1022,10 @@ impl Records {
         }
         // The whole build is deployed now.
         status.insert(PARTIAL_FIELD.to_string(), Value::Null);
-        // Write null when empty so a same-name redeploy clears any previous list.
-        status.insert(
-            keys::ORPHANS_KEPT_FROM_FIELD.to_string(),
-            if orphans_kept_from.is_empty() {
-                Value::Null
-            } else {
-                json!(orphans_kept_from)
-            },
-        );
+        status.insert(keys::ORPHANS_KEPT_FROM_FIELD.to_string(), Value::Null);
+        if let Some(map) = revisions {
+            status.insert(REVISIONS_FIELD.to_string(), map.to_value());
+        }
         self.patch_status(new_activation_name, &json!({ "status": status }))
             .await
     }
@@ -1059,7 +1088,7 @@ impl Records {
     }
 
     /// Set the Activation phase to `Deploying`, initialize wave counters, and
-    /// write the build's package index.
+    /// write the revisions the deploy is made of.
     ///
     /// Called at the start of the apply loop after the record is created. Sets
     /// `status.phase = Deploying` and `status.totalWaves = total_waves`, unless
@@ -1072,22 +1101,49 @@ impl Records {
     /// build adds to the list. A run that stops ends `Failed` with no
     /// `status.partial`.
     ///
-    /// Then writes `package_index` to `status.packageIndex` with a patch of
-    /// its own. The index only helps a later diff group objects, so a failure
-    /// to write it, or an index over [`package_index::MAX_BYTES`], logs a
-    /// warning and the deploy goes on. Writing it separately keeps such a
-    /// failure from losing the phase.
+    /// `revisions` goes to `status.revisions` in the same write as the
+    /// phase. The caller creates the revisions before this write, so a
+    /// record names only revisions that exist. The `keptOrphans` entry is
+    /// left as it is, because only a finished deploy changes it
+    /// ([`Records::record_finish`]).
+    ///
+    /// Before that write, give the record the labels it lacks, so the
+    /// cleanup of revisions, which lists records by `kix.run/cluster`, sees
+    /// it. A record the operator deploys may have been written without them.
     pub(crate) async fn begin_deploy(
         &self,
         activation_name: &str,
+        cluster: &str,
         total_waves: usize,
-        package_index: Option<&RecordPackageIndex>,
+        revisions: Option<&RevisionMap>,
     ) -> Result<Vec<String>, RecordsError> {
         let item = self
             .api()
             .get(activation_name)
             .await
             .map_err(RecordsError::on("get", activation_name))?;
+        let labels = item.metadata.labels.clone().unwrap_or_default();
+        let wanted = [
+            (MANAGED_BY_LABEL, MANAGED_BY),
+            (keys::CLUSTER_LABEL, cluster),
+        ];
+        if wanted
+            .iter()
+            .any(|(key, value)| labels.get(*key).map(String::as_str) != Some(*value))
+        {
+            let labels: serde_json::Map<String, Value> = wanted
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), json!(value)))
+                .collect();
+            self.api()
+                .patch(
+                    activation_name,
+                    &PatchParams::default(),
+                    &Patch::Merge(&json!({ "metadata": { "labels": labels } })),
+                )
+                .await
+                .map_err(RecordsError::on("patch", activation_name))?;
+        }
         let current = read_phase(&item);
         let earlier_only = Record::of(&item)
             .partial
@@ -1103,44 +1159,20 @@ impl Records {
         // Clear any failure status from a prior attempt on the same record.
         status.insert("failure".to_string(), Value::Null);
         status.insert(PARTIAL_FIELD.to_string(), Value::Null);
+        if let Some(map) = revisions {
+            let mut value = map.to_value();
+            // A map without kept orphans keeps the ones the record names.
+            if map.kept_orphans.is_none()
+                && let Some(fields) = value.as_object_mut()
+            {
+                fields.remove("keptOrphans");
+            }
+            status.insert(REVISIONS_FIELD.to_string(), value);
+        }
 
         self.patch_status(activation_name, &json!({ "status": status }))
             .await?;
-
-        if let Some(index) = package_index {
-            self.write_package_index(activation_name, index).await;
-        }
         Ok(earlier_only)
-    }
-
-    /// Write `index` to the record's `status.packageIndex`, warning instead
-    /// of failing. The index only helps later commands group and name
-    /// objects, so a failure must not stop a deploy. See
-    /// [`Records::begin_deploy`].
-    ///
-    /// An index over [`package_index::MAX_BYTES`] is written without its
-    /// names, and one still over the limit is not written.
-    pub async fn write_package_index(&self, activation_name: &str, index: &RecordPackageIndex) {
-        let Some(value) = sized_index(index) else {
-            tracing::warn!(
-                activation = %activation_name,
-                limit = package_index::MAX_BYTES,
-                "the build's package index is too large to store on its record; \
-                 a diff on a machine without this build will show an object that \
-                 moved between packages only under its new package",
-            );
-            return;
-        };
-        let patch = json!({ "status": { (keys::PACKAGE_INDEX_FIELD): value } });
-        if let Err(e) = self.patch_status(activation_name, &patch).await {
-            tracing::warn!(
-                activation = %activation_name,
-                error = %e,
-                "could not store the build's package index on its record; \
-                 a diff on a machine without this build will show an object that \
-                 moved between packages only under its new package",
-            );
-        }
     }
 
     /// Mark a `Queued` record `Failed` with `reason` before the operator
@@ -1331,22 +1363,4 @@ fn current_of<'a>(items: &'a [DynamicObject], cluster: &str) -> Option<&'a Dynam
         );
     }
     current_record(current)
-}
-
-/// Return `index` as the JSON a record stores: with its names when it fits
-/// in [`package_index::MAX_BYTES`], else without them, else `None`.
-fn sized_index(index: &RecordPackageIndex) -> Option<Value> {
-    let fits = |v: &Value| v.to_string().len() <= package_index::MAX_BYTES;
-    let full = index.to_value();
-    if fits(&full) {
-        return Some(full);
-    }
-    let bare = index.without_names().to_value();
-    if fits(&bare) {
-        tracing::debug!(
-            "writing the package index without object names to stay under its size limit"
-        );
-        return Some(bare);
-    }
-    None
 }

@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 
+use crate::cluster::field_manager::FieldManager;
 use crate::cluster::preview::{DryRunAnswer, DryRunOutcome, Refusal};
 use crate::eval::store_graph::StoreGraph;
 use crate::manifest::diff::engine::structural_diff;
@@ -140,6 +141,8 @@ pub(crate) struct Overlay<'a> {
     pub deployed: Option<HashMap<ResourceId, &'a Value>>,
     /// Each resource's manifest in the builds of the folded deploy records.
     pub folded: HashMap<ResourceId, Vec<(FoldedBy, &'a Value)>>,
+    /// The field manager of the Kix cluster planned.
+    pub manager: FieldManager,
 }
 
 /// The fields where the live cluster differs from the deployed build, as
@@ -182,7 +185,9 @@ impl Overlay<'_> {
                 // "added" (the old side may not have known the object, made
                 // by hand or by another tool) is wrong. List it as changed;
                 // the conflict says what about it.
-                DryRunOutcome::Refused(Refusal::Conflict { .. }) => {
+                DryRunOutcome::Refused(
+                    Refusal::Conflict { .. } | Refusal::KixClusterConflict { .. },
+                ) => {
                     if let Some((key, version)) = membership.get(rid)
                         && let Some(entry) = entry(diff, key, version.clone())
                         && entry.added_resources.contains(rid)
@@ -224,6 +229,7 @@ impl Overlay<'_> {
                                 applies: true,
                                 secret: types::is_secret(&live) || types::is_secret(new),
                                 folded: self.folded.get(rid).map_or(&[], Vec::as_slice),
+                                manager: &self.manager,
                             };
                             let (labels, drifted) = three.label(&real);
                             labelled.push((rid.clone(), labels));
@@ -584,6 +590,7 @@ mod tests {
             new_graph: &new_graph,
             deployed: Some(deployed),
             folded: HashMap::new(),
+            manager: FieldManager::of("a"),
         };
         let drift = overlay.apply(&mut diff, &answers).drift;
         assert!(drift.is_empty());
@@ -625,6 +632,7 @@ mod tests {
             new_graph: &new_graph,
             deployed: None,
             folded: HashMap::new(),
+            manager: FieldManager::of("a"),
         }
         .apply(&mut diff, &answers);
         let web = &diff.changed[0];
@@ -715,6 +723,7 @@ mod tests {
             new_graph: &new_graph,
             deployed: Some(deployed),
             folded: HashMap::new(),
+            manager: FieldManager::of("a"),
         }
         .apply(&mut diff, &answers)
         .drift;
@@ -762,6 +771,7 @@ mod tests {
             new_graph: &new_graph,
             deployed: Some(old.iter().map(|m| (ResourceId::from_value(m), m)).collect()),
             folded: [(rid("a"), vec![(by, &partial)])].into_iter().collect(),
+            manager: FieldManager::of("a"),
         }
         .apply(&mut diff, &answers);
         assert!(found.drift.is_empty(), "{:?}", found.drift);
@@ -848,6 +858,7 @@ mod tests {
                     .collect(),
             ),
             folded: HashMap::new(),
+            manager: FieldManager::of("a"),
         }
         .apply(&mut plan_side, &answers);
         let plan_doc = Plan::new(

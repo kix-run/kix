@@ -15,10 +15,9 @@
 //!    reconstructing live state in `kix deploy`. Builds loaded from an old
 //!    activation and live objects projected back to manifests are upgraded to
 //!    the current domain before the planner sees them.
-//! 3. `bookkeeping_null_outs`, called from the two merge patches in
-//!    `cluster::apply`. Server-side apply drops build-time keys automatically
-//!    because the `kix` field manager owns them, whereas patch-written keys
-//!    must be explicitly nulled out.
+//! 3. [`is_legacy_key`], called from the migration write in `kix-lib`'s
+//!    `cluster::migration_write`, which removes every annotation key of a
+//!    retired domain from an object once.
 //! 4. `check_discovery` (in `kix-lib`) and `check_build`. Every command that
 //!    reads Kix records opens them through `kix-lib`'s `Records::open`,
 //!    which rejects an unmigrated cluster and prints the migration command.
@@ -93,27 +92,6 @@ where
     F: Fn(&str) -> bool,
 {
     !has(keys::IDENTITY_HASH) && legacy_spellings(keys::IDENTITY_HASH).iter().any(|k| has(k))
-}
-
-/// Return every retired Kix annotation key on an object that Kix has just
-/// applied.
-///
-/// Server-side apply drops retired keys only when the `kix` field manager owns
-/// them. Objects previously written with client-side `kubectl apply` have no
-/// `managedFields` owner for those keys, so server-side apply adds the current
-/// key while leaving the retired key alongside it.
-///
-/// Call this only after a successful apply. The apply wrote the object's full
-/// current key set, so any remaining retired key is stale residue that would
-/// otherwise cause [`fallback`] to return outdated values when a current key
-/// is absent. Never call this on the skipped path, where the object was not
-/// re-applied and its retired keys are still authoritative.
-pub fn retired_keys(annotations: &std::collections::BTreeMap<String, String>) -> Vec<String> {
-    annotations
-        .keys()
-        .filter(|k| is_legacy_key(k))
-        .cloned()
-        .collect()
 }
 
 /// Look up `key` under each retired domain in turn, using `lookup` to read a
@@ -241,22 +219,6 @@ fn upgrade_map(map: &mut Map<String, Value>, domains: &[&str]) {
         let new = format!("{}{name}", keys::PREFIX);
         map.entry(new).or_insert(value);
     }
-}
-
-/// Return the retired spellings of the keys that a merge patch is about to
-/// write.
-///
-/// Called from `cluster::apply`. Server-side apply drops build-time keys
-/// automatically because the `kix` field manager owns them, whereas
-/// `activations` and `applied-hash` are written by merge patch and must be
-/// removed explicitly.
-///
-/// Only the keys in `writing` are cleared. Clearing a retired key that the
-/// patch does not replace (such as `applied-hash` on the skipped path) would
-/// leave an unchanged resource without a hash under either domain and disable
-/// drift detection for it.
-pub fn bookkeeping_null_outs(writing: &[&str]) -> Vec<String> {
-    writing.iter().flat_map(|k| legacy_spellings(k)).collect()
 }
 
 /// Error returned when a cluster or build uses a retired Kix API group.
@@ -472,28 +434,6 @@ mod tests {
     }
 
     #[test]
-    fn the_bookkeeping_null_outs_cover_both_patch_written_keys() {
-        let both = bookkeeping_null_outs(&[keys::ACTIVATIONS, keys::APPLIED_HASH]);
-        assert_eq!(both.len(), DOMAINS.len() * 2);
-        for domain in DOMAINS {
-            assert!(both.contains(&format!("{domain}/activations")));
-            assert!(both.contains(&format!("{domain}/applied-hash")));
-        }
-
-        // The skipped path writes only `activations`. Clearing the retired
-        // `applied-hash` there would leave the object with no stamp under
-        // either domain, and an unchanged resource is never applied again,
-        // so drift detection would be off for it for good.
-        let one = bookkeeping_null_outs(&[keys::ACTIVATIONS]);
-        assert_eq!(one.len(), DOMAINS.len());
-        for domain in DOMAINS {
-            assert!(one.contains(&format!("{domain}/activations")));
-            assert!(!one.contains(&format!("{domain}/applied-hash")));
-        }
-        assert!(bookkeeping_null_outs(&[]).is_empty());
-    }
-
-    #[test]
     fn a_cluster_still_on_a_retired_group_is_refused() {
         let Some(legacy) = DOMAINS.first() else {
             return;
@@ -652,37 +592,6 @@ mod tests {
         assert!(!stamped_before_move(|k| k == keys::IDENTITY_HASH));
         // An object Kix never stamped is not this case.
         assert!(!stamped_before_move(|_| false));
-    }
-
-    /// Server-side apply drops a retired key only where the `kix` field
-    /// manager owns it. On an object written by client-side `kubectl apply`
-    /// the `managedFields` are empty, so it owns nothing, and the retired
-    /// key sits beside the current one for ever.
-    #[test]
-    fn every_retired_key_on_an_applied_object_is_cleared() {
-        let Some(legacy) = DOMAINS.first() else {
-            return;
-        };
-        let mut anns = std::collections::BTreeMap::new();
-        anns.insert(format!("{legacy}/content-hash"), "old".to_string());
-        anns.insert(keys::CONTENT_HASH.to_string(), "new".to_string());
-        // No current counterpart. Still residue: the apply that just ran
-        // wrote every key this object should carry, and this was not one of
-        // them. Keeping it would leave `fallback` returning a value from an
-        // older build generation as though it were current.
-        anns.insert(format!("{legacy}/depends-on"), "stale".to_string());
-        // Not Kix's, and not ours to remove.
-        anns.insert("helm.sh/hook".to_string(), "x".to_string());
-
-        let mut got = retired_keys(&anns);
-        got.sort();
-        assert_eq!(
-            got,
-            vec![
-                format!("{legacy}/content-hash"),
-                format!("{legacy}/depends-on")
-            ]
-        );
     }
 
     #[test]

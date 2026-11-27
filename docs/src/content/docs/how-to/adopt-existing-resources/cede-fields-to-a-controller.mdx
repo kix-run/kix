@@ -55,14 +55,17 @@ Deploy normally:
 />
 
 On creation, Kix sends the complete field. After the controller takes
-ownership, a later deploy can receive a `409 Conflict`. If all reported paths
+ownership, a ceded field never counts as drift, so a deploy that does not
+change the resource leaves it alone. A later deploy that does change the
+resource can receive a `409 Conflict`. If all reported paths
 are ceded, Kix retries once with those conflicting fields removed (and logs
 the retry at `info` level when you pass `-v` or set `KIX_LOG=info`). The
 controller's values remain in the live object.
 
-Do not use `--force-conflicts` for this transition. That flag tells the API
-server to give the fields to Kix, so there is no conflict for the ceding logic
-to handle.
+You do not need `--force-conflicts` for this. Forced applies (including
+`--force-conflicts`) still leave ceded fields with the manager that owns them,
+while taking ownership of every other conflicting field. Save
+`--force-conflicts` for one-time takeovers.
 
 ## Verify the resulting ownership
 

@@ -100,6 +100,13 @@ pub const PACKAGE_INSTANCES_CRD: &str = concat!("packageinstances.", domain!());
 /// the operator a request. See `cluster::activation::OperatorFeatures`.
 pub const OPERATOR_FEATURES: &str = concat!(domain!(), "/operator-features");
 
+/// Annotation Kix writes on each CustomResourceDefinition it installs itself:
+/// `<number>/<generation>`. The number says which of Kix's definitions of the
+/// kind the CRD holds, and the generation is the CRD's `metadata.generation`
+/// after Kix wrote it. A later change to the CRD's `spec` raises the
+/// generation, which voids the number. See `cluster::own_crds`.
+pub const DEFINITION: &str = key!("definition");
+
 // --- Stamped by the CLI at load time (eval/stamp.rs) ---
 
 /// The 32-char Nix store hash of the resource's sealed manifest. The identity

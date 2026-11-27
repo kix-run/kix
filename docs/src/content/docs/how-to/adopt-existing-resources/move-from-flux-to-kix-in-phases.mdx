@@ -412,13 +412,7 @@ If you want Kix to compile manifests while Flux keeps applying them, export plai
 
 `kix export` writes one YAML file per object without `kix.run/*` annotations or `Activation` and `PackageInstance` records, ready for a Flux `Kustomization` to apply. Because Flux applies the manifests in this mode, Kix's readiness waits, deploy records, and rollback do not run.
 
-Before committing `apps/bridge`, delete three files from `_cluster/`:
-
-- `_cluster/CustomResourceDefinition-activations.kix.run.yaml`
-- `_cluster/CustomResourceDefinition-packageinstances.kix.run.yaml`
-- `_cluster/Namespace-kube-system.yaml`
-
-If Flux applies those files and you later remove that `Kustomization` from Git with pruning enabled, two things go wrong. First, Flux deletes both Kix CRDs, which wipes every `Activation` and `PackageInstance` record on the cluster and erases rollback history for any Kix-deployed cluster sharing that Kubernetes cluster (workloads keep running, and a later `kix deploy` recreates current records). Second, Flux tries to delete `kube-system`; the Kubernetes API server refuses that deletion, leaving the `Kustomization` stuck until you suspend it.
+Before committing `apps/bridge`, delete `_cluster/Namespace-kube-system.yaml`. If Flux applies that file and you later remove that `Kustomization` from Git with pruning enabled, Flux tries to delete `kube-system`. The Kubernetes API server refuses that deletion, which leaves the `Kustomization` stuck until you suspend it.
 
 Exported objects keep the label `app.kubernetes.io/managed-by: kix`. If you deploy a Kix cluster (such as `test`) to the same Kubernetes cluster, `kix gc --full-scan` sees that Kix did not apply those Flux-managed objects. It lists them under "Copied labels" and keeps them unless you pass `--include copies`:
 

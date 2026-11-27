@@ -9,42 +9,34 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry;
 use kube::api::DynamicObject;
 use serde_json::{Map, Value};
 
+use super::field_manager::{FieldManager, Manager};
 use crate::manifest::hash;
 
-/// Field manager Kix uses for server-side apply.
-pub(crate) const KIX_FIELD_MANAGER: &str = "kix";
-
-/// Extract the fieldsV1 tree of Kix's server-side apply entry (`manager == "kix"`,
-/// `operation == "Apply"`, and no subresource).
+/// Extract the fieldsV1 tree of the server-side apply entry that holds the
+/// fields `manager`'s Kix cluster applied ([`FieldManager::apply_entry`]).
 ///
 /// Reads typed `metadata.managed_fields`. LIST responses split metadata
 /// out of `obj.data`, so the raw data must never be consulted for this.
-pub fn kix_fieldset(obj: &DynamicObject) -> Option<Value> {
-    kix_apply_entry(obj.metadata.managed_fields.as_deref()?)
+pub fn kix_fieldset(obj: &DynamicObject, manager: &FieldManager) -> Option<Value> {
+    manager
+        .apply_entry(obj.metadata.managed_fields.as_deref()?)
         .and_then(|e| e.fields_v1.as_ref())
         .map(|f| f.0.clone())
 }
 
-/// Return the `managedFields` entry written by Kix's server-side apply, if
-/// present.
-pub(crate) fn kix_apply_entry(entries: &[ManagedFieldsEntry]) -> Option<&ManagedFieldsEntry> {
-    entries.iter().find(|e| {
-        e.manager.as_deref() == Some(KIX_FIELD_MANAGER)
-            && e.operation.as_deref() == Some("Apply")
-            && e.subresource.is_none()
-    })
-}
-
-/// Return whether any `managedFields` entry names the `kix` field manager.
+/// Return whether any `managedFields` entry names a field manager that a Kix
+/// cluster writes under, its own or the legacy one.
 ///
-/// Kix writes every object it applies under this manager, through its
-/// server-side apply and the bookkeeping update after it. The API server
-/// records the manager of each write, so an object a controller made from a
-/// Kix object's labels and annotations has no such entry.
+/// Kix writes every object it applies under its cluster's manager, and an
+/// older Kix wrote it under the legacy manager. The API server records the
+/// manager of each write, so an object a controller made from a Kix
+/// object's labels and annotations has no such entry.
 pub(crate) fn written_by_kix(entries: &[ManagedFieldsEntry]) -> bool {
-    entries
-        .iter()
-        .any(|e| e.manager.as_deref() == Some(KIX_FIELD_MANAGER))
+    entries.iter().any(|e| {
+        e.manager
+            .as_deref()
+            .is_some_and(|m| Manager::parse(m).is_kix())
+    })
 }
 
 /// Project a live value onto a fieldsV1 tree, keeping the fields the fieldset
@@ -188,17 +180,30 @@ pub fn merge_typed_metadata(obj: &DynamicObject) -> Value {
 ///
 /// 1. Merge typed metadata back into the data `Value`.
 /// 2. Project onto Kix's `fieldsV1` fieldset.
-/// 3. Strip `kix.run/*` annotations so the stamp does not change its own hash.
-/// 4. Compute Blake3 over canonical (sorted-keys) JSON.
+/// 3. Remove the fields the object cedes in `kix.run/cede-fields`.
+/// 4. Strip `kix.run/*` annotations so the stamp does not change its own hash.
+/// 5. Compute Blake3 over canonical (sorted-keys) JSON.
 ///
-/// Returns `None` when the object has no Kix server-side apply `managedFields`
-/// entry.
-pub fn applied_content_hash(obj: &DynamicObject) -> Option<String> {
-    // TODO: exclude PI spec.driftIgnore pointers here. Compiled
-    // delegation drops the listed JSON pointers from the projection on both
-    // the stamp and the check side, so expected co-owners (HPA on replicas,
-    // cert-manager on Secret data) never enter the hash.
-    kix_owned_projection(obj).map(projection_hash)
+/// Kix computes this hash from the apply's answer and again from the live
+/// object, so a ceded field is out of both. Another controller may then
+/// change it without the object reading as drifted.
+///
+/// Returns `None` when the object has no server-side apply `managedFields`
+/// entry that counts as `manager`'s.
+pub fn applied_content_hash(obj: &DynamicObject, manager: &FieldManager) -> Option<String> {
+    hashed_projection(obj, manager).map(projection_hash)
+}
+
+/// Return what [`applied_content_hash`] hashes: [`kix_owned_projection`]
+/// without the fields the object cedes.
+pub(crate) fn hashed_projection(obj: &DynamicObject, manager: &FieldManager) -> Option<Value> {
+    let fields = kix_fieldset(obj, manager)?;
+    let full = merge_typed_metadata(obj);
+    let mut projection = project(&full, &fields);
+    for ceded in crate::cluster::apply::ceded_fields(&full) {
+        crate::cluster::apply::remove_covered(&mut projection, &ceded);
+    }
+    Some(projection)
 }
 
 /// Strip `kix.run/*` annotations from `projection` and return its canonical
@@ -208,11 +213,11 @@ pub(crate) fn projection_hash(mut projection: Value) -> String {
     hash::hash_value(&hash::sort_keys(&projection))
 }
 
-/// Project `obj` onto Kix's server-side apply fieldset after merging typed
-/// metadata back into its data. Returns `None` when `obj` has no Kix `Apply`
-/// `managedFields` entry.
-pub(crate) fn kix_owned_projection(obj: &DynamicObject) -> Option<Value> {
-    let fields = kix_fieldset(obj)?;
+/// Project `obj` onto `manager`'s server-side apply fieldset after merging
+/// typed metadata back into its data. Returns `None` when `obj` has no
+/// `Apply` entry that counts as `manager`'s.
+pub(crate) fn kix_owned_projection(obj: &DynamicObject, manager: &FieldManager) -> Option<Value> {
+    let fields = kix_fieldset(obj, manager)?;
     Some(project(&merge_typed_metadata(obj), &fields))
 }
 
@@ -314,6 +319,46 @@ mod tests {
         let live = json!(["a", "b", "c"]);
         let fields = json!({"i:1": {}});
         assert_eq!(project(&live, &fields), json!(["b"]));
+    }
+
+    /// A field the object cedes is out of the applied hash, so another
+    /// manager may change it. A field it does not cede is still in.
+    #[test]
+    fn the_applied_hash_leaves_out_ceded_fields() {
+        let object = |replicas: i64, image: &str| -> DynamicObject {
+            serde_json::from_value(json!({
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": {
+                    "name": "web",
+                    "namespace": "app",
+                    "annotations": {
+                        (crate::manifest::keys::CEDE_FIELDS): ".spec.replicas,.spec.template.spec.containers[*].resources",
+                    },
+                    "managedFields": [{
+                        "manager": "kix/a",
+                        "operation": "Apply",
+                        "fieldsV1": {"f:spec": {
+                            "f:replicas": {},
+                            "f:template": {"f:spec": {"f:containers": {
+                                "k:{\"name\":\"web\"}": {"f:name": {}, "f:image": {}, "f:resources": {}},
+                            }}},
+                        }},
+                    }],
+                },
+                "spec": {
+                    "replicas": replicas,
+                    "template": {"spec": {"containers": [
+                        {"name": "web", "image": image, "resources": {"limits": {"cpu": replicas}}},
+                    ]}},
+                },
+            }))
+            .unwrap()
+        };
+        let a = FieldManager::of("a");
+        let base = applied_content_hash(&object(1, "a"), &a);
+        assert_eq!(applied_content_hash(&object(5, "a"), &a), base);
+        assert_ne!(applied_content_hash(&object(1, "b"), &a), base);
     }
 
     #[test]

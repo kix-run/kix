@@ -1,7 +1,7 @@
 # 176: Design read of the larger housekeeping themes
 
 **Status:** Draft. A survey, written on 2026-11-23 by a design agent from code and documents only, with no cluster and no test run.
-**Related:** `housekeeping/reviews/2026-11-23.md` (the review whose themes 4 to 14 this reads), `175_one_home_for_what_a_deploy_did.md` (the design for themes 4 and 5 and questions 2 and 3)
+**Related:** `housekeeping/reviews/2026-11-23.md` (the review whose themes 4 to 14 this reads), `archive/175_one_home_for_what_a_deploy_did.md` (the design for themes 4 and 5 and questions 2 and 3)
 
 Type: analysis. It gives a design direction for ten themes of the housekeeping review and the questions each left for the maintainer.
 

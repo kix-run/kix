@@ -599,7 +599,6 @@ async fn run_operator_async(
         // A rollback passes no receipt, so the target record keeps the
         // receipt its own deploy wrote.
         None,
-        planned.checked.package_index(),
     )
     .await?;
 
@@ -673,6 +672,7 @@ fn flags(prune: bool, force_conflicts: bool, accept_migrations: bool) -> PlanFla
         reconcile: false,
         force_conflicts,
         accept_migrations,
+        operator_removed: false,
         only: Vec::new(),
     }
 }

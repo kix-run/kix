@@ -1,0 +1,5 @@
++++
+kind = "error"
+id = "K5636"
++++
+If two Kix clusters on the same Kubernetes cluster deploy the same resource, make sure both definitions set identical field values, or deploy that resource from only one Kix cluster. Previously, whichever cluster deployed last overwrote conflicting fields without warning. Now, when two Kix clusters set a shared field to different values, `kix plan` and `kix deploy` report `[K5636]` naming the resource, the other Kix cluster, and the conflicting fields. Under the default `--on-error stop`, `kix deploy` stops before applying anything. Passing `--force-conflicts` takes ownership for the deploying Kix cluster, which causes the other Kix cluster's next deploy to fail with `[K5636]` until their definitions match. When one Kix cluster removes a shared resource from its build, pruning releases that cluster's field ownership so the remaining Kix cluster owns the resource alone. If releasing ownership fails or `--skip-orphan-check` is set, Kix keeps the resource on its kept-orphans list and retries on the next deploy.

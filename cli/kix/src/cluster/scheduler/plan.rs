@@ -6,13 +6,12 @@ use serde_json::Value;
 
 use crate::manifest::keys;
 use crate::manifest::kinds;
-use crate::manifest::lifecycle;
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use super::super::apply::{ChangeAction, Deployed, changed, wants_rerun};
 use super::super::graph::ResourceGraph;
 use super::super::inventory::{Live, LiveObjects};
-use super::super::readiness::{self, ImportTarget};
+use super::super::readiness;
 use super::super::stream::{NodeId, NodeMeta, PlanNode, TransitionKind};
 
 /// A single resource or synthetic node paired with the work
@@ -67,7 +66,7 @@ pub struct DeployPlan {
 
 impl DeployPlan {
     /// Build a plan from the resource dependency graph and the change
-    /// actions produced by `detect_changes` or `detect_changes_live`.
+    /// actions the planner decided ([`crate::plan`]).
     ///
     /// Orphans are excluded from the plan and passed to the scheduler
     /// separately for pruning after all plan nodes terminate.
@@ -88,35 +87,9 @@ impl DeployPlan {
             by_id.insert(rid, action);
         }
 
-        // Consumer clusters do not apply Kix's own CRDs because the platform
-        // cluster manages them. Wait for the live CRDs instead (see `lifecycle::left_to_platform`).
-        let manifests = || graph.graph.node_weights().map(|n| &n.manifest);
-        let left_to_platform = lifecycle::left_to_platform(manifests());
-        let platform = manifests()
-            .find(|m| lifecycle::is_record(m))
-            .and_then(lifecycle::platform_of)
-            .unwrap_or_default();
-
         let mut nodes = Vec::with_capacity(graph.graph.node_count());
         for idx in graph.graph.node_indices() {
             let node = &graph.graph[idx];
-            if left_to_platform.contains(&node.id) {
-                nodes.push(PlanNodeEntry {
-                    id: NodeId::Resource(node.id.clone()),
-                    kind: TransitionKind::Wait,
-                    action: ChangeAction::Skip(node.id.clone()),
-                    meta: NodeMeta {
-                        package: keys::get(&node.manifest, keys::PACKAGE).map(|s| s.to_string()),
-                        namespace: None,
-                        import_target: Some(ImportTarget::left_to_platform(
-                            &node.manifest,
-                            platform,
-                        )),
-                    },
-                    rerun: None,
-                });
-                continue;
-            }
             let action = match by_id.get(&node.id) {
                 Some(action @ (ChangeAction::Apply(_) | ChangeAction::Recreate(..))) => {
                     (*action).clone()
@@ -164,7 +137,9 @@ impl DeployPlan {
         Ok(DeployPlan {
             nodes,
             edges,
-            controllers: super::super::graph::controllers_of(manifests()),
+            controllers: super::super::graph::controllers_of(
+                graph.graph.node_weights().map(|n| &n.manifest),
+            ),
         })
     }
 
@@ -219,7 +194,7 @@ impl DeployPlan {
                     failed.insert(rid.clone());
                 }
                 Live::Unread => all_read = false,
-                Live::Present(_) | Live::Absent => {}
+                Live::Present(_) | Live::Absent | Live::Unserved => {}
             }
         }
         let reported = self.rerun_failed(&failed);
@@ -240,7 +215,7 @@ impl DeployPlan {
             let NodeId::Resource(rid) = &node.id else {
                 continue;
             };
-            if !failed.contains(rid) || node.kind == TransitionKind::Wait {
+            if !failed.contains(rid) {
                 continue;
             }
             match &node.rerun {
@@ -502,7 +477,7 @@ impl SchedulerState {
 /// its last run failed: a Job under `kix.run/rerun`, which then runs again,
 /// or a Job the plan leaves unchanged, which is then reported.
 fn reads_last_run(entry: &PlanNodeEntry) -> bool {
-    entry.kind != TransitionKind::Wait && (entry.rerun.is_some() || skip_reads_live(entry))
+    entry.rerun.is_some() || skip_reads_live(entry)
 }
 
 /// Return whether a `Skip` node still reads its live object before it counts

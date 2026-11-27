@@ -860,22 +860,19 @@ in
 
       # Collect every resource except the Activation record, which references
       # the package index built from these resources.
-      resourcesBeforeRecord = [
-        k8s.kixCRDs.packageInstance
-        k8s.kixCRDs.activation
-      ]
-      ++ (builtins.concatMap collectResources allInstancesList)
-      ++ (builtins.concatMap (
-        nsName:
-        let
-          ns = nsResources.${nsName};
-        in
-        [ ns.resource ]
-        ++ (if ns.quota != null then [ ns.quota ] else [ ])
-        ++ builtins.attrValues ns.netpols
-      ) realNsNames)
-      ++ (if platformSide == null then [ ] else platformSide.resources)
-      ++ clusterHookResources;
+      resourcesBeforeRecord =
+        (builtins.concatMap collectResources allInstancesList)
+        ++ (builtins.concatMap (
+          nsName:
+          let
+            ns = nsResources.${nsName};
+          in
+          [ ns.resource ]
+          ++ (if ns.quota != null then [ ns.quota ] else [ ])
+          ++ builtins.attrValues ns.netpols
+        ) realNsNames)
+        ++ (if platformSide == null then [ ] else platformSide.resources)
+        ++ clusterHookResources;
 
       # Remove Nix string context from the manifest list consumed by the CLI,
       # manifest writer, and cross-resource validation.

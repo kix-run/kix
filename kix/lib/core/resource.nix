@@ -841,67 +841,6 @@ rec {
     in
     helpers;
 
-  mkKixCRD =
-    {
-      kind,
-      plural,
-      scope ? "Namespaced",
-    }:
-    mkResource {
-      apiVersion = "apiextensions.k8s.io/v1";
-      kind = "CustomResourceDefinition";
-      name = "${plural}.${kixAnnotations.group}";
-      namespace = clusterScoped;
-      labels = {
-        "app.kubernetes.io/managed-by" = "kix";
-      };
-      extra.spec = {
-        group = kixAnnotations.group;
-        inherit scope;
-        names = {
-          inherit kind plural;
-          singular = lib.toLower kind;
-          listKind = "${kind}List";
-        };
-        versions = [
-          {
-            name = "v1alpha1";
-            served = true;
-            storage = true;
-            subresources.status = { };
-            schema.openAPIV3Schema = {
-              type = "object";
-              properties = {
-                apiVersion.type = "string";
-                kind.type = "string";
-                metadata.type = "object";
-                spec = {
-                  type = "object";
-                  "x-kubernetes-preserve-unknown-fields" = true;
-                };
-                status = {
-                  type = "object";
-                  "x-kubernetes-preserve-unknown-fields" = true;
-                };
-              };
-            };
-          }
-        ];
-      };
-    };
-
-  kixCRDs = {
-    packageInstance = mkKixCRD {
-      kind = "PackageInstance";
-      plural = "packageinstances";
-    };
-    activation = mkKixCRD {
-      kind = "Activation";
-      plural = "activations";
-      scope = "Cluster";
-    };
-  };
-
   nsOf =
     r:
     if r.namespace or null == null then
@@ -1406,7 +1345,7 @@ rec {
         ${kixKeys.importName} = importName;
       }
       // extraAnnotations;
-      requires = [ kixCRDs.packageInstance ] ++ extraRequires;
+      requires = extraRequires;
       extra.spec = {
         instanceName = markerName;
         namespaceName = namespaceName;

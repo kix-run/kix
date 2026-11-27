@@ -142,6 +142,7 @@ pub(crate) fn of<'a>(
             store_hash: hash,
             package,
             change,
+            reason: None,
         });
     }
 
@@ -299,6 +300,7 @@ mod tests {
                 package: "app/web".into(),
                 change: WriteChange::Reapplied,
                 group: String::new(),
+                reason: None,
             }],
             deletes: vec![ObjectDelete {
                 kind: "Secret".into(),

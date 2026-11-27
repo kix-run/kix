@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 
+use super::field_manager::FieldManager;
 use crate::manifest::keys;
 use crate::manifest::types::{ResourceId, to_manifest_value};
 use kube::api::DynamicObject;
@@ -40,15 +41,16 @@ pub(crate) fn normalize_for_diff(obj: &mut DynamicObject) {
     }
 }
 
-/// Project `obj` onto the fieldset owned by Kix's server-side apply, restoring
+/// Project `obj` onto the fieldset owned by the server-side apply of
+/// `manager`'s Kix cluster ([`FieldManager::apply_entry`]), restoring
 /// `apiVersion`, `kind`, `metadata.name`, and `metadata.namespace`, and
 /// redacting `Secret` values.
 ///
 /// `kix plan --read-only` and `kix snapshot` compare this view against a build. Server
 /// defaults (such as deployment strategy, probe thresholds, and scheduler name)
-/// are unowned or owned by a controller, so they are excluded. Kix's
-/// bookkeeping annotations (`kix.run/activations` and `kix.run/applied-hash`)
-/// are written through a separate `Update` entry and are also excluded.
+/// are unowned or owned by a controller, so they are excluded. The notes an
+/// older Kix wrote (`kix.run/activations` and `kix.run/applied-hash`) sit
+/// under a separate `Update` entry and are also excluded.
 ///
 /// Objects without a Kix `Apply` entry fall back to the full object with server
 /// metadata stripped.
@@ -56,16 +58,16 @@ pub(crate) fn normalize_for_diff(obj: &mut DynamicObject) {
 /// Every `data` key on a `Secret` is replaced with [`HIDDEN_SECRET_VALUE`] (see
 /// [`redact_secret`]).
 /// [`kix_owned_manifests_against`] compares both against a build.
-pub(crate) fn kix_owned_view(obj: &DynamicObject) -> serde_json::Value {
-    let mut view = unredacted_view(obj);
-    redact_secret(&mut view, obj, None);
+pub(crate) fn kix_owned_view(obj: &DynamicObject, manager: &FieldManager) -> serde_json::Value {
+    let mut view = unredacted_view(obj, manager);
+    redact_secret(&mut view, obj, None, manager);
     view
 }
 
 /// Build [`kix_owned_view`] before running [`redact_secret`]. Because `Secret`
 /// values remain unredacted, this value must not leave the module.
-fn unredacted_view(obj: &DynamicObject) -> serde_json::Value {
-    let Some(mut view) = super::fieldsv1::kix_owned_projection(obj) else {
+fn unredacted_view(obj: &DynamicObject, manager: &FieldManager) -> serde_json::Value {
+    let Some(mut view) = super::fieldsv1::kix_owned_projection(obj, manager) else {
         let mut fallback = obj.clone();
         normalize_for_diff(&mut fallback);
         return to_manifest_value(&fallback);
@@ -117,6 +119,7 @@ fn redact_secret(
     view: &mut serde_json::Value,
     obj: &DynamicObject,
     built: Option<&serde_json::Value>,
+    manager: &FieldManager,
 ) {
     use serde_json::{Map, Value};
 
@@ -185,7 +188,7 @@ fn redact_secret(
         }
     }
 
-    let owned = super::fieldsv1::kix_fieldset(obj);
+    let owned = super::fieldsv1::kix_fieldset(obj, manager);
     let owned = owned
         .as_ref()
         .and_then(|f| f.get("f:stringData"))
@@ -218,11 +221,12 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
 /// Kix annotation domains to the current domain.
 pub fn kix_owned_manifests(
     objects: impl IntoIterator<Item = DynamicObject>,
+    manager: &FieldManager,
 ) -> Vec<serde_json::Value> {
     objects
         .into_iter()
         .map(|obj| {
-            let mut manifest = kix_owned_view(&obj);
+            let mut manifest = kix_owned_view(&obj, manager);
             crate::legacy_domain::upgrade_manifest(&mut manifest);
             manifest
         })
@@ -249,6 +253,7 @@ pub fn kix_owned_manifests(
 pub fn kix_owned_manifests_against(
     objects: impl IntoIterator<Item = DynamicObject>,
     built: &HashMap<String, &serde_json::Value>,
+    manager: &FieldManager,
 ) -> Vec<serde_json::Value> {
     let by_id: HashMap<ResourceId, &serde_json::Value> = built
         .values()
@@ -257,13 +262,13 @@ pub fn kix_owned_manifests_against(
     objects
         .into_iter()
         .map(|obj| {
-            let mut view = unredacted_view(&obj);
+            let mut view = unredacted_view(&obj, manager);
             crate::legacy_domain::upgrade_manifest(&mut view);
             if let Some(manifest) = unchanged_by_build(&obj, &view, built) {
                 return manifest;
             }
             let build = by_id.get(&ResourceId::from_value(&view)).copied();
-            redact_secret(&mut view, &obj, build);
+            redact_secret(&mut view, &obj, build, manager);
             view
         })
         .collect()
@@ -439,7 +444,10 @@ mod tests {
         };
 
         assert_eq!(
-            kix_owned_view(&obj),
+            kix_owned_view(
+                &obj,
+                &crate::cluster::field_manager::FieldManager::unmigrated("a")
+            ),
             json!({
                 "apiVersion": "apps/v1",
                 "kind": "Deployment",
@@ -523,12 +531,21 @@ mod tests {
                 "data": {"password": "plain"}
             }),
         };
-        assert_eq!(kix_owned_view(&obj)["data"]["password"], json!("plain"));
+        assert_eq!(
+            kix_owned_view(
+                &obj,
+                &crate::cluster::field_manager::FieldManager::unmigrated("a")
+            )["data"]["password"],
+            json!("plain")
+        );
     }
 
     #[test]
     fn kix_owned_view_of_a_string_data_secret_holds_no_values() {
-        let view = kix_owned_view(&string_data_secret("ZGV2LXBhc3N3b3Jk", json!({})));
+        let view = kix_owned_view(
+            &string_data_secret("ZGV2LXBhc3N3b3Jk", json!({})),
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
+        );
         assert!(view.get("stringData").is_none());
         assert!(view.get("data").is_none());
     }
@@ -583,7 +600,11 @@ mod tests {
         };
         let hash = match applied_hash {
             Some(h) => h.to_string(),
-            None => crate::cluster::fieldsv1::applied_content_hash(&obj).unwrap(),
+            None => crate::cluster::fieldsv1::applied_content_hash(
+                &obj,
+                &crate::cluster::field_manager::FieldManager::unmigrated("a"),
+            )
+            .unwrap(),
         };
         annotations.insert(keys::APPLIED_HASH.to_string(), hash);
         obj.metadata.annotations = Some(annotations);
@@ -627,7 +648,12 @@ mod tests {
             ],
             None,
         );
-        let out = kix_owned_manifests_against([moved], &by_hash).remove(0);
+        let out = kix_owned_manifests_against(
+            [moved],
+            &by_hash,
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
+        )
+        .remove(0);
         assert_eq!(
             out["metadata"]["annotations"][keys::PACKAGE],
             json!("postgres-old")
@@ -642,7 +668,12 @@ mod tests {
             ],
             None,
         );
-        let out = kix_owned_manifests_against([extra], &by_hash).remove(0);
+        let out = kix_owned_manifests_against(
+            [extra],
+            &by_hash,
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
+        )
+        .remove(0);
         assert_eq!(
             out["metadata"]["annotations"][keys::LIFECYCLE],
             json!("stateful")
@@ -668,21 +699,37 @@ mod tests {
 
         let in_sync = webhook_defaulted_cluster(live_extensions.clone(), None);
         assert_eq!(
-            kix_owned_manifests_against([in_sync], &by_hash),
+            kix_owned_manifests_against(
+                [in_sync],
+                &by_hash,
+                &crate::cluster::field_manager::FieldManager::unmigrated("a")
+            ),
             std::slice::from_ref(&built)
         );
 
         let drifted = webhook_defaulted_cluster(live_extensions.clone(), Some("other"));
-        let out = kix_owned_manifests_against([drifted], &by_hash);
+        let out = kix_owned_manifests_against(
+            [drifted],
+            &by_hash,
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
+        );
         assert_eq!(out[0]["spec"], built["spec"]);
 
         let mut renamed = webhook_defaulted_cluster(live_extensions.clone(), None);
         renamed.metadata.name = Some("other".into());
-        let out = kix_owned_manifests_against([renamed], &by_hash);
+        let out = kix_owned_manifests_against(
+            [renamed],
+            &by_hash,
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
+        );
         assert_eq!(out[0]["spec"]["postgres"]["extensions"], live_extensions);
 
         let in_sync = webhook_defaulted_cluster(live_extensions.clone(), None);
-        let out = kix_owned_manifests_against([in_sync], &HashMap::new());
+        let out = kix_owned_manifests_against(
+            [in_sync],
+            &HashMap::new(),
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
+        );
         assert_eq!(out[0]["spec"]["postgres"]["extensions"], live_extensions);
     }
 
@@ -725,11 +772,23 @@ mod tests {
     /// case reproduces, and that the comparison against the build does not.
     fn assert_unchanged_by_build(built: &Value, live: DynamicObject) {
         assert!(
-            !diff_paths(built, &kix_owned_view(&live)).is_empty(),
+            !diff_paths(
+                built,
+                &kix_owned_view(
+                    &live,
+                    &crate::cluster::field_manager::FieldManager::unmigrated("a")
+                )
+            )
+            .is_empty(),
             "the case does not reproduce"
         );
         let by_hash: HashMap<String, &Value> = [("h-live".to_string(), built)].into();
-        let out = kix_owned_manifests_against([live], &by_hash).remove(0);
+        let out = kix_owned_manifests_against(
+            [live],
+            &by_hash,
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
+        )
+        .remove(0);
         assert_eq!(diff_paths(built, &out), Vec::<String>::new());
     }
 
@@ -830,7 +889,12 @@ mod tests {
             )],
         );
         let by_hash: HashMap<String, &Value> = [("h-live".to_string(), &built)].into();
-        let out = kix_owned_manifests_against([live], &by_hash).remove(0);
+        let out = kix_owned_manifests_against(
+            [live],
+            &by_hash,
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
+        )
+        .remove(0);
         assert_eq!(diff_paths(&built, &out), Vec::<String>::new());
     }
 
@@ -839,7 +903,12 @@ mod tests {
     fn compare_with_build(live: DynamicObject, built: &Value) -> Value {
         let hash = keys::get(built, keys::IDENTITY_HASH).unwrap_or("h-new");
         let by_hash: HashMap<String, &Value> = [(hash.to_string(), built)].into();
-        kix_owned_manifests_against([live], &by_hash).remove(0)
+        kix_owned_manifests_against(
+            [live],
+            &by_hash,
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
+        )
+        .remove(0)
     }
 
     /// Literal `stringData` in the build: a live value equal to the build's
@@ -890,7 +959,13 @@ mod tests {
             crate::manifest::diff::engine::structural_diff(&built, &compared, "$", &config),
             vec![]
         );
-        for out in [compared, kix_owned_view(&live())] {
+        for out in [
+            compared,
+            kix_owned_view(
+                &live(),
+                &crate::cluster::field_manager::FieldManager::unmigrated("a"),
+            ),
+        ] {
             let text = out.to_string();
             assert!(!text.contains("s3cr3t-from-sops"), "{text}");
             assert!(!text.contains("admin"), "{text}");
@@ -1007,7 +1082,10 @@ mod tests {
                 json!({"f:data": {".": {}, "f:user": {}, "f:password": {}}, "f:type": {}}),
             )])
         };
-        let view = kix_owned_view(&live());
+        let view = kix_owned_view(
+            &live(),
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
+        );
         assert_eq!(
             view["data"],
             json!({"user": HIDDEN_SECRET_VALUE, "password": HIDDEN_SECRET_VALUE})
@@ -1041,14 +1119,19 @@ mod tests {
                 json!({"f:data": {}}),
             )])
         };
-        let view = kix_owned_view(&live());
+        let view = kix_owned_view(
+            &live(),
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
+        );
         assert_eq!(
             view["data"],
             json!({"user": HIDDEN_SECRET_VALUE, "password": HIDDEN_SECRET_VALUE,
                    "other": HIDDEN_SECRET_VALUE})
         );
         assert_no_live_value(&view);
-        assert_no_live_value(&kix_owned_manifests([live()]).remove(0));
+        assert_no_live_value(
+            &kix_owned_manifests([live()], &FieldManager::unmigrated("a")).remove(0),
+        );
 
         let built = json!({
             "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
@@ -1127,7 +1210,10 @@ mod tests {
             types: None,
             data: json!({"apiVersion": "v1", "kind": "ConfigMap", "data": {"k": "v"}}),
         };
-        let view = kix_owned_view(&obj);
+        let view = kix_owned_view(
+            &obj,
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
+        );
         assert_eq!(view["data"], json!({"k": "v"}));
         assert_eq!(view["metadata"]["name"], json!("cm"));
         assert!(view["metadata"].get("uid").is_none());

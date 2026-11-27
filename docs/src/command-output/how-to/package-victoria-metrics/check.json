@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix check how-to-package-victoria-metrics",
-      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    72 manifests evaluated       \n scorecard  pass    0 errors, 1 warnings, 1 info \n\nsecurity.hasNetworkPolicy (warning), 1:\n  monitoring-system: namespace 'monitoring-system' has workloads but no network policy\n\n1 info finding(s) not listed; run with -v to list them.\n",
+      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    70 manifests evaluated       \n scorecard  pass    0 errors, 1 warnings, 1 info \n\nsecurity.hasNetworkPolicy (warning), 1:\n  monitoring-system: namespace 'monitoring-system' has workloads but no network policy\n\n1 info finding(s) not listed; run with -v to list them.\n",
       "stderr": "",
-      "stdoutDrift": "\n1 info finding(s) not listed; run with -v to list them.\nTOOL RESULT DETAILS\neval pass 72 manifests evaluated\nmonitoring-system: namespace 'monitoring-system' has workloads but no network policy\nscorecard pass 0 errors, 1 warnings, 1 info\nsecurity.hasNetworkPolicy (warning), 1:\n",
+      "stdoutDrift": "\n1 info finding(s) not listed; run with -v to list them.\nTOOL RESULT DETAILS\neval pass 70 manifests evaluated\nmonitoring-system: namespace 'monitoring-system' has workloads but no network policy\nscorecard pass 0 errors, 1 warnings, 1 info\nsecurity.hasNetworkPolicy (warning), 1:\n",
       "stderrDrift": "",
       "exitCode": 0
     }

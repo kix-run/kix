@@ -257,6 +257,7 @@ fn shop() -> Observation {
             failed: None,
         }],
         unreadable: vec!["secrets".into()],
+        problems: vec![],
     }
 }
 
@@ -426,11 +427,11 @@ fn an_unknown_package_names_the_closest_of_many() {
     );
 }
 
-/// The next step adds `--force-conflicts` only when another manager owns
-/// fields of a changed object that Kix does not also own, because a deploy
-/// stops only on those fields.
+/// The next step is a plain deploy, which takes back fields other managers
+/// changed once the plan is confirmed. It names those managers only when
+/// they own fields of a changed object that Kix does not also own.
 #[test]
-fn the_next_step_forces_conflicts_only_for_another_manager() {
+fn the_next_step_names_the_managers_whose_fields_the_deploy_takes_back() {
     let text = |seen: &Observation| {
         let doc = build(seen, kubernetes(), &BTreeMap::new(), &selected(&[]), None).unwrap();
         text::render(&doc, text::Detail::Packages, &two_days_ago)
@@ -438,8 +439,9 @@ fn the_next_step_forces_conflicts_only_for_another_manager() {
     let changed = text(&shop());
     assert!(
         changed.contains(
-            "Next: run `kix deploy shop --reconcile --force-conflicts` to put back what is \
-             missing or changed and take back the fields that kubectl-edit owns."
+            "Next: run `kix deploy shop` to restore what is missing or changed, or \
+             `kix plan shop` to preview the changes first. The deploy takes back the \
+             fields that kubectl-edit owns."
         ),
         "{changed}"
     );
@@ -464,7 +466,7 @@ fn the_next_step_forces_conflicts_only_for_another_manager() {
     }
     let shared = text(&shared);
     assert!(
-        shared.contains("Next: run `kix deploy shop --reconcile` to put back"),
+        shared.contains("Next: run `kix deploy shop` to restore") && !shared.contains("takes back"),
         "{shared}"
     );
 
@@ -479,7 +481,7 @@ fn the_next_step_forces_conflicts_only_for_another_manager() {
     }
     let scaled = text(&scaled);
     assert!(
-        scaled.contains("Next: run `kix deploy shop --reconcile` to put back"),
+        scaled.contains("Next: run `kix deploy shop` to restore"),
         "{scaled}"
     );
 }

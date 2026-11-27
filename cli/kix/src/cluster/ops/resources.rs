@@ -1,6 +1,6 @@
 //! [`ResourceIo`] against a real cluster.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,9 +24,14 @@ use super::super::apply::{self, ApplyError, ApplyResult};
 use super::super::cancel::CancelToken;
 use super::super::discovery::{self, KindLookup};
 use super::super::errors::FetchError;
+use super::super::field_manager::FieldManager;
+use super::super::migration_write::{self, WriteError};
 use super::super::prune_guard::{PruneGuard, Pruned};
 use super::super::readiness::{self, Deletion, ImportTarget, ReadinessError, ReadinessResult};
-use super::{DeleteError, NotDiscovered, OnStatus, ReadError, RecreateError, ResourceIo};
+use super::super::revision::RevisionObject;
+use super::{
+    DeleteError, Migrations, NotDiscovered, OnStatus, ReadError, RecreateError, ResourceIo,
+};
 
 /// Shared discovery cache of every kind the cluster serves, refreshed after
 /// CRDs land. Refreshes merge into the existing cache (see
@@ -63,6 +68,35 @@ enum Writes {
     DryRun,
 }
 
+/// Which applies take ownership of fields another field manager owns.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) enum Force {
+    /// None: an apply that would change another manager's field is refused
+    /// with a conflict.
+    #[default]
+    None,
+    /// Every apply (`--force-conflicts`).
+    All,
+    /// The applies of these objects, the ones the plan labels as reverting
+    /// drift, each while the API server's answer of what its forced apply
+    /// takes is the plan's ([`apply::takes_back`]).
+    Only(HashMap<ResourceId, Vec<crate::cluster::drift::TakenField>>),
+}
+
+impl Force {
+    /// Return whether and when the apply of `rid` takes ownership.
+    pub(crate) fn of(&self, rid: &ResourceId) -> apply::Takeover {
+        match self {
+            Force::None => apply::Takeover::No,
+            Force::All => apply::Takeover::Always,
+            Force::Only(ids) => match ids.get(rid) {
+                Some(shown) => apply::Takeover::IfTakesBack(shown.clone()),
+                None => apply::Takeover::No,
+            },
+        }
+    }
+}
+
 /// Live cluster resource I/O for a single deploy run. Constructed with
 /// [`KubeResources::new`] for persistent writes, or [`KubeResources::dry_run`]
 /// inside [`super::DryRun`].
@@ -72,17 +106,22 @@ pub(crate) struct KubeResources {
     discovery: DiscoveryCache,
     /// The Kix cluster whose orphans a prune deletes.
     cluster: String,
-    /// Identity hash of the run's Activation, stamped into
-    /// `kix.run/activations` on every object written.
-    identity_hash: Option<String>,
-    /// Take ownership of fields another manager owns.
-    force_conflicts: bool,
-    /// Identity hashes of every Activation CR on the cluster, used to prune
-    /// `kix.run/activations`. Set by the record when the run begins, or `None`
-    /// to leave the annotation unpruned.
-    live_activations: std::sync::RwLock<Option<HashSet<String>>>,
+    /// The field manager of `cluster`, which every apply and migration
+    /// write of the run names.
+    manager: FieldManager,
+    /// Which applies take ownership of fields another manager owns.
+    force: Force,
+    /// The migration writes the plan listed.
+    migrations: Migrations,
+    /// The objects of [`Migrations::objects`] the run has not written the
+    /// migration write to yet.
+    unmigrated: std::sync::Mutex<HashSet<ResourceId>>,
     /// Initialized on the first prune delete, after discovery has settled.
     prune_guard: tokio::sync::OnceCell<PruneGuard>,
+    /// Each object the run applied, with the applied hash of the server's
+    /// answer, until the record writes them to the revisions
+    /// ([`KubeResources::take_applied`]).
+    applied: std::sync::Mutex<BTreeMap<RevisionObject, String>>,
 }
 
 impl KubeResources {
@@ -90,17 +129,9 @@ impl KubeResources {
         client: Client,
         discovery: Vec<(ApiResource, Scope)>,
         cluster: String,
-        identity_hash: Option<String>,
-        force_conflicts: bool,
+        force: Force,
     ) -> Self {
-        Self::with_writes(
-            Writes::Persist,
-            client,
-            discovery,
-            cluster,
-            identity_hash,
-            force_conflicts,
-        )
+        Self::with_writes(Writes::Persist, client, discovery, cluster, force)
     }
 
     /// Create a [`KubeResources`] instance that sends every write with
@@ -109,17 +140,9 @@ impl KubeResources {
         client: Client,
         discovery: Vec<(ApiResource, Scope)>,
         cluster: String,
-        identity_hash: Option<String>,
-        force_conflicts: bool,
+        force: Force,
     ) -> Self {
-        Self::with_writes(
-            Writes::DryRun,
-            client,
-            discovery,
-            cluster,
-            identity_hash,
-            force_conflicts,
-        )
+        Self::with_writes(Writes::DryRun, client, discovery, cluster, force)
     }
 
     fn with_writes(
@@ -127,19 +150,86 @@ impl KubeResources {
         client: Client,
         discovery: Vec<(ApiResource, Scope)>,
         cluster: String,
-        identity_hash: Option<String>,
-        force_conflicts: bool,
+        force: Force,
     ) -> Self {
         Self {
             client,
             writes,
             discovery: Arc::new(RwLock::new(discovery)),
+            manager: FieldManager::of(&cluster),
             cluster,
-            identity_hash,
-            force_conflicts,
-            live_activations: std::sync::RwLock::new(None),
+            force,
+            migrations: Migrations::default(),
+            unmigrated: std::sync::Mutex::new(HashSet::new()),
             prune_guard: tokio::sync::OnceCell::new(),
+            applied: std::sync::Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// Make the migration writes the plan listed ([`Migrations`]).
+    pub(crate) fn with_migrations(mut self, migrations: Migrations) -> Self {
+        self.unmigrated = std::sync::Mutex::new(migrations.objects.clone());
+        self.migrations = migrations;
+        self
+    }
+
+    /// Return whether the object `rid` still waits for the migration write,
+    /// and forget it, so the run writes it once.
+    fn take_unmigrated(&self, rid: &ResourceId) -> bool {
+        self.unmigrated
+            .lock()
+            .map(|mut pending| pending.remove(rid))
+            .unwrap_or(false)
+    }
+
+    /// Return the run's prune guard, made on first use, after discovery has
+    /// settled. It also tells the migration write which Kix clusters name
+    /// an object.
+    async fn guard(&self) -> Result<&PruneGuard, LegacyDomainError> {
+        self.prune_guard
+            .get_or_try_init(|| async {
+                let opened = self.opened().await?;
+                Ok::<_, LegacyDomainError>(PruneGuard::new(
+                    self.client.clone(),
+                    opened,
+                    &self.cluster,
+                ))
+            })
+            .await
+    }
+
+    /// Write the migration write to the object `rid` of kind `ar`. With
+    /// `takes_back`, the write goes on only while a forced apply of the
+    /// object would take back what the plan showed
+    /// ([`migration_write::Write::takes_back`]).
+    async fn migrate(
+        &self,
+        ar: &ApiResource,
+        scope: &Scope,
+        rid: &ResourceId,
+        takes_back: Option<(&Value, &[crate::cluster::drift::TakenField])>,
+    ) -> Result<migration_write::Written, WriteError> {
+        let api = self.api_for(ar, scope, rid);
+        let resource = rid.display_id();
+        let judge = self.guard().await.map_err(|e| WriteError::Tenancy {
+            resource: resource.clone(),
+            reason: e.to_string(),
+        })?;
+        migration_write::write(&migration_write::Write {
+            api: &api,
+            name: &rid.name,
+            resource: &resource,
+            manager: &self.manager,
+            record: self.migrations.record.as_deref(),
+            judge,
+            takes_back,
+        })
+        .await
+    }
+
+    /// Return the kinds the run's discovery holds now.
+    pub(super) async fn discovery(&self) -> Vec<(ApiResource, Scope)> {
+        self.discovery.read().await.clone()
     }
 
     pub(super) fn client(&self) -> &Client {
@@ -155,17 +245,35 @@ impl KubeResources {
         &self.cluster
     }
 
-    pub(super) fn identity_hash(&self) -> Option<&str> {
-        self.identity_hash.as_deref()
+    /// Remember that the run applied `manifest` and the server's answer
+    /// hashed to `hash`. A manifest with no build hash is not remembered,
+    /// because no revision names it.
+    pub(super) fn note_applied(&self, manifest: &Value, hash: String) {
+        let Some(object) = RevisionObject::of_manifest(manifest) else {
+            return;
+        };
+        if let Ok(mut applied) = self.applied.lock() {
+            applied.insert(object, hash);
+        }
     }
 
-    pub(super) fn live_activations(&self) -> Option<HashSet<String>> {
-        self.live_activations.read().ok().and_then(|g| g.clone())
+    /// Return the objects the run applied since the last call, with their
+    /// applied hashes, and forget them.
+    pub(super) fn take_applied(&self) -> BTreeMap<RevisionObject, String> {
+        self.applied
+            .lock()
+            .map(|mut applied| std::mem::take(&mut *applied))
+            .unwrap_or_default()
     }
 
-    pub(super) fn set_live_activations(&self, live: Option<HashSet<String>>) {
-        if let Ok(mut slot) = self.live_activations.write() {
-            *slot = live;
+    /// Put back `applied`, which [`KubeResources::take_applied`] returned
+    /// and a write did not store, so the next write stores it. An entry the
+    /// run recorded since wins.
+    pub(super) fn give_back_applied(&self, applied: BTreeMap<RevisionObject, String>) {
+        if let Ok(mut now) = self.applied.lock() {
+            for (object, hash) in applied {
+                now.entry(object).or_insert(hash);
+            }
         }
     }
 
@@ -176,11 +284,16 @@ impl KubeResources {
         Records::open(&self.client, &d)
     }
 
-    /// Return the `Records` handle for lifecycle writes, `None` when the record
-    /// CRD is not yet served, or an error when the domain gate rejects retired
-    /// records.
-    pub(super) async fn records(&self) -> Result<Option<Records>, LegacyDomainError> {
-        self.opened().await.map(OpenedRecords::into_records)
+    /// Return the `Records` handle for lifecycle writes, or an error when the
+    /// domain gate rejects retired records.
+    ///
+    /// The kind is spelled from Kix's constants rather than looked up in the
+    /// discovery cache. A run that writes a record holds the deploy lock, and
+    /// taking the lock installed the kind, possibly after the run read
+    /// discovery.
+    pub(super) async fn records(&self) -> Result<Records, LegacyDomainError> {
+        self.opened().await?;
+        Ok(Records::undiscovered(&self.client))
     }
 
     /// Look up `rid`'s group and kind in the discovery cache without
@@ -272,26 +385,68 @@ impl KubeResources {
         discovery::api_for(&self.client, ar, scope, rid)
     }
 
-    /// Server-side apply `manifest` as the kind `ar`, stamped with the run's
-    /// Activation.
+    /// Return whether and when the run's apply of `rid` takes ownership of
+    /// fields another field manager owns.
+    pub(super) fn takeover_of(&self, rid: &ResourceId) -> apply::Takeover {
+        self.force.of(rid)
+    }
+
+    /// Server-side apply `manifest` as the kind `ar` under the cluster's
+    /// manager, taking ownership as `takeover` says, after the migration
+    /// write when the plan listed the object. A dry run writes no migration
+    /// write, so it applies an object whose entry under `kix` the write would
+    /// move under `kix` instead, which owns the same fields until then.
     pub(super) async fn apply_as(
         &self,
         ar: &ApiResource,
         scope: Scope,
         manifest: &Value,
+        takeover: apply::Takeover,
     ) -> Result<ApplyResult, ApplyError> {
-        let live = self.live_activations();
-        apply::apply_resource(
+        let rid = ResourceId::from_value(manifest);
+        let legacy;
+        let manager = if self.dry() {
+            if self.migrations.renamed.contains(&rid) {
+                legacy = FieldManager::legacy_for(&self.cluster);
+                &legacy
+            } else {
+                &self.manager
+            }
+        } else {
+            &self.manager
+        };
+        if !self.dry() && self.take_unmigrated(&rid) {
+            // An object the plan forces is written only while its forced
+            // apply takes back what the plan showed, so the migration write
+            // judges the object it reads first, as the apply does after it.
+            let takes_back = match &takeover {
+                apply::Takeover::IfTakesBack(shown) => Some((manifest, shown.as_slice())),
+                apply::Takeover::No | apply::Takeover::Always => None,
+            };
+            match self.migrate(ar, &scope, &rid, takes_back).await {
+                Ok(_) => {}
+                Err(WriteError::ChangedSincePlan { .. }) => {
+                    return Err(ApplyError::ChangedSincePlan {
+                        resource: rid.display_id(),
+                    });
+                }
+                Err(e) => return Err(ApplyError::Migration(Box::new(e))),
+            }
+        }
+        let result = apply::apply_resource(
             &self.client,
             ar,
             scope,
+            manager,
             manifest,
             self.dry(),
-            self.identity_hash.as_deref(),
-            live.as_ref(),
-            self.force_conflicts,
+            takeover,
         )
-        .await
+        .await?;
+        if let Some(hash) = &result.applied_hash {
+            self.note_applied(manifest, hash.clone());
+        }
+        Ok(result)
     }
 
     /// Delete the live object as the first step of an in-place recreate.
@@ -333,6 +488,68 @@ impl KubeResources {
 
 #[async_trait]
 impl ResourceIo for KubeResources {
+    async fn migrate_unchanged(&self, rid: &ResourceId) -> Result<bool, WriteError> {
+        if self.dry() || !self.take_unmigrated(rid) {
+            return Ok(false);
+        }
+        let Some((ar, scope)) = self.cached(rid).await else {
+            return Ok(false);
+        };
+        let written = self.migrate(&ar, &scope, rid, None).await?;
+        Ok(written != migration_write::Written::NothingToDo)
+    }
+
+    fn releases(&self) -> Vec<ResourceId> {
+        if self.dry() {
+            return Vec::new();
+        }
+        self.migrations.releases.clone()
+    }
+
+    async fn release(&self, rid: &ResourceId) -> Result<bool, String> {
+        let Some((ar, scope)) = self.cached(rid).await else {
+            return Ok(false);
+        };
+        let api = self.api_for(&ar, &scope, rid);
+        let Some(live) = api
+            .get_opt(&rid.name)
+            .await
+            .map_err(|e| format!("could not read {}: {e}", rid.display_id()))?
+        else {
+            return Ok(false);
+        };
+        let applies = live.metadata.managed_fields.iter().flatten().any(|e| {
+            e.manager.as_deref() == Some(self.manager.name())
+                && e.operation.as_deref() == Some("Apply")
+                && e.subresource.is_none()
+        });
+        if !applies {
+            return Ok(false);
+        }
+        let mut metadata = serde_json::json!({ "name": rid.name });
+        if let Some(ns) = &live.metadata.namespace {
+            metadata["namespace"] = Value::String(ns.clone());
+        }
+        let nothing = serde_json::json!({
+            "apiVersion": ar.api_version,
+            "kind": ar.kind,
+            "metadata": metadata,
+        });
+        api.patch(
+            &rid.name,
+            &kube::api::PatchParams::apply(self.manager.name()),
+            &kube::api::Patch::Apply(&nothing),
+        )
+        .await
+        .map_err(|e| {
+            format!(
+                "could not release this Kix cluster's field ownership on {}, which another Kix cluster still deploys: {e}",
+                rid.display_id()
+            )
+        })?;
+        Ok(true)
+    }
+
     async fn prune(
         &self,
         rid: &ResourceId,
@@ -344,13 +561,7 @@ impl ResourceIo for KubeResources {
         };
         // The guard reads the other clusters' records, so a cluster the
         // domain gate refuses has no guard and nothing is deleted.
-        let guard = self
-            .prune_guard
-            .get_or_try_init(|| async {
-                let opened = self.opened().await.map_err(DeleteError::Domain)?;
-                Ok::<_, DeleteError>(PruneGuard::new(self.client.clone(), opened, &self.cluster))
-            })
-            .await?;
+        let guard = self.guard().await.map_err(DeleteError::Domain)?;
         let dp = DeleteParams {
             propagation_policy: Some(propagation),
             dry_run: self.dry(),
@@ -401,7 +612,8 @@ impl ResourceIo for KubeResources {
                 detail,
             });
         }
-        let uid = match self.apply_as(&ar, scope.clone(), manifest).await {
+        let takeover = self.takeover_of(&ResourceId::from_value(manifest));
+        let uid = match self.apply_as(&ar, scope.clone(), manifest, takeover).await {
             Err(ApplyError::BeingDeleted { uid, .. }) => uid,
             other => return other,
         };
@@ -410,7 +622,12 @@ impl ResourceIo for KubeResources {
         match readiness::wait_gone(&api, &rid.name, uid.as_deref(), timeout, cancel, on_status)
             .await
         {
-            Ok(Deletion::Gone) => self.apply_as(&ar, scope, manifest).await,
+            // The object is gone, so the apply creates it and takes nothing
+            // from another field manager.
+            Ok(Deletion::Gone) => {
+                self.apply_as(&ar, scope, manifest, apply::Takeover::No)
+                    .await
+            }
             Ok(Deletion::Stuck(stuck)) => Err(ApplyError::StillBeingDeleted { rid, stuck }),
             Ok(Deletion::Cancelled) => Err(ApplyError::Interrupted {
                 resource: rid.display_id(),
@@ -460,7 +677,9 @@ impl ResourceIo for KubeResources {
             }
         }
 
-        self.apply_as(&ar, scope, manifest)
+        // Kix deleted the object, so the apply creates it and takes nothing
+        // from another field manager.
+        self.apply_as(&ar, scope, manifest, apply::Takeover::No)
             .await
             .map_err(RecreateError::Reapply)
     }
@@ -566,7 +785,7 @@ mod prune_tests {
         ]);
         let client = api.client();
         let discovery = discovery::discover_resources(&client).await.unwrap();
-        let ops = KubeResources::new(client, discovery, "a".into(), None, false);
+        let ops = KubeResources::new(client, discovery, "a".into(), Force::None);
         let rid = |name: &str| ResourceId {
             group: "rbac.authorization.k8s.io".into(),
             kind: "ClusterRole".into(),
@@ -604,7 +823,7 @@ mod prune_tests {
             .into_iter()
             .filter(|(ar, _)| ar.kind != "ClusterRole")
             .collect();
-        let ops = KubeResources::new(client, discovery, "a".into(), None, false);
+        let ops = KubeResources::new(client, discovery, "a".into(), Force::None);
         let rid = |group: &str, kind: &str| ResourceId {
             group: group.into(),
             kind: kind.into(),
@@ -655,7 +874,7 @@ mod prune_tests {
         api.serve_retired_records();
         let client = api.client();
         let discovery = discovery::discover_resources(&client).await.unwrap();
-        let ops = KubeResources::new(client, discovery, "a".into(), None, false);
+        let ops = KubeResources::new(client, discovery, "a".into(), Force::None);
         let rid = ResourceId {
             group: "rbac.authorization.k8s.io".into(),
             kind: "ClusterRole".into(),
@@ -704,7 +923,7 @@ mod apply_tests {
     async fn ops(api: &FakeApi) -> KubeResources {
         let client = api.client();
         let discovery = discovery::discover_resources(&client).await.unwrap();
-        KubeResources::new(client, discovery, "a".into(), None, false)
+        KubeResources::new(client, discovery, "a".into(), Force::None)
     }
 
     /// An apply onto an object being deleted waits for it to be gone, then
@@ -727,6 +946,73 @@ mod apply_tests {
         let cm = api.object("ConfigMap", "cm").unwrap();
         assert_eq!(cm["data"], json!({ "new": "yes" }));
         assert!(cm["metadata"]["deletionTimestamp"].is_null());
+    }
+
+    /// The plan forces the apply of an object that is then being deleted.
+    /// Once it is gone, the apply creates it without force, because nothing
+    /// is left to take back.
+    #[tokio::test(start_paused = true)]
+    async fn a_forced_apply_onto_an_object_that_finishes_deleting_creates_it() {
+        let api = FakeApi::new([held_config_map()]);
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let taken = crate::cluster::drift::TakenField {
+            manager: "kubectl-edit".into(),
+            path: ".data.old".into(),
+            live: "\"yes\"".into(),
+        };
+        let force = Force::Only([(ResourceId::from_value(&desired()), vec![taken])].into());
+        let ops = KubeResources::new(client, discovery, "a".into(), force);
+        let remover = {
+            let api = api.clone();
+            async move {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                api.remove_finalizers("ConfigMap", "cm");
+            }
+        };
+        let before = api.requests().len();
+        let (manifest, cancel) = (desired(), CancelToken::new());
+        let applied = ops.apply(&manifest, Duration::from_secs(60), &cancel, &|_| {});
+        let (applied, ()) = tokio::join!(applied, remover);
+        assert_eq!(applied.unwrap().action, apply::ApplyAction::Created);
+        assert_eq!(
+            api.object("ConfigMap", "cm").unwrap()["data"],
+            json!({ "new": "yes" })
+        );
+        let forced: Vec<String> = api.requests()[before..]
+            .iter()
+            .filter(|r| r.starts_with("PATCH") && r.contains("force=true"))
+            .cloned()
+            .collect();
+        assert!(forced.is_empty(), "{forced:?}");
+    }
+
+    /// Under `--force-conflicts`, an apply whose read of the object fails
+    /// is not sent, because without the read Kix cannot leave ceded fields
+    /// to their manager.
+    #[tokio::test]
+    async fn a_forced_apply_whose_read_fails_is_not_sent() {
+        let mut live = desired();
+        live["data"] = json!({ "old": "yes" });
+        let api = FakeApi::new([live]);
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let ops = KubeResources::new(client, discovery, "a".into(), Force::All);
+        api.fail_next("/api/v1/namespaces/app/configmaps/cm", 1, 403);
+        let err = ops
+            .apply(
+                &desired(),
+                Duration::from_secs(5),
+                &CancelToken::new(),
+                &|_| {},
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ApplyError::ReadFailed { .. }), "{err}");
+        assert_eq!(
+            api.object("ConfigMap", "cm").unwrap()["data"],
+            json!({ "old": "yes" })
+        );
     }
 
     /// An object that stays past the wait is not applied, and the error is
@@ -782,7 +1068,7 @@ mod group_tests {
         let api = FakeApi::new([job("batch/v1", "batch"), job(&other_version, "other")]);
         let client = api.client();
         let discovery = discovery::discover_resources(&client).await.unwrap();
-        let ops = KubeResources::new(client, discovery, "a".into(), None, false);
+        let ops = KubeResources::new(client, discovery, "a".into(), Force::None);
         let rid = |group: &str| ResourceId::from_value(&job(group, ""));
 
         let note = |live: Option<Value>| live.unwrap()["spec"]["note"].clone();
@@ -814,7 +1100,7 @@ mod discovery_tests {
     /// Create a [`KubeResources`] instance over `api` with an empty discovery
     /// cache, modeling a cache before the group is served.
     fn ops(api: &FakeApi) -> KubeResources {
-        KubeResources::new(api.client(), Vec::new(), String::new(), None, false)
+        KubeResources::new(api.client(), Vec::new(), String::new(), Force::None)
     }
 
     async fn cached(ops: &KubeResources, group: &str, kind: &str) -> bool {
@@ -896,5 +1182,90 @@ mod discovery_tests {
         let start = tokio::time::Instant::now();
         assert_eq!(ops(&api).get_live(&rid).await.unwrap(), None);
         assert_eq!(start.elapsed(), Duration::ZERO);
+    }
+
+    /// An apply takes ownership of another manager's fields only for the
+    /// objects the plan labels as reverting drift, so any other conflict
+    /// still stops the deploy.
+    #[tokio::test]
+    async fn only_the_objects_that_revert_drift_are_applied_with_force() {
+        let config_map = |name: &str| {
+            json!({
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": { "name": name, "namespace": "app" },
+            })
+        };
+        let api = FakeApi::new([config_map("drifted"), config_map("other")]);
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let (ar, scope) = discovery::find(&discovery, "", "ConfigMap")
+            .unwrap()
+            .clone();
+        let drifted = ResourceId::from_value(&config_map("drifted"));
+        let ops = KubeResources::new(
+            client,
+            discovery,
+            "a".into(),
+            Force::Only([(drifted, Vec::new())].into()),
+        );
+        for name in ["drifted", "other"] {
+            let manifest = config_map(name);
+            let takeover = ops.force.of(&ResourceId::from_value(&manifest));
+            ops.apply_as(&ar, scope.clone(), &manifest, takeover)
+                .await
+                .unwrap();
+        }
+        let applies: Vec<String> = api
+            .requests()
+            .into_iter()
+            .filter(|r| r.starts_with("PATCH") && !r.contains("dryRun=All"))
+            .collect();
+        assert_eq!(applies.len(), 2, "{applies:?}");
+        assert!(applies[0].contains("/drifted?") && applies[0].contains("force=true"));
+        assert!(applies[1].contains("/other?") && !applies[1].contains("force=true"));
+    }
+
+    /// A Job the plan forces as reverting drift is recreated when its last
+    /// run failed. Kix deletes it first, so the apply that follows creates
+    /// it without force and takes nothing from another manager.
+    #[tokio::test]
+    async fn a_forced_object_that_is_recreated_is_applied_without_force() {
+        let job = json!({
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": { "name": "migrate", "namespace": "app" },
+            "spec": { "backoffLimit": 1 },
+        });
+        let api = FakeApi::new([job.clone()]);
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let rid = ResourceId::from_value(&job);
+        let shown = vec![crate::cluster::drift::TakenField {
+            manager: "kubectl-edit".into(),
+            path: ".spec.backoffLimit".into(),
+            live: "3".into(),
+        }];
+        let ops = KubeResources::new(
+            client,
+            discovery,
+            "a".into(),
+            Force::Only([(rid.clone(), shown)].into()),
+        );
+        let before = api.requests().len();
+        let result = ops
+            .recreate_in_place(&job, Duration::from_secs(5), &CancelToken::new())
+            .await
+            .unwrap();
+        assert_eq!(result.action, apply::ApplyAction::Created);
+        let requests = &api.requests()[before..];
+        assert!(
+            requests.iter().any(|r| r.starts_with("DELETE")),
+            "{requests:?}"
+        );
+        let applies: Vec<&String> = requests.iter().filter(|r| r.starts_with("PATCH")).collect();
+        assert_eq!(applies.len(), 1, "{requests:?}");
+        assert!(!applies[0].contains("force=true"), "{requests:?}");
+        assert!(api.object("Job", "migrate").is_some());
     }
 }

@@ -21,7 +21,7 @@
 //! `run_deploy` is private to the library and accepts only plans constructed
 //! by library entry points.
 //!
-//! The planner produces `Apply`, `Skip`, `Recreate`, and `Wait` transitions.
+//! The planner produces `Apply`, `Skip`, and `Recreate` transitions.
 
 #[cfg(test)]
 mod engine_tests;
@@ -46,7 +46,7 @@ use crate::manifest::{keys, lifecycle, types::CLUSTER_SCOPED};
 use super::apply::ApplyAction;
 use super::cancel::CancelToken;
 use super::graph::Walked;
-use super::ops::{Cluster, DeployRecord, RecordWriteError, ResourceIo};
+use super::ops::{Cluster, DeployRecord, Left, RecordWriteError, ResourceIo};
 use super::prune_guard::Pruned;
 use super::readiness::{self, DeletePath, Deletion, Runner};
 use super::stream::{
@@ -188,6 +188,23 @@ pub enum DeployError {
         message: String,
         partial: DeployResult,
     },
+
+    /// Every node reached a verdict, but the hashes of what the run applied
+    /// could not be written to its revisions, so the run stopped before it
+    /// finalized.
+    #[error(
+        "every object reached a result, but Kix could not record the applied hashes\n  \
+         Cause:\n    {message}\n\n  \
+         Cluster state:\n    \
+         - Resource changes were applied to the cluster.\n    \
+         - This deployment record was not finalized, so the previous deployment record remains current.\n\n  \
+         Next:\n    \
+         Run the deploy again to record the applied hashes and finalize the deployment record."
+    )]
+    AppliedNotRecorded {
+        message: String,
+        partial: DeployResult,
+    },
 }
 
 impl DeployError {
@@ -199,7 +216,8 @@ impl DeployError {
             | DeployError::DiscoveryFailed { partial, .. }
             | DeployError::Cancelled { partial, .. }
             | DeployError::Internal { partial, .. }
-            | DeployError::FinalizeFailed { partial, .. } => partial,
+            | DeployError::FinalizeFailed { partial, .. }
+            | DeployError::AppliedNotRecorded { partial, .. } => partial,
         }
     }
 }
@@ -290,16 +308,17 @@ pub(crate) async fn run_deploy(
     run.begin().await?;
     run.run_nodes().await?;
     run.close_out().await?;
+    run.record_applied().await?;
     if run.stop_partial_closure().await {
         return Ok(run.result);
     }
     if ending == Ending::Partial {
         return run.end_partial().await;
     }
-    run.stamp_unchanged().await;
-    let orphans_left = run.prune().await;
+    run.migrate_unchanged().await;
+    let left = run.prune().await;
     run.stop_if_cancelled().await?;
-    run.finalize(orphans_left).await
+    run.finalize(left).await
 }
 
 /// State for a single execution of [`run_deploy`].
@@ -334,8 +353,8 @@ struct Run<'a> {
     halting: bool,
     halting_reason: Option<String>,
     discovery_failed: Option<String>,
-    // Unchanged resources still belong to this activation and are stamped in a
-    // batch after all nodes terminate (see `DeployRecord::stamp_unchanged`).
+    // Unchanged resources get the migration write the plan lists for them in
+    // a batch after all nodes terminate (see `Run::migrate_unchanged`).
     skipped: Vec<ResourceId>,
     /// Orphans that were deleted and recreated during immutable-conflict
     /// recovery. Excluded from post-deploy pruning because they now belong to
@@ -424,30 +443,27 @@ impl<'a> Run<'a> {
     }
 
     /// Begin the Activation record, stopping the run before any resource is
-    /// applied if the record cannot be written.
+    /// applied if the record and its revisions cannot be written in time.
     async fn begin(&mut self) -> Result<(), DeployError> {
         // No nodes are in flight yet, so awaiting inline cannot block node tasks.
         let Some(record) = &self.record else {
             return Ok(());
         };
-        match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, record.begin()).await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                let message = e.to_string();
-                self.emit(DeployEvent::Stopped {
-                    reason: message.clone(),
-                });
-                return Err(DeployError::BeginFailed {
-                    message,
-                    partial: self.partial(),
-                });
-            }
-            Err(_) => self.emit(DeployEvent::BestEffortFailed {
-                what: "activation begin".into(),
-                message: format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs()),
-            }),
-        }
-        Ok(())
+        let message = match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, record.begin()).await {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(e)) => e.to_string(),
+            Err(_) => format!(
+                "updating the deployment record timed out after {}s",
+                INLINE_BEST_EFFORT_TIMEOUT.as_secs()
+            ),
+        };
+        self.emit(DeployEvent::Stopped {
+            reason: message.clone(),
+        });
+        Err(DeployError::BeginFailed {
+            message,
+            partial: self.partial(),
+        })
     }
 
     /// Execute plan nodes up to `concurrency` at a time until no nodes are
@@ -849,14 +865,8 @@ impl<'a> Run<'a> {
             .set_stands_for(&DISCOVERY_NODE, &self.barrier.covered);
         self.progress.set_phase(&DISCOVERY_NODE, Phase::Discovery);
         let resources = self.resources.clone();
-        let record = self.record.clone();
         let handle = self.tasks.spawn(async move {
             let refreshed = resources.rediscover().await;
-            if refreshed.is_ok()
-                && let Some(record) = record
-            {
-                record.discovery_refreshed().await;
-            }
             Done::Rediscovery(refreshed.map_err(|e| e.to_string()))
         });
         self.kinds.insert(handle.id(), TaskKind::Rediscovery);
@@ -889,6 +899,13 @@ impl<'a> Run<'a> {
     /// may have already applied part of its closure, and the `Failed` record
     /// tells the next deploy to fold those changes into its plan.
     async fn abort_record(&self, reason: &str) {
+        self.write_applied().await;
+        self.mark_stopped(reason).await;
+    }
+
+    /// Mark the Activation record as stopped ([`DeployRecord::abort`]), and
+    /// emit an event if the status write fails.
+    async fn mark_stopped(&self, reason: &str) {
         let Some(record) = &self.record else {
             return;
         };
@@ -900,6 +917,57 @@ impl<'a> Run<'a> {
             };
         self.emit(DeployEvent::BestEffortFailed {
             what: "activation abort".into(),
+            message: failed,
+        });
+    }
+
+    /// Write the applied hashes of every object the run applied, and carry
+    /// the current record's hashes into the run's revisions, before the run
+    /// tidies notes or finalizes. Finalizing supersedes the current record,
+    /// whose revisions the cleanup then deletes, so a hash that is not
+    /// written now is lost. A failed write stops the run with its record
+    /// marked as stopped, and the previous record stays current with its
+    /// revisions. An object whose hash was not written has no applied hash,
+    /// so the next deploy applies it again, writes the hashes, and
+    /// finalizes.
+    async fn record_applied(&mut self) -> Result<(), DeployError> {
+        let Some(record) = self.record.clone() else {
+            return Ok(());
+        };
+        let message =
+            match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, record.write_applied()).await {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(e)) => e.to_string(),
+                Err(_) => format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs()),
+            };
+        let reason = format!("could not record applied hashes for this deploy: {message}");
+        self.emit(DeployEvent::Stopped {
+            reason: reason.clone(),
+        });
+        // The hashes stay unwritten, so the next deploy applies those
+        // objects again, records their hashes, and finalizes.
+        self.mark_stopped(&reason).await;
+        Err(DeployError::AppliedNotRecorded {
+            message,
+            partial: self.result.clone(),
+        })
+    }
+
+    /// Write the applied hashes of the objects the run applied to the
+    /// revisions that name them, and emit an event if the write fails. A
+    /// later call writes only what the run applied since.
+    async fn write_applied(&self) {
+        let Some(record) = &self.record else {
+            return;
+        };
+        let failed =
+            match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, record.write_applied()).await {
+                Ok(Ok(())) => return,
+                Ok(Err(e)) => e.to_string(),
+                Err(_) => format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs()),
+            };
+        self.emit(DeployEvent::BestEffortFailed {
+            what: "applied hashes".into(),
             message: failed,
         });
     }
@@ -1038,34 +1106,42 @@ impl<'a> Run<'a> {
         true
     }
 
-    /// Stamp the current activation onto unchanged resources. Without this,
-    /// `kix.run/activations` would only record deployments that modified a
-    /// resource, leaving stable resources with stale activation references.
+    /// Write the migration write to each object the run did not apply that
+    /// the plan lists for it ([`super::migration_write`]): the unchanged
+    /// objects of the build and the orphans the run keeps. Such an object
+    /// gets no apply, so this is its one write.
     ///
-    /// Stamping is best-effort because nothing was written to these resources.
-    /// Failures are counted and reported rather than failing a deploy that
-    /// otherwise succeeded.
-    async fn stamp_unchanged(&self) {
-        let Some(record) = &self.record else {
+    /// The write is best-effort. An object it did not reach keeps the
+    /// metadata an older Kix wrote, which no reader needs any more, and the
+    /// next deploy plans the write again. Failures are counted and reported
+    /// rather than failing a deploy that otherwise succeeded.
+    async fn migrate_unchanged(&mut self) {
+        if self.record.is_none() {
             return;
-        };
-        if self.skipped.is_empty() {
+        }
+        let candidates: Vec<ResourceId> = self
+            .skipped
+            .iter()
+            .chain(self.orphan_rids)
+            .cloned()
+            .collect();
+        if candidates.is_empty() {
             return;
         }
         let mut failures = 0usize;
-        for chunk in self.skipped.chunks(self.config.concurrency.max(1)) {
+        for chunk in candidates.chunks(self.config.concurrency.max(1)) {
             let mut set = JoinSet::new();
             for rid in chunk {
-                let record = record.clone();
+                let resources = self.resources.clone();
                 let rid = rid.clone();
                 set.spawn(async move {
                     match tokio::time::timeout(
                         INLINE_BEST_EFFORT_TIMEOUT,
-                        record.stamp_unchanged(&rid),
+                        resources.migrate_unchanged(&rid),
                     )
                     .await
                     {
-                        Ok(Ok(())) => Ok(()),
+                        Ok(Ok(written)) => Ok(written),
                         Ok(Err(e)) => Err((rid, e.to_string())),
                         Err(_) => Err((
                             rid,
@@ -1077,31 +1153,67 @@ impl<'a> Run<'a> {
             while let Some(joined) = set.join_next().await {
                 if let Ok(Err((rid, e))) = joined {
                     failures += 1;
-                    tracing::warn!(resource = %rid.display_id(), error = %e, "could not record activation on unchanged resource");
+                    tracing::warn!(resource = %rid.display_id(), error = %e, "could not update Kix metadata on unchanged resource");
                 }
             }
         }
         if failures > 0 {
             self.emit(DeployEvent::BestEffortFailed {
-                what: "activation stamp on unchanged resources".into(),
+                what: "metadata of unchanged resources".into(),
                 message: format!(
-                    "{failures} of {} not stamped; the deploy itself is unaffected and the next deploy retries",
-                    self.skipped.len()
+                    "{failures} of {} could not be updated; the deploy itself is unaffected and the next deploy will retry them",
+                    candidates.len()
+                ),
+            });
+        }
+    }
+
+    /// Give up this Kix cluster's fields on each orphan another Kix cluster
+    /// still deploys ([`ResourceIo::release`]). A release that fails leaves
+    /// the object in `left`, so the record's kept-orphans revision names it
+    /// and the next deploy finds it and tries again.
+    async fn release_shared(&mut self, left: &mut Vec<ResourceId>) {
+        if self.record.is_none() {
+            return;
+        }
+        let mut failed = Vec::new();
+        for rid in self.resources.releases() {
+            let released =
+                tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, self.resources.release(&rid))
+                    .await;
+            let message = match released {
+                Ok(Ok(_)) => continue,
+                Ok(Err(e)) => e,
+                Err(_) => format!(
+                    "{}: no answer within {}s",
+                    rid.display_id(),
+                    INLINE_BEST_EFFORT_TIMEOUT.as_secs()
+                ),
+            };
+            failed.push(message);
+            left.push(rid);
+        }
+        if !failed.is_empty() {
+            self.emit(DeployEvent::BestEffortFailed {
+                what: "objects another Kix cluster still deploys".into(),
+                message: format!(
+                    "{}; recorded in the kept-orphans list so the next deploy will retry releasing field ownership",
+                    failed.join("; ")
                 ),
             });
         }
     }
 
     /// Prune orphaned resources after all plan nodes reach a terminal verdict.
-    /// Returns `true` if any prunable orphans remain on the cluster so
-    /// finalization can record their source builds.
+    /// Returns the prunable orphans that remain on the cluster so
+    /// finalization can record them and their source builds.
     ///
     /// The orphans are deleted through [`DeleteOrder::walk`], and each delete
     /// waits for its object to be gone. An object still there after the wait
     /// fails the run, stays recorded as an orphan, and holds back the orphans
     /// it depends on, which the next prune deletes. When the cancel token
     /// fires during the prune, every orphan not deleted counts as cancelled.
-    async fn prune(&mut self) -> bool {
+    async fn prune(&mut self) -> Vec<ResourceId> {
         let prune = self.prune;
         let effective_orphans: Vec<ResourceId> = self
             .orphan_rids
@@ -1109,12 +1221,24 @@ impl<'a> Run<'a> {
             .filter(|rid| !self.consumed_orphans.contains(rid))
             .cloned()
             .collect();
-        let mut orphans_left = prune != PrunePolicy::Delete
-            && effective_orphans
+        let mut left: Vec<ResourceId> = if prune == PrunePolicy::Delete {
+            Vec::new()
+        } else {
+            effective_orphans
                 .iter()
-                .any(|rid| !never_pruned(rid.group_kind()));
+                .filter(|rid| !never_pruned(rid.group_kind()))
+                .cloned()
+                .collect()
+        };
+        if prune == PrunePolicy::Skip {
+            // `--skip-orphan-check` writes nothing to orphans, so the
+            // record lists the shared ones and the next deploy releases them.
+            left.extend(self.resources.releases());
+        } else {
+            self.release_shared(&mut left).await;
+        }
         if effective_orphans.is_empty() || prune == PrunePolicy::Skip {
-            return orphans_left;
+            return left;
         }
         let mut order = prune_order(&effective_orphans, self.old_manifests);
         let delete = prune == PrunePolicy::Delete;
@@ -1130,7 +1254,7 @@ impl<'a> Run<'a> {
             delete,
         });
         if prune == PrunePolicy::WarnOnly {
-            return orphans_left;
+            return left;
         }
         order.retain(|rid| !never_pruned(rid.group_kind()));
         if let Some(record) = &self.record
@@ -1281,7 +1405,7 @@ impl<'a> Run<'a> {
                             Unfinished::Failed(message) => (message, None),
                             Unfinished::Cancelled => (String::new(), None),
                         };
-                        orphans_left = true;
+                        left.push(rid.clone());
                         result.failed += 1;
                         result.failures.push(NodeFailure {
                             node: NodeId::Resource(rid.clone()),
@@ -1296,7 +1420,7 @@ impl<'a> Run<'a> {
                     }
                     Walked::Done(Pruning::Unfinished(Unfinished::Cancelled))
                     | Walked::NotStarted => {
-                        orphans_left = true;
+                        left.push(rid.clone());
                         result.cancelled += 1;
                         emit(state(
                             rid,
@@ -1306,7 +1430,7 @@ impl<'a> Run<'a> {
                         ));
                     }
                     Walked::HeldBack(stuck) => {
-                        orphans_left = true;
+                        left.push(rid.clone());
                         if !shared.contains(stuck) {
                             result.kept += 1;
                         }
@@ -1321,7 +1445,7 @@ impl<'a> Run<'a> {
                         });
                     }
                     Walked::Cycle => {
-                        orphans_left = true;
+                        left.push(rid.clone());
                         result.kept += 1;
                         emit(DeployEvent::PruneKept {
                             resource: rid.clone(),
@@ -1332,7 +1456,7 @@ impl<'a> Run<'a> {
             )
             .await;
         self.result = result;
-        orphans_left
+        left
     }
 
     /// Stop a run that was cancelled while it pruned: report it, mark the
@@ -1383,7 +1507,14 @@ impl<'a> Run<'a> {
     }
 
     /// Finalize the Activation record unless the run was a no-op or a dry run.
-    async fn finalize(self, orphans_left: bool) -> Result<DeployResult, DeployError> {
+    /// `left` names the orphans the prune left on the cluster.
+    async fn finalize(self, left: Vec<ResourceId>) -> Result<DeployResult, DeployError> {
+        let never_pruned: Vec<ResourceId> = self
+            .orphan_rids
+            .iter()
+            .filter(|rid| !self.consumed_orphans.contains(rid) && never_pruned(rid.group_kind()))
+            .cloned()
+            .collect();
         let r = &self.result;
         let actually_changed = r.created > 0
             || r.configured > 0
@@ -1396,7 +1527,14 @@ impl<'a> Run<'a> {
         {
             match tokio::time::timeout(
                 INLINE_BEST_EFFORT_TIMEOUT,
-                record.finalize(r.failed > 0, orphans_left),
+                record.finalize(
+                    r.failed > 0,
+                    Left {
+                        orphans: &left,
+                        never_pruned: &never_pruned,
+                        manifests: self.old_manifests,
+                    },
+                ),
             )
             .await
             {

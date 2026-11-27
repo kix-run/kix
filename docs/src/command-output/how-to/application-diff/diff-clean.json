@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix plan how-to-application --read-only",
-      "stdout": "\u001b[36m⠁\u001b[0m Fetching live cluster state...                                                Discovering API resources...\nFetching managed resources (60 resource types)...\nFetched 17 resources across 60 resource types\n4 packages: 4 unchanged, 0 changed, 0 added, 0 removed\n\u001b[32mNo differences found.\u001b[39m\n",
+      "stdout": "Connecting to context kind-kix-docs (https://127.0.0.1:40563)...\n\u001b[36m⠁\u001b[0m Fetching live cluster state...                                                Discovering API resources...\nFetching managed resources (62 resource types)...\nFetched 15 resources across 62 resource types\n4 packages: 4 unchanged, 0 changed, 0 added, 0 removed\n\u001b[32mNo differences found.\u001b[39m\n",
       "stderr": "",
-      "stdoutDrift": "4 packages: 4 unchanged, 0 changed, 0 added, 0 removed\nFetched 17 resources across 60 resource types\nFetching managed resources (60 resource types)...\nNo differences found.\n⠁ Fetching live cluster state... Discovering API resources...\n",
+      "stdoutDrift": "4 packages: 4 unchanged, 0 changed, 0 added, 0 removed\nConnecting to context kind-kix-docs (https://127.0.0.1:40563)...\nFetched 15 resources across 62 resource types\nFetching managed resources (62 resource types)...\nNo differences found.\n⠁ Fetching live cluster state... Discovering API resources...\n",
       "stderrDrift": "",
       "exitCode": 0
     }

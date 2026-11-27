@@ -1,42 +1,41 @@
 ---
 title: "Handle server-side-apply conflicts safely"
-description: "Identify the competing field manager and resolve a Kix server-side apply conflict deliberately."
+description: "Find which field manager changed a field Kix applied, and either take ownership back or cede the field to that manager."
 ---
 
 import Command from '/src/components/Command.astro';
-import conflict from '/src/command-output/how-to/adoption-ssa-conflicts/conflict.json';
-import forcePreview from '/src/command-output/how-to/adoption-ssa-conflicts/force-preview.json';
+import drift from '/src/command-output/how-to/adoption-ssa-conflicts/drift.json';
 import resolve from '/src/command-output/how-to/adoption-ssa-conflicts/resolve.json';
+import clean from '/src/command-output/how-to/adoption-ssa-conflicts/clean.json';
 
-A server-side apply conflict means Kix is trying to change a field owned by
-another field manager. Identify that manager and decide who should own the
-field before forcing a deployment.
+Kubernetes records which field manager owns each field of an object. When
+another manager changes a field Kix applied, it becomes that field's owner.
+Kix reports this as drift before changing anything. Decide who should own the
+field, then either let Kix take ownership back or cede the field to the other
+manager.
 
 The example below starts with a Kix-managed Deployment. A separate manager
 named `autoscaler` then takes ownership of `spec.replicas` and changes it from
 two to three.
 
-## Reproduce the conflict without changing the cluster
+## See what changed without changing the cluster
 
-Run a reconciled API-server dry run:
+Run a plan:
 
-<Command {...conflict} />
+<Command {...drift} />
 
-`--reconcile` makes Kix check every resource even when the activation itself
-has not changed. `--dry-run` runs [`kix plan`](/docs/reference/cli/plan/),
-which asks the API server to validate each apply without persisting it.
-
-Read the conflict message closely. It identifies three things:
+The plan labels the change `(reverts drift)` and lists it under `Drift:`. It
+names three things:
 
 - the resource, `Deployment.apps/legacy-web@takeover`;
 - the other field manager, `autoscaler`;
-- the overlapping field, `.spec.replicas`.
+- the field and its two values, `spec.replicas`: `3` live and `2` in the
+  deployed build.
 
-The dry run carries on past a conflict and still checks the resources that
-depend on the conflicting one, so the plan lists every conflict in one run.
-It exits `3`, the status for a deploy that would stop. A real deploy with the
-same conflicts stops before applying anything under the default
-`--on-error stop`.
+The `↺` line under `Objects:` counts the objects that changed on the cluster
+since Kix applied them. A plain `kix deploy` reapplies each of them and takes
+the changed fields back from the other manager. You do not need `--reconcile`
+or `--force-conflicts` for that.
 
 ## Inspect the other manager
 
@@ -52,7 +51,7 @@ Find the named manager under `metadata.managedFields`, then determine what owns
 it. Common managers include an operator, an autoscaler, `kubectl`, Helm, and
 another deployment system.
 
-Also inspect the current field value and the Kix definition. A conflict is not
+Also inspect the current field value and the Kix definition. Drift is not
 evidence that the other value is wrong.
 
 ## Choose the field owner
@@ -69,38 +68,57 @@ scope.mkResource {
 }
 ```
 
-Kix stamps the paths as `kix.run/cede-fields`. When a later apply conflicts
-only on those paths, deploy retries without them and the other manager keeps
-the field; a conflict anywhere else still fails. See
+Kix stamps the paths as `kix.run/cede-fields`. A ceded field never counts as
+drift, and Kix never takes it back, so the other manager keeps it. See
 [Cede fields to a controller](/docs/how-to/adopt-existing-resources/cede-fields-to-a-controller/).
 Choose one manager either way, rather than letting both repeatedly take
 ownership from each other.
 
 If Kix should manage the field, first disable or reconfigure the other manager
-for this resource. Otherwise the conflict will return after both systems
-reconcile again.
+for this resource. Otherwise, it will overwrite the field again after the
+deploy, and the next plan will report the same drift.
 
-## Preview the ownership transfer
+## Take the field back
 
-Once Kix is the intended owner, add `--force-conflicts` to the same dry run:
-
-<Command {...forcePreview} />
-
-This confirms that the API server accepts the transfer while still writing
-nothing. Review the rest of the plan before continuing.
-
-## Apply the resolution
-
-Run the reconciled deployment with the same flag:
+Run a plain deploy:
 
 <Command {...resolve} />
 
-The successful apply transfers the overlapping field to the `kix` field
-manager and restores the replica count from the Kix definition.
+The deploy reapplies the drifted Deployment with force, transferring
+`spec.replicas` back to the Kix cluster's field manager and restoring the
+replica count from your cluster definition. Unchanged resources are not touched.
+Kix checks which fields the forced apply will take back during planning and
+again right before writing (using an unforced dry run). Updates to `status` do
+not block the apply. If the conflicting field, its owning manager, or its live
+value changed after the plan was made, the deploy stops, names the object, and
+tells you to run the command again.
 
-Return to ordinary deployments after resolving the conflict. Keeping
-`--force-conflicts` in routine commands can hide a new ownership dispute that
-needs a separate decision.
+Plan again to confirm that nothing is left to do:
+
+<Command {...clean} />
+
+## Where a conflict still stops the deploy
+
+Kix forces only the objects the plan labels as reverting drift. Other
+ownership disputes still stop the plan and the deploy with a field ownership
+conflict:
+
+- **An object Kix never applied.** On a first deploy over a resource that
+  `kubectl`, Helm, or another tool created, those tools own the fields, and
+  Kix has nothing to revert. The plan lists the conflict with the owning
+  manager and fields. Pass `--force-conflicts` once, after review, to take
+  the fields. See
+  [Take ownership of kubectl-managed resources](/docs/how-to/adopt-existing-resources/take-ownership-of-kubectl-managed-resources/)
+  and [Take ownership of Helm-managed resources](/docs/how-to/adopt-existing-resources/take-ownership-of-helm-managed-resources/).
+- **A field applied by another Kix cluster.** Kix never forces fields away from
+  another Kix cluster. When two Kix clusters set different values for the same
+  field, the deploy stops with `[K5636]`. Update the cluster definitions to
+  match.
+
+`--force-conflicts` forces every apply in the run, so do not pass it on
+routine deploys where it could hide a new ownership conflict. Even with
+`--force-conflicts`, Kix leaves fields listed in `ownership.cede` with the
+manager that owns them.
 
 :::note[Use it for a migration]
 See [Take ownership of kubectl-managed resources](/docs/how-to/adopt-existing-resources/take-ownership-of-kubectl-managed-resources/)

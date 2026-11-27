@@ -18,9 +18,7 @@ use super::super::graph::DeleteOrder;
 use super::super::ops::{RecreateError, ResourceIo, SecretHydrator};
 use super::super::readiness::{self, DeletePath, ReadinessResult, Runner};
 use super::super::secrets;
-use super::super::stream::{
-    DeployEvent, DeployObserver, NodeDetail, NodeId, Phase, TransitionKind, Verdict,
-};
+use super::super::stream::{DeployEvent, DeployObserver, NodeDetail, NodeId, Phase, Verdict};
 use super::super::watchdog::Progress;
 use super::PlanNodeEntry;
 
@@ -196,9 +194,6 @@ pub(super) async fn execute_node(
     entry: &PlanNodeEntry,
     checked: bool,
 ) -> NodeOutcome {
-    if entry.kind == TransitionKind::Wait {
-        return wait_for_platform(ctx, entry).await;
-    }
     match &entry.action {
         ChangeAction::Apply(m) | ChangeAction::Recreate(m, _) => {
             match apply_node(ctx, entry, m.clone()).await {
@@ -514,17 +509,6 @@ fn apply_failed(message: String) -> NodeOutcome {
     NodeOutcome::Failed {
         detail: NodeDetail::ApplyFailed(message.clone()),
         message,
-    }
-}
-
-/// Wait for a resource managed by a platform Kix cluster
-/// ([`TransitionKind::Wait`]) to become ready without applying it.
-async fn wait_for_platform(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
-    match &entry.id {
-        NodeId::Resource(rid) if !ctx.dry_run => wait_live(ctx, entry, rid).await,
-        _ => NodeOutcome::Ready {
-            apply_action: ApplyAction::Unchanged,
-        },
     }
 }
 

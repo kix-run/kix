@@ -145,7 +145,10 @@ When you run a cluster command such as `kix check prod`, `kix plan prod`, or
 `kix deploy prod`, Kix looks `prod` up in `[versions]`, runs Kix 0.12.3
 (installing it if needed), and builds `prod` with the Kix library from
 `kix-stable`. Clusters on different versions of Kix can also deploy to the same
-Kubernetes cluster.
+Kubernetes cluster. If two of them deploy the same object while only one has
+upgraded to revisions, see
+[Kix clusters on two versions of Kix](/docs/explanation/server-side-apply-and-drift/#kix-clusters-on-two-versions-of-kix)
+for how Kix keeps that shared object compatible until both upgrade.
 
 Every cluster in the repository still shares `flake.nix`, `kix.toml`, and any
 imported `.nix` modules, so keep shared modules compatible with both versions of

@@ -1,0 +1,3 @@
+# 2026-11-26 · `cli/kix/src/plan/` · Two pieces of code decide what a stopped deploy wrote to the cluster.
+
+The package diff in `baseline.rs` reads it from the `Failed` or `Partial` record's build files, when this machine has them, and shows its fields under `earlier_deploys`. The one planner in `decide.rs` reads it from the live objects: a write is labelled `AppliedByRecord` when the live build hash is the one that record's revision names. The two can disagree, for example when the build is not on this machine (`PlanEvent::FailedValuesUnknown`) or the run died before it wrote applied hashes. The package diff could take the planner's label instead of reading the builds.

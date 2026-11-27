@@ -43,18 +43,13 @@ impl DryRun {
         client: Client,
         discovery: Vec<(ApiResource, Scope)>,
         cluster: String,
-        identity_hash: Option<String>,
-        force_conflicts: bool,
+        force: super::resources::Force,
         sops: SopsSources,
+        migrations: super::Migrations,
     ) -> Self {
         DryRun {
-            resources: KubeResources::dry_run(
-                client,
-                discovery,
-                cluster,
-                identity_hash,
-                force_conflicts,
-            ),
+            resources: KubeResources::dry_run(client, discovery, cluster, force)
+                .with_migrations(migrations),
             secrets: SopsHydrator::new(sops),
             journal: Journal::default(),
         }
@@ -88,7 +83,11 @@ impl ResourceIo for DryRun {
                 .record(rid, DryRunOutcome::Refused(Refusal::of_apply(&e)));
             return Err(e);
         };
-        let applied = self.resources.apply_as(&ar, scope.clone(), manifest).await;
+        let takeover = self.resources.takeover_of(&rid);
+        let applied = self
+            .resources
+            .apply_as(&ar, scope.clone(), manifest, takeover)
+            .await;
         if let Err(ApplyError::BeingDeleted { .. }) = &applied {
             // The whole object, metadata included, which says what the
             // delete waits for.
@@ -112,6 +111,7 @@ impl ResourceIo for DryRun {
                 action: ApplyAction::Created,
                 preview: None,
                 not_kept: Vec::new(),
+                applied_hash: None,
             });
         }
         match &applied {
@@ -153,7 +153,11 @@ impl ResourceIo for DryRun {
             .ok()
             .flatten()
             .and_then(|o| serde_json::to_value(o).ok());
-        let applied = self.resources.apply_as(&ar, scope, manifest).await;
+        let takeover = self.resources.takeover_of(&rid);
+        let applied = self
+            .resources
+            .apply_as(&ar, scope, manifest, takeover)
+            .await;
         let outcome = match &applied {
             Ok(result) => DryRunOutcome::Recreated {
                 live: existing,
@@ -174,6 +178,7 @@ impl ResourceIo for DryRun {
                 action: ApplyAction::Created,
                 preview: None,
                 not_kept: Vec::new(),
+                applied_hash: None,
             }),
             Err(e) => Err(RecreateError::DryRunReapply(e)),
         }
@@ -270,8 +275,8 @@ mod tests {
             client,
             discovery,
             "a".into(),
-            None,
-            false,
+            super::super::resources::Force::None,
+            Default::default(),
             Default::default(),
         )
     }
@@ -302,6 +307,76 @@ mod tests {
             &answers[0].outcome,
             DryRunOutcome::Refused(Refusal::UnknownKind { kind }) if kind == "Widget"
         ));
+    }
+
+    /// A dry run that meets fields another Kix cluster applies refuses the
+    /// write as the apply would, with the message that names that Kix
+    /// cluster and its fields, not as a conflict that `--force-conflicts`
+    /// settles.
+    #[tokio::test]
+    async fn a_conflict_with_another_kix_cluster_is_refused_as_the_apply_refuses_it() {
+        use crate::cluster::apply::{Takeover, apply_resource};
+        use crate::cluster::field_manager::FieldManager;
+        use crate::cluster::preview::Refusal;
+
+        let api = FakeApi::default();
+        api.track_owners();
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let (ar, scope) = discovery
+            .iter()
+            .find(|(ar, _)| ar.kind == "ConfigMap")
+            .cloned()
+            .unwrap();
+        let cm = |value: &str| {
+            json!({
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": { "name": "shared", "namespace": "app" },
+                "data": { "owner": value },
+            })
+        };
+        let apply = |cluster: &str, dry_run: bool| {
+            let (client, ar, scope) = (client.clone(), ar.clone(), scope.clone());
+            let manager = FieldManager::of(cluster);
+            let manifest = cm(cluster);
+            async move {
+                apply_resource(
+                    &client,
+                    &ar,
+                    scope,
+                    &manager,
+                    &manifest,
+                    dry_run,
+                    Takeover::No,
+                )
+                .await
+            }
+        };
+        apply("b", false).await.unwrap();
+        let refused = apply("a", true).await.unwrap_err().to_string();
+
+        let dry = dry_run(&api).await;
+        assert!(
+            dry.apply(
+                &cm("a"),
+                Duration::from_secs(1),
+                &CancelToken::new(),
+                &|_| {}
+            )
+            .await
+            .is_err()
+        );
+        let answers = dry.take_answers();
+        let DryRunOutcome::Refused(Refusal::KixClusterConflict { clusters, message }) =
+            &answers[0].outcome
+        else {
+            panic!("{:?}", answers[0].outcome);
+        };
+        assert_eq!(clusters[0].manager, "b");
+        assert_eq!(clusters[0].fields, [".data.owner"]);
+        assert!(message.starts_with("[K5636] ConfigMap/shared@app was not updated."));
+        assert_eq!(message, &refused);
     }
 
     /// An apply onto an object being deleted is answered as a recreate that

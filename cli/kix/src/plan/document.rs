@@ -84,8 +84,8 @@ pub struct Plan {
     /// the cluster, every field of a drifted object that the new build sets.
     pub drift: Checked<DriftChange>,
     /// How many live objects `kix diff` could not check for drift, because
-    /// they have no applied-hash stamp or no Kix field records in
-    /// `managedFields`. Left out when there are none.
+    /// Kix has no applied hash for them or `managedFields` has no Kix field
+    /// records. Left out when there are none.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub drift_unchecked: usize,
     /// Fields the build sets that Kubernetes would not store as sent, from
@@ -134,6 +134,13 @@ pub struct Plan {
     /// --read-only`, or an account that may not read it.
     #[serde(default)]
     pub head: Option<PlanHead>,
+    /// How many objects the deploy moves to this version of Kix's
+    /// bookkeeping, once: it renames their field manager `kix` to the Kix
+    /// cluster's own, and removes the two annotations in which an earlier
+    /// version recorded which deploys name the object and what it applied.
+    /// Left out when there are none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub metadata_rewrites: usize,
 }
 
 /// The deploy lock of a Kix cluster, as a plan read it.
@@ -305,6 +312,11 @@ pub struct PlanFlags {
     pub reconcile: bool,
     pub force_conflicts: bool,
     pub accept_migrations: bool,
+    /// `--operator-removed`: no Kix operator runs for the Kix cluster, so
+    /// the deploy takes back the records an older operator was handed.
+    /// Left out when not set.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub operator_removed: bool,
     /// The instances (`namespace/instance`) that `--only` names, sorted. The
     /// deploy applies them and what they depend on, and leaves the rest of
     /// the build for a later deploy. Left out when the deploy applies the
@@ -586,6 +598,66 @@ pub struct ObjectWrite {
     /// the field existed reads as the core group.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub group: String,
+    /// Why the deploy writes an object whose build file did not change, or
+    /// that a deploy with failures left behind. Left out for a change the
+    /// new build makes, and for a plan that compared builds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<WriteReason>,
+}
+
+/// Why a deploy writes an object, beyond the change its build makes. Kix
+/// decides this from the live object and the cluster's deployment records.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WriteReason {
+    /// The live object is what a deploy that stopped (`Failed`) or that
+    /// `kix deploy --only` left partly deployed (`Partial`) applied.
+    AppliedByRecord { record: String },
+    /// The cluster's current deploy finished with failures (`Degraded`) and
+    /// did not reach this object.
+    LeftByDegraded { record: String },
+    /// The live object matches the build, but Kix has no record of what it
+    /// applied. The deploy applies it again and records that.
+    AppliedHashMissing,
+    /// Fields Kix applied changed on the cluster. The deploy applies the
+    /// build again and takes those fields back from the field managers that
+    /// changed them, which `changed_by` names. Empty when Kubernetes
+    /// recorded no other owner.
+    RevertsDrift { changed_by: Vec<DriftOwner> },
+    /// Fields Kix applied are owned by another Kix cluster's field manager,
+    /// or by the manager `kix` an older Kix applies under, which
+    /// `changed_by` names. The deploy applies the build without force: when
+    /// the values agree it adds this Kix cluster's own entry, and when they
+    /// differ Kubernetes refuses it and the deploy stops.
+    HeldByOtherCluster { changed_by: Vec<DriftOwner> },
+}
+
+/// A field manager other than Kix that owns fields Kix applied.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+pub struct DriftOwner {
+    pub manager: String,
+    /// The fields, such as `spec.replicas`.
+    pub fields: Vec<String>,
+}
+
+impl DriftOwner {
+    /// Return the managers that `report` finds own fields Kix no longer
+    /// owns, with those fields, sorted by manager.
+    pub(crate) fn of_report(report: &crate::cluster::drift::DriftReport) -> Vec<DriftOwner> {
+        let crate::cluster::drift::DriftVerdict::Drifted { foreign, .. } = &report.verdict else {
+            return Vec::new();
+        };
+        let mut owners: Vec<DriftOwner> = foreign
+            .iter()
+            .filter(|o| !o.unshared_paths.is_empty())
+            .map(|o| DriftOwner {
+                manager: o.manager.clone(),
+                fields: o.unshared_paths.clone(),
+            })
+            .collect();
+        owners.sort();
+        owners
+    }
 }
 
 impl ObjectWrite {
@@ -708,6 +780,10 @@ pub enum RefusalReason {
     /// A SOPS file has a top-level value that is a map, a list, or null, so
     /// Kix cannot make the Secret's keys from it.
     SopsNotFlat,
+    /// Another Kix cluster applies the object and owns fields this build
+    /// sets to other values. The message names that Kix cluster and the
+    /// fields.
+    KixClusterConflict,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -889,6 +965,9 @@ pub struct UncheckedObject {
 pub enum UncheckedReason {
     /// Its kind comes from a CRD this deploy creates.
     CrdCreatedByThisDeploy,
+    /// Its kind is one of Kix's own. The build does not carry its CRD, and
+    /// Kix installs that CRD when the deploy takes its lock.
+    CrdInstalledByKix,
     /// Its kind comes from a CRD that is not on the cluster, and the build
     /// declares it installed outside Kix with an import marker. Kix does
     /// not create it, and the deploy waits for something else to install
@@ -963,6 +1042,7 @@ impl Plan {
             only_needed: Vec::new(),
             earlier_deploys: Vec::new(),
             head: None,
+            metadata_rewrites: 0,
         }
     }
 
@@ -977,6 +1057,7 @@ impl Plan {
             || p.activation.is_some()
             || !self.migrations.items().is_empty()
             || !self.being_deleted.is_empty()
+            || self.metadata_rewrites > 0
             || self
                 .prune
                 .items()
@@ -1244,6 +1325,7 @@ mod tests {
                 reconcile: false,
                 force_conflicts: false,
                 accept_migrations: false,
+                operator_removed: false,
                 only: Vec::new(),
             };
             let json = serde_json::to_value(&flags).unwrap();
@@ -1270,6 +1352,7 @@ mod tests {
             reconcile: false,
             force_conflicts: false,
             accept_migrations: false,
+            operator_removed: false,
             only: PlanFlags::only_of(&["web/b".into(), "app/a".into(), "web/b".into()]),
         };
         assert_eq!(flags.only, ["app/a", "web/b"]);

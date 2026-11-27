@@ -8,7 +8,6 @@
 use std::time::Duration;
 
 use kix::cluster::activation::{Record, Records, WaveStatus};
-use kix::eval::package_index::RecordPackageIndex;
 use kix::manifest::lifecycle::{
     PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_QUEUED, PHASE_SUPERSEDED,
 };
@@ -78,7 +77,7 @@ pub async fn require_features(client: &Client) -> Result<()> {
             crd = kix::manifest::keys::ACTIVATIONS_CRD,
         )
     })?;
-    let missing: Vec<&str> = [features::REQUESTS, features::HEAD_LOCK]
+    let missing: Vec<&str> = [features::REQUESTS, features::HEAD_LOCK, features::REVISIONS]
         .into_iter()
         .filter(|f| !found.handles(f))
         .collect();
@@ -95,7 +94,7 @@ pub async fn require_features(client: &Client) -> Result<()> {
          Nothing was applied to the cluster.\n\n  \
          Why:\n    \
          CustomResourceDefinition `{crd}` does not list {listed} in its `{key}` annotation. \
-         `--operator` commands require an operator that reads `spec.request` (`{requests}`) and takes the cluster's deploy lock before making changes (`{lock}`). \
+         `--operator` commands require an operator that reads `spec.request` (`{requests}`), takes the cluster's deploy lock before making changes (`{lock}`), and records deployed objects in revisions (`{revisions}`). \
          Because the operator writes `{key}` at startup, it is either older than Kix {version}, still starting, or missing permission to patch `{crd}`.\n\n  \
          Next:\n    \
          Make sure the Kix operator is running Kix {version} or newer and its Kubernetes account can patch CustomResourceDefinition `{crd}`, then wait for it to start (or restart it) and run the command again.",
@@ -103,7 +102,29 @@ pub async fn require_features(client: &Client) -> Result<()> {
         crd = kix::manifest::keys::ACTIVATIONS_CRD,
         requests = features::REQUESTS,
         lock = features::HEAD_LOCK,
+        revisions = features::REVISIONS,
     ))
+}
+
+/// Refuse to change Kix cluster `cluster` when a record of it is driven by a
+/// Kix operator older than this Kix
+/// ([`kix::cluster::activation::features::operator_without_revisions`]).
+/// A Kubernetes cluster that serves no Activation kind has no such record.
+pub(crate) async fn refuse_older_operator(client: &Client, cluster: &str) -> Result<()> {
+    let discovery = kix::cluster::discovery::discover_resources(client)
+        .await
+        .map_err(|e| miette!("{e}"))?;
+    let opened = Records::open(client, &discovery).map_err(|e| miette!("{e}"))?;
+    let Some(records) = opened.records() else {
+        return Ok(());
+    };
+    match kix::cluster::activation::features::operator_without_revisions(client, records, cluster)
+        .await
+    {
+        Ok(None) => Ok(()),
+        Ok(Some(refusal)) => Err(miette!("{refusal}")),
+        Err(e) => Err(miette!("{e}")),
+    }
 }
 
 /// Create or update an Activation CR to trigger operator reconciliation.
@@ -111,7 +132,9 @@ pub async fn require_features(client: &Client) -> Result<()> {
 /// The CR is created without a phase. The operator treats it as Queued and
 /// advances it through Deploying to Active. `kubernetes_uid` is the build's
 /// `cluster.kubernetes.uid`, which the record carries as a label.
-#[allow(clippy::too_many_arguments)]
+///
+/// The command holds no deploy lock, so it writes no revisions and no map of
+/// them. The operator writes both when it deploys the record.
 pub async fn apply_activation(
     records: &Records,
     activation_name: &str,
@@ -120,7 +143,6 @@ pub async fn apply_activation(
     identity_hash: Option<&str>,
     kubernetes_uid: Option<&str>,
     receipt: Option<&Value>,
-    package_index: &RecordPackageIndex,
 ) -> Result<String> {
     let request = kix::cluster::activation::new_request();
     records
@@ -143,12 +165,6 @@ pub async fn apply_activation(
             .await
             .map_err(|e| miette!("failed to record the deploy receipt: {e}"))?;
     }
-
-    // The operator holds no build graph, so the CLI writes the index of the
-    // build the record now names. A failure only warns.
-    records
-        .write_package_index(activation_name, package_index)
-        .await;
 
     Ok(request)
 }
@@ -452,10 +468,94 @@ mod tests {
         let unlocked = FakeApi::new([crd(json!({ (keys::OPERATOR_FEATURES): "requests" }))]);
         let err = require_features(&unlocked.client()).await.unwrap_err();
         assert!(err.to_string().contains("older than Kix"), "{err}");
-        let new = FakeApi::new([crd(
+        // An operator that takes the lock but keeps no revisions is refused.
+        let without_revisions = FakeApi::new([crd(
             json!({ (keys::OPERATOR_FEATURES): "requests,head-lock" }),
         )]);
+        let err = require_features(&without_revisions.client())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("`revisions`"), "{err}");
+        let new = FakeApi::new([crd(
+            json!({ (keys::OPERATOR_FEATURES): "requests,head-lock,revisions" }),
+        )]);
         assert!(require_features(&new.client()).await.is_ok());
+    }
+
+    /// A command that changes a Kix cluster refuses while a record of it
+    /// that is current, queued, or deploying is driven by an operator that
+    /// keeps no revisions, and says to upgrade the operator first. The lock
+    /// refuses too, before it writes anything. A Kix cluster whose records
+    /// the operator does not drive passes beside the same operator, and so
+    /// does any cluster once the operator announces revisions. An operator
+    /// that publishes nothing is refused the same way.
+    #[tokio::test]
+    async fn an_older_operator_is_refused_for_the_records_it_drives() {
+        let crd = |features: Option<&str>| {
+            let mut annotations = json!({});
+            if let Some(features) = features {
+                annotations[keys::OPERATOR_FEATURES] = json!(features);
+            }
+            json!({
+                "apiVersion": "apiextensions.k8s.io/v1",
+                "kind": "CustomResourceDefinition",
+                "metadata": { "name": keys::ACTIVATIONS_CRD, "annotations": annotations },
+            })
+        };
+        let record = |cluster: &str, driven: bool| {
+            let mut spec = json!({ "cluster": cluster });
+            if driven {
+                spec["source"] = json!("/nix/store/x");
+            }
+            json!({
+                "apiVersion": keys::API_VERSION,
+                "kind": "Activation",
+                "metadata": {
+                    "name": format!("{cluster}-1"),
+                    "labels": { "app.kubernetes.io/managed-by": "kix", (keys::CLUSTER_LABEL): cluster },
+                },
+                "spec": spec,
+                "status": { "phase": "Active" },
+            })
+        };
+        for features in [Some("requests,head-lock"), None] {
+            let old = FakeApi::new([crd(features), record("a", true), record("b", false)]);
+            let err = refuse_older_operator(&old.client(), "a").await.unwrap_err();
+            let text = err.to_string();
+            assert!(text.starts_with("[K9557]"), "{text}");
+            assert!(text.contains("a-1"), "{text}");
+            assert!(text.contains("upgrade it to Kix"), "{text}");
+            assert!(text.contains("kix deploy a --operator-removed"), "{text}");
+            assert!(refuse_older_operator(&old.client(), "b").await.is_ok());
+            let before = old.requests().len();
+            assert!(
+                super::super::lock::take(
+                    &old.client(),
+                    "a",
+                    "kix deploy",
+                    kix::cluster::head::Purpose::Deploy,
+                    None,
+                    None,
+                )
+                .await
+                .is_err()
+            );
+            assert!(
+                old.requests()[before..]
+                    .iter()
+                    .all(|r| r.starts_with("GET")),
+                "{:?}",
+                old.requests()
+            );
+            assert!(old.object(kix::cluster::head::KIND, "a").is_none());
+        }
+        let new = FakeApi::new([crd(Some("requests,head-lock,revisions")), record("a", true)]);
+        assert!(refuse_older_operator(&new.client(), "a").await.is_ok());
+        assert!(
+            refuse_older_operator(&FakeApi::new([]).client(), "a")
+                .await
+                .is_ok()
+        );
     }
 
     /// Verify that operator mode requires API discovery and rejects unmigrated clusters.
@@ -583,5 +683,30 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.ends_with("'rec': cancelled"), "{err}");
+    }
+
+    /// `kix deploy --operator` holds no deploy lock, so the record it
+    /// submits names no revisions and has no package index, and it creates
+    /// no revisions. The operator writes the map when it deploys.
+    #[tokio::test]
+    async fn submitting_a_record_writes_no_revisions_and_no_index() {
+        let api = FakeApi::new([]);
+        let client = api.client();
+        let records = open_records(&client).await.unwrap();
+        apply_activation(
+            &records,
+            "rec",
+            "c",
+            "/nix/store/x",
+            Some("h"),
+            None,
+            Some(&json!({ "source": {} })),
+        )
+        .await
+        .unwrap();
+        let status = api.object(RECORD_KIND, "rec").unwrap()["status"].clone();
+        assert!(status.get("revisions").is_none(), "{status}");
+        assert!(status.get(keys::PACKAGE_INDEX_FIELD).is_none(), "{status}");
+        assert!(api.names(kix::cluster::revision::KIND).is_empty());
     }
 }

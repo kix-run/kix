@@ -21,26 +21,26 @@ kix migrate domain <CLUSTER> [--dry-run] [-y] [--flake <FLAKE>] [--context <CONT
 
 | Argument or flag | Meaning |
 | --- | --- |
-| `<CLUSTER>` | Cluster name. Kix builds it to get the current CRD manifests. |
+| `<CLUSTER>` | Cluster name. |
 | `--dry-run` | Print the plan and stop. |
 | `-y`, `--yes` | Skip the confirmation prompt. Required when stdin is not a terminal. |
 | `--flake`, `--context` | See [Global flags](/docs/reference/cli/global-flags/). |
 
 ## What it does
 
-1. Builds the cluster and reads the Kix CRDs from the build.
-2. Prints the plan. A cluster with nothing under the old group reports
+1. Prints the plan. A cluster with nothing under the old group reports
    "Nothing to do" and exits.
-3. Takes the cluster's
+2. Takes the cluster's
    [deploy lock](/docs/reference/cli/deploy/#the-deploy-lock) and holds it
    until the migration finishes. If another active run holds the lock,
-   `kix migrate domain` stops without changing anything.
-4. Copies every Activation record to the new group with its spec, status, and
+   `kix migrate domain` stops without changing anything. Before taking the
+   lock, Kix installs its CRDs under the new group.
+3. Copies every Activation record to the new group with its spec, status, and
    history, and checks each copy by name and phase.
-5. Clears the operator finalizer from the old records, waits, and reads them
+4. Clears the operator finalizer from the old records, waits, and reads them
    back. If a finalizer returns, an operator is still running, and the command
    stops having deleted nothing.
-6. Deletes the old CRDs.
+5. Deletes the old CRDs.
 
 PackageInstance records are not copied; the next deploy re-creates them.
 

@@ -11,7 +11,7 @@ use super::PlanError;
 use super::document::{Objects, WriteChange};
 use super::fixtures::{deployed, flags, plan, stamp};
 use super::objects::Unshown;
-use crate::cluster::stream::TransitionKind;
+use crate::cluster::stream::NodeId;
 use crate::eval::store_graph::{PackageNode, ResourceNode};
 use crate::eval::store_graph::{StoreGraph, store_hash};
 use crate::manifest::types::{self, ResourceId};
@@ -231,7 +231,7 @@ fn a_delete_the_plan_does_not_show_is_refused() {
 fn a_first_deploy_writes_every_object_the_plan_shows() {
     let new = build();
     let objects = objects(None, &new, &[]).unwrap();
-    assert_eq!(objects.writes.len(), new.resources.len());
+    assert_eq!(objects.writes.len(), stamp(&new).0.resources.len());
     assert!(
         objects
             .writes
@@ -241,53 +241,45 @@ fn a_first_deploy_writes_every_object_the_plan_shows() {
     assert!(objects.deletes.is_empty());
 }
 
-/// A consumer's first deploy writes every object but Kix's own CRDs, which
-/// its platform writes. Its engine plan waits for them, and its package
-/// diff does not list them.
+/// Return `graph` without the Activation and PackageInstance definitions, as
+/// builds that no longer carry them are made.
+fn without_kix_crds(graph: &StoreGraph) -> StoreGraph {
+    let mut graph = graph.clone();
+    graph
+        .resources
+        .retain(|_, node| !lifecycle::is_kix_crd(&node.manifest));
+    graph
+}
+
+/// A build from before the Kix program installed its own CRDs holds two of
+/// them. Loading it leaves them out, so a deploy over it plans no orphan and
+/// no leaving kind, and a rollback to it writes neither.
 #[test]
-fn a_consumer_leaves_kix_crds_to_its_platform() {
-    let mut new = build();
-    for node in new.resources.values_mut() {
-        if lifecycle::is_record(&node.manifest) {
-            node.manifest["spec"]["interfaces"] = json!({"core": {"consumer": "acme"}});
-        }
-    }
-    let checked = plan(&deployed(None), &new, flags(&[])).unwrap();
-    let is_kix_crd = |kind: &str, name: &str| {
-        kind == "CustomResourceDefinition"
-            && [keys::ACTIVATIONS_CRD, keys::PACKAGE_INSTANCES_CRD].contains(&name)
-    };
-
-    let writes = &checked.objects().writes;
-    assert_eq!(writes.len(), new.resources.len() - 2);
-    assert!(!writes.iter().any(|w| is_kix_crd(&w.kind, &w.name)));
-
-    let mut waits: Vec<(&str, Option<&str>)> = checked
-        .plan()
-        .nodes()
-        .iter()
-        .filter(|n| n.kind == TransitionKind::Wait)
-        .map(|n| {
-            let target = n.meta.import_target.as_ref().unwrap();
-            (target.name.as_str(), target.platform.as_deref())
-        })
-        .collect();
-    waits.sort();
+fn a_build_that_holds_kixs_own_crds_plans_none_of_them() {
+    let old = build();
     assert_eq!(
-        waits,
-        [
-            (keys::ACTIVATIONS_CRD, Some("core")),
-            (keys::PACKAGE_INSTANCES_CRD, Some("core"))
-        ]
+        old.resources
+            .values()
+            .filter(|n| lifecycle::is_kix_crd(&n.manifest))
+            .count(),
+        2,
+        "the fixture is a build that holds both definitions"
     );
+    let new = without_kix_crds(&old);
 
-    let shown = checked
-        .pkg_diff()
-        .cluster_level
-        .iter()
-        .flat_map(|c| &c.added_resources)
-        .any(|r| is_kix_crd(&r.kind, &r.name));
-    assert!(!shown, "the package diff lists a CRD the platform writes");
+    let upgrade = plan(&deployed(Some(&old)), &new, flags(&["--prune"])).unwrap();
+    assert!(upgrade.orphans().is_empty(), "{:?}", upgrade.orphans());
+    assert!(upgrade.kinds_leaving().is_empty());
+    assert!(upgrade.objects().writes.is_empty());
+    assert!(upgrade.objects().deletes.is_empty());
+
+    let rollback = plan(&deployed(Some(&new)), &old, flags(&["--prune"])).unwrap();
+    assert!(rollback.objects().writes.is_empty());
+    assert!(
+        !rollback.plan().nodes().iter().any(
+            |n| matches!(&n.id, NodeId::Resource(id) if id.kind == "CustomResourceDefinition")
+        )
+    );
 }
 
 #[test]
@@ -329,7 +321,7 @@ fn a_redeploy_lists_an_unchanged_rerun_job_as_a_write_only_if_it_failed() {
 fn reconcile_reapplies_the_deployed_build() {
     let build = build();
     let objects = objects(Some(&build), &build, &["--reconcile"]).unwrap();
-    assert_eq!(objects.writes.len(), build.resources.len());
+    assert_eq!(objects.writes.len(), stamp(&build).0.resources.len());
     assert!(
         objects
             .writes

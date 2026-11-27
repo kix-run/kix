@@ -18,13 +18,13 @@ ingress/ingress-nginx
   Deployment ingress/ingress-nginx  ok
 vault/vaultwarden
   Deployment vault/vaultwarden      not ready (0/1 ready, 0/1 updated)
-  ConfigMap vault/vaultwarden-env   not checked for changes: no applied-hash stamp yet, the next deploy adds it
+  ConfigMap vault/vaultwarden-env   not checked for changes: Kix has no recorded applied hash; `kix deploy` reapplies this object and records it
   Secret vault/vaultwarden-db       missing, needed by Deployment vault/vaultwarden
   Secret vault/vaultwarden-admin    not checked: this account may not list its kind
 (cluster-level)
   Namespace vault                   ok
 
 8 resources: 3 ok, 1 changed, 1 not ready, 1 missing, 2 not checked.
-Next: run `kix deploy shop --reconcile --force-conflicts` to put back what is missing or changed and take back the fields that kubectl-edit owns. `kix plan shop --reconcile --force-conflicts` shows what it would change first.
+Next: run `kix deploy shop` to restore what is missing or changed, or `kix plan shop` to preview the changes first. The deploy takes back the fields that kubectl-edit owns.
 
 This account may not list secrets, so Kix did not check objects of those kinds.

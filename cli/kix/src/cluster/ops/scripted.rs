@@ -36,7 +36,7 @@ use super::super::secrets::{HydrationResult, SecretError};
 pub use super::Finalized;
 use super::{
     DeleteError, DeployRecord, OnStatus, ReadError, RecordWriteError, RecreateError, ResourceIo,
-    SecretHydrator, StampError,
+    SecretHydrator,
 };
 
 /// The status [`ResourceIo::wait_gone`] reports for one object, if any, and
@@ -197,7 +197,7 @@ pub enum Call {
         failed: usize,
         finalizing: bool,
     },
-    Stamp(ResourceId),
+    Migrate(ResourceId),
     Delete(ResourceId),
     WaitGone(ResourceId),
     Finalize {
@@ -208,6 +208,7 @@ pub enum Call {
         reason: String,
     },
     EndPartial,
+    WriteApplied,
 }
 
 #[derive(Clone, Debug)]
@@ -224,7 +225,7 @@ pub struct ScriptedOps {
     default_rediscover: Mutex<Behaviour<Result<(), String>>>,
     begin: Mutex<Behaviour<Result<(), String>>>,
     checkpoint: Mutex<Behaviour<Result<(), String>>>,
-    stamp: Mutex<Behaviour<Result<(), String>>>,
+    migrate: Mutex<Behaviour<Result<(), String>>>,
     delete: Mutex<Behaviour<Result<Pruned, String>>>,
     /// What [`ResourceIo::wait_gone`] answers for each object, after
     /// reporting the status. Unscripted objects are gone at once.
@@ -256,7 +257,7 @@ impl ScriptedOps {
             default_rediscover: Mutex::new(Behaviour::Now(Ok(()))),
             begin: Mutex::new(Behaviour::Now(Ok(()))),
             checkpoint: Mutex::new(Behaviour::Now(Ok(()))),
-            stamp: Mutex::new(Behaviour::Now(Ok(()))),
+            migrate: Mutex::new(Behaviour::Now(Ok(()))),
             delete: Mutex::new(Behaviour::Now(Ok(Pruned::Deleted {
                 uid: None,
                 finalizers: Vec::new(),
@@ -318,8 +319,8 @@ impl ScriptedOps {
         self
     }
 
-    pub fn stamp_behaviour(&self, b: Behaviour<Result<(), String>>) -> &Self {
-        *self.stamp.lock().unwrap() = b;
+    pub fn migrate_behaviour(&self, b: Behaviour<Result<(), String>>) -> &Self {
+        *self.migrate.lock().unwrap() = b;
         self
     }
 
@@ -457,6 +458,17 @@ impl SecretHydrator for ScriptedOps {
 
 #[async_trait]
 impl ResourceIo for ScriptedOps {
+    async fn migrate_unchanged(
+        &self,
+        rid: &ResourceId,
+    ) -> Result<bool, crate::cluster::migration_write::WriteError> {
+        self.record(Call::Migrate(rid.clone()));
+        let b = self.migrate.lock().unwrap().clone();
+        b.run().await.map(|()| false).map_err(|message| {
+            crate::cluster::migration_write::WriteError::KeepsChanging { resource: message }
+        })
+    }
+
     async fn apply(
         &self,
         manifest: &Value,
@@ -475,6 +487,7 @@ impl ResourceIo for ScriptedOps {
                 action,
                 preview: None,
                 not_kept: script.not_kept.clone(),
+                applied_hash: None,
             }),
             Err(ApplyFailure::Other(msg)) => Err(ApplyError::UnknownKind { kind: msg }),
             Err(ApplyFailure::ImmutableConflict) => Err(ApplyError::ImmutableConflict {
@@ -512,6 +525,7 @@ impl ResourceIo for ScriptedOps {
                 action,
                 preview: None,
                 not_kept: Vec::new(),
+                applied_hash: None,
             })
             .map_err(|failure| match failure {
                 ApplyFailure::StillBeingDeleted(stuck) => RecreateError::StillExists { rid, stuck },
@@ -638,8 +652,6 @@ impl DeployRecord for ScriptedOps {
         b.run().await.map_err(RecordWriteError::Scripted)
     }
 
-    async fn discovery_refreshed(&self) {}
-
     async fn checkpoint(
         &self,
         applied: usize,
@@ -655,23 +667,22 @@ impl DeployRecord for ScriptedOps {
         b.run().await.map_err(RecordWriteError::Scripted)
     }
 
-    async fn stamp_unchanged(&self, rid: &ResourceId) -> Result<(), StampError> {
-        self.record(Call::Stamp(rid.clone()));
-        let b = self.stamp.lock().unwrap().clone();
-        b.run().await.map_err(StampError::Scripted)
-    }
-
     async fn finalize(
         &self,
         had_failures: bool,
-        orphans_left: bool,
+        left: super::Left<'_>,
     ) -> Result<Option<Finalized>, RecordWriteError> {
         self.record(Call::Finalize {
             had_failures,
-            orphans_left,
+            orphans_left: !left.orphans.is_empty(),
         });
         let b = self.finalize.lock().unwrap().clone();
         b.run().await.map_err(RecordWriteError::Scripted)
+    }
+
+    async fn write_applied(&self) -> Result<(), RecordWriteError> {
+        self.record(Call::WriteApplied);
+        Ok(())
     }
 
     async fn abort(&self, reason: &str) -> Result<(), RecordWriteError> {

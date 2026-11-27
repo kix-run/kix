@@ -1,9 +1,10 @@
 //! Runtime content drift checks.
 //!
 //! For each Kix-managed live object, project it onto Kix's current server-side
-//! apply fieldset, hash the projection, and compare it against the
-//! `kix.run/applied-hash` annotation written from the SSA response at apply
-//! time. When they match, every field Kix applied is identical to what the
+//! apply fieldset, hash the projection, and compare it against the applied
+//! hash computed from the SSA response at apply time. A revision's
+//! `status.applied` holds that hash, and an object an earlier Kix applied
+//! holds it in its `kix.run/applied-hash` annotation. When they match, every field Kix applied is identical to what the
 //! server committed. When they differ, `managedFields` attributes which manager
 //! modified each field and when.
 //!
@@ -13,8 +14,9 @@
 use kube::api::DynamicObject;
 use serde_json::Value;
 
-use super::fieldsv1::{self, KIX_FIELD_MANAGER};
-use crate::manifest::keys;
+use super::apply;
+use super::field_manager::{FieldManager, Whose};
+use super::fieldsv1;
 use crate::manifest::types::ResourceId;
 
 /// Per-resource drift verdict.
@@ -23,8 +25,9 @@ pub enum DriftVerdict {
     /// Every field Kix applied is byte-identical to the state committed at
     /// apply time.
     InSync,
-    /// The Kix-owned projection no longer hashes to the stamp because content
-    /// changed under Kix's ownership or another manager took ownership.
+    /// The Kix-owned projection no longer hashes to the applied hash, because
+    /// content changed under Kix's ownership or another manager took
+    /// ownership.
     /// `foreign` lists the other managers' recorded fields, and
     /// `unrecorded_scale` is set when the change is a replicas write that
     /// Kubernetes recorded no owner for.
@@ -32,8 +35,8 @@ pub enum DriftVerdict {
         foreign: Vec<ForeignOwner>,
         unrecorded_scale: Option<UnrecordedScale>,
     },
-    /// The resource has no `kix.run/applied-hash` annotation and will be
-    /// stamped on the next deploy.
+    /// Kix does not know the object's applied hash: no revision records it,
+    /// and the object has no `kix.run/applied-hash` annotation.
     Unstamped,
     /// `managedFields` is missing or has no Kix entry, so the drift check
     /// cannot run for this object.
@@ -77,8 +80,7 @@ pub struct ForeignOwner {
 pub struct UnrecordedScale {
     /// Field path, always `spec.replicas`.
     pub path: String,
-    /// The value Kix applied, recovered from the `kix.run/applied-hash`
-    /// stamp.
+    /// The value Kix applied, recovered from the applied hash.
     pub deployed: i64,
     /// The value on the live object.
     pub live: i64,
@@ -95,42 +97,41 @@ const SCALE_KINDS: &[(&str, &str)] = &[
 ];
 
 /// Highest deployed replicas value [`unrecorded_scale`] tries. Because the
-/// stamp is a hash, recovering the deployed value requires hashing each
+/// applied hash is a hash, recovering the deployed value requires hashing each
 /// candidate up to this bound.
 const SCALE_SEARCH_LIMIT: i64 = 1024;
 
 /// Drift report for a single resource.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriftReport {
     pub rid: ResourceId,
     pub verdict: DriftVerdict,
 }
 
-/// Run the drift check on one live object.
-pub fn check_object(obj: &DynamicObject) -> DriftReport {
+/// Run the drift check on the live object `obj`, whose applied hash is
+/// `applied`, against the fields `manager`'s Kix cluster applied. Another
+/// Kix cluster's manager is another manager here. Take `applied` from [`AppliedHashes::applied`], which reads
+/// the revisions of a record that names its revisions and the annotation
+/// otherwise. `None` means the applied hash is not known.
+///
+/// [`AppliedHashes::applied`]: super::revision::AppliedHashes::applied
+pub fn check_object(
+    obj: &DynamicObject,
+    applied: Option<&str>,
+    manager: &FieldManager,
+) -> DriftReport {
     let rid = resource_id(obj);
 
-    let stamped = obj
-        .metadata
-        .annotations
-        .as_ref()
-        .and_then(|a| keys::get_meta(a, keys::APPLIED_HASH))
-        .map(str::to_string);
-
-    let Some(stamped) = stamped else {
+    let Some(stamped) = applied else {
         return DriftReport {
             rid,
             verdict: DriftVerdict::Unstamped,
         };
     };
 
-    // Project onto Kix's current fieldset, strip `kix.run/*` annotations, and
-    // hash canonical JSON.
-    // TODO: exclude PI spec.driftIgnore pointers here, resolved through
-    // kix.run/package annotations and a PackageInstance GET, so compiled
-    // delegation (HPA on replicas, cert-manager on Secret data) is an
-    // expected co-owner, not drift.
-    let Some(current) = fieldsv1::applied_content_hash(obj) else {
+    // Project onto Kix's current fieldset without the ceded fields, strip
+    // `kix.run/*` annotations, and hash canonical JSON.
+    let Some(current) = fieldsv1::applied_content_hash(obj, manager) else {
         return DriftReport {
             rid,
             verdict: DriftVerdict::NoFieldset,
@@ -146,8 +147,8 @@ pub fn check_object(obj: &DynamicObject) -> DriftReport {
         DriftReport {
             rid,
             verdict: DriftVerdict::Drifted {
-                foreign: foreign_owners(obj),
-                unrecorded_scale: unrecorded_scale(obj, &stamped),
+                foreign: foreign_owners(obj, manager),
+                unrecorded_scale: unrecorded_scale(obj, stamped, manager),
             },
         }
     }
@@ -163,8 +164,14 @@ pub fn check_object(obj: &DynamicObject) -> DriftReport {
 /// is the only field Kix owned that changed. Returns `None` when nothing
 /// matches, which includes a replicas change combined with any other change
 /// to Kix's fields.
-fn unrecorded_scale(obj: &DynamicObject, stamped: &str) -> Option<UnrecordedScale> {
-    if !serves_scale(obj) {
+fn unrecorded_scale(
+    obj: &DynamicObject,
+    stamped: &str,
+    manager: &FieldManager,
+) -> Option<UnrecordedScale> {
+    // A ceded replicas count is out of the applied hash, so its change is
+    // not drift.
+    if !serves_scale(obj) || is_ceded(&ceded_of(obj), &["f:spec".into(), "f:replicas".into()]) {
         return None;
     }
     let live = obj.data.pointer("/spec/replicas")?.as_i64()?;
@@ -178,7 +185,7 @@ fn unrecorded_scale(obj: &DynamicObject, stamped: &str) -> Option<UnrecordedScal
         return None;
     }
 
-    let mut projection = fieldsv1::kix_owned_projection(obj)?;
+    let mut projection = fieldsv1::hashed_projection(obj, manager)?;
     // Indexing `projection["spec"]` below panics unless it is an object.
     projection.get("spec")?.as_object()?;
     let deployed = (0..=SCALE_SEARCH_LIMIT).find(|&candidate| {
@@ -204,8 +211,10 @@ fn serves_scale(obj: &DynamicObject) -> bool {
     SCALE_KINDS.contains(&(group, kind))
 }
 
-/// Extract non-Kix field managers from `managedFields` with their operation,
-/// subresource, timestamp, and flattened field paths.
+/// Extract the field managers whose fields do not count as `manager`'s
+/// ([`FieldManager::counts_as_own`]) from `managedFields`, with their
+/// operation, subresource, timestamp, and flattened field paths. Another Kix
+/// cluster's manager is among them.
 ///
 /// Excludes entries with `subresource == "status"` because status writes are
 /// controller updates rather than configuration drift. Other subresources stay
@@ -214,21 +223,28 @@ fn serves_scale(obj: &DynamicObject) -> bool {
 /// records a `/scale` entry only when the write sets a non-zero value and a
 /// manager already owned `spec.replicas`. [`UnrecordedScale`] covers the other
 /// cases.
-pub(crate) fn foreign_owners(obj: &DynamicObject) -> Vec<ForeignOwner> {
-    let kix_owned = kix_owned_leaves(obj);
+///
+/// A field the object cedes (`kix.run/cede-fields`) is left out: another
+/// manager is meant to own it.
+pub(crate) fn foreign_owners(obj: &DynamicObject, manager: &FieldManager) -> Vec<ForeignOwner> {
+    let kix_owned = kix_owned_leaves(obj, manager);
+    let ceded = ceded_of(obj);
     let Some(entries) = obj.metadata.managed_fields.as_deref() else {
         return Vec::new();
     };
     entries
         .iter()
-        .filter(|e| e.manager.as_deref() != Some(KIX_FIELD_MANAGER))
+        .filter(|e| !manager.counts_as_own(e.manager.as_deref()))
         .filter(|e| e.subresource.as_deref() != Some("status"))
         .map(|e| {
-            let leaves = e
+            let leaves: Vec<(String, Vec<String>)> = e
                 .fields_v1
                 .as_ref()
                 .map(|f| leaves(&f.0))
-                .unwrap_or_default();
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|(_, keys)| !is_ceded(&ceded, keys))
+                .collect();
             let unshared_paths = leaves
                 .iter()
                 .filter(|(_, keys)| !kix_owned.contains(keys))
@@ -250,9 +266,13 @@ pub(crate) fn foreign_owners(obj: &DynamicObject) -> Vec<ForeignOwner> {
         .collect()
 }
 
-/// Return the fieldsV1 key chain of each leaf that Kix's `Apply` entry owns.
-fn kix_owned_leaves(obj: &DynamicObject) -> std::collections::HashSet<Vec<String>> {
-    fieldsv1::kix_fieldset(obj)
+/// Return the fieldsV1 key chain of each leaf that `manager`'s `Apply` entry
+/// owns.
+fn kix_owned_leaves(
+    obj: &DynamicObject,
+    manager: &FieldManager,
+) -> std::collections::HashSet<Vec<String>> {
+    fieldsv1::kix_fieldset(obj, manager)
         .map(|f| leaves(&f).into_iter().map(|(_, keys)| keys).collect())
         .unwrap_or_default()
 }
@@ -370,19 +390,112 @@ impl ForeignField {
 }
 
 /// Return the fields of `obj` that a manager other than Kix owns, leaving out
-/// status writes and fields Kix's `Apply` entry still owns.
+/// status writes, fields Kix's `Apply` entry still owns, and fields the
+/// object cedes.
 ///
 /// A field Kix still owns holds the value Kix applied, because the API server
 /// moves ownership to whoever changes a value. So the fields returned are the
 /// ones another manager changed or took over since Kix applied the object.
-pub fn foreign_fields(obj: &DynamicObject) -> Vec<ForeignField> {
-    let kix_owned = kix_owned_leaves(obj);
+pub fn foreign_fields(obj: &DynamicObject, manager: &FieldManager) -> Vec<ForeignField> {
+    let ceded = ceded_of(obj);
+    taken_fields(obj, manager)
+        .into_iter()
+        .filter(|f| !is_ceded(&ceded, &f.keys))
+        .collect()
+}
+
+/// One field a forced apply takes from another field manager, as the API
+/// server named it in its answer to the same apply sent without force
+/// ([`super::apply::takes_back`]): who holds it, and its value on the object
+/// Kix read.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TakenField {
+    pub manager: String,
+    /// The field path as the API server writes it, such as
+    /// `.spec.ports[port=80,protocol="TCP"].targetPort`.
+    pub path: String,
+    /// The live value, as JSON text.
+    pub live: String,
+}
+
+/// Return whether applying `manifest` without force would be refused with a
+/// conflict on `obj`: `manifest` sets a field that another manager took from
+/// Kix, and the object does not cede that field.
+pub(crate) fn conflicts(obj: &DynamicObject, manifest: &Value, manager: &FieldManager) -> bool {
+    foreign_fields(obj, manager)
+        .iter()
+        .any(|f| f.value_in(manifest).is_some())
+}
+
+/// Return the field managers of other Kix clusters, sorted, that own a
+/// field of `obj` that `manifest` sets and the object does not cede: the
+/// fields another Kix cluster applied with other values than `manager`'s
+/// Kix cluster did. Another Kix cluster's manager is named by the cluster's
+/// name. The legacy manager `kix` counts too when `manager` does not count
+/// it as its own, because an older Kix may apply under it for another Kix
+/// cluster.
+pub(crate) fn held_by_other_clusters(
+    obj: &DynamicObject,
+    manifest: &Value,
+    manager: &FieldManager,
+) -> Vec<String> {
+    let mut clusters: Vec<String> = foreign_fields(obj, manager)
+        .into_iter()
+        .filter(|f| f.value_in(manifest).is_some())
+        .filter_map(|f| match manager.whose(&f.manager) {
+            Whose::OtherCluster(cluster) => Some(cluster.to_string()),
+            Whose::Legacy => Some(f.manager.clone()),
+            Whose::This | Whose::NotKix => None,
+        })
+        .collect();
+    clusters.sort();
+    clusters.dedup();
+    clusters
+}
+
+/// Return `manifest` without each field it cedes that another manager owns
+/// on `obj` and Kix's `Apply` entry does not. A forced apply of the result
+/// leaves those fields to their manager, as an apply that is refused on them
+/// and sent again without them does. A Secret's ceded `data` key goes from
+/// `stringData` too, which Kix sends as `data`.
+pub(crate) fn without_ceded_taken(
+    manifest: &Value,
+    obj: &DynamicObject,
+    manager: &FieldManager,
+) -> Value {
+    let ceded = apply::ceded_fields(manifest);
+    let mut out = manifest.clone();
+    if ceded.is_empty() {
+        return out;
+    }
+    let secret = crate::manifest::types::is_secret(manifest);
+    for field in taken_fields(obj, manager) {
+        let Some(path) = segs(&field.keys) else {
+            continue;
+        };
+        if !ceded.iter().any(|c| apply::covers(c, &path)) {
+            continue;
+        }
+        apply::remove_path(&mut out, &path);
+        if secret && path.first() == Some(&apply::Seg::Field("data".into())) {
+            let mut in_strings = path.clone();
+            in_strings[0] = apply::Seg::Field("stringData".into());
+            apply::remove_path(&mut out, &in_strings);
+        }
+    }
+    out
+}
+
+/// Return the fields of `obj` that a manager other than Kix owns and Kix's
+/// `Apply` entry does not, leaving out status writes.
+fn taken_fields(obj: &DynamicObject, manager: &FieldManager) -> Vec<ForeignField> {
+    let kix_owned = kix_owned_leaves(obj, manager);
     let Some(entries) = obj.metadata.managed_fields.as_deref() else {
         return Vec::new();
     };
     entries
         .iter()
-        .filter(|e| e.manager.as_deref() != Some(KIX_FIELD_MANAGER))
+        .filter(|e| !manager.counts_as_own(e.manager.as_deref()))
         .filter(|e| e.subresource.as_deref() != Some("status"))
         .flat_map(|e| {
             let manager = e.manager.clone().unwrap_or_else(|| "unknown".to_string());
@@ -397,6 +510,50 @@ pub fn foreign_fields(obj: &DynamicObject) -> Vec<ForeignField> {
                     path,
                     keys,
                 })
+        })
+        .collect()
+}
+
+/// Return the field paths `obj` cedes in its `kix.run/cede-fields`
+/// annotation.
+fn ceded_of(obj: &DynamicObject) -> Vec<Vec<apply::Seg>> {
+    let Some(declared) = obj
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|a| a.get(crate::manifest::keys::CEDE_FIELDS))
+    else {
+        return Vec::new();
+    };
+    apply::ceded_fields(&serde_json::json!({
+        "metadata": { "annotations": { (crate::manifest::keys::CEDE_FIELDS): declared } }
+    }))
+}
+
+/// Return whether one of `ceded` covers the field whose fieldsV1 key chain
+/// is `keys`.
+fn is_ceded(ceded: &[Vec<apply::Seg>], keys: &[String]) -> bool {
+    !ceded.is_empty()
+        && segs(keys).is_some_and(|path| ceded.iter().any(|c| apply::covers(c, &path)))
+}
+
+/// Convert a fieldsV1 key chain to the segments of a field path. A set
+/// element (`v:`) has no such segment, so its chain gives `None`.
+fn segs(keys: &[String]) -> Option<Vec<apply::Seg>> {
+    keys.iter()
+        .map(|key| {
+            if let Some(name) = key.strip_prefix("f:") {
+                Some(apply::Seg::Field(name.to_string()))
+            } else if let Some(json) = key.strip_prefix("k:") {
+                match serde_json::from_str::<Value>(json).ok()? {
+                    Value::Object(keys) => Some(apply::Seg::Key(keys.into_iter().collect())),
+                    _ => None,
+                }
+            } else if let Some(i) = key.strip_prefix("i:") {
+                i.parse().ok().map(apply::Seg::Index)
+            } else {
+                None
+            }
         })
         .collect()
 }
@@ -470,7 +627,7 @@ mod tests {
                 "name": "coredns",
                 "namespace": "kube-system",
                 "managedFields": [
-                    entry("kix", "Apply", json!({"f:data": {"f:Corefile": {}}})),
+                    entry("kix/a", "Apply", json!({"f:data": {"f:Corefile": {}}})),
                     entry("kubeadm", "Update", json!({"f:data": {"f:Corefile": {}}})),
                     entry("kubectl-patch", "Update", json!({"f:data": {"f:hosts": {}}})),
                 ],
@@ -478,7 +635,7 @@ mod tests {
             "data": {"Corefile": ".:53 {}", "hosts": "10.0.0.1 a"},
         }))
         .unwrap();
-        let unshared: Vec<(String, Vec<String>)> = foreign_owners(&obj)
+        let unshared: Vec<(String, Vec<String>)> = foreign_owners(&obj, &FieldManager::of("a"))
             .into_iter()
             .map(|o| (o.manager, o.unshared_paths))
             .collect();
@@ -488,6 +645,64 @@ mod tests {
                 ("kubeadm".to_string(), vec![]),
                 ("kubectl-patch".to_string(), vec!["data.hosts".to_string()]),
             ]
+        );
+    }
+
+    /// Another Kix cluster's entry is another manager, and so is the legacy
+    /// entry of a Kix cluster this Kix has deployed. A cluster's own entry
+    /// holds the fields it applied, and the legacy one stands in only for a
+    /// reader of a cluster that is not migrated.
+    #[test]
+    fn another_kix_cluster_is_another_manager() {
+        let entry = |manager: &str, fields: Value| {
+            json!({
+                "manager": manager,
+                "operation": "Apply",
+                "fieldsType": "FieldsV1",
+                "fieldsV1": fields,
+            })
+        };
+        let obj: DynamicObject = serde_json::from_value(json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": "shared",
+                "namespace": "app",
+                "managedFields": [
+                    entry("kix", json!({"f:data": {"f:a": {}, "f:old": {}}})),
+                    entry("kix/a", json!({"f:data": {"f:a": {}}})),
+                    entry("kix/b", json!({"f:data": {"f:a": {}, "f:b": {}}})),
+                ],
+            },
+            "data": {"a": "1", "b": "2", "old": "3"},
+        }))
+        .unwrap();
+        let owners = |cluster: &str| -> Vec<(String, Vec<String>)> {
+            foreign_owners(&obj, &FieldManager::of(cluster))
+                .into_iter()
+                .map(|o| (o.manager, o.unshared_paths))
+                .collect()
+        };
+        assert_eq!(
+            owners("a"),
+            [
+                ("kix".to_string(), vec!["data.old".to_string()]),
+                ("kix/b".to_string(), vec!["data.b".to_string()]),
+            ]
+        );
+        assert_eq!(
+            owners("b"),
+            [
+                ("kix".to_string(), vec!["data.old".to_string()]),
+                ("kix/a".to_string(), Vec::<String>::new()),
+            ]
+        );
+        let fields = |cluster: &str| fieldsv1::kix_fieldset(&obj, &FieldManager::of(cluster));
+        assert_eq!(fields("a"), Some(json!({"f:data": {"f:a": {}}})));
+        assert_eq!(fields("c"), None);
+        assert_eq!(
+            fieldsv1::kix_fieldset(&obj, &FieldManager::unmigrated("c")),
+            Some(json!({"f:data": {"f:a": {}, "f:old": {}}}))
         );
     }
 

@@ -50,6 +50,7 @@ use kix::cluster::head::{self, Holder, Lock, Purpose, TakeError, WritesStopped};
 use kix::cluster::kubernetes_version;
 use kix::cluster::prune_guard::{self, Pruned, Removal, Step};
 use kix::cluster::readiness::{self, DeletePath};
+use kix::cluster::revision::RevisionSet;
 use kix::cluster::scheduler::{self, DeployError, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::stops;
 use kix::cluster::stream::{DeployObserver, DeployResult};
@@ -238,16 +239,29 @@ fn source_path(activation: &DynamicObject) -> Option<std::path::PathBuf> {
 /// `kix rollback --operator`), and `kix deploy` validates new builds before
 /// writing the record.
 fn load_manifests(path: &Path) -> Result<Vec<Value>, OperatorError> {
-    let build = Build::local(path, &|_| {}).map_err(|e| OperatorError::StoreGraphError {
-        path: path.display().to_string(),
-        reason: e.to_string(),
-    })?;
-    Ok(build
+    Ok(load_build(path)?
         .graph()
         .resources
         .values()
         .map(|r| r.manifest.clone())
         .collect())
+}
+
+/// Load the build in `path`, as [`load_manifests`] does.
+fn load_build(path: &Path) -> Result<Build, OperatorError> {
+    Build::local(path, &|_| {}).map_err(|e| OperatorError::StoreGraphError {
+        path: path.display().to_string(),
+        reason: e.to_string(),
+    })
+}
+
+/// Return whether the operator applies `manifest`. It leaves out
+/// CustomResourceDefinitions, because applying them again restarts API
+/// watches, and the Activation record, because applying the manifest the
+/// build holds would overwrite `spec.source` through server-side apply.
+fn operator_applies(manifest: &Value) -> bool {
+    ResourceId::from_value(manifest).kind != "CustomResourceDefinition"
+        && !kix::manifest::lifecycle::is_record(manifest)
 }
 
 /// What the binding check decided for a Queued record.
@@ -334,6 +348,9 @@ fn operator_error(e: LivePlanError) -> OperatorError {
         LivePlanError::Graph(_) | LivePlanError::Marker(_) => {
             OperatorError::GraphError(e.to_string())
         }
+        LivePlanError::Tenancy(_)
+        | LivePlanError::ReadForbidden(_)
+        | LivePlanError::Conversion(_) => OperatorError::ReconcileError(e.to_string()),
     }
 }
 
@@ -724,6 +741,19 @@ impl Reconcile {
     fn counts_failed_runs(self) -> bool {
         matches!(self, Reconcile::Start | Reconcile::Resume)
     }
+
+    /// Return what the run does when an object fails. A repair goes on with
+    /// the other objects and skips only the dependents of the failed one.
+    /// The operator never forces, so an object another field manager
+    /// changed fails on every repair, and stopping there would leave every
+    /// other object unrepaired. A deploy stops at the first failure, and the
+    /// operator retries it.
+    fn on_error(self) -> OnErrorPolicy {
+        match self {
+            Reconcile::Repair => OnErrorPolicy::Continue,
+            Reconcile::Start | Reconcile::Redeploy | Reconcile::Resume => OnErrorPolicy::Stop,
+        }
+    }
 }
 
 /// Load the desired manifests from the record's build and plan them
@@ -733,24 +763,21 @@ async fn sweep(
     activation: &DynamicObject,
     client: &Client,
     name: &str,
+    deploys: bool,
 ) -> Result<Option<LivePlan>, OperatorError> {
     let path = source_path(activation).ok_or(OperatorError::MissingSourcePath)?;
-    let new_manifests = load_manifests(&path)?;
+    let graph = load_build(&path)?.into_graph();
 
-    if new_manifests.is_empty() {
+    if graph.resources.is_empty() {
         tracing::warn!(name, "No manifests found in store graph");
         return Ok(None);
     }
 
-    // Exclude CRDs (re-applying them triggers API watch restarts) and
-    // Activation CRs (applying the Nix-generated manifest would overwrite
-    // `spec.source` via server-side apply).
-    let managed_manifests: Vec<Value> = new_manifests
-        .iter()
-        .filter(|m| {
-            ResourceId::from_value(m).kind != "CustomResourceDefinition"
-                && !kix::manifest::lifecycle::is_record(m)
-        })
+    let managed_manifests: Vec<Value> = graph
+        .resources
+        .values()
+        .map(|r| &r.manifest)
+        .filter(|m| operator_applies(m))
         .cloned()
         .collect();
 
@@ -759,7 +786,13 @@ async fn sweep(
         return Ok(None);
     }
 
-    LivePlan::sweep(client, activation, &managed_manifests)
+    // The revisions name the whole build, as the CLI's do, so both name the
+    // same revisions for one build. What the operator leaves out shows as an
+    // object with no applied hash. The revisions are labelled with the
+    // record's Kix cluster, which the cleanup lists them by. A record that
+    // names none gets no revisions.
+    let revisions = cluster_of(activation).map(|cluster| RevisionSet::of(&cluster, &graph));
+    LivePlan::sweep(client, activation, &managed_manifests, revisions, deploys)
         .await
         .map(Some)
         .map_err(operator_error)
@@ -815,7 +848,7 @@ async fn run_locked(
     let client = lock.guarded(&ctx.client);
     let records = ctx.records.through(&client);
     let manage_lifecycle = reconcile.manages_lifecycle();
-    let mut plan = match sweep(activation, &client, name).await {
+    let mut plan = match sweep(activation, &client, name, manage_lifecycle).await {
         Ok(Some(plan)) => plan,
         Ok(None) => return Ok(Action::requeue(requeue_interval())),
         Err(e) if reconcile.counts_failed_runs() => {
@@ -852,19 +885,28 @@ async fn run_locked(
     for s in plan.shared_orphans() {
         tracing::info!(name, resource = %s.rid, clusters = ?s.clusters, "prune: {}", s.describe());
     }
+    // The recorder counts a repeated Event on one Event, so a drift left in
+    // place adds one Event, not one for every requeue.
+    let events = K8sEventObserver::new(ctx.events.clone(), activation, keys::API_VERSION);
+    for drift in plan.drift_not_reverted() {
+        let message = drift_not_reverted_message(drift);
+        tracing::warn!(name, resource = %drift.rid, "{message}");
+        events.warn_now("DriftNotReverted", &message).await;
+    }
 
     tracing::info!(
         name,
         apply = plan.applies(),
         orphans = plan.orphans().len(),
         unchanged = plan.unchanged(),
+        metadata_rewrites = plan.metadata_rewrites(),
         lifecycle = manage_lifecycle,
         "Live change detection complete"
     );
 
     let config = SchedulerConfig {
         timeout: READINESS_TIMEOUT,
-        on_error: OnErrorPolicy::Stop,
+        on_error: reconcile.on_error(),
         // The stall watchdog cancels this token. A child token keeps that
         // cancel inside this run, and an operator shutdown still reaches it.
         cancel: ctx.shutdown.child(),
@@ -905,6 +947,22 @@ async fn after_run(
     result: Result<DeployResult, DeployError>,
 ) -> Result<Action, OperatorError> {
     match result {
+        // A repair goes on past a failed object, so its run ends without an
+        // error. It returns one here, which logs the first failure and
+        // brings the next repair after the error requeue.
+        Ok(r) if reconcile == Reconcile::Repair && r.failed > 0 => {
+            tracing::error!(
+                name,
+                configured = r.configured,
+                pruned = r.pruned,
+                failed = r.failed,
+                "Repair finished, but some objects could not be repaired"
+            );
+            Err(OperatorError::ReconcileError(
+                first_failure(&r)
+                    .unwrap_or_else(|| format!("{} object(s) could not be repaired", r.failed)),
+            ))
+        }
         Ok(r) => {
             tracing::info!(
                 name,
@@ -1004,13 +1062,37 @@ async fn after_failed_attempt(
     Err(OperatorError::ReconcileError(cause.to_string()))
 }
 
+/// Return the message for a drifted object the operator leaves as it is.
+fn drift_not_reverted_message(drift: &kix::plan::live::DriftNotReverted) -> String {
+    let resource = drift.rid.display_id();
+    let owners = if drift.owners.is_empty() {
+        "another field manager now owns its fields".to_string()
+    } else {
+        let named: Vec<String> = drift
+            .owners
+            .iter()
+            .map(|o| format!("{} now owns {}", o.manager, o.fields.join(", ")))
+            .collect();
+        named.join("; ")
+    };
+    format!(
+        "{resource} changed on the cluster since Kix applied it ({owners}). The Kix operator never overwrites fields owned by another field manager, so it left {resource} unchanged. Run `kix deploy` to take those fields back, or list them in `ownership.cede` if that manager should keep owning them."
+    )
+}
+
 /// Return what stopped a run: the first object that failed and why, or the
 /// run's own error when no object failed.
 fn stop_cause(error: &DeployError) -> String {
-    match error.partial().failures.first() {
-        Some(f) => format!("{}: {}", f.node, f.message),
-        None => error.to_string(),
-    }
+    first_failure(error.partial()).unwrap_or_else(|| error.to_string())
+}
+
+/// Return the first object of `result` that failed and why, or `None` when
+/// none failed.
+fn first_failure(result: &DeployResult) -> Option<String> {
+    result
+        .failures
+        .first()
+        .map(|f| format!("{}: {}", f.node, f.message))
 }
 
 /// Return the `status.failure.reason` of a record whose deploy the operator
@@ -2368,6 +2450,48 @@ mod tests {
         assert_eq!(status["phase"], PHASE_ACTIVE);
         assert_eq!(status["failedAttempts"], 0);
         assert!(event_reasons(&api).is_empty());
+    }
+
+    /// A repair goes on past an object it could not repair, and only a
+    /// repair does. A repair that ends with such an object is an error, so
+    /// the next repair comes after the error requeue, and the record is not
+    /// written.
+    #[tokio::test]
+    async fn a_repair_with_an_object_it_could_not_repair_requeues_as_an_error() {
+        assert_eq!(Reconcile::Repair.on_error(), OnErrorPolicy::Continue);
+        for deploy in [Reconcile::Start, Reconcile::Redeploy, Reconcile::Resume] {
+            assert_eq!(deploy.on_error(), OnErrorPolicy::Stop);
+        }
+
+        let mut record = deploying(0);
+        record["status"]["phase"] = json!(PHASE_ACTIVE);
+        let api = FakeApi::new([record]);
+        let ctx = operator(&api, 0).await;
+        let DeployError::NodesFailed { partial, .. } = stopped() else {
+            unreachable!()
+        };
+        let repaired = DeployResult {
+            configured: 1,
+            ..partial
+        };
+        let (answer, status) = after_a_run(&api, &ctx, Reconcile::Repair, Ok(repaired)).await;
+        let err = answer.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "reconcile failed: Secret/db@app: cannot decrypt SOPS file db.yaml\n  no key"
+        );
+        assert_eq!(
+            error_policy(
+                Arc::new(
+                    serde_json::from_value(api.object("Activation", "a-new").unwrap()).unwrap()
+                ),
+                &err,
+                Arc::new(operator(&api, 0).await),
+            ),
+            Action::requeue(ERROR_REQUEUE_INTERVAL)
+        );
+        assert_eq!(status["phase"], PHASE_ACTIVE);
+        assert_eq!(status["failedAttempts"], 0);
     }
 
     /// A new request starts the count again: a Queued record submitted

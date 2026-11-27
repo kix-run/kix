@@ -55,11 +55,6 @@ pub struct ImportTarget {
     /// `kix.run/crd-served-versions`. Each version must appear in the live
     /// CRD's `spec.versions` with `served: true`. Empty for non-CRD imports.
     pub served_versions: Vec<String>,
-    /// The platform Kix cluster that installs this CRD when running on a
-    /// consumer cluster ([`crate::manifest::lifecycle::left_to_platform`]).
-    /// Used in failure messages to direct the user to deploy or upgrade Kix on
-    /// the platform cluster.
-    pub platform: Option<String>,
 }
 
 impl ImportTarget {
@@ -69,25 +64,6 @@ impl ImportTarget {
             crate::manifest::types::api_group(&self.api_version),
             &self.kind,
         )
-    }
-
-    /// Build the target that a consumer deploy waits for instead of applying
-    /// `crd`, one of Kix's own CRDs managed by `platform`. The live CRD must
-    /// serve every version that `crd` declares.
-    pub fn left_to_platform(crd: &Value, platform: &str) -> Self {
-        ImportTarget {
-            kind: "CustomResourceDefinition".into(),
-            api_version: "apiextensions.k8s.io/v1".into(),
-            name: crd
-                .pointer("/metadata/name")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            namespace: None,
-            expected_keys: Vec::new(),
-            served_versions: served_crd_versions(crd),
-            platform: Some(platform.to_string()),
-        }
     }
 }
 
@@ -202,7 +178,6 @@ pub fn import_target_from_manifest(
         namespace,
         expected_keys,
         served_versions,
-        platform: None,
     }))
 }
 
@@ -244,12 +219,7 @@ pub(crate) async fn wait_for_import_target(
                             let unserved =
                                 unserved_crd_versions(&obj.data, &target.served_versions);
                             if !unserved.is_empty() {
-                                let fix = match &target.platform {
-                                    Some(platform) => format!(
-                                        "This cluster is a consumer, and its platform cluster '{platform}' installs Kix's own resource types. Upgrade Kix on '{platform}' first, then deploy again."
-                                    ),
-                                    None => "Correct version or servedVersions on the scope.mkCRDRef or mkImport crds entry that declares it.".to_string(),
-                                };
+                                let fix = "Correct version or servedVersions on the scope.mkCRDRef or mkImport crds entry that declares it.";
                                 return Ok(ReadinessResult::ImportMismatch {
                                     missing_keys: Vec::new(),
                                     message: format!(
@@ -337,16 +307,10 @@ pub(crate) async fn wait_for_import_target(
 
         let elapsed = start.elapsed();
         if elapsed >= timeout {
-            let message = match &target.platform {
-                Some(platform) => format!(
-                    "{} {} is not on the cluster, or is not established. This cluster is a consumer, and its platform cluster '{platform}' installs Kix's own resource types. Deploy Kix on '{platform}' first, then deploy again.",
-                    target.kind, target.name
-                ),
-                None => format!(
-                    "import target {}/{} (apiVersion {}) not found on the cluster before the timeout expired.",
-                    target.kind, target.name, target.api_version
-                ),
-            };
+            let message = format!(
+                "import target {}/{} (apiVersion {}) not found on the cluster before the timeout expired.",
+                target.kind, target.name, target.api_version
+            );
             return Ok(ReadinessResult::TimedOut { elapsed, message });
         }
         tokio::time::sleep(POLL_INTERVAL).await;

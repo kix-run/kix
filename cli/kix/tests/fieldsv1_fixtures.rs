@@ -12,8 +12,18 @@ use kube::api::DynamicObject;
 use serde_json::Value;
 
 use kix::cluster::drift::{self, DriftVerdict};
+use kix::cluster::field_manager::FieldManager;
 use kix::cluster::fieldsv1;
+use kix::cluster::revision::AppliedHashes;
 use kix::manifest::keys;
+
+/// The field manager of the Kix cluster the fixtures are read for. They were
+/// applied under the legacy name, which counts as every Kix cluster's own.
+fn manager() -> FieldManager {
+    // The fixtures were captured from objects an older Kix applied under the
+    // legacy field manager.
+    FieldManager::unmigrated("fixture")
+}
 
 fn load(json: &str) -> DynamicObject {
     serde_json::from_str(json).expect("fixture must deserialize as DynamicObject")
@@ -34,7 +44,7 @@ fn coowned() -> DynamicObject {
 #[test]
 fn kix_fieldset_found_on_all_fixtures() {
     for obj in [deployment(), secret(), coowned()] {
-        let fs = fieldsv1::kix_fieldset(&obj).expect("kix Apply entry present");
+        let fs = fieldsv1::kix_fieldset(&obj, &manager()).expect("kix Apply entry present");
         assert!(fs.get("f:spec").is_some() || fs.get("f:data").is_some());
     }
 }
@@ -47,13 +57,13 @@ fn fieldset_reads_typed_metadata_not_raw_data() {
     if let Some(map) = obj.data.as_object_mut() {
         map.remove("metadata");
     }
-    assert!(fieldsv1::kix_fieldset(&obj).is_some());
+    assert!(fieldsv1::kix_fieldset(&obj, &manager()).is_some());
 }
 
 #[test]
 fn deployment_projection_shape() {
     let obj = deployment();
-    let fields = fieldsv1::kix_fieldset(&obj).unwrap();
+    let fields = fieldsv1::kix_fieldset(&obj, &manager()).unwrap();
     let full = fieldsv1::merge_typed_metadata(&obj);
     let proj = fieldsv1::project(&full, &fields);
 
@@ -99,7 +109,7 @@ fn deployment_projection_shape() {
 #[test]
 fn secret_projection_includes_data() {
     let obj = secret();
-    let fields = fieldsv1::kix_fieldset(&obj).unwrap();
+    let fields = fieldsv1::kix_fieldset(&obj, &manager()).unwrap();
     let full = fieldsv1::merge_typed_metadata(&obj);
     let proj = fieldsv1::project(&full, &fields);
     assert_eq!(
@@ -116,14 +126,17 @@ fn secret_projection_includes_data() {
 #[test]
 fn hash_is_stable_across_recompute_and_roundtrip() {
     let obj = deployment();
-    let h1 = fieldsv1::applied_content_hash(&obj).unwrap();
-    let h2 = fieldsv1::applied_content_hash(&obj).unwrap();
+    let h1 = fieldsv1::applied_content_hash(&obj, &manager()).unwrap();
+    let h2 = fieldsv1::applied_content_hash(&obj, &manager()).unwrap();
     assert_eq!(h1, h2);
 
     // Round-trip through JSON (as a watch/LIST would re-deliver the object).
     let json = serde_json::to_string(&obj).unwrap();
     let reparsed: DynamicObject = serde_json::from_str(&json).unwrap();
-    assert_eq!(h1, fieldsv1::applied_content_hash(&reparsed).unwrap());
+    assert_eq!(
+        h1,
+        fieldsv1::applied_content_hash(&reparsed, &manager()).unwrap()
+    );
 }
 
 #[test]
@@ -131,45 +144,54 @@ fn hash_ignores_own_stamp_annotation() {
     // The stamp must not change its own hash: rewriting kix.run/applied-hash
     // (or any kix.run/* bookkeeping) leaves the hash untouched.
     let mut obj = secret();
-    let before = fieldsv1::applied_content_hash(&obj).unwrap();
+    let before = fieldsv1::applied_content_hash(&obj, &manager()).unwrap();
     obj.metadata
         .annotations
         .as_mut()
         .unwrap()
         .insert(keys::APPLIED_HASH.to_string(), before.clone());
-    assert_eq!(before, fieldsv1::applied_content_hash(&obj).unwrap());
+    assert_eq!(
+        before,
+        fieldsv1::applied_content_hash(&obj, &manager()).unwrap()
+    );
 }
 
 #[test]
 fn tamper_on_kix_owned_field_changes_hash() {
     let mut obj = deployment();
-    let before = fieldsv1::applied_content_hash(&obj).unwrap();
+    let before = fieldsv1::applied_content_hash(&obj, &manager()).unwrap();
     *obj.data
         .pointer_mut("/spec/template/spec/containers/0/image")
         .unwrap() = Value::String("nginx:evil".into());
-    let after = fieldsv1::applied_content_hash(&obj).unwrap();
+    let after = fieldsv1::applied_content_hash(&obj, &manager()).unwrap();
     assert_ne!(before, after, "kix-owned image change must change the hash");
 }
 
 #[test]
 fn tamper_on_kix_owned_secret_data_changes_hash() {
     let mut obj = secret();
-    let before = fieldsv1::applied_content_hash(&obj).unwrap();
+    let before = fieldsv1::applied_content_hash(&obj, &manager()).unwrap();
     *obj.data.pointer_mut("/data/password").unwrap() = Value::String("dGFtcGVyZWQ=".into());
-    assert_ne!(before, fieldsv1::applied_content_hash(&obj).unwrap());
+    assert_ne!(
+        before,
+        fieldsv1::applied_content_hash(&obj, &manager()).unwrap()
+    );
 }
 
 #[test]
 fn deleting_kix_owned_field_changes_hash() {
     let mut obj = deployment();
-    let before = fieldsv1::applied_content_hash(&obj).unwrap();
+    let before = fieldsv1::applied_content_hash(&obj, &manager()).unwrap();
     obj.data
         .pointer_mut("/spec/template/spec/containers/0")
         .unwrap()
         .as_object_mut()
         .unwrap()
         .remove("env");
-    assert_ne!(before, fieldsv1::applied_content_hash(&obj).unwrap());
+    assert_ne!(
+        before,
+        fieldsv1::applied_content_hash(&obj, &manager()).unwrap()
+    );
 }
 
 #[test]
@@ -179,14 +201,14 @@ fn tamper_on_foreign_owned_field_keeps_hash() {
     // Kix hash (the take-over itself was the drift, already reflected in the
     // fieldset shrink at take-over time).
     let mut obj = coowned();
-    let before = fieldsv1::applied_content_hash(&obj).unwrap();
+    let before = fieldsv1::applied_content_hash(&obj, &manager()).unwrap();
     *obj.data.pointer_mut("/spec/replicas").unwrap() = serde_json::json!(7);
     *obj.data
         .pointer_mut("/spec/template/spec/containers/0/image")
         .unwrap() = Value::String("nginx:9.9.9".into());
     assert_eq!(
         before,
-        fieldsv1::applied_content_hash(&obj).unwrap(),
+        fieldsv1::applied_content_hash(&obj, &manager()).unwrap(),
         "foreign-owned fields are outside kix's projection"
     );
 }
@@ -197,7 +219,7 @@ fn fieldset_shrink_after_takeover_changes_hash() {
     // with vs without `f:image` hashes differently. Simulate the pre-takeover
     // state by re-adding f:image to Kix's entry in the co-owned fixture.
     let obj = coowned();
-    let after_takeover = fieldsv1::applied_content_hash(&obj).unwrap();
+    let after_takeover = fieldsv1::applied_content_hash(&obj, &manager()).unwrap();
 
     let mut restored = obj.clone();
     let entries = restored.metadata.managed_fields.as_mut().unwrap();
@@ -211,7 +233,7 @@ fn fieldset_shrink_after_takeover_changes_hash() {
         .as_object_mut()
         .unwrap()
         .insert("f:image".to_string(), serde_json::json!({}));
-    let before_takeover = fieldsv1::applied_content_hash(&restored).unwrap();
+    let before_takeover = fieldsv1::applied_content_hash(&restored, &manager()).unwrap();
 
     assert_ne!(before_takeover, after_takeover);
 }
@@ -220,7 +242,7 @@ fn fieldset_shrink_after_takeover_changes_hash() {
 fn keyed_list_matching_is_by_key_not_position() {
     let mut obj = deployment();
     let baseline_proj = {
-        let fields = fieldsv1::kix_fieldset(&obj).unwrap();
+        let fields = fieldsv1::kix_fieldset(&obj, &manager()).unwrap();
         fieldsv1::project(&fieldsv1::merge_typed_metadata(&obj), &fields)
     };
 
@@ -234,7 +256,7 @@ fn keyed_list_matching_is_by_key_not_position() {
         .unwrap();
     containers.reverse();
 
-    let fields = fieldsv1::kix_fieldset(&obj).unwrap();
+    let fields = fieldsv1::kix_fieldset(&obj, &manager()).unwrap();
     let proj = fieldsv1::project(&fieldsv1::merge_typed_metadata(&obj), &fields);
     let projected = proj
         .pointer("/spec/template/spec/containers")
@@ -274,13 +296,17 @@ fn keyed_list_matching_is_by_key_not_position() {
 #[test]
 fn check_object_in_sync_when_stamp_matches() {
     let mut obj = deployment();
-    let hash = fieldsv1::applied_content_hash(&obj).unwrap();
+    let hash = fieldsv1::applied_content_hash(&obj, &manager()).unwrap();
     obj.metadata
         .annotations
         .as_mut()
         .unwrap()
         .insert(keys::APPLIED_HASH.to_string(), hash);
-    let report = drift::check_object(&obj);
+    let report = drift::check_object(
+        &obj,
+        AppliedHashes::from_annotations().applied(&obj),
+        &manager(),
+    );
     assert_eq!(report.verdict, DriftVerdict::InSync);
     assert_eq!(report.rid.name, "fixture-web");
 }
@@ -295,7 +321,15 @@ fn check_object_unstamped_without_annotation() {
         .as_mut()
         .unwrap()
         .retain(|k, _| !keys::is_kix_key(k));
-    assert_eq!(drift::check_object(&obj).verdict, DriftVerdict::Unstamped);
+    assert_eq!(
+        drift::check_object(
+            &obj,
+            AppliedHashes::from_annotations().applied(&obj),
+            &manager()
+        )
+        .verdict,
+        DriftVerdict::Unstamped
+    );
 }
 
 /// Verify that an object stamped by Kix under a retired domain still reads as
@@ -312,14 +346,30 @@ fn check_object_reads_a_stamp_under_a_retired_domain() {
         format!("{legacy}/applied-hash"),
         "some-old-hash".to_string(),
     );
-    assert_ne!(drift::check_object(&obj).verdict, DriftVerdict::Unstamped);
+    assert_ne!(
+        drift::check_object(
+            &obj,
+            AppliedHashes::from_annotations().applied(&obj),
+            &manager()
+        )
+        .verdict,
+        DriftVerdict::Unstamped
+    );
 }
 
 #[test]
 fn check_object_no_fieldset_when_managed_fields_stripped() {
     let mut obj = deployment();
     obj.metadata.managed_fields = None;
-    assert_eq!(drift::check_object(&obj).verdict, DriftVerdict::NoFieldset);
+    assert_eq!(
+        drift::check_object(
+            &obj,
+            AppliedHashes::from_annotations().applied(&obj),
+            &manager()
+        )
+        .verdict,
+        DriftVerdict::NoFieldset
+    );
 }
 
 #[test]
@@ -343,7 +393,7 @@ fn check_object_drifted_with_attribution() {
         .as_object_mut()
         .unwrap()
         .insert("f:image".to_string(), serde_json::json!({}));
-    let stamped_hash = fieldsv1::applied_content_hash(&pre_takeover).unwrap();
+    let stamped_hash = fieldsv1::applied_content_hash(&pre_takeover, &manager()).unwrap();
 
     let mut obj = coowned();
     obj.metadata
@@ -352,7 +402,11 @@ fn check_object_drifted_with_attribution() {
         .unwrap()
         .insert(keys::APPLIED_HASH.to_string(), stamped_hash);
 
-    let report = drift::check_object(&obj);
+    let report = drift::check_object(
+        &obj,
+        AppliedHashes::from_annotations().applied(&obj),
+        &manager(),
+    );
     let DriftVerdict::Drifted {
         foreign,
         unrecorded_scale,
@@ -409,7 +463,7 @@ fn check_object_drifted_with_attribution() {
 /// `/scale` to `live` replicas without a recorded owner.
 fn scaled_without_owner(live: i64) -> DynamicObject {
     let mut obj = deployment();
-    let stamp = fieldsv1::applied_content_hash(&obj).unwrap();
+    let stamp = fieldsv1::applied_content_hash(&obj, &manager()).unwrap();
     obj.metadata
         .annotations
         .as_mut()
@@ -441,7 +495,13 @@ fn release_replicas(obj: &mut DynamicObject) {
 }
 
 fn unrecorded_scale(obj: &DynamicObject) -> Option<drift::UnrecordedScale> {
-    match drift::check_object(obj).verdict {
+    match drift::check_object(
+        obj,
+        AppliedHashes::from_annotations().applied(obj),
+        &manager(),
+    )
+    .verdict
+    {
         DriftVerdict::Drifted {
             foreign,
             unrecorded_scale,
@@ -484,7 +544,7 @@ fn unowned_replicas_kix_never_applied_is_not_attributed() {
     // no recorded owner drifted the object.
     let mut obj = deployment();
     release_replicas(&mut obj);
-    let stamp = fieldsv1::applied_content_hash(&obj).unwrap();
+    let stamp = fieldsv1::applied_content_hash(&obj, &manager()).unwrap();
     obj.metadata
         .annotations
         .as_mut()
