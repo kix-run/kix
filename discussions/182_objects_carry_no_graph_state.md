@@ -1,6 +1,6 @@
 # 182: Objects carry no graph state
 
-**Status:** Draft (2026-11-27). Proposed design. Section 9 lists what a review should attack.
+**Status:** Accepted for building (2026-11-27). Section 9 says what the adversarial review changed.
 **Related:** `archive/175_one_home_for_what_a_deploy_did.md` (this finishes it), `archive/175a_revisions_build_notes.md`, `archive/150_scope_managed_sweep_to_one_cluster.md`, `55_shared_resource_ownership.md`, `ROADMAP.md` ("Two Kix clusters that render one shared object differently").
 
 ## 1. Summary
@@ -18,9 +18,10 @@ same object.
 
 This design removes graph state from objects:
 
-1. Kix stops writing `kix.run/identity-hash` and `kix.run/depends-on` to
-   the cluster. Each Kix cluster's revisions hold both facts.
-2. A revision records a hash of each object's content, and the object's
+1. Kix stops writing `kix.run/identity-hash`, `kix.run/depends-on`, and
+   the three annotations that name an object's instance. Each Kix
+   cluster's revisions hold those facts.
+2. A revision records a hash of each object's manifest, and the object's
    dependency edges by name.
 3. The planner's three rules become one.
 4. An import is a statement about the cluster, so Kix records it in the
@@ -109,63 +110,85 @@ dependency.
 
 ## 4. Design
 
+Words used below. The **graph notes** are the annotations that describe one
+Kix cluster's graph: `kix.run/identity-hash`, `kix.run/depends-on`, and the
+three that name an object's instance, `kix.run/package`,
+`kix.run/package-namespace`, and `kix.run/lifecycle`. The **object hash** is
+a hash of the manifest Kix sends for one object. The **applied hash** is
+doc 175's: a hash of what the cluster stored.
+
 ### 4.1 What Kix sends
 
 The build is unchanged. A built manifest still carries `kix.run/depends-on`,
-and the CLI still stamps `kix.run/identity-hash` on it when it loads the
+and the CLI still stamps the other four graph notes on it when it loads the
 build. The scheduler, the graph commands, bundles, and stored builds read
 them as today.
 
 One function turns a built manifest into the manifest Kix sends. It removes
-the two graph annotations. Every request that sends a manifest uses it: the
-apply, the dry run, the forced-write check, and the migration write. Every
-comparison of a build with the cluster uses it too.
+the five graph notes, so Kix sends what the library rendered and nothing the
+graph added. Every request that sends a manifest uses it: the apply, the
+dry run, the forced-write check, and the migration write. Every comparison
+of a build with the cluster uses it too, including the offline plan.
+
+The three instance notes go with the two hashes because they are the same
+kind of fact. Two Kix clusters that make one CRD from instances with
+different names would conflict on `kix.run/package-namespace`, and
+`kix.run/lifecycle` comes from a package's `meta`, so it can differ between
+two library versions. A revision's `slot` already names the instance.
 
 Kix's own Activation record keeps its annotations. It belongs to one Kix
 cluster, its name is its build's hash, and no revision lists it.
-
-The annotations that say which instance an object belongs to
-(`kix.run/package`, `kix.run/package-namespace`, `kix.run/lifecycle`) stay
-on the object. They do not change when a dependency changes. Two Kix
-clusters that put one object in two different instances get a conflict,
-and that conflict is real.
 
 ### 4.2 Revisions, format 2
 
 ```yaml
 spec:
   format: 2
-  slot: { kind: instance, namespace: monitoring, instance: grafana }
+  slot: { kind: instance, namespace: db, instance: main, lifecycle: stateful }
   objects:
-    - hash: 9f2c...          # content hash
-      group: apps
-      kind: Deployment
-      namespace: monitoring
-      name: grafana
+    - hash: 9f2c...          # object hash
+      group: example.com
+      kind: Widget
+      namespace: db
+      name: main
       needs:
-        - ConfigMap/monitoring/grafana-datasources
-        - controller:Deployment.apps/stackgres-system/stackgres-operator
-  import:                    # only for an import instance
-    apiVersion: v1
-    kind: Service
-    namespace: kube-system
-    name: kube-dns
+        - { kind: ConfigMap, namespace: db, name: main-config }
+        - { kind: PackageInstance, group: kix.run, namespace: db, name: crd-ref-main-widgets-example-com }
+  imports:
+    - name: crd-ref-main-widgets-example-com
+      hash: 77ab...
+      target: { apiVersion: apiextensions.k8s.io/v1, kind: CustomResourceDefinition, name: widgets.example.com }
+      needs:
+        - { as: requires, group: apps, kind: Deployment, namespace: ops, name: widget-operator }
 status:
   applied:
     9f2c...: 51ab...
 ```
 
-- **`hash` is the content hash:** a hash of the manifest Kix sends, before
-  encrypted values are filled in. It changes when the object's own manifest
-  changes and at no other time. Kix compares it for equality and reads
-  nothing else from it.
-- **`needs` lists the object's dependencies by name,** with the prefix
-  `depends-on` gives them today (`requires:`, `controller:`, `extra:`, or
-  none). Names do not change when a dependency's content changes.
-- **`import` describes what an import instance stands for.** Section 4.5.
-- A revision's name is still the Kix cluster and a hash of `spec`. With
-  content hashes and named edges, a deploy that leaves an instance alone
-  now leaves its revision alone too.
+- **`hash` is the object hash:** a hash of the manifest of section 4.1, with
+  sorted keys and nulls removed, before encrypted values are filled in. It
+  covers every other `kix.run/*` annotation, so a changed SOPS file changes
+  it through `kix.run/sops-digest`. Kix compares it for equality and reads
+  nothing else from it. No reader joins it with a build's store hashes:
+  every join between a revision and a build goes by name. A test fixture
+  pins the function, because the value is stored state.
+- **`needs` lists the object's dependencies by name,** each with the role
+  `depends-on` gives it today (`requires`, `controller`, `extra`, or none).
+  Names do not change when a dependency's content changes.
+- **`imports` lists the instance's import markers** (section 4.5): the
+  marker's name, what it stands for, and its own `needs`. An edge to a
+  marker names it as today, so an edge that passes through a marker, such
+  as custom resource to CRD marker to operator, stays whole.
+- A reader of `objects` gets only objects Kix makes. A reader of edges gets
+  `objects` and `imports`.
+- A revision's name is still the Kix cluster and a hash of `spec`. A deploy
+  that leaves an instance alone now leaves its revision alone too.
+- Code that maps an object to its applied hash keys on the object's name
+  and hash, not on the whole entry, so a changed edge does not lose it.
+- The new CRD must be on the cluster before the first format 2 write. An
+  API server with the old definition drops the new fields without an
+  error. Kix installs its own CRDs at the start of a deploy, and this
+  design depends on that order.
 
 Size: the homelab cluster has 334 objects and 980 edges, 2.9 for each
 object. An edge is about 60 bytes, so edges add about 180 bytes to an
@@ -183,15 +206,18 @@ the object, the applied hash does that work. For each object the new build
 makes:
 
 > **Skip the object when a revision this Kix cluster needs holds an applied
-> hash for the new content hash, and the live object still matches that
+> hash for the new object hash, and the live object still matches that
 > applied hash. In every other case, apply it and record the applied
 > hash.**
 
-"Matches" is today's comparison: the applied hash against the hash of the
-fields of the live object that this Kix cluster owns
-(`cli/kix/src/cluster/drift.rs`).
-
-The rule gives the same action as the three rules in every case I can find:
+For the rule to hold, the two hashes must cover the same things. Today the
+applied hash leaves out every `kix.run/*` annotation, because a stamp
+written after the apply must not change its own hash. No stamp is written
+after the apply any more. So the applied hash covers every field this Kix
+cluster owns, and leaves out only the retired notes: the five graph notes
+and doc 175's two. Without this, a change to `kix.run/readiness` alone
+would be skipped after a failed deploy. With it,
+`apply::owner_stamps_moved` has no work left and goes.
 
 | Case | Today | With one rule |
 |---|---|---|
@@ -199,8 +225,15 @@ The rule gives the same action as the three rules in every case I can find:
 | Content changed in the build | rule 1, apply | no entry for the new hash, apply |
 | Only a dependency changed | rule 1, a write that changes two annotations | entry exists and matches: **skip** |
 | A run died after the apply and before the status write | rule 2, apply again | no entry, apply again (it changes nothing) |
-| Edited by hand | rule 3, reverting drift | entry exists, live differs, apply as reverting drift |
+| Edited by hand | rule 3, reverting drift | entry exists, live differs, reverting drift |
 | A failed deploy wrote a newer build over it | rule 1, labelled "applied by record X" | entry exists, live differs, apply |
+| Only a dependency changed, and someone edited it | rule 1, no force, Kubernetes refuses | **reverting drift** |
+| A killed run wrote over it, and another tool then took a field | rule 1, no force, Kubernetes refuses | **reverting drift** |
+
+The last two rows change. Reverting drift asks Kubernetes which fields a
+forced write would take, shows them in the plan, and forces after you
+confirm. That is doc 175's decision 1. No case goes from a forced write to
+an unforced one.
 
 The labels come from the same facts:
 
@@ -212,57 +245,84 @@ The labels come from the same facts:
 - **Left by a deploy with failures:** the current record is `Degraded` and
   its revision holds no applied hash for the object.
 
-One label gets weaker. A deploy that was killed records no applied hashes
-(`scheduler/mod.rs` writes them once, after the last object). If it wrote a
-newer build over an object, the next plan sees fields that this Kix
-cluster's own manager changed and no record of it. Today the live identity
-hash names the record. The new plan says the object was changed by a deploy
-of this Kix cluster that did not finish. The action is the same. Section 8
-has an option that closes the gap.
+A deploy that was killed records no applied hashes. If it wrote a newer
+build over an object, the next plan cannot name the record. It labels the
+object as changed by a deploy of this Kix cluster that did not finish, when
+a stopped record's revision names the object and holds no applied hash for
+it. Section 8 has an option that narrows this.
+
+**A runner that never forces** (the operator) skips a drifted object today
+and reports it, on the grounds that the object carries the build's hash.
+That is no longer known. So the operator applies the build without the
+fields other managers hold, which changes nothing when its own fields are
+already right, and reports the held fields as today. It does not record a
+new applied hash for such an object, so the report stays until the drift
+is gone.
+
+**Readers with no new build.** `kix status` and `kix diff --live` compare
+the live object with the applied hash that the current record's revision
+holds for it, found by name. A live object that matches a stopped record's
+entry is shown as written by that deploy.
 
 **Objects the new build does not make.** A live object becomes an orphan
 when a revision of the current record or the kept-orphans revision names
 it, as today. For a `Failed` or `Partial` record, today's test is "the live
 identity hash is the one that record gives the object, and this Kix
 cluster's manager wrote it". The new test is "that record's revision names
-it, and this Kix cluster's manager wrote it". The hash half is no longer
-needed: only a record of this Kix cluster can have written under
-`kix/<cluster>`, and every record that could have is the current one (which
-takes the object in already), the kept-orphans revision (the same), or a
-stopped one.
+it, and the object has an apply entry under `kix/<cluster>` itself". The
+old shared manager `kix` does not count here, or a Kix cluster could delete
+an object that only another one wrote before the upgrade.
 
 ### 4.4 Which objects are Kix's
 
 Every sweep today keeps an object when it carries `kix.run/identity-hash`
-(`inventory::is_stamped`). The new test is a field manager entry of a Kix
-cluster, which `fieldsv1::written_by_kix` reads already. A revision of this
-Kix cluster that names the object says the same and attributes it. Both are
-written in the apply itself, or before it.
+(`inventory::is_stamped`). The new test is one thing: a field manager entry
+of a Kix cluster, which `fieldsv1::written_by_kix` reads already. A
+revision that names the object attributes it to a Kix cluster and does not
+make it Kix's by itself, so an object whose ownership records a restore
+dropped stays a copy until Kix applies it again, as today.
+
+Today's "unstamped" class is "written by Kix and not stamped". It becomes
+empty. Such an object is now an object Kix wrote that no revision names,
+which `kix gc --include unattributed` covers. `--include unstamped` is
+removed, and Kix refuses it with an error that names the other flag.
 
 ### 4.5 An import is not an object
 
-An import instance says that something exists which Kix does not make: the
-platform's DNS Service, a storage class, a CRD another tool installs. Today
-Kix applies a `PackageInstance` marker for it and then waits for the thing
-itself. The wait reads the build's marker. Nothing reads the live marker
-except `kix status`, which shows it as "external".
+An import says that something exists which Kix does not make: the
+platform's DNS Service, a CRD another tool installs, a Secret or Service a
+package refers to. The library makes a marker for each (`kix.mkImport`,
+`scope.mkCRDRef`, `mkSecretRef`, `mkServiceRef`). Today Kix applies the
+marker as a `PackageInstance` and then waits for the thing itself.
 
-The marker stays in the build, where it is a node of the graph. Kix no
-longer applies it. The instance's revision records the import in
-`spec.import`, so `kix status` and other readers can show it with no build
-at hand.
+The marker stays in the build, where it is a node of the graph, and Kix no
+longer applies it:
+
+- A marker is not one of the objects a build makes. So a marker already on
+  the cluster has left the build, like any object a build stops making.
+- The planner gives a marker no write. The scheduler treats it as it treats
+  an unchanged marker today: it checks that the target exists when
+  something this deploy writes depends on it.
+- The revision lists it under `imports`, so status, delete order, and the
+  controller lookup read it from there.
 
 This removes the only objects that every Kix cluster on a Kubernetes cluster
 wrote by construction. `kubectl get packageinstances` then lists the
-instances Kix deployed, and no entries that stand for something else.
+instances Kix deployed.
 
 ### 4.6 Delete order and status
 
 Prune order, `kix gc` order, the controller that removes a finalizer, and
 the "needed by" lines of `kix status` read `depends-on` from live objects
 whenever the build is not on the machine. They read `needs` from the
-revisions. One reader builds the edges from a set of revisions. The
-operator, which never has the build, uses the same reader.
+revisions. The operator, which never has the build, does the same. The
+edges Kix derives from content, such as a RoleBinding to its Role, still
+come from the live objects.
+
+Two orders get weaker. An object that no revision names
+(`kix gc --full-scan --include unattributed`) has only the edges derived
+from content. So has a kept-orphans revision that `kix gc` had to rebuild
+because it could not be read.
 
 ### 4.7 What stays the same
 
@@ -270,9 +330,9 @@ operator, which never has the build, uses the same reader.
   out every `kix.run/*` annotation.
 - `kix diff` between two builds. A build still knows its dependency hashes,
   so "only its dependencies changed" stays true there.
-- The plan document keeps its field for such changes. `kix plan` against a
-  cluster leaves it empty.
-- The lock, the head, the Activation record, and the applied hash.
+- The plan document keeps its field for such changes. Every plan of a
+  deploy leaves it empty.
+- The lock, the head, and the Activation record.
 
 ## 5. Migration
 
@@ -280,53 +340,58 @@ The first deploy by the new Kix already converts an older Kix's records and
 rewrites every object's metadata once (doc 175, section 7). This design adds
 to that one step. It does not add a second.
 
+- **Order.** The conversion reads every note it needs and stores the
+  revisions before the first object is written. A migration deploy that
+  dies and runs again then finds its revisions and does not need notes the
+  first run removed.
 - **Objects.** The first deploy moves each object to `kix/<cluster>` and
-  then sends the manifest without the two annotations. Kubernetes removes a
-  field that its owner stops sending. An object with unchanged content gets
-  the same treatment in the migration write.
-- **Revisions for the new record** come from the build, in format 2.
-- **Applied hashes across the upgrade.** For an object whose live identity
-  hash equals the one the new build gives it, the conversion copies the old
-  applied hash under the new content hash. A hand edit made before the
-  upgrade is then still reported as drift. For any other object the first
-  deploy applies without force, and Kubernetes refuses a field that someone
-  else took.
+  then sends the manifest without the graph notes. Kubernetes removes a
+  field that its owner stops sending.
+- **Applied hashes.** The old applied hash left out `kix.run/*`
+  annotations and the new one does not, so no old value can be kept as it
+  is. For an object whose live identity hash equals the one the new build
+  gives it, and which matches its old applied hash, the conversion stores
+  the new applied hash of the live object. For one that does not match, it
+  stores the old value, which no live object can match, so the plan reports
+  drift as it would have.
 - **Failed and Partial records and kept orphans of an older Kix.** Their
-  builds may not be on the machine, so their content hashes are unknown.
-  The conversion writes the old identity hash as `hash`. It is still a value
-  that says what that build wanted, and it never equals a content hash, so
-  the rule never skips such an object. `needs` comes from the live
-  `depends-on`, which the conversion reads before any write, as it reads the
-  other notes today.
+  builds may not be on the machine, so their object hashes are unknown. The
+  conversion writes the old identity hash as `hash`. It still says what
+  that build wanted, and it never equals an object hash, so the rule never
+  skips such an object. `needs` comes from the live `depends-on`.
 - **Format 1 revisions.** Only clusters deployed from `main` between #374
   and this change have them: one shared test cluster and developers' test clusters. No release
-  writes format 1. The first deploy treats them as it treats an older Kix's
-  records.
+  writes format 1. A revision's `spec` cannot change, so the first deploy
+  writes new revisions and a new map for each record it keeps, as it does
+  for an older Kix's records.
 - **Markers already on the cluster** have left the build. They are kept and
   listed like any other object that left, and `kix deploy --prune` or
   `kix gc` deletes them. A marker another Kix cluster still writes stays,
   and this Kix cluster gives up its share.
-- **Another Kix cluster on an older Kix.** It keeps writing its two
-  annotations and its markers under the manager `kix`. The new Kix does not
-  send those fields, so the two never conflict on them. This is the case
-  the trial failed on.
+- **Another Kix cluster on an older Kix.** It keeps writing its notes and
+  its markers under the manager `kix`. The new Kix sends none of those
+  fields and no markers, so the two never conflict on them. This is the
+  case the trial failed on.
 - **An older Kix that looks at the new Kix cluster's objects** sees Kix's
-  label and no identity hash. Its sweep sets such objects aside as
-  "unstamped", and `kix gc` deletes them only with
-  `--include unstamped`. Section 9 asks for a test.
+  label and no identity hash. From its code, `kix gc` deletes such an
+  object only with both `--include unstamped` and `--include unattributed`.
 
 ## 6. What users see
 
-- `silent`: `kix.run/identity-hash` and `kix.run/depends-on` are gone from
-  objects. This joins the record `revisions-annotations-retired`, which
-  already tells a reader of `kix.run/activations` and
-  `kix.run/applied-hash` to read revisions.
-- `silent`: import instances have no `PackageInstance` object.
-- `changed`: a deploy no longer writes to an object whose dependencies
-  changed, and `kix plan` no longer lists "tracking annotation only".
-- `added`: revision format 2 (`needs`, `import`).
-- `fixed`: the first Kix cluster to upgrade is no longer refused. This has
-  no record of its own, because no release had the refusal.
+- `silent`: the five graph notes are gone from objects. This joins the
+  record `revisions-annotations-retired`, which already tells a reader of
+  `kix.run/activations` and `kix.run/applied-hash` to read revisions.
+- `silent`: an import has no `PackageInstance` object.
+- `silent`: a deploy no longer writes to an object whose dependencies
+  changed. An operator that acts only when its custom resource is written
+  no longer sees a write when a Secret the resource depends on changes.
+  `kix plan` no longer lists "tracking annotation only".
+- `silent`: two cases that Kubernetes refused are now reported as reverting
+  drift (section 4.3).
+- `error`: `kix gc --include unstamped` is removed.
+- `added`: revision format 2 (`needs`, `imports`, `slot.lifecycle`).
+- The first Kix cluster to upgrade is no longer refused. This has no record
+  of its own, because no release had the refusal.
 
 ## 7. Alternatives considered
 
@@ -344,6 +409,12 @@ to that one step. It does not add a second.
 - **Keep the design and explain the refusal.** The first upgrade needs
   `--force-conflicts`, and so does every later one where the definitions
   differ.
+- **Keep the instance notes on objects.** This was the first version. They
+  do not change when a dependency changes, but two Kix clusters that make
+  one object from differently named instances conflict on them.
+- **Compare every `kix.run/*` annotation in the rule,** and keep the
+  applied hash as it is. It is smaller, and it turns one special check
+  into a general one where the other choice removes it.
 - **Keep `depends-on` on objects, by name.** It stops the rewrites. Two Kix
   clusters that give a shared object different dependencies still conflict
   on it.
@@ -360,36 +431,51 @@ to that one step. It does not add a second.
    hold nothing, so deleting them is safe. It is a second rule for when an
    object is deleted, which is why the design does not do it.
 
-## 9. What a review should attack
+## 9. Review, 2026-11-27
 
-1. The claim of section 4.3 that one rule gives the same action as three.
-   Look for a state where the live object matches an applied hash recorded
-   for the new content hash, and the object is still wrong.
-2. The orphan test for a stopped record without the hash half.
-3. Two Kix clusters and one shared object, through every step: first apply
-   by the second, a prune by one, a hand edit, and the applied hash each
-   keeps. The applied hash covers the fields a Kix cluster owns. Check that
-   a field both own does not make each report the other as drift.
-4. Content hash and encrypted values: a Secret from a SOPS file whose
-   decrypted value changes while the file's manifest does not.
-5. The migration, from 0.9, from 0.10.0-rc.6, and from format 1, with a
-   second Kix cluster left on the older Kix.
-6. An older Kix running `kix gc --full-scan --include unstamped` beside an
-   upgraded Kix cluster.
-7. Anything outside the CLI that reads the two annotations from a live
-   object: the operator, `scripts/`, the docs' recorded outputs.
+An adversarial review read this design against the code and found no flaw
+in the principle. It changed the design in these places:
+
+- **The applied hash must cover what the object hash covers** (section
+  4.3). As first written, a change to a `kix.run/*` annotation alone was
+  skipped after a failed deploy.
+- **Markers are of four kinds and edges pass through them** (sections 4.2
+  and 4.5). As first written, a revision recorded one import for each import
+  instance, and a prune with no build at hand could delete an operator
+  before its custom resource.
+- **The instance notes go too** (section 4.1). The first version kept them.
+- **The stopped-record orphan test needs this Kix cluster's own manager**
+  (section 4.3).
+- **The operator's skip** (section 4.3), **readers with no build**, the
+  offline plan (section 4.1), the "unstamped" class (section 4.4), and the
+  order of the migration (section 5) were not covered.
+
+It could not build a failing case for ceded fields, `stringData`, server
+defaults, a co-owned object, a rollback whose revisions are gone, `--only`,
+`--reconcile`, rerun Jobs, recreated objects, a kind that is not served
+yet, or an edge between Kix clusters.
+
+Tests it asked for, beyond section 10: a flip between two builds across a
+failed deploy and across a killed one, for each `kix.run/*` annotation; the
+delete order custom resource, CRD marker, operator with no build at hand;
+a killed migration deploy run again; Kix 0.9.2 running
+`kix gc --full-scan` beside an upgraded Kix cluster; a dependency name that
+holds a colon; one build read from a bundle and from the store gives the
+same object hashes.
 
 ## 10. Build order
 
 Each step ends with the full tests green.
 
-1. The function of section 4.1, used by every sender, with the annotations
-   still written. No behavior changes.
-2. Revision format 2 with `needs` and `import`, written beside the
-   annotations. Readers of edges move to revisions.
+1. The function of section 4.1, used by every sender, with the notes still
+   written. No behavior changes.
+2. Revision format 2 with `needs` and `imports`, written beside the notes.
+   Readers of edges move to revisions.
 3. The sweep reads field managers (section 4.4).
-4. The one rule (section 4.3), then stop sending the two annotations.
-5. Imports (section 4.5).
+4. The applied hash covers `kix.run/*` annotations, the one rule (section
+   4.3), then stop sending the graph notes.
+5. Imports (section 4.5). This part is the riskiest and can ship after the
+   others if a test shows a problem.
 6. Migration and conversion (section 5).
 7. Docs, change records, the cluster-state fixtures, `cli/README.md`, the
    skills.
