@@ -1,0 +1,3 @@
+# 2026-11-27 · `cli/kix/src/cluster/activation/mod.rs` · `current_among` picks the current record by `deployedAt` stamps that different machines' clocks wrote.
+
+When two records are current by phase, which a killed phase repair can leave, `current_among` takes the one with the later `kix.run/deployed-at`. A machine whose clock runs behind can make the older record win. Then `tenancy::older_kix_deployed_after` reads the cluster as one an older Kix deployed after this one, and the operator refusal (`features::operator_without_revisions`) judges the wrong record. The head's `status.current` already names the current record and does not depend on any clock.

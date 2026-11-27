@@ -1,3 +1,0 @@
-# 2026-11-26 · `cli/kix/src/plan/planner.rs` · The plan says it takes back fields another Kix cluster owns, and the deploy then stops on them.
-
-`write_reason` maps `Label::HeldByOtherCluster` to `WriteReason::RevertsDrift`, so the text plan counts the object in the `↺` line ("takes back the fields other field managers changed") and `takes_back` in `kix-cli/src/plan/render.rs` marks its drift as reverted. The run applies it without force (`Force::Only` holds only `RevertsDrift` objects), and Kubernetes refuses it with `ApplyError::KixClusterConflict`. The plan document needs a reason of its own for it.

@@ -2842,8 +2842,6 @@
           "kix"
           "deploy"
           "how-to-application"
-          "--reconcile"
-          "--force-conflicts"
           "-y"
         ];
       }

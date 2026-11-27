@@ -100,37 +100,43 @@ Settled without a question, from the code:
   release,** behind one constructor, for clusters and records an earlier
   Kix wrote.
 
-Settled while building stages 7 and 8:
+Settled while building stages 7 and 8, as reworked after the migration
+review:
 
 - **The manager name is `kix/<cluster>`.** A cluster name holds no `/`, so
-  it never equals `kix` or another fixed name. Until the migration moves an
-  object's `kix` entry, a reader of a cluster that is not migrated counts
-  `kix` as the cluster's own (`FieldManager::unmigrated`); after it, `kix`
-  belongs to a Kix cluster an older Kix still deploys.
+  it never equals `kix` or another fixed name. The `kix` entry counts as
+  this cluster's own only on an object its own records name, that no
+  record of an older Kix's cluster lists in the note, and on which every
+  other Kix cluster naming it has its own entry (`takes_legacy`). On any
+  other object Kix applies unforced.
 - **The CLI does not force a field another Kix cluster holds**
-  (`HeldByOtherCluster`). It applies without force, so a different
-  rendering is refused with K5636.
+  (`HeldByOtherCluster`, its own plan reason). A different rendering is
+  refused with K5636, in the dry run too.
 - **A Kix cluster that stops deploying a shared object gives up its fields**
-  with one empty apply under its own manager, once. Otherwise its stale
-  entry would keep the object for ever.
-- **The migration write is one JSON patch** with a `test` on
-  `resourceVersion`, before the object's first apply under the new name.
-  An object an older Kix's cluster also deploys keeps its note, with this
-  record's hash added, and its `kix` entries, until that cluster migrates.
-- **An older Kix that deploys after this one** leaves the cluster read as
-  not migrated, and the next deploy migrates again.
-- **`kix deploy --only` refuses on a cluster that is not migrated,** because
-  a `Partial` run never finalizes the move.
-- **The operator migrates when it deploys, refuses to repair before that,**
-  and announces `revisions`; the CLI refuses an operator that published
-  features without it.
+  with one empty apply under its own manager, at the start of the prune,
+  only while it has its own entry. A failed release stays on the kept list.
+- **Convert first.** Every run that holds the lock gives the records an
+  older Kix wrote (the current one, and `Failed` or `Partial` ones) their
+  revisions before it writes any object, then tidies objects with one JSON
+  patch each. The conversion writes no object and names a map only after its
+  revisions exist, so a run that stops leaves readable records.
+- **Objects shared with an older Kix's cluster** keep both notes and the
+  `kix` entries until that cluster moves.
+- **An older Kix that deploys after this one** leaves a record without a
+  map, which the next run converts.
+- **No refusal of `--only` or of the operator's repair:** both convert.
+- **The operator refusal is per Kix cluster:** every command that changes a
+  Kix cluster refuses (K9557) while a current, queued, or deploying record of
+  it was submitted to an operator that does not list `revisions`. An
+  operator that publishes nothing is refused too.
 - **`kix gc --full-scan` rebuilds a missing kept-orphans list** from live
-  objects with the cluster's `Apply` entry that no other revision names.
+  objects this cluster applied that no other revision names.
 
 Open: the cluster-level and kept-orphans revisions have no bound of their
-own (about 2,000 namespaces fill the first). They need a way to split. The
-CLI cannot see an operator from 0.9 or earlier, which publishes no features.
-Both are in `ROADMAP.md`.
+own (about 2,000 namespaces fill the first). They need a way to split. No
+command yet takes a cluster back from a removed operator, and the conversion
+does not yet refuse a listing it cannot complete. All three are in
+`ROADMAP.md`.
 
 ## 4. Build order
 
@@ -180,3 +186,19 @@ may not list; the choice of planner fails closed; and the operator reports
 drift another manager owns without writing it. The smaller findings on
 applied hashes (carry-forward, disagreeing revisions, unreadable maps) were
 fixed too.
+
+**The migration (2026-11-26).** The review found that the first deploy
+removed notes before every record that relied on them had a map, that a
+release could empty an object another cluster deploys, that a failed release
+was never tried again, and that the refusals of `--only`, of the repair, and
+of an old operator trapped users. The rework converts the records first,
+decides per object whose `kix` entry is whose, releases in the prune step,
+removes the two refusals, and refuses an old operator per Kix cluster.
+
+**The rework, second pass (2026-11-27).** The earlier findings are closed,
+apart from the way out of the operator refusal. New: the conversion trusts a
+listing that may miss a kind the account cannot list (a refusal is being
+built), a shared object stays untidied while the other cluster has any old
+record, an operator never gets its own entry on such an object, a release is
+skipped under `--skip-orphan-check`, and applied hashes reach the new
+revisions by a best-effort write. Fixes are in progress.

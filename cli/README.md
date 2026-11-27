@@ -1098,7 +1098,10 @@ over that plan through `ops::DryRun`, so every SSA and DELETE goes with
   Not checked: an unknown kind whose CRD the build brings, as
   `crd_created_by_this_deploy` for a CRD manifest of that group and kind and
   as `crd_installed_outside_kix` for a `crd-ref-*` import marker for a CRD in
-  its API group (`classify::CrdSource`), an unknown-kind, invalid, or other refusal of an object whose CRD
+  its API group, and as `crd_installed_by_kix` for one of Kix's own kinds,
+  whose CRD `own_crds::all()` gives and the deploy installs when it takes the
+  lock (`classify::InstalledKinds`, one `CrdSource` per kind; a CRD the build
+  carries wins), an unknown-kind, invalid, or other refusal of an object whose CRD
   the dry run would change (`ChangedCrds`: the object was checked against
   the CRD now served), a missing namespace the build creates, a webhook
   without dry-run support, and a webhook that could not reach a Service
@@ -1109,6 +1112,11 @@ over that plan through `ops::DryRun`, so every SSA and DELETE goes with
   immutable-field refusal followed by a `Recreated` answer for the same
   object is accepted, since the deploy recreates it. A recreated object stays in `packages` as changed, with the
   build comparison's field changes when the create could not be dry-run.
+  A conflict with another Kix cluster's manager keeps the apply's own
+  classification (`preview::Refusal::of_apply` turns
+  `ApplyError::KixClusterConflict` into `Refusal::KixClusterConflict` with the
+  `[K5636]` message), so the plan lists it under `admission` with reason
+  `kix_cluster_conflict`, not under `conflicts`.
 - **Deploy stops first.** When the plan has a conflict, a refused write, or a
   refused prune delete and `--on-error stop` (the default), `kix deploy`
   exits 1 before applying anything. `--on-error continue` applies the rest.

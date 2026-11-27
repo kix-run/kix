@@ -158,16 +158,15 @@ The text output has four parts:
 3. Any objects not in the current deploy that are still being deleted.
 4. A summary line with the counts.
 5. When an object is missing or changed, a `Next:` line that names
-   `kix deploy <cluster> --reconcile`, which puts it back, and
-   `kix plan <cluster> --reconcile`, which shows what that deploy would change
-   first. When another field manager owns fields on a changed object and Kix
-   does not co-own them (for example, after `kubectl edit` or `kubectl scale`),
-   the `Next:` line adds `--force-conflicts`. Fields shared with Kix still hold
-   what Kix applied, so a manager that shares all its fields with Kix does not
-   trigger `--force-conflicts`. A plain `kix deploy` also puts back a missing
-   object and takes back the changed fields of an object it applied (see
-   [How a deploy decides what to write](/docs/reference/cli/deploy/#how-a-deploy-decides-what-to-write)),
-   and forces only those objects, so you need neither flag for that.
+   `kix deploy <cluster>`, which puts it back, and `kix plan <cluster>`, which
+   shows what that deploy would change first (see
+   [How a deploy decides what to write](/docs/reference/cli/deploy/#how-a-deploy-decides-what-to-write)).
+   When another field manager owns fields on a changed object and Kix does not
+   co-own them (for example, after `kubectl edit` or `kubectl scale`), the line
+   names that manager and says the deploy takes its fields back. A manager that
+   shares all its fields with Kix changed none of them. When the manager is
+   another Kix cluster, or `kix` from an earlier version of Kix, the line says
+   the deploy does not take those fields and to make the definitions agree.
 
 ```text
 Cluster shop on Kubernetes v1.33.1 (context prod, https://prod.example:6443)
@@ -185,7 +184,7 @@ vault/vaultwarden
   Secret vault/vaultwarden-db        missing, needed by Deployment.apps vault/vaultwarden
 
 8 resources: 3 ok, 1 changed, 1 not ready, 1 missing, 2 not checked.
-Next: run `kix deploy shop --reconcile --force-conflicts` to put back what is missing or changed and take back the fields that kubectl-edit owns. `kix plan shop --reconcile --force-conflicts` shows what it would change first.
+Next: run `kix deploy shop` to put back what is missing or changed. `kix plan shop` shows what it would change first. The deploy takes back the fields that kubectl-edit owns.
 
 This account may not list secrets, so Kix did not check objects of those kinds.
 ```

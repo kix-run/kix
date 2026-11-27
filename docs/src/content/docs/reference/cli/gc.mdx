@@ -157,8 +157,10 @@ kinds.
 If the kept-orphans revision that the `Active` record names is missing or
 cannot be read, the default mode, `kix deploy --prune`, and the Kix operator
 refuse to delete anything. `kix gc --full-scan` then builds the list again
-from the live resources that carry this Kix cluster's field manager, that no
-other revision of the cluster names, and that the active deployment's build
+from the live resources that carry this Kix cluster's field manager (or the
+`kix` field manager and a `kix.run/activations` annotation that names one of
+its records, on a resource no deploy with this version has tidied yet), that
+no other revision of the cluster names, and that the active deployment's build
 does not contain, names it on the `Active` record, and runs the full scan.
 With `--dry-run` it only says how many resources the list would hold. Deploying with
 `--prune` every time keeps the list empty, so the default mode has no kept

@@ -1,0 +1,3 @@
+# 2026-11-27 · `cli/kix-cli/tests/kind_integration_test.rs` · Nothing runs the kind tests, so their assertions go stale.
+
+The tests are `#[ignore]` and no CI workflow runs them. On 2026-11-27 most of the seven tests failed on assertions that also fail on `main`: reworded UID refusals, a cluster name now quoted, `Kubernetes cluster ID:` printed only with `-v`, full resource ids such as `ClusterRole.rbac.authorization.k8s.io/...`, and saved-plan refusal texts changed by a copy pass. Each copy pass or message change breaks them unseen, and a real regression then hides among the stale failures. A scheduled CI job with kind would catch both.

@@ -120,9 +120,10 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
    An orphan that another Kix cluster still deploys is not pruned. The plan
    lists it as kept, then as `kept <resource>, still deployed by Kix cluster
    <name>`, read from that Kix cluster's records and revisions and from the
-   field managers on the live resource. After the deploy finishes, Kix gives up
-   this cluster's fields on each such resource with one empty apply, so the
-   other Kix cluster owns it alone. `kix rollback --prune` and a default
+   field managers on the live resource. At the start of the prune step, Kix
+   gives up this cluster's fields on each such resource with one empty apply,
+   so the other Kix cluster owns it alone. If that apply fails, the resource
+   stays on the kept-orphans list and the next deploy tries again. `kix rollback --prune` and a default
    `kix gc` follow the same rule. With `--offline` the plan has not read
    the cluster yet, so it says the check comes once the deploy connects.
    The prune checks each orphan again right before deleting it, and leaves
@@ -222,8 +223,11 @@ each object of the build, in this order:
    Kix sends the `resourceVersion` the plan read, so when something changes the
    object after the plan, the deploy stops and names the object. A field the
    object cedes with [`ownership.cede`](/docs/how-to/adopt-existing-resources/cede-fields-to-a-controller/)
-   never counts as drift. When another Kix cluster owns the changed field,
-   Kix applies without force, and the deploy stops with `[K5636]`.
+   never counts as drift. Kix never takes a field another Kix cluster
+   applies: it applies such an object without force, and the plan counts it
+   in a line that starts with `↻`. Kubernetes then adds this cluster's own
+   entry when the values agree, and refuses the apply when they differ, which
+   `kix plan` and the dry run already show as `[K5636]`.
 
 Kix writes nothing to any other object of the build. `--force-conflicts`
 forces every apply, also those of rule 1. Without it, a conflict on an
@@ -232,14 +236,18 @@ object of rule 1 stops the deploy.
 During planning, Kix lists the objects of each kind the build and the revisions
 name, across the cluster, with one `list` request per kind. For a kind the
 account may not list, Kix reads each object it needs with `get`, and the plan
-stops, naming the kinds, when the account may do neither. In the
+stops, naming the kinds, when the account may do neither.
+{/* GAP: the one-time conversion of an earlier version's records refuses with `[K9558]` when it must list a kind the account may not list. Describe it here once it is built. */}
+In the
 [`Plan` document](/docs/reference/cli/plan/#the-plan-document), each entry in
 `objects.writes` says in `reason` why Kix writes an object the build did not
 change.
 
-The first deploy of a Kix cluster with this version also rewrites the metadata
-of each object once, to move it from an earlier version's annotations to
-revisions. The plan counts those objects in a line that starts with `Upgrade:`.
+The first deploy of a Kix cluster with this version first gives the
+deployment records an earlier version wrote their revisions, before it writes
+any object, and then rewrites the metadata of each object once, to remove that
+version's annotations. The plan counts those objects in a line that starts with
+`Upgrade:`.
 See [The first deploy after upgrading](/docs/explanation/server-side-apply-and-drift/#the-first-deploy-after-upgrading).
 
 ## The deploy lock
@@ -254,10 +262,15 @@ request to the Kix operator, which takes the lock. Before it takes the lock,
 Kix installs any of its four CustomResourceDefinitions that is missing, which
 requires `get` and `create` permissions on `customresourcedefinitions` once
 (see [Kix's own CRDs](/docs/reference/annotations-crds-and-receipts/#activationhead)).
-A command stops with `[K9557]` before it takes the lock when a Kix operator on
-the Kubernetes cluster does not list the `revisions` feature, because an older
-operator writes back the annotations this version removes (see
+Every command that changes a Kix cluster stops with `[K9557]`, before it
+plans, while a current, queued, or deploying record of that Kix cluster was
+submitted to the Kix operator and the operator does not list the `revisions`
+feature, because an older operator writes back the annotations this version
+removes. An operator from Kix 0.9 or earlier is refused too. Other Kix
+clusters on the same Kubernetes cluster are not affected. Upgrade the
+operator, then run the command again (see
 [Operator mode](/docs/reference/cli/operator-mode/#requirements)).
+{/* GAP: the second way out of this refusal, `kix deploy <cluster> --operator-removed`, for a cluster whose operator was removed. Describe it here once it is built. */}
 
 Right after building and connecting, before reading cluster state for the
 plan, `kix deploy` checks whether another run holds the lock. If the lock is
@@ -541,11 +554,9 @@ any changes that run applied.
 
 ### Limits of `--only`
 
-- **First deploy**: `--only` requires a cluster that this version of Kix has
-  already deployed in full, because that deploy creates the initial active
-  deployment record and moves every object of an older Kix's cluster to
-  revisions (see
-  [The first deploy after upgrading](/docs/explanation/server-side-apply-and-drift/#the-first-deploy-after-upgrading)).
+- **First deploy**: `--only` requires a cluster that Kix has already
+  deployed in full, because the first deploy creates the initial active
+  deployment record.
 - **Operator-managed clusters**: `--only` is refused whenever the Kix operator
   deployed the cluster's active deployment record, whether someone ran
   `kix deploy --operator` or the record reached the operator another way (for
