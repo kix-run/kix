@@ -2,17 +2,21 @@
 // Link styled as a button. "primary" is the Electric Cobalt CTA button,
 // "ink" is the Sovereign Navy button, "outline" is the slate-bordered secondary,
 // and "outline-night" is the secondary on a Sovereign Navy section.
+// Any data-* attribute is passed to the link, as data-event is for
+// Plausible (layouts/Base.astro).
 interface Props {
   href: string;
   variant?: 'primary' | 'ink' | 'outline' | 'outline-night';
   size?: 'lg' | 'sm';
   class?: string;
+  [data: `data-${string}`]: string;
 }
-const { href, variant = 'primary', size = 'lg', class: className } = Astro.props;
+const { href, variant = 'primary', size = 'lg', class: className, ...data } = Astro.props;
 ---
 
 <a
   href={href}
+  {...data}
   class:list={[
     'inline-flex items-center justify-center gap-2 rounded-lg font-semibold whitespace-nowrap transition-colors [&_svg]:shrink-0',
     {
