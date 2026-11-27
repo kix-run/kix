@@ -2,6 +2,9 @@
 import { Check, Eye, GitCompare, Pencil, Rocket, Undo2 } from '@lucide/astro';
 import Section from '../Section.astro';
 
+const code = (text: string) =>
+  `<code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[13.5px] text-ink">${text}</code>`;
+
 const beats = [
   {
     title: 'Agents write infrastructure code now.',
@@ -13,7 +16,7 @@ const beats = [
   },
   {
     title: 'You need something small enough to review.',
-    body: 'You can review the results of kix check and the package-level plan from kix diff before approving a change.',
+    body: `You can review the results of ${code('kix check')} and the changes grouped by package from ${code('kix diff')} before approving a deployment.`,
   },
 ];
 
@@ -64,14 +67,13 @@ const steps = [
           beats.map((beat) => (
             <li class="flex flex-col gap-1.5 border-t border-line py-5">
               <h3 class="text-[18px] font-semibold">{beat.title}</h3>
-              <p class="text-[15.5px] leading-[1.55] text-ink-2">{beat.body}</p>
+              <p class="text-[15.5px] leading-[1.55] text-ink-2" set:html={beat.body} />
             </li>
           ))
         }
       </ul>
     </div>
-    <figure class="rounded-[14px] bg-night p-6 text-on-night sm:p-8">
-      <figcaption class="mb-6 font-mono text-[12.5px] text-on-night-2">the loop, for agents and people alike</figcaption>
+    <div class="rounded-[14px] bg-night p-6 text-on-night sm:p-8">
       <ol>
         {
           steps.map((step, i) => (
@@ -102,6 +104,6 @@ const steps = [
           ))
         }
       </ol>
-    </figure>
+    </div>
   </div>
 </Section>

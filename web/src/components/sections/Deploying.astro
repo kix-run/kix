@@ -13,7 +13,7 @@ const waves = [
 const notes = [
   {
     cmd: 'kix plan',
-    desc: 'Runs the deploy pipeline as a server-side dry run (dryRun=All) to surface webhook rejections, field ownership conflicts, and migrations before applying.',
+    desc: 'Runs the deploy as a server-side dry run to surface webhook rejections, field ownership conflicts, and stateful resource replacements before applying.',
   },
   {
     cmd: 'kix drift',
@@ -33,48 +33,42 @@ const notes = [
 <Section tone="night" labelledby="deploying-title">
   <div class="flex flex-col gap-12 lg:gap-14">
     <div class="flex max-w-[760px] flex-col gap-4">
-      <Heading id="deploying-title">Roll out in dependency waves from CI or your laptop.</Heading>
+      <Heading id="deploying-title">Roll out in dependency order from CI or your laptop.</Heading>
       <p class="text-[17px] leading-[1.6] text-on-night-2 md:text-[18px]">
-        Because the cluster definition and image pins live in Git, you can run <code class="rounded bg-night-2 px-1.5 py-0.5 font-mono text-[14.5px] text-on-night">kix deploy</code> from your laptop or any CI pipeline. Kix schedules resources wave by wave along the dependency graph and waits for each wave to report ready before applying the next.
+        Because the cluster definition and image pins live in Git, you can run <code class="rounded bg-night-2 px-1.5 py-0.5 font-mono text-[14.5px] text-on-night">kix deploy</code> from your laptop or any CI pipeline. Kix applies resources in dependency order and waits for each dependency to report ready before starting the next.
       </p>
       <p class="text-sm text-t-dim">An optional in-cluster operator is in development.</p>
     </div>
 
-    <div class="flex flex-col gap-4">
-      <p class="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 font-mono">
-        <span class="text-sm font-semibold text-t-green">$ kix deploy shop</span>
-        <span class="text-[13px] text-on-night-2">scheduled along the dependency DAG</span>
-      </p>
-      <ol class="flex flex-col xl:flex-row xl:items-stretch">
-        {
-          waves.map((resources, i) => (
-            <li
-              class:list={[
-                'flex min-w-0 flex-col xl:flex-row xl:items-center',
-                i > 0 ? 'xl:flex-[1_1_96px]' : 'xl:flex-[1_1_0%]',
-              ]}
-            >
-              {i > 0 && (
-                <span
-                  aria-hidden="true"
-                  class="flex shrink-0 items-center gap-2 py-1.5 pl-6 xl:w-24 xl:flex-col xl:gap-1 xl:py-0 xl:pl-0"
-                >
-                  <span class="h-5 w-[1.5px] bg-night-line xl:hidden" />
-                  <span class="font-mono text-[11px] text-t-green">ready</span>
-                  <span class="hidden h-[1.5px] w-full bg-night-line xl:block" />
-                </span>
-              )}
-              <div class="flex min-w-0 flex-1 flex-col gap-2 self-stretch rounded-lg border border-night-line bg-night-2 p-4 xl:min-h-[108px]">
-                <span class="font-mono text-xs font-semibold text-t-blue">wave {i + 1}</span>
-                {resources.map((r) => (
-                  <span class="font-mono text-[13.5px] break-all text-on-night">{r}</span>
-                ))}
-              </div>
-            </li>
-          ))
-        }
-      </ol>
-    </div>
+    <ol class="flex flex-col xl:flex-row xl:items-stretch">
+      {
+        waves.map((resources, i) => (
+          <li
+            class:list={[
+              'flex min-w-0 flex-col xl:flex-row xl:items-center',
+              i > 0 ? 'xl:flex-[1_1_96px]' : 'xl:flex-[1_1_0%]',
+            ]}
+          >
+            {i > 0 && (
+              <span
+                aria-hidden="true"
+                class="flex shrink-0 items-center gap-2 py-1.5 pl-6 xl:w-24 xl:flex-col xl:gap-1 xl:py-0 xl:pl-0"
+              >
+                <span class="h-5 w-[1.5px] bg-night-line xl:hidden" />
+                <span class="font-mono text-[11px] text-t-green">ready</span>
+                <span class="hidden h-[1.5px] w-full bg-night-line xl:block" />
+              </span>
+            )}
+            <div class="flex min-w-0 flex-1 flex-col gap-2 self-stretch rounded-lg border border-night-line bg-night-2 p-4 xl:min-h-[108px]">
+              <span class="font-mono text-xs font-semibold text-t-blue">step {i + 1}</span>
+              {resources.map((r) => (
+                <span class="font-mono text-[13.5px] break-all text-on-night">{r}</span>
+              ))}
+            </div>
+          </li>
+        ))
+      }
+    </ol>
 
     <dl class="grid grid-cols-1 border-t border-night-line pt-2 sm:grid-cols-2 lg:grid-cols-4">
       {

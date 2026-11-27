@@ -1,5 +1,5 @@
 ---
-import { ChevronRight, Check, GitMerge, GitPullRequest, MessageSquare, Receipt, Rocket } from '@lucide/astro';
+import { ChevronRight } from '@lucide/astro';
 import Section from '../Section.astro';
 import Terminal from '../Terminal.astro';
 
@@ -9,12 +9,12 @@ type Tone = 'text' | 'out' | 'dim' | 'changed' | 'added' | 'removed';
 type Run = [string, Tone];
 
 const pipeline = [
-  { step: '01', title: 'pull request', desc: 'edit cluster or package Nix files', icon: GitPullRequest },
-  { step: '02', title: 'kix check', desc: 'validate wiring, quotas, and policy offline', icon: Check },
-  { step: '03', title: 'kix diff / plan', desc: 'preview package-grouped changes on the PR', icon: MessageSquare },
-  { step: '04', title: 'merge', desc: 'every release is a Git commit', icon: GitMerge },
-  { step: '05', title: 'kix deploy', desc: 'apply in dependency waves and wait on readiness', icon: Rocket },
-  { step: '06', title: 'receipt', desc: 'record commit and image digests on the cluster', icon: Receipt },
+  { label: 'kix check', code: true },
+  { label: 'Pull request', code: false },
+  { label: 'kix diff / plan', code: true },
+  { label: 'Merge', code: false },
+  { label: 'kix deploy', code: true },
+  { label: 'Receipt', code: false },
 ];
 
 // `kix diff shop`, in the layout of the real captures in
@@ -74,31 +74,31 @@ const comment = {
 
 <Section id="plan" labelledby="plan-title">
   <div class="flex flex-col gap-16">
-    <!-- 6-Step End-to-End Lifecycle Overview Strip -->
-    <div class="flex flex-col gap-4">
-      <p class="font-mono text-xs font-semibold tracking-[1.2px] text-accent-text uppercase">
-        End-to-end delivery lifecycle
-      </p>
-      <ol class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-        {
-          pipeline.map((item) => (
-            <li class="flex flex-col gap-2 rounded-lg border border-line bg-paper-2/70 p-4">
-              <div class="flex items-center justify-between text-ink-2">
-                <span class="font-mono text-[11px] font-semibold text-accent-text">{item.step}</span>
-                <item.icon size={16} aria-hidden="true" class="text-ink-2" />
-              </div>
-              <span class="font-mono text-[13.5px] font-semibold text-ink">{item.title}</span>
-              <span class="text-[13px] leading-[1.45] text-ink-2">{item.desc}</span>
-            </li>
-          ))
-        }
-      </ol>
-    </div>
+    <ol aria-label="Delivery workflow" class="flex flex-wrap items-center gap-y-2.5">
+      {
+        pipeline.map((item, i) => (
+          <li class="flex items-center">
+            <span
+              class:list={[
+                'rounded-md border border-line bg-paper-2/70 px-3.5 py-2 text-ink',
+                item.code ? 'font-mono text-[13px] font-medium' : 'text-[14px] font-medium',
+              ]}
+            >
+              {item.label}
+            </span>
+            {i < pipeline.length - 1 && (
+              <span aria-hidden="true" class="px-2.5 text-sm text-ink-2">
+                →
+              </span>
+            )}
+          </li>
+        ))
+      }
+    </ol>
 
     <!-- Stage 1: Preview locally & on Pull Requests -->
     <div class="grid grid-cols-1 items-start gap-10 xl:grid-cols-[minmax(0,640px)_minmax(0,1fr)] xl:gap-14">
-      <div class="flex min-w-0 flex-col gap-4">
-        <p class="font-mono text-xs font-semibold text-ink-2">Terminal output ($ kix diff shop)</p>
+      <div class="flex min-w-0 flex-col">
         <Terminal class="min-w-0">
           <div aria-hidden="true" class="flex gap-[7px] border-b border-night-line px-[18px] py-3">
             <span class="size-[11px] rounded-full bg-t-dot"></span>
@@ -118,19 +118,17 @@ const comment = {
             id="plan-title"
             class="text-[30px] leading-[1.1] font-semibold tracking-[-0.75px] text-balance text-ink md:text-[38px] md:tracking-[-1px]"
           >
-            Preview package-grouped diffs locally and on pull requests
+            Review changes locally and on pull requests
           </h2>
           <p class="text-[16.5px] leading-[1.6] text-ink-2">
-            Before deploying, <code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[14px] text-ink">kix diff</code> compares the compiled cluster against live Kubernetes state and groups every change by namespace and package, separating direct field edits from downstream <code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[14px] text-ink">via dependency</code> hash updates.
+            Before deploying, <code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[14px] text-ink">kix diff</code> compares your build against the cluster and groups every change by namespace and package, highlighting the exact fields that changed.
           </p>
           <p class="text-[16.5px] leading-[1.6] text-ink-2">
-            In CI, <code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[14px] text-ink">kix diff -o markdown</code> posts the summary directly to the pull request so reviewers inspect the exact package and resource impact alongside the code change.
+            In CI, <code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[14px] text-ink">kix diff -o markdown</code> outputs the summary as Markdown so your pipeline can post it to the pull request. For example:
           </p>
         </div>
 
-        <div class="flex flex-col gap-3">
-          <p class="font-mono text-xs font-semibold text-ink-2">Pull request comment ($ kix diff shop -o markdown)</p>
-          <figure class="overflow-hidden rounded-[10px] border border-line bg-paper text-ink shadow-sm">
+        <figure class="overflow-hidden rounded-[10px] border border-line bg-paper text-ink shadow-sm">
             <figcaption class="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-line bg-paper-2 px-[18px] py-3">
               <span
                 aria-hidden="true"
@@ -183,7 +181,6 @@ const comment = {
               </p>
             </div>
           </figure>
-        </div>
       </div>
     </div>
   </div>

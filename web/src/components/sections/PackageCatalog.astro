@@ -1,0 +1,112 @@
+---
+import Section from '../Section.astro';
+import Heading from '../Heading.astro';
+import { loadPackageCatalog } from '@/lib/packages';
+
+const { groups, total } = loadPackageCatalog();
+---
+
+<Section id="catalog" tone="paper" labelledby="catalog-title">
+  <div class="flex flex-col gap-12">
+    <div class="flex flex-col justify-between gap-6 lg:flex-row lg:items-end">
+      <div class="flex max-w-[680px] flex-col gap-4">
+        <Heading id="catalog-title" size="lg">Available packages</Heading>
+        <p class="text-[17px] leading-[1.55] text-ink-2 md:text-[18px]">
+          Kix includes {total} packages across databases, observability, networking, secrets, storage, and applications.
+          Select any package for its options, dependencies, and stability level in the docs.
+        </p>
+      </div>
+      <div class="w-full lg:w-[260px]">
+        <label for="package-filter" class="sr-only">Filter packages</label>
+        <input
+          id="package-filter"
+          type="search"
+          placeholder="Filter packages…"
+          autocomplete="off"
+          class="w-full rounded-md border border-line bg-paper px-3 py-1.5 text-[14.5px] text-ink placeholder:text-ink-2 focus:border-accent-brand focus:outline-none"
+        />
+      </div>
+    </div>
+
+    <div id="package-groups" class="flex flex-col gap-14">
+      {
+        groups.map((group) => (
+          <div data-package-group class="flex flex-col gap-7 border-t-[1.5px] border-ink pt-7">
+            <h3 class="text-[22px] font-semibold tracking-[-0.015em] text-ink">{group.title}</h3>
+            <div class="grid grid-cols-1 items-start gap-x-16 gap-y-10 lg:grid-cols-2">
+              {group.families.map((family) => (
+                <div
+                  data-package-family
+                  data-family-search={`${family.title} ${family.mode ?? ''} ${family.note ?? ''}`.toLowerCase()}
+                  class="flex flex-col gap-2.5"
+                >
+                  <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                    <h4 class="text-[16px] font-semibold text-ink">{family.title}</h4>
+                    {family.mode && <span class="font-mono text-[12px] text-ink-2">{family.mode}</span>}
+                  </div>
+                  {family.note && (
+                    <p
+                      class="text-[13.5px] leading-[1.5] text-ink-2 [&_code]:font-mono [&_code]:text-[12.5px] [&_code]:text-ink"
+                      set:html={family.note}
+                    />
+                  )}
+                  <ul class="border-t border-line">
+                    {family.packages.map((pkg) => (
+                      <li
+                        data-package-item
+                        data-search={`${pkg.name} ${pkg.summary} ${pkg.fullDescription}`.toLowerCase()}
+                        class="border-b border-line"
+                      >
+                        <a
+                          href={pkg.docsHref}
+                          class="group grid grid-cols-1 gap-x-4 gap-y-0.5 py-2 sm:grid-cols-[205px_minmax(0,1fr)] sm:items-baseline"
+                        >
+                          <span class="font-mono text-[13px] font-semibold text-accent-text group-hover:underline">
+                            {pkg.name}
+                          </span>
+                          <span class="text-[14px] leading-[1.45] text-ink-2 group-hover:text-ink">{pkg.summary}</span>
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))
+      }
+    </div>
+
+    <p id="package-empty" hidden class="text-[15.5px] text-ink-2">No packages match that filter.</p>
+  </div>
+</Section>
+
+<script>
+  const input = document.getElementById('package-filter') as HTMLInputElement | null;
+  const groups = Array.from(document.querySelectorAll<HTMLElement>('[data-package-group]'));
+  const empty = document.getElementById('package-empty');
+
+  input?.addEventListener('input', () => {
+    const query = input.value.trim().toLowerCase();
+    let anyVisible = false;
+
+    for (const group of groups) {
+      let groupVisible = false;
+      for (const family of group.querySelectorAll<HTMLElement>('[data-package-family]')) {
+        const familyMatch = Boolean(query && (family.dataset.familySearch ?? '').includes(query));
+        let anyMemberVisible = false;
+        for (const item of family.querySelectorAll<HTMLElement>('[data-package-item]')) {
+          const match = !query || familyMatch || (item.dataset.search ?? '').includes(query);
+          item.hidden = !match;
+          if (match) anyMemberVisible = true;
+        }
+        family.hidden = !anyMemberVisible;
+        if (anyMemberVisible) groupVisible = true;
+      }
+      group.hidden = !groupVisible;
+      if (groupVisible) anyVisible = true;
+    }
+
+    if (empty) empty.hidden = anyVisible;
+  });
+</script>

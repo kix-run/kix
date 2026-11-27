@@ -43,6 +43,23 @@ The script verifies the release archive, unpacks Kix and the Kix runtime (Nix, H
 
 To try Kix on a local `kind` cluster with [kix-examples](https://github.com/kix-run/kix-examples), start with the [tutorials](https://kix.run/docs/tutorials/). To install from a release archive directly or see how projects pin their version of Kix, read [Install and run Kix](https://kix.run/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/).
 
+### Build and run from source
+
+Kix (the CLI, the operator, the Kix library, and the built-in packages) is open source under the Apache License 2.0. To run `kix` from [`cli/`](cli/) with Cargo, enter the Nix development shell so `KIX_RUNTIME_DIR` points at the Kix runtime and `CARGO_TARGET_DIR` stays outside the checkout:
+
+```sh
+nix develop
+cargo run --manifest-path cli/Cargo.toml --bin kix -- check example-hello
+```
+
+You can also build and run the packaged binary directly with Nix:
+
+```sh
+nix run .#kix -- check example-hello
+```
+
+If you already installed a release archive and want to run a Cargo build without Nix on `PATH`, set `KIX_RUNTIME_DIR` to `~/.local/share/kix/<version>/libexec/kix` and set `CARGO_TARGET_DIR` outside the repository checkout.
+
 ## Documentation
 
 Full documentation is at [kix.run/docs](https://kix.run/docs/):

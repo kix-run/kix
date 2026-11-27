@@ -6,6 +6,9 @@ import tailwindcss from '@tailwindcss/vite';
 // (docs/, base /docs); .github/workflows/pages.yml merges the two builds.
 export default defineConfig({
   site: 'https://kix.run',
-  vite: { plugins: [tailwindcss()] },
+  vite: {
+    plugins: [tailwindcss()],
+    server: { fs: { allow: ['..'] } },
+  },
   devToolbar: { enabled: false },
 });

@@ -20,6 +20,7 @@ name: Docs site
 on:
   pull_request:
     paths:
+      - 'web/**'
       - 'docs/**'
       - 'kix/**'
       - 'cli/Cargo.toml'
@@ -55,6 +56,13 @@ jobs:
           repository: kix-run/kix-examples
           path: kix-examples
           fetch-depth: 0
+
+      - name: Build and check website
+        working-directory: kix/web
+        run: |
+          npm ci
+          npm run build
+          node --test 'scripts/*.test.mjs'
 
       - name: Build the docs site
         working-directory: kix

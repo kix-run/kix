@@ -18,7 +18,7 @@ const cards = [
   },
   {
     title: 'Diff live clusters & order rollouts',
-    desc: 'Preview package-grouped diffs against the live cluster, post markdown plans on pull requests, and roll out in dependency waves.',
+    desc: 'Compare your build against the live cluster by package, output Markdown summaries for pull requests, and deploy in dependency order.',
     href: '/workflow',
     cta: 'See diff, deploy & receipts',
     cmd: '$ kix diff shop',
@@ -42,14 +42,14 @@ const cards = [
   },
   {
     title: 'Pure Nix evaluation for people & agents',
-    desc: 'Built on the Nix language for string-context dependency tracking, hermetic evaluation without cluster credentials, and fast agent feedback loops.',
+    desc: 'Built on Nix for automatic dependency tracking, local evaluation without cluster credentials, and fast feedback loops for coding agents.',
     href: '/why-nix',
-    cta: 'Why the Nix language',
-    cmd: 'flake.lock · hermetic evaluation',
+    cta: 'Why we built on Nix',
+    cmd: 'flake.lock · reproducible builds',
     lines: [
-      { mark: '✓', tone: 'text-t-green', text: 'String context tracks every cross-resource reference' },
-      { mark: '✓', tone: 'text-t-green', text: 'Pure evaluation runs offline without cluster API access' },
-      { mark: '✓', tone: 'text-t-blue', text: 'Sub-second compiler feedback loop for coding agents' },
+      { mark: '✓', tone: 'text-t-green', text: 'Output references track dependencies automatically' },
+      { mark: '✓', tone: 'text-t-green', text: 'Local evaluation without cluster API access' },
+      { mark: '✓', tone: 'text-t-blue', text: 'Fast local compiler feedback loop for coding agents' },
     ],
   },
 ];

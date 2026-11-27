@@ -280,6 +280,11 @@ jobs:
           # The docs come out of the Nix store read-only; wrangler needs
           # to read every file it uploads.
           chmod -R a+rX _site
+          # Verify that every link on the marketing pages resolves inside the
+          # staged _site directory (including /docs/ and /docs/main/) before upload.
+          if [ -n "$LATEST" ]; then
+            node kix/web/scripts/check-links.mjs --dist kix/web/dist --site-root _site
+          fi
 
       # Only the tip of main is signed. Every Kix accepts a newer index, so a
       # re-run of an old run, or a preview from a branch, must not sign one

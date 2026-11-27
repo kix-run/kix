@@ -10,19 +10,19 @@ const code = (text: string) =>
 const reasons = [
   {
     title: 'String context',
-    body: 'Nix strings can carry hidden context paths alongside their text. Kix attaches resource identity and endpoint metadata to every output, and Nix preserves that metadata through string interpolation and ConfigMaps so Kix can trace every dependency and network edge.',
+    body: 'Nix strings can carry hidden context paths alongside their text. Kix encodes resource identity on every output and endpoint details on network addresses. Nix preserves that context through string interpolation, and Kix carries it through ConfigMaps to order deployments and generate network policies.',
   },
   {
     title: 'Pure evaluation',
-    body: `A Nix expression cannot change anything outside the evaluation. Evaluating a definition never calls the Kubernetes API, so ${code('kix check')} and ${code('kix build')} run without cluster credentials.`,
+    body: `In pure evaluation, Nix expressions cannot read environment variables, undeclared files, or live network APIs. Evaluating a definition never contacts a cluster, so ${code('kix check')} and ${code('kix build')} run without cluster credentials.`,
   },
   {
     title: 'Locked inputs',
-    body: `${code('flake.lock')} pins Kix and every package by hash, and image digests are committed with the definition. The same commit builds the same resources.`,
+    body: `${code('flake.lock')} pins the Kix library and external inputs by hash, and image digests are committed with the definition. The same commit builds the same resources.`,
   },
   {
     title: 'The module system',
-    body: 'Package options have types and defaults, and settings from flavors and clusters are merged by the same rules everywhere.',
+    body: 'Cluster and package options have types and defaults, and settings from cluster profiles and clusters merge by the same rules everywhere.',
   },
 ];
 ---
@@ -30,10 +30,10 @@ const reasons = [
 <Section tone="paper-2" labelledby="language-title">
   <div class="flex flex-col gap-12 lg:gap-16">
     <div class="flex max-w-[720px] flex-col gap-5">
-      <Heading id="language-title">Why the Nix language?</Heading>
+      <Heading id="language-title">Why Nix?</Heading>
       <p class="text-[17px] leading-[1.55] text-ink-2 md:text-[18px]">
-        Kix definitions are written in the Nix language, which has been used for reproducible builds for over 20 years.
-        Kix relies on four of the language's features directly.
+        Kix definitions are written in the Nix language, part of a build system used for reproducible software for over
+        20 years. Kix relies on four capabilities from Nix and its standard library.
       </p>
     </div>
     <ul class="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-4">

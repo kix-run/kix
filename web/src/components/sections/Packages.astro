@@ -5,7 +5,7 @@ import Heading from '../Heading.astro';
 const escapeHatches = [
   {
     title: 'Import external managed services',
-    desc: 'Wire an external AWS RDS or CloudSQL database into your cluster definition so consuming apps receive its endpoint and credentials without changing app code.',
+    desc: 'Wire an external AWS RDS or CloudSQL database into your cluster definition so workloads receive its endpoint and credentials without changing how they are configured.',
     code: `db = kix.mkImport {
   out.fqdn = "rds.prod.internal";
   # ... credentials
@@ -33,20 +33,20 @@ const escapeHatches = [
 ];
 ---
 
-<Section id="packages" tone="paper-2" labelledby="packages-title">
+<Section id="escape-hatches" tone="paper-2" labelledby="packages-title">
   <div class="flex flex-col gap-14">
     <div class="grid grid-cols-1 gap-12 lg:grid-cols-[520px_minmax(0,1fr)] lg:gap-20">
       <div class="flex flex-col gap-5">
-        <Heading id="packages-title" size="lg">Packages &amp; escape hatches</Heading>
+        <Heading id="packages-title" size="lg">Escape hatches</Heading>
         <p class="text-[17px] leading-[1.55] text-ink-2 md:text-[18px]">
-          The library covers databases, caches, observability, networking, and applications, with new packages tested
-          against real clusters and added continuously.
+          When a cluster needs external cloud services, existing Helm charts, or a specific Kubernetes field, you can
+          wire them directly into the cluster definition.
         </p>
       </div>
-      <div class="flex flex-col gap-6">
+      <div class="border-t-[1.5px] border-ink">
         {
           escapeHatches.map((item) => (
-            <div class="flex flex-col gap-3 rounded-xl border border-line bg-paper p-6">
+            <div class="flex flex-col gap-3 border-b border-line py-7">
               <h3 class="text-[20px] font-semibold text-ink">{item.title}</h3>
               <p class="text-[15.5px] leading-[1.55] text-ink-2">{item.desc}</p>
               <pre class="overflow-x-auto rounded-md border border-night-line bg-night px-4 py-3 font-mono text-[13px] leading-[1.6] text-t-blue"><code>{item.code}</code></pre>

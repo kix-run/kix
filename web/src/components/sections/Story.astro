@@ -6,11 +6,11 @@ import Heading from '../Heading.astro';
 // sizes, and the font size are percentages of that canvas (cqw for text),
 // so the picture scales down on narrow screens without reflowing.
 const slabs = [
-  { num: '05', text: 'policy engines that check YAML afterwards', x: 64, y: 24, rotate: -2.2 },
-  { num: '04', text: 'controllers that sync YAML from git', x: 40, y: 94, rotate: 1.6 },
-  { num: '03', text: 'overlays that patch YAML', x: 78, y: 164, rotate: -1.2 },
-  { num: '02', text: 'templates that generate YAML', x: 30, y: 234, rotate: 0.9 },
-  { num: '01', text: 'YAML', x: 56, y: 304, rotate: 0, base: true },
+  { num: '5', text: 'policy engines that check YAML afterwards', x: 64, y: 24, rotate: -2.2 },
+  { num: '4', text: 'controllers that sync YAML from git', x: 40, y: 94, rotate: 1.6 },
+  { num: '3', text: 'overlays that patch YAML', x: 78, y: 164, rotate: -1.2 },
+  { num: '2', text: 'templates that generate YAML', x: 30, y: 234, rotate: 0.9 },
+  { num: '1', text: 'YAML', x: 56, y: 304, rotate: 0, base: true },
 ];
 const W = 560;
 const H = 430;
@@ -18,16 +18,16 @@ const pct = (n: number, of: number) => `${((n / of) * 100).toFixed(3)}%`;
 
 const beats = [
   {
-    title: 'What we considered',
-    body: 'We considered describing Kubernetes with a general-purpose language, but couldn’t see a clean way to express the cluster as a whole.',
+    title: 'See the whole cluster',
+    body: 'Generating YAML in another language still leaves you with separate files. Checking selectors, ports, and rollout order takes a compiler that sees everything together.',
   },
   {
-    title: 'What changed',
-    body: 'As agents began writing more infrastructure code, the need for precise error messages grew. Whether a person or an agent makes a change, they need to know which resource is wrong and why.',
+    title: 'Fast feedback for agents',
+    body: 'Application code gives coding agents instant compiler errors. Infrastructure needed that same local check before a broken change ever reaches a cluster.',
   },
   {
-    title: 'What we built',
-    body: 'So we built Kix as a compiler for the whole cluster definition. It can check the resources together, work out their dependencies, and use that information to plan and carry out a deployment.',
+    title: 'Never repeat an outage',
+    body: 'Whenever we hit a subtle Kubernetes trap in production, we build that check into Kix once so neither an engineer nor an agent can repeat it.',
   },
 ];
 ---
@@ -35,19 +35,23 @@ const beats = [
 <Section id="why" rule labelledby="why-title">
   <div class="flex flex-col gap-14 lg:gap-[72px]">
     <div class="grid grid-cols-1 items-center gap-12 xl:grid-cols-[minmax(0,1fr)_minmax(0,560px)] xl:gap-20">
-      <div class="flex flex-col gap-6">
-        <Heading id="why-title">Why we built Kix</Heading>
-        <p class="text-[17px] leading-[1.55] text-ink-2 md:text-[19px]">
-          Our team managed Kubernetes with YAML. We added templates, overlays, controllers to sync changes from Git, and
-          policies to catch mistakes. Each tool addressed a real need, but together they made the whole system
-          substantially more complex. We wanted to go back to first principles and see what would happen if we described
-          the cluster as a whole.
+      <div class="flex flex-col gap-5">
+        <Heading id="why-title">Five layers of YAML was enough</Heading>
+        <p class="text-[17px] leading-[1.55] text-ink-2 md:text-[18.5px]">
+          Kix started over a beer in Munich. One of us runs custom bare-metal Kubernetes clusters 24/7 at <a
+            href="https://lithus.eu"
+            class="text-accent-text hover:underline">Lithus</a
+          >, where every client's setup is different and a bad deploy wakes someone up at night. The other came to
+          Kubernetes fresh while building with coding agents, baffled that the normal way to find a config mistake is to
+          deploy it and see what breaks.
+        </p>
+        <p class="text-[17px] leading-[1.55] text-ink-2 md:text-[18.5px]">
+          Templates, overlays, sync controllers, and policy scanners each solved a real need, yet together they made
+          clusters harder to reason about. So we went back to first principles and built a compiler for the whole
+          cluster.
         </p>
       </div>
-      <div class="@container mx-auto flex w-full max-w-[560px] flex-col gap-3">
-        <p class="font-mono text-[13px] font-semibold text-ink-2">
-          Layers of tooling added on top of Kubernetes YAML
-        </p>
+      <div class="@container mx-auto flex w-full max-w-[560px] flex-col">
         <ol
           aria-label="Layers of tooling on top of Kubernetes, newest first"
           class="relative w-full"

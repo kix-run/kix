@@ -120,47 +120,47 @@ import { DOCS_URL } from '@/lib/links';
           <div class="wb-input-pane">
             <div class="wb-code-editor" id="code-editor">
               <div class="code-line" id="cline-1">
-                <span class="code-ln">01</span><span id="ctext-1">db = packages.cnpg-cluster {'{ storage.size = "20Gi"; };'}</span><span
+                <span class="code-ln">1</span><span id="ctext-1">db = packages.cnpg-cluster {'{ storage.size = "20Gi"; };'}</span><span
                   class="code-anchor-dot"
                   id="cdot-1"></span>
               </div>
               <div class="code-line" id="cline-2">
-                <span class="code-ln">02</span><span id="ctext-2">web = scope.mkDeployment {'{'}</span><span
+                <span class="code-ln">2</span><span id="ctext-2">web = scope.mkDeployment {'{'}</span><span
                   class="code-anchor-dot"
                   id="cdot-2"></span>
               </div>
               <div class="code-line" id="cline-3">
-                <span class="code-ln">03</span><span id="ctext-3">  image = "ghcr.io/acme/web:1.4";</span><span
+                <span class="code-ln">3</span><span id="ctext-3">  image = "ghcr.io/acme/web:1.4";</span><span
                   class="code-anchor-dot"
                   id="cdot-3"></span>
               </div>
               <div class="code-line" id="cline-4">
-                <span class="code-ln">04</span><span id="ctext-4">  replicas = 3;</span><span
+                <span class="code-ln">4</span><span id="ctext-4">  replicas = 3;</span><span
                   class="code-anchor-dot"
                   id="cdot-4"></span>
               </div>
               <div class="code-line comment-ref" id="cline-5">
-                <span class="code-ln">05</span><span id="ctext-5"
+                <span class="code-ln">5</span><span id="ctext-5"
                   ><span class="code-comment">  # derives CiliumNetworkPolicy and deploy order</span></span
                 ><span class="code-anchor-dot" id="cdot-5"></span>
               </div>
               <div class="code-line active-ref" id="cline-6">
-                <span class="code-ln">06</span><span id="ctext-6">  env.DB_HOST = db.out.fqdn;</span><span
+                <span class="code-ln">6</span><span id="ctext-6">  env.DB_HOST = db.out.fqdn;</span><span
                   class="code-anchor-dot"
                   id="cdot-6"></span>
               </div>
               <div class="code-line" id="cline-7">
-                <span class="code-ln">07</span><span id="ctext-7">  selector.matchLabels.app = "shop-web";</span><span
+                <span class="code-ln">7</span><span id="ctext-7">  selector.matchLabels.app = "shop-web";</span><span
                   class="code-anchor-dot"
                   id="cdot-7"></span>
               </div>
               <div class="code-line" id="cline-8">
-                <span class="code-ln">08</span><span id="ctext-8">{'};'}</span><span
+                <span class="code-ln">8</span><span id="ctext-8">{'};'}</span><span
                   class="code-anchor-dot"
                   id="cdot-8"></span>
               </div>
               <div class="code-line hidden-line" id="cline-9">
-                <span class="code-ln">09</span><span id="ctext-9"></span><span
+                <span class="code-ln">9</span><span id="ctext-9"></span><span
                   class="code-anchor-dot"
                   id="cdot-9"></span>
               </div>
@@ -426,7 +426,9 @@ import { DOCS_URL } from '@/lib/links';
     border-top-right-radius: 0;
   }
   .code-ln {
-    width: 26px;
+    width: 20px;
+    margin-right: 10px;
+    text-align: right;
     color: var(--t-dim);
     font-size: 11px;
     user-select: none;
@@ -820,8 +822,8 @@ import { DOCS_URL } from '@/lib/links';
 <span style="color:#F87171;font-weight:700;">✗ selector {"app": "shop-wbe"} matches 0 pods</span>
 <span style="color:#F87171;font-weight:700;">  in namespace "shop"</span>
 
-  <span class="k8s-muted">clusters/shop.nix:07</span>
-  <span style="color:#38BDF8;">did you mean "shop-web" (defined on line 02)?</span>`;
+  <span class="k8s-muted">clusters/shop.nix:7</span>
+  <span style="color:#38BDF8;">did you mean "shop-web" (defined on line 2)?</span>`;
       } else if (beatIdx === 2) {
         document.getElementById('cline-4')?.classList.add('comment-plan');
         c4.innerHTML = '<span class="code-comment">  # live cluster was manually scaled to 5 replicas</span>';

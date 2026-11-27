@@ -6,56 +6,70 @@ import Heading from '../Heading.astro';
 <Section id="faq" labelledby="faq-title">
   <div class="grid grid-cols-1 gap-10 xl:grid-cols-[400px_minmax(0,1fr)] xl:gap-20">
     <div class="flex flex-col gap-5">
-      <Heading id="faq-title">Questions before you try Kix</Heading>
+      <Heading id="faq-title">Common questions</Heading>
       <p class="text-[17px] leading-[1.55] text-ink-2">
-        Kix produces standard Kubernetes resources, and the CLI fits into an existing workflow. These are the details
-        people usually ask about before trying it.
+        Practical details people ask before trying Kix.
       </p>
     </div>
     <dl class="border-t-[1.5px] border-ink">
       <div class="faq-row">
+        <dt>Is Kix open source?</dt>
+        <dd>
+          Yes. Kix, including the Rust compiler CLI, the Nix library, and the package catalog, is open source under the
+          Apache 2.0 license on <a
+            href="https://github.com/kix-run/kix"
+            class="font-medium text-accent-text hover:underline">GitHub</a
+          >.
+        </dd>
+      </div>
+      <div class="faq-row">
         <dt>Is it still standard Kubernetes underneath?</dt>
         <dd>
-          Yes. Kix produces ordinary Kubernetes resources that kubectl, dashboards, operators, and security tools can
+          Yes. Kix outputs ordinary Kubernetes resources that kubectl, dashboards, operators, and security tools can
           inspect.
         </dd>
       </div>
       <div class="faq-row">
-        <dt>What if you stop using Kix?</dt>
+        <dt>What if I stop using Kix?</dt>
         <dd>
-          <code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[14px] text-ink">kix export</code> writes the cluster
-          as plain Kubernetes YAML. If you stop using Kix, you can keep managing those resources with standard Kubernetes
-          tools.
+          <code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[14px] text-ink">kix export</code> writes your
+          cluster out as plain Kubernetes YAML that you can keep managing with standard tools.
+        </dd>
+      </div>
+      <div class="faq-row">
+        <dt>Can I adopt Kix gradually on an existing cluster?</dt>
+        <dd>
+          Yes. Kix can manage a single namespace or a few applications alongside your existing Helm or GitOps setup.
         </dd>
       </div>
       <div class="faq-row">
         <dt>Can Kix use existing Helm charts?</dt>
         <dd>
-          Yes. You can use existing Helm charts with Kix, although they do not provide every benefit of a native Kix
-          package.
+          Yes. You can import existing Helm charts directly, though native Kix packages give you deeper checks and
+          automatic wiring.
         </dd>
       </div>
       <div class="faq-row">
         <dt>What if Kix doesn't model something I need?</dt>
-        <dd>Define any Kubernetes resource or field directly in the cluster definition.</dd>
+        <dd>You can define any raw Kubernetes resource or field directly in your cluster definition.</dd>
       </div>
       <div class="faq-row">
         <dt>Does anything need to run in my cluster?</dt>
-        <dd>Nothing runs in the cluster: the CLI deploys from your laptop or CI. Kix adds two CRDs and records each deploy, with its receipt, as an Activation resource.</dd>
+        <dd>
+          No controller runs in the cluster. Kix deploys from your laptop or CI and stores a small deployment receipt as
+          a custom resource.
+        </dd>
       </div>
       <div class="faq-row">
         <dt>Does Kix block insecure configs?</dt>
         <dd>
-          Security checks run on every build. Scorecard findings are warnings by default; choose which rules fail the
-          build.
+          Security checks run on every build as warnings by default, and you can choose which rules fail the build.
         </dd>
       </div>
       <div class="faq-row">
         <dt>Which packages exist?</dt>
         <dd class="flex flex-col gap-2">
-          <span>
-            The library covers databases, observability, networking, and applications, with more added regularly.
-          </span>
+          <span>Databases, observability, networking, routing, and common applications.</span>
           <a href="/packages" class="self-start font-semibold text-accent-text hover:underline"
             >Browse the Packages page →</a
           >

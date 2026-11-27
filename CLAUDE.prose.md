@@ -35,12 +35,29 @@ whenever Adam corrects writing style.
   Never add a box or heading explaining why an output matters. Let the resource
   (`kind: CiliumNetworkPolicy`), the code comment, or the CLI output speak for
   itself.
-- **Never label the self-evident.** Do not put badges like `"7 lines total"`,
-  `"input"`, `"OUTPUT"`, `"WHAT YOU WRITE"`, or `"WHAT KIX GENERATES"` on top of
-  a code editor or terminal pane. If a pane shows `clusters/shop.nix` with 7
-  numbered lines, the reader can see it is 7 lines of input code. If the right
-  pane shows `$ kix build shop` and `kind: CiliumNetworkPolicy`, the reader can
-  see it is the output.
+- **Never label the self-evident.** Do not put badges or eyebrow headings like
+  `"7 lines total"`, `"input"`, `"OUTPUT"`, `"WHAT YOU WRITE"`, `"WHAT KIX
+  GENERATES"`, `"Terminal output ($ kix diff shop)"`, or `"Pull request comment
+  ($ kix diff shop -o markdown)"` on top of a code editor, terminal pane, or
+  sample card. If a pane shows `clusters/shop.nix` with 7 numbered lines, the
+  reader can see it is 7 lines of input code. If the preceding sentence needs to
+  lead into a sample, end the sentence with `"For example:"` instead of adding a
+  heading above the sample.
+- **No zero-prefixed step or list numbering (`01`, `02`, `03`)**, no decorative
+  icons or filler subtext in workflow/step strips, and no grids of shaded
+  rounded card wells around every group of text. Prefer open typography and
+  simple hairline dividers directly on the page surface.
+- **No Kix-internal or Nix-internal jargon on marketing pages.** Do not expect a
+  first-time visitor to parse terms like `"via dependency hash updates"`,
+  `"package-grouped diffs"`, `"scorecard"`, `"flavors"`, `"activation"` (in
+  prose), or `"hermetic evaluation"`. Use plain Kubernetes and Git language.
+- **Distinguish what a command outputs from what CI or the user does with it.**
+  Do not write "`kix diff -o markdown` posts the summary to the pull request"
+  when the command writes Markdown that a CI workflow can post.
+- **Keep comparison and reference table cells tight and direct.** Prefer short,
+  active phrases (`"Missing PriorityClass"`, `"Environment variable defined
+  twice"`, `"Pod fails to start"`) over narrative or passive sentences (`"A
+  workload names a PriorityClass that doesn't exist."`).
 - **No aphoristic paired-punch sentences.** Pattern: two short declaratives
   where the second "lands the twist", e.g. "The benefits are real. The problem
   has always been the price of admission." Reads as AI-generated. Cut these
