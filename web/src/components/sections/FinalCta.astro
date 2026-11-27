@@ -43,8 +43,33 @@ import { NAV_LINKS } from '@/lib/nav';
     <footer
       class="mt-16 flex flex-col gap-6 border-t border-night-line pt-7 pb-12 md:flex-row md:items-center md:justify-between lg:mt-20"
     >
-      <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <a href="/" class="-translate-y-[2px] rounded-md"><Logo tone="night" size="sm" /><span class="sr-only">Kix home</span></a>
+      <div class="flex flex-wrap items-center gap-x-3.5 gap-y-2">
+        <a href="/" class="-translate-y-[2px] rounded-md"
+          ><Logo tone="night" size="sm" /><span class="sr-only">Kix home</span></a
+        >
+        <span class="hidden h-4 w-px bg-night-line sm:block" aria-hidden="true"></span>
+        <p class="flex items-center gap-1.5 text-sm text-on-night-2">
+          <span>Co-created by</span>
+          <a
+            href="https://lithus.eu"
+            class="inline-flex items-center gap-1.5 rounded-sm font-medium text-on-night transition-colors hover:text-t-blue"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 21 21"
+              aria-hidden="true"
+              class="h-[13.5px] w-[13.5px] shrink-0"
+              fill="currentColor"
+            >
+              <path
+                fill-rule="evenodd"
+                clip-rule="evenodd"
+                d="M 0 10.2 V 6.6 C 0 2.7 3.1 0 7.2 0 C 10.4 0 13.0 1.7 14.0 4.2 L 10.3 6.35 C 9.9 6.58 9.75 7.08 9.98 7.48 C 10.2 7.88 10.7 8.02 11.1 7.78 L 15.2 5.1 C 15.8 4.8 16.5 4.6 17.2 4.6 C 19.4 4.6 21.0 6.2 21.0 8.4 V 10.2 H 0 Z M 0 12.2 H 9.5 V 21.0 H 2.2 C 0.99 21.0 0 20.01 0 18.8 V 12.2 Z M 2.0 14.3 V 15.7 H 7.5 V 14.3 H 2.0 Z M 11.5 12.2 H 21.0 V 18.8 C 21.0 20.01 20.01 21.0 18.8 21.0 H 11.5 V 12.2 Z M 13.5 14.3 V 15.7 H 19.0 V 14.3 H 13.5 Z"
+              ></path>
+            </svg>
+            <span>Lithus</span>
+          </a>
+        </p>
       </div>
       <nav aria-label="Footer">
         <ul class="flex flex-wrap gap-x-7 gap-y-3">

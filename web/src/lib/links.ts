@@ -6,8 +6,8 @@ export const INSTALL_URL = '/docs/tutorials/02-local-setup-and-first-run/';
 /** "Read the docs": the first tutorial. */
 export const DOCS_URL = '/docs/tutorials/01-orientation/';
 
-/** GitHub organisation URL. */
-export const GITHUB_URL = 'https://github.com/kix-run';
+/** GitHub repository URL. */
+export const GITHUB_URL = 'https://github.com/kix-run/kix';
 
 /**
  * The one-line installer, served from web/public/install.

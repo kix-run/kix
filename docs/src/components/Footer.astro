@@ -9,16 +9,23 @@ const { lang, lastUpdated } = Astro.locals.starlightRoute;
 
 <footer class="kix-footer">
   <Pagination />
-  {
-    lastUpdated && (
-      <p class="meta">
-        Updated{' '}
-        <time datetime={lastUpdated.toISOString()}>
-          {lastUpdated.toLocaleDateString(lang, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })}
-        </time>
-      </p>
-    )
-  }
+  <div class="meta">
+    {
+      lastUpdated ? (
+        <span>
+          Updated{' '}
+          <time datetime={lastUpdated.toISOString()}>
+            {lastUpdated.toLocaleDateString(lang, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })}
+          </time>
+        </span>
+      ) : (
+        <span></span>
+      )
+    }
+    <span>
+      Co-created by <a href="https://lithus.eu" class="lithus-link">Lithus</a>
+    </span>
+  </div>
 </footer>
 
 <style>
@@ -30,10 +37,22 @@ const { lang, lastUpdated } = Astro.locals.starlightRoute;
   }
   .meta {
     margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 0.5rem 1.5rem;
     border-top: 1px solid var(--kix-line);
     padding-top: 1.25rem;
     color: var(--kix-dim);
     font-family: var(--__sl-font-mono);
     font-size: 0.75rem;
+  }
+  .lithus-link {
+    color: var(--kix-ink-2);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .lithus-link:hover {
+    color: var(--kix-ink);
   }
 </style>

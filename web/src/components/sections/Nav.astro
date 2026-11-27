@@ -1,5 +1,5 @@
 ---
-import { Menu, X } from '@lucide/astro';
+import { ArrowUpRight, Menu, X } from '@lucide/astro';
 import Container from '../Container.astro';
 import Logo from '../Logo.astro';
 import Button from '../Button.astro';
@@ -8,7 +8,68 @@ import { NAV_LINKS } from '@/lib/nav';
 import { GITHUB_URL, INSTALL_URL } from '@/lib/links';
 
 const currentPath = Astro.url.pathname.replace(/\/$/, '') || '/';
+const DEVOPSCON_SESSION_URL = 'https://devopscon.io/kubernetes-ecosystem/kix-kubernetes-compiler/';
 ---
+
+<aside
+  id="kix-devopscon-banner"
+  aria-label="DevOpsCon Munich announcement"
+  class="kix-announce border-t-[3px] border-t-[#38bdf8] border-b border-b-[#212d3b] text-[#f1f5f9] [&[hidden]]:hidden"
+>
+  <Container>
+    <a
+      href={DEVOPSCON_SESSION_URL}
+      class="group flex flex-col items-start justify-between gap-5 py-6 sm:py-7 lg:flex-row lg:items-center lg:gap-8 lg:py-8"
+    >
+      <div class="flex min-w-0 flex-col items-start gap-3.5 lg:flex-row lg:items-center lg:gap-7">
+        <div class="flex shrink-0 flex-col gap-0.5 lg:border-r lg:border-[#38bdf8]/25 lg:pr-7">
+          <span id="kix-banner-when" class="font-mono text-[12px] font-medium text-[#38bdf8]">Wednesday, 2 Dec</span>
+          <span id="kix-banner-where" class="text-[18px] leading-tight font-semibold tracking-[-0.02em] text-white">
+            Forum 3 · 11:30 CET
+          </span>
+        </div>
+        <div class="flex min-w-0 flex-col gap-1">
+          <span id="kix-banner-tag" class="text-[13.5px] font-medium text-[#38bdf8]">
+            DevOpsCon Munich 2026 · Adam Charnock &amp; Luca Dombetzki
+          </span>
+          <strong
+            id="kix-banner-title"
+            class="text-[20px] leading-[1.18] font-bold tracking-[-0.02em] text-balance text-white sm:text-[23px]"
+          >
+            We are launching and presenting Kix next week.
+          </strong>
+          <span id="kix-banner-sub" class="max-w-[68ch] text-[14.5px] leading-[1.45] text-[#94a3b8] sm:text-[15px]">
+            Join our session on compiling Kubernetes for engineers and coding agents, and meet us outside Forum 3
+            afterwards.
+          </span>
+        </div>
+      </div>
+      <span
+        class="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-[#1d65ec] px-4 py-2.5 text-[13.5px] font-semibold whitespace-nowrap text-white transition-all group-hover:-translate-y-0.5 group-hover:bg-[#2563eb]"
+      >
+        <span>View session</span>
+        <ArrowUpRight size={16} aria-hidden="true" class="transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+      </span>
+    </a>
+  </Container>
+</aside>
+<script is:inline>
+  (() => {
+    if (new URLSearchParams(location.search).has('banner')) return;
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Europe/Berlin',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date());
+    const y = Number(parts.find((p) => p.type === 'year')?.value ?? 2026);
+    const m = Number(parts.find((p) => p.type === 'month')?.value ?? 12);
+    const d = Number(parts.find((p) => p.type === 'day')?.value ?? 2);
+    if (Date.UTC(y, m - 1, d) >= Date.UTC(2027, 0, 15)) {
+      document.getElementById('kix-devopscon-banner')?.setAttribute('hidden', '');
+    }
+  })();
+</script>
 
 <header id="site-nav" class="sticky top-0 z-40 border-b border-line bg-paper/95 backdrop-blur-sm transition-colors">
   <Container>
@@ -123,4 +184,112 @@ const currentPath = Astro.url.pathname.replace(/\/$/, '') || '/';
     }
   });
   window.matchMedia('(min-width: 64rem)').addEventListener('change', () => setOpen(false));
+
+  const BANNER_PREVIEWS = ['countdown', 'tomorrow', 'today', 'launched', 'expired'] as const;
+  type BannerPreview = (typeof BANNER_PREVIEWS)[number];
+
+  interface DevOpsConBannerState {
+    when: string;
+    where: string;
+    tag: string;
+    title: string;
+    sub: string;
+  }
+
+  function berlinTodayUtc(now: Date): number {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Europe/Berlin',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(now);
+    const year = Number(parts.find((p) => p.type === 'year')?.value ?? 2026);
+    const month = Number(parts.find((p) => p.type === 'month')?.value ?? 12);
+    const day = Number(parts.find((p) => p.type === 'day')?.value ?? 2);
+    return Date.UTC(year, month - 1, day);
+  }
+
+  function resolveDevOpsConBanner(now: Date, preview: BannerPreview | undefined): DevOpsConBannerState | null {
+    const todayUtc = berlinTodayUtc(now);
+    const launchUtc = Date.UTC(2026, 11, 2);
+    const expiryUtc = Date.UTC(2027, 0, 15);
+    if (preview === 'expired' || (!preview && todayUtc >= expiryUtc)) {
+      return null;
+    }
+
+    const rawDays = Math.round((launchUtc - todayUtc) / 86_400_000);
+    if (preview === 'launched' || (!preview && rawDays < 0)) {
+      return {
+        when: '2 December 2026',
+        where: 'DevOpsCon Munich',
+        tag: 'Open-source launch · Adam Charnock & Luca Dombetzki',
+        title: 'We launched and presented Kix at DevOpsCon Munich.',
+        sub: 'See our session overview on compiling whole Kubernetes clusters with fast, local feedback for engineers and coding agents.',
+      };
+    }
+    if (preview === 'today' || (!preview && rawDays === 0)) {
+      return {
+        when: 'Today · 2 Dec',
+        where: 'Forum 3 · 11:30 CET',
+        tag: 'DevOpsCon Munich 2026 · Adam Charnock & Luca Dombetzki',
+        title: 'We are launching and presenting Kix today at DevOpsCon Munich.',
+        sub: 'Join us in Forum 3 at 11:30 CET for our session on compiling Kubernetes, and meet us outside afterwards for lunch.',
+      };
+    }
+    if (preview === 'tomorrow' || (!preview && rawDays === 1)) {
+      return {
+        when: 'Tomorrow · 2 Dec',
+        where: 'Forum 3 · 11:30 CET',
+        tag: 'DevOpsCon Munich 2026 · Adam Charnock & Luca Dombetzki',
+        title: 'We are launching and presenting Kix tomorrow in Munich.',
+        sub: 'Join our session on compiling Kubernetes for engineers and coding agents, and meet us outside Forum 3 afterwards.',
+      };
+    }
+    const days = rawDays > 1 ? rawDays : 5;
+    return {
+      when: 'Wednesday, 2 Dec',
+      where: 'Forum 3 · 11:30 CET',
+      tag: 'DevOpsCon Munich 2026 · Adam Charnock & Luca Dombetzki',
+      title: `We are launching and presenting Kix in ${days} days.`,
+      sub: 'Join our session on compiling Kubernetes for engineers and coding agents, and meet us outside Forum 3 afterwards.',
+    };
+  }
+
+  function updateDevOpsConBanner() {
+    const bannerEl = document.getElementById('kix-devopscon-banner');
+    const whenEl = document.getElementById('kix-banner-when');
+    const whereEl = document.getElementById('kix-banner-where');
+    const tagEl = document.getElementById('kix-banner-tag');
+    const titleEl = document.getElementById('kix-banner-title');
+    const subEl = document.getElementById('kix-banner-sub');
+    if (!bannerEl || !whenEl || !whereEl || !tagEl || !titleEl || !subEl) return;
+
+    const rawParam = new URLSearchParams(window.location.search).get('banner');
+    const preview = BANNER_PREVIEWS.find((p) => p === rawParam);
+    const state = resolveDevOpsConBanner(new Date(), preview);
+    if (!state) {
+      bannerEl.hidden = true;
+      return;
+    }
+    bannerEl.hidden = false;
+    whenEl.textContent = state.when;
+    whereEl.textContent = state.where;
+    tagEl.textContent = state.tag;
+    titleEl.textContent = state.title;
+    subEl.textContent = state.sub;
+  }
+
+  updateDevOpsConBanner();
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') updateDevOpsConBanner();
+  });
 </script>
+
+<style>
+  .kix-announce {
+    background:
+      radial-gradient(65% 160% at 14% 0%, rgba(56, 189, 248, 0.16), transparent 70%),
+      linear-gradient(90deg, rgba(37, 99, 235, 0.14), transparent 48%),
+      #080c11;
+  }
+</style>

@@ -1,6 +1,7 @@
 ---
 import Section from '../Section.astro';
 import Heading from '../Heading.astro';
+import { GITHUB_URL } from '@/lib/links';
 ---
 
 <Section id="faq" labelledby="faq-title">
@@ -19,6 +20,22 @@ import Heading from '../Heading.astro';
             href="https://github.com/kix-run/kix"
             class="font-medium text-accent-text hover:underline">GitHub</a
           >.
+        </dd>
+      </div>
+      <div class="faq-row">
+        <dt>Who created Kix?</dt>
+        <dd>
+          Kix is co-created by Luca Dombetzki and <a
+            href="https://lithus.eu"
+            class="font-medium text-accent-text hover:underline">Lithus</a
+          >, which runs it across managed bare-metal Kubernetes clusters in Europe with 24/7 on-call engineering.
+        </dd>
+      </div>
+      <div class="faq-row" id="deploy-safely">
+        <dt>What does "if it compiles, it will deploy safely" mean?</dt>
+        <dd>
+          No compiler can catch a crashing container or a dead node, but if Kubernetes rejects a Kix manifest,{' '}
+          <a href={`${GITHUB_URL}/issues`} class="font-medium text-accent-text hover:underline">report a bug</a>.
         </dd>
       </div>
       <div class="faq-row">
