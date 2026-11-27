@@ -109,3 +109,66 @@ test('serves the install script as text, release files with a short cache, and t
     '/releases/v0.8.4/SHA256SUMS',
   ]);
 });
+
+// Stand in for the network: record each forwarded request and answer 202.
+async function forward(path, { method = 'GET', headers = {}, body, origin = 'https://p.kix.run' } = {}) {
+  const sent = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init);
+    sent.push({ request, body: await request.text() });
+    return new Response(null, { status: 202 });
+  };
+  try {
+    const env = { ...assets(), ...(origin ? { KIX_ANALYTICS_ORIGIN: origin } : {}) };
+    const response = await worker.fetch(new Request(`https://kix.run${path}`, { method, headers, body }), env);
+    return { response, sent, seen: env.seen };
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+test('forwards a page view to the analytics host with the visitor address', async () => {
+  const { response, sent, seen } = await forward('/p/event', {
+    method: 'POST',
+    headers: {
+      'cf-connecting-ip': '203.0.113.7',
+      'content-type': 'text/plain',
+      'user-agent': 'Visitor/1.0',
+      cookie: 'a=b',
+    },
+    body: '{"n":"pageview"}',
+  });
+  assert.equal(response.status, 202);
+  assert.deepEqual(seen, []);
+  assert.equal(sent.length, 1);
+  const { request, body } = sent[0];
+  assert.equal(request.url, 'https://p.kix.run/p/event');
+  assert.equal(request.method, 'POST');
+  assert.equal(request.headers.get('x-real-ip'), '203.0.113.7');
+  assert.equal(request.headers.get('user-agent'), 'Visitor/1.0');
+  assert.equal(request.headers.get('content-type'), 'text/plain');
+  assert.equal(request.headers.get('cookie'), null);
+  assert.equal(body, '{"n":"pageview"}');
+});
+
+test('forwards the analytics script', async () => {
+  const { response, sent } = await forward('/p/script.js', { headers: { 'cf-connecting-ip': '203.0.113.7' } });
+  assert.equal(response.status, 202);
+  assert.equal(sent[0].request.url, 'https://p.kix.run/p/script.js');
+  assert.equal(sent[0].request.method, 'GET');
+});
+
+test('answers 404 on the analytics paths without an analytics host', async () => {
+  for (const path of ['/p/script.js', '/p/event']) {
+    const { response, sent } = await forward(path, { origin: null });
+    assert.equal(response.status, 404);
+    assert.deepEqual(sent, []);
+  }
+});
+
+test('leaves other /p/ paths to the assets', async () => {
+  const { sent, seen } = await forward('/p/other.js');
+  assert.deepEqual(sent, []);
+  assert.deepEqual(seen, ['/p/other.js']);
+});

@@ -24,3 +24,7 @@ const llmsTxtHref = new URL(`${base}/llms.txt`, Astro.site).href;
 <Default><slot /></Default>
 {markdownHref && <link rel="alternate" type="text/markdown" href={markdownHref} />}
 <link rel="describedby" type="text/plain" href={llmsTxtHref} title="llms.txt" />
+{/* Plausible, as on the landing page: see web/src/layouts/Base.astro. */}
+{!import.meta.env.DEV && (
+  <script is:inline defer data-domain="kix.run" data-api="/p/event" src="/p/script.js" />
+)}
