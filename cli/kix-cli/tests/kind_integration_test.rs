@@ -1672,7 +1672,9 @@ fn drift_is_reverted_and_ceded_fields_are_left_alone() {
     assert_eq!(code, Some(2), "{text}");
     assert!(text.contains("editor"), "{text}");
     assert!(text.contains("ownership.cede"), "{text}");
-    assert!(!text.contains("drift-ceded"), "{text}");
+    // The library's warning about the unreferenced ConfigMap names
+    // `drift-ceded` too, so look for the plan's own `Kind/name@namespace`.
+    assert!(!text.contains("ConfigMap/drift-ceded@"), "{text}");
 
     let (ok, out) = flake.kix(&ctx, &["deploy", "hold", "--yes"]);
     assert!(ok, "{out}");
