@@ -631,7 +631,7 @@ fn deploy_and_gc() {
         "a deploy over a broken unchanged Deployment fails"
     );
     assert!(
-        text.contains("Deployment/echo-server@echo")
+        text.contains("Deployment.apps/echo-server@echo")
             && text.contains("ImagePullBackOff")
             && text.contains("This deploy did not change it"),
         "the failure names the unchanged Deployment with its own status, got:\n{text}"
