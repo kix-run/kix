@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kubectl get gatewayclass,gateway --all-namespaces",
-      "stdout": "NAME                                             CONTROLLER                                      ACCEPTED   AGE\ngatewayclass.gateway.networking.k8s.io/gateway   gateway.envoyproxy.io/gatewayclass-controller   True       32s\n\nNAMESPACE        NAME                                        CLASS     ADDRESS      PROGRAMMED   AGE\ngateway-system   gateway.gateway.networking.k8s.io/gateway   gateway   172.18.0.2   True         32s\n",
+      "stdout": "NAME                                                              CONTROLLER                                      ACCEPTED   AGE\ngatewayclass.gateway.networking.k8s.io/envoy-gateway-controller   gateway.envoyproxy.io/gatewayclass-controller   True       24s\n\nNAMESPACE        NAME                                        CLASS                      ADDRESS      PROGRAMMED   AGE\ngateway-system   gateway.gateway.networking.k8s.io/gateway   envoy-gateway-controller   172.18.0.5   True         22s\n",
       "stderr": "",
-      "stdoutDrift": "\nNAME CONTROLLER ACCEPTED AGE\nNAMESPACE NAME CLASS ADDRESS PROGRAMMED AGE\ngateway-system gateway.gateway.networking.k8s.io/gateway gateway <NODE-IP> True <DURATION>\ngatewayclass.gateway.networking.k8s.io/gateway gateway.envoyproxy.io/gatewayclass-controller True <DURATION>\n",
+      "stdoutDrift": "\nNAME CONTROLLER ACCEPTED AGE\nNAMESPACE NAME CLASS ADDRESS PROGRAMMED AGE\ngateway-system gateway.gateway.networking.k8s.io/gateway envoy-gateway-controller <NODE-IP> True <DURATION>\ngatewayclass.gateway.networking.k8s.io/envoy-gateway-controller gateway.envoyproxy.io/gatewayclass-controller True <DURATION>\n",
       "stderrDrift": "",
       "exitCode": 0
     }

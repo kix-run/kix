@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix deploy how-to-adoption-takeover --dry-run -y",
-      "stdout": "\u001b[31mThe deploy would stop on 1 write:\u001b[39m\n\u001b[31m✗\u001b[39m Deployment/legacy-web@takeover \u001b[31mfield ownership conflict\u001b[39m\nkubectl owns .spec.replicas\n\u001b[2m--force-conflicts takes the fields; `ownership.cede` on the resource leaves them to the other manager\u001b[0m\n",
+      "stdout": "\u001b[31mThe deploy would stop on 1 write:\u001b[39m\n\u001b[31m✗\u001b[39m Deployment.apps/legacy-web@takeover \u001b[31mfield ownership conflict\u001b[39m\nkubectl owns .spec.replicas\n\u001b[2m--force-conflicts takes the fields; `ownership.cede` on the resource leaves them to the other manager\u001b[0m\n",
       "stderr": "",
-      "stdoutDrift": "--force-conflicts takes the fields; `ownership.cede` on the resource leaves them to the other manager\nThe deploy would stop on 1 write:\nkubectl owns .spec.replicas\n✗ Deployment/legacy-web@takeover field ownership conflict\n",
+      "stdoutDrift": "--force-conflicts takes the fields; `ownership.cede` on the resource leaves them to the other manager\nThe deploy would stop on 1 write:\nkubectl owns .spec.replicas\n✗ Deployment.apps/legacy-web@takeover field ownership conflict\n",
       "stderrDrift": "",
       "exitCode": 3
     }

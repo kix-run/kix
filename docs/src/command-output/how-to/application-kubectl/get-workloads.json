@@ -9,7 +9,7 @@
   "commands": [
     {
       "command": "kubectl get deployments,services,jobs -n how-to-app",
-      "stdout": "NAME                         READY   UP-TO-DATE   AVAILABLE   AGE\ndeployment.apps/preview      1/1     1            1           52s\ndeployment.apps/production   2/2     2            2           52s\n\nNAME                 TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)   AGE\nservice/preview      ClusterIP   10.96.41.221   <none>        80/TCP    21s\nservice/production   ClusterIP   10.96.177.54   <none>        80/TCP    23s\n\nNAME                          STATUS     COMPLETIONS   DURATION   AGE\njob.batch/production-health   Complete   1/1           11s        23s\n",
+      "stdout": "NAME                         READY   UP-TO-DATE   AVAILABLE   AGE\ndeployment.apps/preview      1/1     1            1           67s\ndeployment.apps/production   2/2     2            2           67s\n\nNAME                 TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE\nservice/preview      ClusterIP   10.96.142.186   <none>        80/TCP    41s\nservice/production   ClusterIP   10.96.185.92    <none>        80/TCP    27s\n\nNAME                          STATUS     COMPLETIONS   DURATION   AGE\njob.batch/production-health   Complete   1/1           12s        27s\n",
       "stderr": "",
       "stdoutDrift": "\nNAME READY UP-TO-DATE AVAILABLE AGE\nNAME STATUS COMPLETIONS DURATION AGE\nNAME TYPE CLUSTER-IP EXTERNAL-IP PORT(S) AGE\ndeployment.apps/preview 1/1 1 1 <DURATION>\ndeployment.apps/production 2/2 2 2 <DURATION>\njob.batch/production-health Complete 1/1 <DURATION> <DURATION>\nservice/preview ClusterIP <CLUSTER-IP> <none> 80/TCP <DURATION>\nservice/production ClusterIP <CLUSTER-IP> <none> 80/TCP <DURATION>\n",
       "stderrDrift": "",
