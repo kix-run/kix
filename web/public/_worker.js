@@ -30,15 +30,15 @@
 // fetch in .github/workflows/pages.yml, and no shipped Kix.
 //
 // It also forwards `/p/script.js` and `/p/event`, Plausible's script and the
-// page views it sends, to the host in the Pages variable KIX_ANALYTICS_ORIGIN.
-// The pages call only kix.run, so ad blockers that refuse another site's
-// tracking script leave them alone. That host must be in the kix.run zone:
-// Cloudflare passes on the visitor's address that a Worker sets in
-// `x-real-ip` only for a request to its own zone, and Plausible tells
-// visitors apart by that address. Without the variable, both paths are 404.
+// page views it sends, to ANALYTICS_ORIGIN. The pages call only kix.run, so
+// ad blockers that refuse another site's tracking script leave them alone.
+// ANALYTICS_ORIGIN must be in the kix.run zone: Cloudflare passes on the
+// visitor's address that a Worker sets in `x-real-ip` only for a request to
+// its own zone, and Plausible tells visitors apart by that address.
 
 const DOCS_PREFIX = '/docs/';
 
+const ANALYTICS_ORIGIN = 'https://p.kix.run';
 const ANALYTICS_PATHS = new Set(['/p/script.js', '/p/event']);
 
 const DOWNLOAD_ORIGIN = 'https://github.com/kix-run/kix-releases/releases/download/';
@@ -115,16 +115,13 @@ function downloadRedirect(url) {
 }
 
 /** Forward Plausible's script or a page view to the analytics host, with the visitor's address. */
-async function forwardAnalytics(request, env, url) {
-  if (!env.KIX_ANALYTICS_ORIGIN) {
-    return new Response('not found', { status: 404 });
-  }
+async function forwardAnalytics(request, url) {
   const headers = new Headers(request.headers);
   headers.delete('host');
   headers.delete('cookie');
   headers.set('x-real-ip', request.headers.get('cf-connecting-ip') || '');
   const readOnly = request.method === 'GET' || request.method === 'HEAD';
-  return fetch(new URL(url.pathname, env.KIX_ANALYTICS_ORIGIN), {
+  return fetch(new URL(url.pathname, ANALYTICS_ORIGIN), {
     method: request.method,
     headers,
     body: readOnly ? undefined : await request.arrayBuffer(),
@@ -149,7 +146,7 @@ export default {
     const readOnly = request.method === 'GET' || request.method === 'HEAD';
 
     if (ANALYTICS_PATHS.has(url.pathname)) {
-      return forwardAnalytics(request, env, url);
+      return forwardAnalytics(request, url);
     }
 
     const download = readOnly ? downloadRedirect(url) : null;

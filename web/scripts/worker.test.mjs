@@ -111,7 +111,7 @@ test('serves the install script as text, release files with a short cache, and t
 });
 
 // Stand in for the network: record each forwarded request and answer 202.
-async function forward(path, { method = 'GET', headers = {}, body, origin = 'https://p.kix.run' } = {}) {
+async function forward(path, { method = 'GET', headers = {}, body } = {}) {
   const sent = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
@@ -120,7 +120,7 @@ async function forward(path, { method = 'GET', headers = {}, body, origin = 'htt
     return new Response(null, { status: 202 });
   };
   try {
-    const env = { ...assets(), ...(origin ? { KIX_ANALYTICS_ORIGIN: origin } : {}) };
+    const env = assets();
     const response = await worker.fetch(new Request(`https://kix.run${path}`, { method, headers, body }), env);
     return { response, sent, seen: env.seen };
   } finally {
@@ -157,14 +157,6 @@ test('forwards the analytics script', async () => {
   assert.equal(response.status, 202);
   assert.equal(sent[0].request.url, 'https://p.kix.run/p/script.js');
   assert.equal(sent[0].request.method, 'GET');
-});
-
-test('answers 404 on the analytics paths without an analytics host', async () => {
-  for (const path of ['/p/script.js', '/p/event']) {
-    const { response, sent } = await forward(path, { origin: null });
-    assert.equal(response.status, 404);
-    assert.deepEqual(sent, []);
-  }
 });
 
 test('leaves other /p/ paths to the assets', async () => {
