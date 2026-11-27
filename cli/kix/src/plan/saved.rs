@@ -4,9 +4,10 @@
 //! [`compare`] finds a mismatch. A saved plan only restricts a deploy; the
 //! deploy never applies anything read from it.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
+use serde_json::Value;
 
 use super::document::{Checked, MadeBy, Plan, PlanFlags, PruneFate};
 use crate::cluster::scheduler::PrunePolicy;
@@ -384,23 +385,37 @@ pub fn compare(reviewed: &Plan, fresh: &Plan) -> Comparison {
 
     match &reviewed.drift {
         Checked::Checked { items } => {
-            let known: BTreeSet<(&str, &str)> = items
+            // A reverted field the reviewed plan showed, with the live value
+            // it showed. A plan saved before drift entries carried values
+            // compares fields only.
+            let known: BTreeMap<(&str, &str), Option<&Value>> = items
                 .iter()
                 .filter(|d| d.reverted)
-                .map(|d| (d.resource.as_str(), d.path.as_str()))
+                .map(|d| ((d.resource.as_str(), d.path.as_str()), d.live.as_ref()))
                 .collect();
             let new = fresh
                 .drift
                 .items()
                 .iter()
-                .filter(|d| d.reverted && !known.contains(&(d.resource.as_str(), d.path.as_str())))
-                .map(|d| {
+                .filter(|d| d.reverted)
+                .filter_map(|d| {
                     let by = if d.managers.is_empty() {
                         String::new()
                     } else {
                         format!(": changed by {}", d.managers.join(", "))
                     };
-                    format!("{} {}{by}", d.resource, d.path)
+                    match known.get(&(d.resource.as_str(), d.path.as_str())) {
+                        None => Some(format!("{} {}{by}", d.resource, d.path)),
+                        Some(Some(shown)) if d.live.as_ref() != Some(*shown) => Some(format!(
+                            "{} {}{by}: the live value is now {}, and the plan showed {shown}",
+                            d.resource,
+                            d.path,
+                            d.live
+                                .as_ref()
+                                .map_or("absent".to_string(), Value::to_string),
+                        )),
+                        Some(_) => None,
+                    }
                 })
                 .collect();
             mismatch(Rule::NewRevertedDrift, new);
@@ -738,12 +753,28 @@ mod tests {
         };
         let mut drifted = plan();
         drifted.drift = Checked::found(vec![drift("$.spec.replicas", "5")]);
+        // The same field and manager with another live value is a new
+        // revert: the deploy would overwrite a value the reviewer did not
+        // see.
         let mut redrifted = plan();
         redrifted.drift = Checked::found(vec![drift("$.spec.replicas", "7")]);
-        assert!(
-            compare(&drifted, &redrifted).matches,
-            "the live value is not compared"
+        let differs = compare(&drifted, &redrifted);
+        assert_eq!(rules(&differs), vec![Rule::NewRevertedDrift]);
+        assert_eq!(
+            differs.mismatches[0].items,
+            [
+                "Deployment/a@app $.spec.replicas: changed by kubectl-scale: the live value is now \"7\", and the plan showed \"5\""
+            ]
         );
+        assert!(compare(&drifted, &drifted).matches);
+        // A plan saved before drift entries carried values compares fields
+        // only.
+        let mut older = plan();
+        older.drift = Checked::found(vec![DriftChange {
+            live: None,
+            ..drift("$.spec.replicas", "5")
+        }]);
+        assert!(compare(&older, &redrifted).matches);
         assert_eq!(
             rules(&compare(&plan(), &drifted)),
             vec![Rule::NewRevertedDrift]

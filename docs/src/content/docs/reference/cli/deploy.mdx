@@ -494,13 +494,13 @@ any of these:
 | Lock generation | The generation of the cluster's [deploy lock](#the-deploy-lock): another run modified the cluster after the plan was saved (such as `kix deploy --only` or `kix gc`). Skipped when the saved plan has no lock generation (for example, from `--offline` or an older Kix). |
 | Planning flags | `--prune`, `--skip-orphan-check`, `--reconcile`, `--force-conflicts`, `--accept-migrations`, `--operator-removed`, or `--only`. Passing a flag on the command line that was not set when the plan was saved fails before building. `--only` must match the saved plan: pass the exact same `--only` instances for a partial plan, and omit `--only` for a full plan. |
 | Refusals | A conflict, by object, or an admission refusal, by object and reason, that the reviewed plan did not have. |
-| Reverted drift | A drifted field, by object, path, and field manager, that the deploy would put back and the reviewed plan did not list. The live values are not compared, so a field the same manager changed again after the plan was saved is not noticed here. The deploy still checks values from its fresh plan to the apply. |
+| Reverted drift | A drifted field, by object and path, that the deploy would put back and the reviewed plan did not list, or one whose live value is no longer the value the reviewed plan showed. A plan saved by an earlier version records no live values, so only the fields are compared. |
 | Prune deletes | An orphan the deploy would delete that the reviewed plan did not list. |
 | Objects not checked | An object the dry run checked for the reviewed plan and cannot check now, for example because a webhook it calls lost dry-run support. Its refusals and drift would not show. |
 
 What the reviewed plan had and the new one does not, such as a conflict
-someone resolved, does not refuse the deploy. Messages, live values,
-`resourceVersion`s, and order are not compared.
+someone resolved, does not refuse the deploy. Messages, `resourceVersion`s, and order are
+not compared. Live values are compared only for reverted drift.
 
 The planning flags come from the plan: a flag it has and the command line
 omits still applies. A plan whose sections do not match how it says it was
