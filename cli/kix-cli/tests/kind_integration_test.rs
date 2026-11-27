@@ -529,9 +529,30 @@ fn deploy_and_gc() {
         String::from_utf8_lossy(&create_result.stderr)
     );
 
-    // Hard GC should now detect this as garbage
-    let gc_orphan = kix(KIND_CLUSTER)
+    // No deployment record names the object, so hard GC lists it and keeps
+    // it until `--include unattributed` is passed.
+    let gc_listed = kix(KIND_CLUSTER)
         .args(["gc", KIX_CLUSTER, "--full-scan", "--yes"])
+        .output()
+        .expect("hard gc with orphan should run");
+    let gc_listed_out = String::from_utf8_lossy(&gc_listed.stdout);
+    eprintln!("{gc_listed_out}");
+    assert!(
+        gc_listed_out.contains("Objects with no matching deployment record")
+            && gc_listed_out.contains("ConfigMap/orphan-test@echo")
+            && gc_listed_out.contains("Nothing to delete"),
+        "hard gc should list the orphan-test configmap and keep it, got:\n{gc_listed_out}"
+    );
+
+    let gc_orphan = kix(KIND_CLUSTER)
+        .args([
+            "gc",
+            KIX_CLUSTER,
+            "--full-scan",
+            "--include",
+            "unattributed",
+            "--yes",
+        ])
         .output()
         .expect("hard gc with orphan should run");
 
