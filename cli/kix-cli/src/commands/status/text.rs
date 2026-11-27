@@ -306,8 +306,7 @@ fn next_step(c: &ClusterStatus) -> String {
         .partition(|m| kix::cluster::field_manager::Manager::parse(m).is_kix());
     let cluster = &c.cluster;
     let mut line = format!(
-        "Next: run `kix deploy {cluster}` to put back what is missing or changed. \
-         `kix plan {cluster}` shows what it would change first."
+        "Next: run `kix deploy {cluster}` to restore what is missing or changed, or `kix plan {cluster}` to preview the changes first."
     );
     if !others.is_empty() {
         line.push_str(&format!(
@@ -318,9 +317,8 @@ fn next_step(c: &ClusterStatus) -> String {
     }
     if !kix.is_empty() {
         line.push_str(&format!(
-            " It does not take the fields that {} {}, which another Kix cluster applies: make the definitions agree.",
+            " It will not overwrite fields owned by {} (applied by another Kix cluster); update the cluster definitions to match.",
             and_list(&kix),
-            if kix.len() == 1 { "owns" } else { "own" }
         ));
     }
     line
@@ -481,7 +479,7 @@ fn resource_state(r: &ResourceStatus, age: &dyn Fn(&str) -> String) -> String {
                 "not checked: multiple API groups serve this kind, and this object's API group is not in the deploy record; run `kix deploy <cluster> --reconcile` to record it",
             ),
             (_, Some(DriftState::Unstamped)) => Some(
-                "not checked for changes: Kix has no record of what it applied; `kix deploy` applies it again and records it",
+                "not checked for changes: Kix has no recorded applied hash; `kix deploy` reapplies this object and records it",
             ),
             (_, Some(DriftState::NoFieldset)) => {
                 Some("not checked for changes: Kubernetes records no fields Kix owns")

@@ -57,7 +57,7 @@ const ATTEMPTS: usize = 5;
 #[derive(Debug, Error)]
 pub enum WriteError {
     #[error(
-        "could not tidy the metadata of {resource}. Kubernetes refused the write that moves its field manager `{legacy}` and removes the annotations `{activations}` and `{applied}`: {source}. Run the deploy again",
+        "could not update Kix metadata on {resource}. Kubernetes refused the patch that renames field manager `{legacy}` and removes retired annotations `{activations}` and `{applied}`: {source}. Run the deploy again",
         legacy = field_manager::LEGACY,
         activations = keys::ACTIVATIONS,
         applied = keys::APPLIED_HASH,
@@ -68,12 +68,12 @@ pub enum WriteError {
         source: kube::Error,
     },
     #[error(
-        "could not tidy the metadata of {resource}, because something else changed it each of the {ATTEMPTS} times Kix read it. Find what keeps writing to {resource}, then run the deploy again"
+        "could not update Kix metadata on {resource} because another writer modified it on each of the {ATTEMPTS} attempts. Stop what keeps updating {resource}, then run the deploy again"
     )]
     KeepsChanging { resource: String },
     /// What the run's forced apply of the object would take back is not
     /// what the plan showed.
-    #[error("what Kix would take back on {resource} changed after the plan was made")]
+    #[error("fields Kix would take back on {resource} changed after the plan was made")]
     ChangedSincePlan { resource: String },
     #[error("could not read {resource}: {source}")]
     Read {
@@ -82,7 +82,7 @@ pub enum WriteError {
         source: kube::Error,
     },
     #[error(
-        "could not tell which Kix clusters deploy {resource}, so its metadata was not tidied: {reason}"
+        "could not determine which Kix clusters deploy {resource}, so its Kix metadata was not updated: {reason}"
     )]
     Tenancy { resource: String, reason: String },
 }

@@ -439,8 +439,8 @@ fn the_next_step_names_the_managers_whose_fields_the_deploy_takes_back() {
     let changed = text(&shop());
     assert!(
         changed.contains(
-            "Next: run `kix deploy shop` to put back what is missing or changed. \
-             `kix plan shop` shows what it would change first. The deploy takes back the \
+            "Next: run `kix deploy shop` to restore what is missing or changed, or \
+             `kix plan shop` to preview the changes first. The deploy takes back the \
              fields that kubectl-edit owns."
         ),
         "{changed}"
@@ -466,8 +466,7 @@ fn the_next_step_names_the_managers_whose_fields_the_deploy_takes_back() {
     }
     let shared = text(&shared);
     assert!(
-        shared.contains("Next: run `kix deploy shop` to put back")
-            && !shared.contains("takes back"),
+        shared.contains("Next: run `kix deploy shop` to restore") && !shared.contains("takes back"),
         "{shared}"
     );
 
@@ -482,7 +481,7 @@ fn the_next_step_names_the_managers_whose_fields_the_deploy_takes_back() {
     }
     let scaled = text(&scaled);
     assert!(
-        scaled.contains("Next: run `kix deploy shop` to put back"),
+        scaled.contains("Next: run `kix deploy shop` to restore"),
         "{scaled}"
     );
 }

@@ -70,18 +70,17 @@ impl OperatorFeatures {
 /// deploys or repairs ([`operator_without_revisions`]).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "[K9557] Kix cluster {cluster} was handed to a Kix operator older than Kix {version}\n  \
+    "[K9557] Kix cluster {cluster} is managed by a Kix operator older than Kix {version} (or an uninstalled operator)\n  \
      Nothing was changed on the cluster.\n\n  \
      Why:\n    \
-     Deployment record `{record}` of Kix cluster {cluster} was submitted to the Kix operator, which deploys it and repairs its objects again and again. \
-     CustomResourceDefinition `{crd}` does not list `{feature}` in its `{key}` annotation. \
-     So either the operator running here is older than Kix {version}, or the operator was uninstalled. Kix cannot tell which. \
-     An older operator writes the annotations `{activations}` and `{applied}` back onto every object it applies, after this version of Kix removed them.\n\n  \
+     Deployment record `{record}` for Kix cluster {cluster} was submitted to the Kix operator, which reconciles it continuously, \
+     and CustomResourceDefinition `{crd}` does not list `{feature}` in its `{key}` annotation. \
+     Either the running operator is older than Kix {version}, or the operator was uninstalled. \
+     An older operator writes the retired `{activations}` and `{applied}` annotations back onto every object after Kix {version} removes them.\n\n  \
      Next:\n    \
-     If the operator still runs, upgrade it to Kix {version} or newer, wait for it to start, then run the command again.\n    \
-     If the operator was uninstalled, run `kix deploy {cluster} --{flag}`. \
-     That deploy takes the Kix cluster back from the operator, and later commands need no flag. \
-     Do not use it while an older operator still runs, because the operator would keep writing the annotations back.",
+     - If the operator is still running, upgrade it to Kix {version} or newer, wait for it to start, and run the command again.\n    \
+     - If the operator was uninstalled, run `kix deploy {cluster} --{flag}` once to take the cluster back from the operator. \
+     Do not pass `--{flag}` while an older operator is still running, or it will keep rewriting those annotations.",
     version = crate::version::running(),
     crd = keys::ACTIVATIONS_CRD,
     feature = REVISIONS,
@@ -104,7 +103,7 @@ pub const OPERATOR_REMOVED_FLAG: &str = "operator-removed";
 #[derive(Debug, thiserror::Error)]
 pub enum FeaturesCheckError {
     #[error(
-        "could not read CustomResourceDefinition `{crd}` to check the Kix operator's features: {0}. Check that this account has permission to read it, then run the command again",
+        "could not read CustomResourceDefinition `{crd}` to check the Kix operator's features: {0}. Check your cluster connection and verify that this account has `get` permission on `{crd}`, then run the command again",
         crd = keys::ACTIVATIONS_CRD
     )]
     Crd(kube::Error),

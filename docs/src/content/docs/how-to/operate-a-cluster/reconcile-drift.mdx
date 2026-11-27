@@ -6,12 +6,13 @@ description: "Reapply a cluster's desired manifests to heal out-of-band changes.
 import Command from '/src/components/Command.astro';
 import reconcileApplication from '/src/command-output/how-to/application-reconcile/reconcile.json';
 
-A normal `kix deploy` heals out-of-band changes. It recreates any resource in
-the build that is missing from the cluster or being deleted, and it puts back
-fields that someone changed on a resource Kix applied, taking them back from
-the field manager that changed them. The plan labels those resources as
-changed on the cluster before anything is applied. Use `kix deploy --reconcile`
-only when you want Kix to reapply every resource of the build.
+A standard `kix deploy` heals out-of-band changes automatically. It recreates
+any resource in the build that is missing from the cluster or being deleted,
+and it restores fields that another writer changed on a Kix-applied resource,
+taking ownership back from that field manager. `kix plan` marks those resources
+as changed on the cluster before anything is applied. Pass `--reconcile` only
+when you want Kix to reapply every resource in the build regardless of whether
+it changed.
 
 {/* The `kix status` output below is maintained by hand until the live
     captures how-to/application-drift/scaled-deployment and
@@ -31,13 +32,12 @@ how-to-app/production
   Deployment how-to-app/production  changed since deploy (spec.replicas by kubectl)
 
 16 resources: 15 ok, 1 changed.
-Next: run `kix deploy how-to-application` to put back what is missing or changed. `kix plan how-to-application` shows what it would change first. The deploy takes back the fields that kubectl owns.
+Next: run `kix deploy how-to-application` to restore what is missing or changed, or `kix plan how-to-application` to preview the changes first. The deploy takes back the fields that kubectl owns.
 ```
 
-Run `kix plan how-to-application` to see what the deploy would change before
-it changes anything. The plan counts the resources that changed on the cluster
-in a line that starts with `↺`, and lists each changed field under `Drift:`
-with the field manager that changed it.
+Run `kix plan how-to-application` to preview what the deploy will change. The
+plan counts drifted resources on a `↺` line and lists each modified field and
+its current field manager under `Drift:`.
 
 Confirm that the checked-in cluster definition still describes the state you
 want. Reconciliation applies that definition, so review intentional emergency
@@ -45,15 +45,14 @@ changes before continuing.
 
 ## Reapply the desired resources
 
-The example output says kubectl changed `spec.replicas`. Deploy the cluster,
-which takes that field back:
+The example output shows that `kubectl` changed `spec.replicas`. Deploy the
+cluster to restore the field and take ownership back:
 
 <Command expandable {...reconcileApplication} />
 
 The example begins with a production Deployment that was scaled from two
-replicas to one outside Kix. The deploy applies that Deployment again with
-force and waits for it to become ready. It writes nothing to the resources
-that did not change.
+replicas to one outside Kix. `kix deploy` reapplies that Deployment with force
+and waits for it to become ready, leaving unchanged resources untouched.
 
 Use `--context` and `--flake` when the Kubernetes target or source directory
 is not the current one:
@@ -82,9 +81,9 @@ No object should be changed, and the command exits `0`. Run `kix status`
 without `--check` to also confirm that the reapplied workloads are ready. See
 [Check a cluster's status](/docs/how-to/operate-a-cluster/check-resource-status/).
 
-A field the package cedes with `ownership.cede` never counts as changed, so
-the deploy leaves it with the controller that owns it. A field another Kix
-cluster applies is not taken back: the deploy stops with `[K5636]` when the
-two Kix clusters set it to different values. `--reconcile` reapplies every
-resource of the build, and `--force-conflicts` takes fields from other
-managers on every apply. Neither is needed to heal drift.
+Fields listed in `ownership.cede` never count as changed, so `kix deploy`
+leaves them with the controller that owns them. Kix also never forces fields
+away from another Kix cluster; if two Kix clusters set different values for the
+same field, the deploy stops with `[K5636]`. `--reconcile` reapplies every
+resource in the build, and `--force-conflicts` forces field ownership on every
+apply; neither flag is needed to heal drift.

@@ -190,7 +190,7 @@ pub enum PruneError {
     /// Kix could not read part of what says which objects other Kix
     /// clusters deploy.
     #[error(
-        "not deleted, because Kix cannot tell whether another Kix cluster still deploys it: {0}"
+        "not deleted because Kix cannot determine whether another Kix cluster still deploys it: {0}"
     )]
     Tenancy(#[from] super::tenancy::Problem),
     /// Kix could not tell whether the cluster serves the object's kind.

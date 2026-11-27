@@ -106,7 +106,7 @@ pub enum CleanError {
     #[error(transparent)]
     Records(#[from] RecordsError),
     #[error(
-        "cannot read the ActivationHead of Kix cluster {cluster}: {}. Kix keeps every revision until it can read which record is current",
+        "cannot read ActivationHead for Kix cluster '{cluster}': {}. Kix will keep all PackageInstanceRevision objects until it can verify which deployment record is current",
         describe(.source)
     )]
     Head {
@@ -115,7 +115,7 @@ pub enum CleanError {
         source: kube::Error,
     },
     #[error(
-        "deployment record `{record}` cannot be read by this version of Kix: {source}. A later version of Kix probably wrote it. This version deletes no revisions, and a version that reads the record can delete them"
+        "deployment record `{record}` cannot be read by this version of Kix ({source}); a newer version of Kix likely wrote it. Kix left all PackageInstanceRevision objects in place"
     )]
     UnreadableMap {
         record: String,
@@ -123,7 +123,7 @@ pub enum CleanError {
         source: UnreadableMap,
     },
     #[error(
-        "the ActivationHead of Kix cluster {cluster} names deployment record `{record}`, but no deployment record of that name carries the label `{}={cluster}`. Kix deletes no revisions until it can see that record",
+        "ActivationHead for Kix cluster '{cluster}' names deployment record `{record}`, but no deployment record with that name has label `{}={cluster}`. Kix left all PackageInstanceRevision objects in place",
         keys::CLUSTER_LABEL
     )]
     MissingRecord { cluster: String, record: String },

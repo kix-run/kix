@@ -1066,7 +1066,7 @@ async fn after_failed_attempt(
 fn drift_not_reverted_message(drift: &kix::plan::live::DriftNotReverted) -> String {
     let resource = drift.rid.display_id();
     let owners = if drift.owners.is_empty() {
-        "another field manager now owns fields".to_string()
+        "another field manager now owns its fields".to_string()
     } else {
         let named: Vec<String> = drift
             .owners
@@ -1076,7 +1076,7 @@ fn drift_not_reverted_message(drift: &kix::plan::live::DriftNotReverted) -> Stri
         named.join("; ")
     };
     format!(
-        "{resource} changed on the cluster since Kix applied it: {owners}. The Kix operator never takes fields from another field manager, so it left {resource} as it is. Run `kix deploy` to take the fields back, or declare them with `ownership.cede` if that manager is meant to own them."
+        "{resource} changed on the cluster since Kix applied it ({owners}). The Kix operator never overwrites fields owned by another field manager, so it left {resource} unchanged. Run `kix deploy` to take those fields back, or list them in `ownership.cede` if that manager should keep owning them."
     )
 }
 

@@ -80,21 +80,20 @@ how-to-app/production
   ConfigMap how-to-app/production  missing, needed by Deployment how-to-app/production
 
 16 resources: 15 ok, 1 missing.
-Next: run `kix deploy how-to-application` to put back what is missing or changed. `kix plan how-to-application` shows what it would change first.
+Next: run `kix deploy how-to-application` to restore what is missing or changed, or `kix plan how-to-application` to preview the changes first.
 ```
 
 The line names the objects that depend on the missing one. Those objects may
 keep running, but can fail when they next need it, for example when a Pod
 restarts and mounts the ConfigMap.
 
-Run the command the `Next:` line names to create the object again. A deploy
-recreates every object of the build that is missing from the cluster.
+Run the command the `Next:` line names to create the object again. `kix deploy`
+always recreates any object in the build that is missing from the cluster.
 
-When Kix cannot name a missing object, it shows it as
+When Kix cannot determine a missing object's kind and name, it shows
 `Unknown/(hash: ...)`. This happens on a machine that does not have the
-deployed build, for a deploy record that an earlier version of Kix wrote
-without the names of its objects and that this version has not converted
-yet.
+deployed build locally, when an earlier version of Kix wrote the deployment
+record without object names and no deploy on this version has converted it yet.
 
 ## Find changed objects
 
@@ -121,7 +120,7 @@ how-to-app/production
   Deployment how-to-app/production  changed since deploy (spec.replicas by kubectl)
 
 16 resources: 15 ok, 1 changed.
-Next: run `kix deploy how-to-application` to put back what is missing or changed. `kix plan how-to-application` shows what it would change first. The deploy takes back the fields that kubectl owns.
+Next: run `kix deploy how-to-application` to restore what is missing or changed, or `kix plan how-to-application` to preview the changes first. The deploy takes back the fields that kubectl owns.
 ```
 
 Only the fields Kix set count. A field that a controller adds, or one the
@@ -131,8 +130,8 @@ Before you put the value back, decide whether the change should stay. If it
 should, change the cluster definition to match and deploy. If it should not,
 follow [Reconcile drift](/docs/how-to/operate-a-cluster/reconcile-drift/).
 
-An object Kix has no record of applying shows as "not checked for changes".
-The next `kix deploy` applies it again and records what it applied. Objects that are not checked do not
+An object with no recorded applied hash shows as "not checked for changes".
+The next `kix deploy` reapplies the object and records its applied hash. Objects that are not checked do not
 count as problems.
 
 ## Investigate an object that is not ready

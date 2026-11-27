@@ -24,7 +24,7 @@ Most `kix.run/*` metadata is stamped automatically by resource builders (`scope.
 
 | Label | Placed on | Meaning |
 | --- | --- | --- |
-| `app.kubernetes.io/managed-by: kix` | Every Kix-rendered resource and CRD record | Identifies objects managed by Kix (required by [validation check 8](/docs/reference/validation-checks/)). Which Kix cluster deploys an object, for pruning and garbage collection, comes from its `kix.run/identity-hash` and the [`PackageInstanceRevision`](#packageinstancerevision) objects of each Kix cluster. |
+| `app.kubernetes.io/managed-by: kix` | Every Kix-rendered resource and CRD record | Identifies objects managed by Kix (required by [validation check 8](/docs/reference/validation-checks/)). Pruning and garbage collection determine which Kix cluster deploys an object from its `kix.run/identity-hash` and each Kix cluster's [`PackageInstanceRevision`](#packageinstancerevision) objects. |
 | `kix.run/cluster` | `Activation` and `PackageInstanceRevision` resources | Names the Kix cluster that owns the record or revision so multiple Kix clusters can share a single Kubernetes cluster. |
 | `kix.run/kubernetes-uid` | `Activation` resources of a definition that sets `cluster.kubernetes.uid` | The UID of the Kubernetes cluster's `kube-system` Namespace the build was bound to. While any record carries it, the Kubernetes cluster refuses definitions that do not set the UID. See [Bind a cluster definition to its Kubernetes cluster](/docs/how-to/operate-a-cluster/bind-a-cluster-definition-to-its-kubernetes-cluster/). |
 | `kix.run/consumer` | `Namespace` resources in consumer clusters | Names the consumer cluster (built with `kix.interface`) that owns the namespace, allowing platform network policies to select consumer pods. |
@@ -59,39 +59,39 @@ Most `kix.run/*` metadata is stamped automatically by resource builders (`scope.
 
 ### Retired annotations
 
-Earlier versions of Kix wrote two more annotations onto every object after
-applying it. This version no longer writes them, and the first deploy of a
-Kix cluster with this version removes them (see
-[Moving to revisions on the first deploy](/docs/explanation/server-side-apply-and-drift/#the-first-deploy-after-upgrading)).
+Earlier versions of Kix wrote two additional annotations onto every object
+after applying it. Kix no longer writes them, and the first deploy after
+upgrading removes them (see
+[The first deploy after upgrading](/docs/explanation/server-side-apply-and-drift/#the-first-deploy-after-upgrading)).
 
 | Annotation | What it held | Where Kix keeps it now |
 | --- | --- | --- |
-| `kix.run/activations` | Comma-separated identity hashes of the `Activation` records that used the object. | The record's [`status.revisions`](#activation-spec-and-status-fields) names `PackageInstanceRevision` objects, which list the objects. |
-| `kix.run/applied-hash` | Hash of the fields Kix owned after its last apply. | [`status.applied`](#packageinstancerevision) of the revisions that list the object. |
+| `kix.run/activations` | Comma-separated identity hashes of the `Activation` records that included the object. | [`status.revisions`](#activation-spec-and-status-fields) on the `Activation` record, which links to `PackageInstanceRevision` objects listing the objects. |
+| `kix.run/applied-hash` | Hash of the fields Kix owned after its last apply. | [`status.applied`](#packageinstancerevision) on the revision that lists the object. |
 
-An object that a Kix cluster on an earlier version of Kix also deploys keeps
-both annotations until that Kix cluster is deployed with this version, because
-the earlier version reads them before it deletes anything. This version adds
-its own record's identity hash to `kix.run/activations`.
+If another Kix cluster on an earlier version also deploys a shared object, Kix
+keeps both annotations on that object until the other cluster upgrades, because
+the earlier version checks `kix.run/activations` before deleting orphans.
+Meanwhile, Kix appends its own deployment record hash to `kix.run/activations`.
 
 ### Field manager
 
-Kix applies every object with server-side apply under the field manager
-`kix/<cluster>`, where `<cluster>` is the Kix cluster's name, such as
-`kix/production`. Kubernetes lists each field manager in the object's
-`metadata.managedFields`, so an object shows which Kix clusters apply it. When
-two Kix clusters set a field of a shared object to different values,
-Kubernetes refuses the second apply and Kix stops with `[K5636]`.
+Kix applies every object with Server-Side Apply under the field manager
+`kix/<cluster>`, where `<cluster>` is the Kix cluster's name (such as
+`kix/production`). Kubernetes records each field manager in
+`metadata.managedFields`, showing which Kix clusters manage the object. When
+two Kix clusters set conflicting values for a field on a shared object,
+Kubernetes rejects the second apply and Kix stops with `[K5636]`.
 
-Earlier versions of Kix applied under the one name `kix` for every Kix
-cluster. The first deploy with this version renames the `kix` entry to
-`kix/<cluster>` on each object that this Kix cluster's own deployment records
-name, and removes the `Update` entry under `kix` that the retired annotations
-left. It leaves a `kix` entry alone on an object that another Kix cluster
-also deploys, until every such cluster has its own entry, and keeps it while
-one of them is on an earlier version. On an object this Kix cluster's records
-never named, it does not count the `kix` entry as its own: it applies the
-object without force, which adds its own entry beside `kix`.
+Earlier versions of Kix applied under the shared field manager `kix` for every
+Kix cluster. On the first deploy after upgrading, Kix renames `kix` to
+`kix/<cluster>` on each object listed in this cluster's deployment records, and
+removes the `Update` entry under `kix` left by the retired annotations. On
+objects also deployed by another Kix cluster, Kix leaves the `kix` entry in
+place until every sharing cluster has its own `kix/<cluster>` entry and has
+upgraded to revisions. On an object never listed in this cluster's deployment
+records, Kix does not treat an existing `kix` entry as its own; it applies
+without force, adding `kix/<cluster>` alongside `kix`.
 
 #### `kix.run/readiness`
 
@@ -189,22 +189,22 @@ spec:
 | `status.failedRequest` | `object` (optional) | Most recent `spec.request` that failed on an `Active` or `Degraded` record, written when redeploying the current build fails. Contains `request` (the `spec.request` token), `reason` (why the redeploy failed), and `at` (RFC 3339 UTC timestamp). Because the operator leaves `status.finishedRequest` unchanged, older versions of Kix keep waiting rather than reporting success. |
 | `status.partial` | `object` (optional) | Present only when `status.phase` is `Partial`, written by [`kix deploy --only`](/docs/reference/cli/deploy/#deploy-one-instance-at-a-time). Contains `only` (sorted `namespace/instance` names of every selected and required instance applied so far across `--only` runs of this build) and `at` (RFC 3339 UTC timestamp). Cleared when a new deploy of this record starts or when the record is marked `Superseded`. |
 | `status.receipt` | `object` | Provenance record written by `kix deploy` (see [Deploy receipt schema](#deploy-receipt-schema)). |
-| `status.revisions` | `object` (optional) | The [`PackageInstanceRevision`](#packageinstancerevision) objects the deploy is made of. Written when a deploy begins, and again when it finishes. See [Revision map](#revision-map). |
-| `status.packageIndex` | `object` (optional) | Written by earlier versions of Kix only. Map of package instances and cluster-level resources to their manifest identity hashes. Kix still reads it on records an earlier version wrote. See [The package index](#the-package-index). |
-| `status.orphansKeptFrom` | `array of string` (optional) | Written by earlier versions of Kix only. Previous activation build paths whose orphaned resources were kept because `--prune` was not passed. Kix reads it on a record an earlier version wrote, and clears it when a deploy finishes. The kept-orphans revision replaces it. |
+| `status.revisions` | `object` (optional) | Map of [`PackageInstanceRevision`](#packageinstancerevision) objects for this deploy, written when the deploy starts and updated when it finishes. See [Revision map](#revision-map). |
+| `status.packageIndex` | `object` (optional) | Legacy map of package instances and cluster-level resources to manifest identity hashes, written only by earlier versions of Kix. Kix still reads it on older records. See [The package index](#the-package-index). |
+| `status.orphansKeptFrom` | `array of string` (optional) | Legacy list of previous activation build paths whose orphaned resources were kept when `--prune` was omitted. Kix still reads it on older records and clears it when a deploy finishes; the kept-orphans revision replaces it. |
 
 ### Revision map
 
-`status.revisions` names one revision for each package instance of the build,
-one for the objects that belong to no package instance, and, when the deploy
-left orphans on the cluster, one for those.
+`status.revisions` links one revision per package instance in the build, one
+revision for cluster-level objects outside any package instance, and (when
+unpruned orphans remain) one kept-orphans revision.
 
 | Path | Type | Meaning |
 | --- | --- | --- |
-| `format` | `integer` | Version of the map's shape. This version of Kix reads and writes `1`, and refuses to delete anything on account of a record whose map it cannot read. |
-| `instances` | `object` | Map from `namespace/instance` to the name of that package instance's revision. |
-| `clusterLevel` | `string` | Name of the revision of the objects that belong to no package instance, such as Namespaces. |
-| `keptOrphans` | `string` (optional) | Name of the revision of the orphans that this deploy and earlier ones left on the cluster without pruning. `kix deploy --prune` and `kix gc` delete what it lists. |
+| `format` | `integer` | Schema version of the revision map. Kix reads and writes `1`, and refuses to prune or garbage-collect when a deployment record has a `format` it cannot read. |
+| `instances` | `object` | Map from `namespace/instance` to the `PackageInstanceRevision` name for that package instance. |
+| `clusterLevel` | `string` | Name of the `PackageInstanceRevision` for cluster-level objects outside any package instance, such as Namespaces. |
+| `keptOrphans` | `string` (optional) | Name of the `PackageInstanceRevision` listing orphans kept by this deploy or earlier deploys that ran without `--prune`. `kix deploy --prune` and `kix gc` delete the objects it lists. |
 
 ```yaml
 status:
@@ -217,14 +217,14 @@ status:
     keptOrphans: production-5b7d9f1a3c5e7b9d0f2a4c6e8b0d1f3a
 ```
 
-A deploy that leaves a package instance unchanged names the revision the
-deploy before it created.
+When a package instance is unchanged from the previous deploy,
+`status.revisions` reuses the existing revision name.
 
 ### The package index
 
-Earlier versions of Kix wrote `status.packageIndex`, which lists the objects a
-deploy made, grouped by package. This version reads it on records an earlier
-version wrote and no longer writes it. Revisions replace it.
+Earlier versions of Kix wrote `status.packageIndex` to list a deploy's objects
+grouped by package. Kix still reads `status.packageIndex` on older records and
+writes [revisions](#packageinstancerevision) instead on new deploys.
 Commands that read the cluster without building it, such as
 [`kix status`](/docs/reference/cli/status/) and `kix diff`, use it to group
 objects by package and to find objects that are gone from the cluster.
@@ -261,7 +261,7 @@ have an index without `names`, or none.
 
 - **`Queued` -> `Deploying` -> `Active` | `Degraded` | `Failed` | `Partial` -> `Superseded`**: `kix deploy` creates or updates the `Activation` record before applying the first wave. `Active` means every resource applied and became ready. `Degraded` means the deploy completed but one or more resources failed readiness; it remains the cluster's current activation. `Failed` means the deploy aborted before completion. `Partial` means `kix deploy --only` applied every selected resource and left the rest of the build for a later deploy (recorded in `status.partial`). After a `Failed` or `Partial` record, the next deploy uses the previous `Active` or `Degraded` activation as its primary diff baseline while also sweeping changes from that run.
 - **Operator requests (`--operator`)**: Each run of `kix deploy --operator` or `kix rollback --operator` writes a new token to `spec.request`, and the Kix operator copies it to `status.startedRequest` when work begins. If the record is `Superseded`, `Failed`, or `Partial` (for example, during `kix rollback --operator`, a retry of a failed deploy, or a full deploy after `kix deploy --only`), the operator sets `status.phase` back to `Queued` and deploys the build. During any new deploy or rollback, the cluster's existing `Active` or `Degraded` record remains current until the deploy finishes, when the operator marks it `Superseded`. If the deploy reaches `Failed` instead, that record remains current and the operator restores the cluster to match it. If the record is already `Active` or `Degraded` (when `kix deploy --operator` redeploys the current build), it keeps that phase while the operator applies the build again. Once per request, when the deploy starts, the operator reruns any Job marked `kix.run/rerun` whose last run failed. When the deploy finishes, the operator writes the token to `status.finishedRequest`. If redeploying the current build fails, the operator writes the token and failure reason to `status.failedRequest` instead of `status.finishedRequest`, and the record keeps its phase.
-- **Operator features (`kix.run/operator-features`)**: On startup, the Kix operator patches the `activations.kix.run` CustomResourceDefinition to set `kix.run/operator-features` to a comma-separated list of supported features: `requests` (handles `spec.request`), `head-lock` (takes each Kix cluster's [deploy lock](#activationhead) before changing the cluster), and `revisions` (keeps what a deploy did in [revisions](#packageinstancerevision) and writes no annotations on the objects it applies). `kix deploy --operator` and `kix rollback --operator` check this annotation before making changes and stop with `[K9557]` if any of the three is missing, because an older operator ignores `spec.request`, deploys without the lock, or writes the [retired annotations](#retired-annotations) back. Every other command that changes a Kix cluster stops with `[K9557]`, before it plans, while a current, queued, or deploying record of that Kix cluster was submitted to the operator (it has `spec.source`) and the annotation does not list `revisions`. An operator from Kix 0.9 or earlier writes no annotation and is refused too. Other Kix clusters on the same Kubernetes cluster are not affected. Kix cannot tell an older operator from one that was uninstalled. If the operator was uninstalled, `kix deploy <cluster> --operator-removed` takes the Kix cluster back (see [`--operator-removed`](/docs/reference/cli/deploy/#take-a-cluster-back-from-a-removed-operator)).
+- **Operator features (`kix.run/operator-features`)**: On startup, the Kix operator sets `kix.run/operator-features` on the `activations.kix.run` CustomResourceDefinition to `requests,head-lock,revisions`: `requests` (processes `spec.request`), `head-lock` (takes each Kix cluster's [deploy lock](#activationhead) before modifying the cluster), and `revisions` (records deployed objects in [revisions](#packageinstancerevision) instead of writing post-apply annotations on workload objects). `kix deploy --operator` and `kix rollback --operator` check this annotation before making changes and stop with `[K9557]` if any feature is missing, because an older operator ignores `spec.request`, deploys without the lock, or writes back the [retired annotations](#retired-annotations). Other cluster-modifying commands also stop with `[K9557]` before planning if a current, queued, or deploying record for that Kix cluster has `spec.source` (meaning it was submitted to the operator) and the annotation lacks `revisions` (including operators from Kix 0.9 or earlier, which write no annotation). Other Kix clusters on the same Kubernetes cluster are unaffected. Because Kix cannot distinguish an older running operator from an uninstalled one, run `kix deploy <cluster> --operator-removed` once if you uninstalled the operator (see [`--operator-removed`](/docs/reference/cli/deploy/#take-a-cluster-back-from-a-removed-operator)).
 - **In-cluster operator (`--operator`)**: When managed by `kix-operator`, the record carries the finalizer `kix.run/operator-gc`. Deleting an `Active`, `Deploying`, or `Degraded` `Activation` causes the operator to delete all resources owned by that activation except `Namespace` and `CustomResourceDefinition` objects. Deleting a `Superseded` record (for example, during `kix gc --operator`) simply removes the finalizer.
 
 ## ActivationHead
@@ -274,16 +274,15 @@ deployment record, and records the Kix version that last changed the cluster.
 An `Activation` record without a `kix.run/cluster` label uses an
 `ActivationHead` named after the record itself.
 
-Kix installs its four CustomResourceDefinitions itself:
-`activations.kix.run`, `packageinstances.kix.run`, `activationheads.kix.run`,
-and `packageinstancerevisions.kix.run`. Builds do not contain them. Before
-taking the lock, `kix deploy`, `kix rollback`, `kix gc`, and
-`kix migrate domain` create any CRD that is missing, and the Kix operator does
-the same when it starts. Each CRD carries the annotation `kix.run/definition`,
-which says which version of Kix's definition it holds. A newer Kix replaces an
-older definition, and an older Kix leaves a newer one as it is. A Kix stops
-with an error if the CRD on the cluster no longer serves the API version it
-uses.
+Kix installs its four CustomResourceDefinitions automatically
+(`activations.kix.run`, `packageinstances.kix.run`, `activationheads.kix.run`,
+and `packageinstancerevisions.kix.run`); cluster builds do not include them.
+Before taking the lock, `kix deploy`, `kix rollback`, `kix gc`, and
+`kix migrate domain` create any missing CRD, as does the Kix operator on
+startup. Each CRD carries a `kix.run/definition` annotation recording its
+schema revision: newer versions of Kix update older CRD definitions, while
+older versions of Kix leave newer definitions untouched and stop with an error
+only if the cluster's CRD no longer serves the API version they require.
 
 The `activationheads.kix.run` CRD has no status subresource. On every write, Kix replaces the whole object with the
 `resourceVersion` it read, so the Kubernetes API server rejects concurrent
@@ -307,8 +306,8 @@ that takes the lock reconciles them. When the `Activation` record named in
 `status.current` no longer exists or is in phase `Superseded` while another
 record is `Active` or `Degraded` (for example, after an older Kix deployed),
 when another record without `status.revisions` is `Active` or `Degraded` while
-the record in `status.current` still is too (an older Kix deployed after this
-one), or when `ActivationHead` has no `status` (such as on first creation or after
+the record in `status.current` still is too (because an earlier version of Kix
+deployed after this version), or when `ActivationHead` has no `status` (such as on first creation or after
 restoring a backup without `status`), Kix rebuilds `ActivationHead` from the
 record phases. When the record named in
 `status.current` exists without an `Active` or `Degraded` phase (because a
@@ -320,48 +319,47 @@ an existing `status` or repairing phases increments `status.generation`.
 
 `PackageInstanceRevision` (`packageinstancerevisions.kix.run`, API version
 `kix.run/v1alpha1`) is a cluster-scoped custom resource that lists the objects
-one build makes for one part of a Kix cluster, and records what Kix last
-applied to each of them. Deployment records name their revisions in
-[`status.revisions`](#revision-map). Each revision is labelled
-`kix.run/cluster`, so this lists every revision of one Kix cluster:
+one build produces for one slot of a Kix cluster and records the applied hash
+of each object. Deployment records link to their revisions in
+[`status.revisions`](#revision-map). Each revision carries the label
+`kix.run/cluster`, so you can list all revisions for a cluster with:
 
 <Command commands={["kubectl get packageinstancerevisions -l kix.run/cluster=production"]} />
 
 | Field | Meaning |
 | --- | --- |
 | `spec.cluster` | Name of the Kix cluster. |
-| `spec.slot` | What the revision covers: `{ kind: instance, namespace, name }` for one package instance, `{ kind: clusterLevel }` for the objects that belong to no package instance, or `{ kind: keptOrphans }` for the objects that deploys without `--prune` left on the cluster. |
-| `spec.objects` | The objects, sorted: `hash` (the object's `kix.run/identity-hash`), `group` (`""` for the core API group), `kind`, `namespace` (left out for a cluster-scoped object), and `name`. |
-| `status.applied` | Map from an object's `hash` to the hash of the fields Kix owned on it after its last apply. Kix compares it with the live object to find drift. Fields the object cedes with [`kix.run/cede-fields`](#kixruncede-fields) are left out. An object with no entry has no known applied hash, and the next deploy applies it again and records one. |
+| `spec.slot` | Scope covered by the revision: `{ kind: instance, namespace, name }` for a package instance, `{ kind: clusterLevel }` for cluster-level objects outside any package instance, or `{ kind: keptOrphans }` for orphaned objects kept by deploys that ran without `--prune`. |
+| `spec.objects` | Sorted list of objects: `hash` (`kix.run/identity-hash`), `group` (`""` for core `v1`), `kind`, `namespace` (omitted when cluster-scoped), and `name`. |
+| `status.applied` | Map from each object's `hash` to the hash of the Kix-owned live fields after its last apply (excluding fields listed in [`kix.run/cede-fields`](#kixruncede-fields)). Used to detect drift. If an object has no entry, the next deploy reapplies it and records its hash. |
 
-A revision's name is the Kix cluster's name, a dash, and a 32-character hash
-of its `spec`, so two machines that hold the same build compute the same name.
-The CRD refuses any change to `spec`, and Kix checks the hash against `spec`
-when it reads a revision. `status` is a subresource, so you can let an account
-edit workloads and still deny it `packageinstancerevisions/status`, which holds
-the applied hashes.
+Each revision is named `<cluster>-<32-char spec hash>`, so any machine holding
+the same build computes the same revision name. The CRD makes `spec` immutable,
+and Kix verifies that the name matches `spec` whenever it reads a revision.
+Because `status` is a separate subresource, RBAC rules can allow an account to
+edit workloads while denying write access to `packageinstancerevisions/status`.
 
-Kix keeps only the revisions that a record it still needs names: the current
-record, a record a deploy is applying or that waits in the queue, and each
-`Failed` or `Partial` record until a later deploy finishes and takes in what
-it left. A `Superseded` record names none. A finished deploy and `kix gc`
-delete the other revisions of the Kix cluster, and a rollback writes the
-revisions of the record it rolls back to again from its build. A revision
-holds at most about 1.5 MB, which is about 6,500 objects, so Kix refuses a
-package instance with more objects than that before it applies anything. A
-deployment record from a Kix older than 0.6 has no package index, so the first
-deploy with this version puts all its objects in one revision; if they do not
-fit, Kix refuses and says to deploy a changed build once with Kix 0.9, which
-writes a package index.
+Kix retains only revisions referenced by deployment records it still consults:
+the active record, any queued or deploying record, and any `Failed` or
+`Partial` record until a later deploy finishes and folds in its changes.
+`Superseded` records carry no revision links. Finishing a deploy or running
+`kix gc` deletes unreferenced revisions for that Kix cluster, and `kix rollback`
+recreates the target record's revisions from its build. Each revision holds up
+to roughly 1.5 MB (around 6,500 objects); Kix stops before applying if a
+package instance exceeds that limit. Because deployment records from Kix 0.5
+and earlier have no package index, upgrading converts all of a record's objects
+into a single revision; if they exceed the size limit, Kix stops and instructs
+you to deploy an updated build of the cluster once with Kix 0.9 (which writes a
+package index), then upgrade Kix again and redeploy.
 
-When a record names a revision that is not on the cluster, `kix deploy`,
-`kix gc`, and the Kix operator refuse to delete anything, and `kix status`
-reports it and carries on. A deploy of that record's build creates the
-revision again under the same name. If the missing revision is the list of
-kept orphans, run `kix gc --full-scan`, which builds it again from the live
-objects this Kix cluster applied that no other revision names.
+If a deployment record references a revision that is missing from the cluster,
+`kix deploy`, `kix gc`, and the Kix operator refuse to prune or delete
+resources, while `kix status` warns and continues. Redeploying that record's
+build recreates the missing revision under the same name. If the missing
+revision is `keptOrphans`, run `kix gc --full-scan` to rebuild it from live
+objects owned by this Kix cluster that no other revision lists.
 
-Do not edit `PackageInstanceRevision` objects.
+Do not edit `PackageInstanceRevision` objects by hand.
 
 ## PackageInstance
 

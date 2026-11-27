@@ -58,7 +58,7 @@ pub fn all() -> [OwnCrd; 4] {
             definition: definitions::activation(),
             number: 1,
             holds: "deployment records",
-            verbs: "`get`, `list`, `watch`, `create`, `patch`, and `delete` (`patch` also on its `status`)",
+            verbs: "`get`, `list`, `watch`, `create`, `patch`, and `delete` (plus `patch` on `status`)",
         },
         OwnCrd {
             name: crate::manifest::keys::PACKAGE_INSTANCES_CRD.to_string(),
@@ -78,8 +78,8 @@ pub fn all() -> [OwnCrd; 4] {
             name: crate::cluster::revision::crd_name(),
             definition: crate::cluster::revision::crd::definition(),
             number: 1,
-            holds: "the objects each deploy applied",
-            verbs: "`get`, `list`, `create`, and `delete`, and `patch` on its `status`",
+            holds: "deployed object lists",
+            verbs: "`get`, `list`, `create`, and `delete` (plus `patch` on `status`)",
         },
     ]
 }

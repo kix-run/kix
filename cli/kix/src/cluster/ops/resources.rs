@@ -537,7 +537,7 @@ impl ResourceIo for KubeResources {
         .await
         .map_err(|e| {
             format!(
-                "could not give up this Kix cluster's fields on {}, which another Kix cluster still deploys: {e}",
+                "could not release this Kix cluster's field ownership on {}, which another Kix cluster still deploys: {e}",
                 rid.display_id()
             )
         })?;

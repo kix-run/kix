@@ -2,4 +2,4 @@
 kind = "changed"
 cli = ["kix deploy --log-format json"]
 +++
-The JSON deploy log no longer lists `wait` as a value of a node's `kind`. Only a consumer cluster's wait for its platform's copy of Kix's CRDs produced it, and Kix now installs those CRDs itself.
+If a script or tool parses `kix deploy --log-format json`, remove any handling for `"kind": "wait"` on node events. That event kind was emitted only when a cluster waited for another cluster to install Kix's internal CustomResourceDefinitions, and Kix now installs those CRDs directly when a deploy starts.

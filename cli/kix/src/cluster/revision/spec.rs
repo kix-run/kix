@@ -161,18 +161,18 @@ pub struct Revision {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ReadError {
     #[error(
-        "{} `{name}` has a `spec` that does not match its name (the name's hash belongs to `{expected}`). Someone changed or replaced it outside Kix, so Kix cannot trust the list of objects it holds",
+        "{} `{name}` has a `spec` that does not match its name (expected `{expected}` from its `spec`). It was modified outside Kix, so Kix cannot trust its object list",
         super::KIND
     )]
     NameMismatch { name: String, expected: String },
-    #[error("{} `{name}` cannot be read: {reason}", super::KIND)]
+    #[error("{} `{name}` is invalid: {reason}", super::KIND)]
     Malformed { name: String, reason: String },
 }
 
 /// A revision too large for the API server to store.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "{what} has {objects} objects, too many for Kix to record in one {} object: it would take about {bytes} bytes, and Kubernetes stores at most {MAX_BYTES} bytes in one object. {next}",
+    "{what} has {objects} objects (~{bytes} bytes), which exceeds Kubernetes's {MAX_BYTES}-byte limit for a single {} object. {next}",
     super::KIND
 )]
 pub struct TooLarge {
@@ -222,9 +222,9 @@ impl Revision {
         let spec_value = obj
             .data
             .get("spec")
-            .ok_or_else(|| malformed("it has no `spec`".into()))?;
+            .ok_or_else(|| malformed("missing `spec`".into()))?;
         let spec: RevisionSpec = serde_json::from_value(spec_value.clone())
-            .map_err(|e| malformed(format!("its `spec` does not parse: {e}")))?;
+            .map_err(|e| malformed(format!("`spec` could not be parsed: {e}")))?;
         let expected = name_of(&spec);
         if expected != name {
             return Err(ReadError::NameMismatch { name, expected });
@@ -232,7 +232,7 @@ impl Revision {
         let applied = match obj.data.pointer("/status/applied") {
             None | Some(Value::Null) => BTreeMap::new(),
             Some(value) => serde_json::from_value(value.clone())
-                .map_err(|e| malformed(format!("its `status.applied` does not parse: {e}")))?,
+                .map_err(|e| malformed(format!("`status.applied` could not be parsed: {e}")))?,
         };
         Ok(Revision {
             name,
@@ -321,7 +321,7 @@ impl RevisionSet {
             )
         });
         let cluster_level = too_large(
-            "the part of the build that belongs to no package instance".into(),
+            "cluster-level resources (outside any package instance)".into(),
             "Move some of these objects into package instances, then plan again.",
             &self.cluster_level,
         );

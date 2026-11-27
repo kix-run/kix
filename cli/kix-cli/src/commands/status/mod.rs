@@ -143,7 +143,7 @@ async fn read_cluster(
                     .problems
                     .iter()
                     .filter(|p| p.cluster().is_none_or(|c| c == view.cluster))
-                    .map(|p| format!("{p}. Kix shows what it could read.")),
+                    .map(|p| format!("{p}. Showing the objects Kix could read.")),
             );
             notes.insert(view.cluster.clone(), cluster_notes);
         }

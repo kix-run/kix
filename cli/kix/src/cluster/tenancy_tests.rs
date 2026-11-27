@@ -455,7 +455,7 @@ mod both_sources {
         assert!(
             text.contains(&missing)
                 && text.contains("a-failed")
-                && text.contains("A deploy of that record's build writes it again"),
+                && text.contains("Redeploying that record's build recreates it"),
             "{text}"
         );
         assert!(a.complete_for_others().is_ok());

@@ -102,8 +102,8 @@ in
   # so builds no longer carry them.
   kixCRDs = kixlib.fail {
     id = "K5132";
-    message = "`kix.kixCRDs` was removed. Builds no longer contain the Activation and PackageInstance CustomResourceDefinitions, because Kix installs them itself when it deploys.";
-    fix = "Remove the reference. To apply build output with another tool, run `kix deploy` once first, or copy the two CRDs from a cluster that Kix has deployed.";
+    message = "`kix.kixCRDs` was removed. Kix now installs the Activation and PackageInstance CustomResourceDefinitions directly during deploy, so cluster builds no longer emit them.";
+    fix = "Remove `kix.kixCRDs`. If you apply build manifests with another tool, run `kix deploy` once first to install Kix's CRDs, or copy the Activation and PackageInstance CRDs from a cluster Kix has deployed.";
   };
 
   inherit (env) mkEnv;

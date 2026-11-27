@@ -67,13 +67,13 @@ impl RevisionMap {
         if format.is_some_and(|f| f != FORMAT) {
             return Err(UnreadableMap {
                 reason: format!(
-                    "is in format {}, and this version of Kix reads format {FORMAT}",
+                    "uses format {} (this version of Kix supports format {FORMAT})",
                     format.unwrap_or_default()
                 ),
             });
         }
         let stored: Stored = serde_json::from_value(value.clone()).map_err(|e| UnreadableMap {
-            reason: format!("does not parse: {e}"),
+            reason: format!("is invalid: {e}"),
         })?;
         Ok(RevisionMap {
             instances: stored.instances,

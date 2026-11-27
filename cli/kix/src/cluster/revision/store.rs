@@ -25,9 +25,11 @@ pub enum Created {
 #[derive(Debug, Error)]
 pub enum RevisionError {
     #[error(
-        "cannot {action} {KIND} `{name}`: {}. Check the cluster connection and that this account has `get`, `list`, `create`, and `delete` permissions on `{}`, and `patch` on its `status`, then try again",
+        "cannot {action} {KIND} `{name}`: {}. Check your cluster connection and verify that this account has `get`, `list`, `create`, and `delete` permissions on `{crd}` (plus `patch` on `{plural}/status` in API group `{group}`), then try again",
         describe(.source),
-        crd_name()
+        crd = crd_name(),
+        plural = super::PLURAL,
+        group = keys::GROUP,
     )]
     Api {
         action: &'static str,
@@ -36,7 +38,7 @@ pub enum RevisionError {
         source: kube::Error,
     },
     #[error(
-        "cannot list the {KIND} objects of {scope}: {}. Check the cluster connection and that this account has `list` permission on `{}`, then try again",
+        "cannot list {KIND} objects for {scope}: {}. Check your cluster connection and verify that this account has `list` permission on `{}`, then try again",
         describe(.source),
         crd_name()
     )]
@@ -48,8 +50,8 @@ pub enum RevisionError {
     #[error(transparent)]
     Read(#[from] ReadError),
     #[error(
-        "the Kubernetes API server stored {KIND} `{name}` with a different `spec` from the one Kix sent. The installed definition `{}` does not match this version of Kix, so it drops or changes fields this version writes. Check whether someone edited the definition or another version of Kix installed it",
-        crd_name()
+        "the Kubernetes API server stored {KIND} `{name}` with a different `spec` than Kix sent because CustomResourceDefinition `{crd}` dropped or modified fields. Check whether `{crd}` was edited outside Kix or installed by another version of Kix",
+        crd = crd_name()
     )]
     StoredDifferently { name: String },
 }

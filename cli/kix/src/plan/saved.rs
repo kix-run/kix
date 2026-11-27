@@ -407,7 +407,7 @@ pub fn compare(reviewed: &Plan, fresh: &Plan) -> Comparison {
                     match known.get(&(d.resource.as_str(), d.path.as_str())) {
                         None => Some(format!("{} {}{by}", d.resource, d.path)),
                         Some(Some(shown)) if d.live.as_ref() != Some(*shown) => Some(format!(
-                            "{} {}{by}: the live value is now {}, and the plan showed {shown}",
+                            "{} {}{by}: live value is now {} (saved plan had {shown})",
                             d.resource,
                             d.path,
                             d.live
@@ -763,7 +763,7 @@ mod tests {
         assert_eq!(
             differs.mismatches[0].items,
             [
-                "Deployment/a@app $.spec.replicas: changed by kubectl-scale: the live value is now \"7\", and the plan showed \"5\""
+                "Deployment/a@app $.spec.replicas: changed by kubectl-scale: live value is now \"7\" (saved plan had \"5\")"
             ]
         );
         assert!(compare(&drifted, &drifted).matches);

@@ -60,14 +60,14 @@ pub enum ApplyError {
 
     /// What a forced apply would take back is not what the plan showed.
     #[error(
-        "{resource} not updated, because the fields Kix would take back from other field managers changed after the plan was made. Kix takes back only the fields and values the plan showed, so this change was not overwritten. Run the command again to plan from the cluster as it is now."
+        "{resource} was not updated because the fields Kix would take back from other field managers changed after the plan was made. Kix overwrites only the fields and live values shown in the plan. Run the command again to build a fresh plan from the live cluster."
     )]
     ChangedSincePlan { resource: String },
 
     /// A forced apply found the object changed between its read and its
     /// write each time it tried.
     #[error(
-        "{resource} not updated, because something else changed it each of the {TAKEOVER_ATTEMPTS} times Kix read it before taking fields back. Find what keeps writing to {resource}, then run the deploy again."
+        "{resource} was not updated because another writer modified it on each of the {TAKEOVER_ATTEMPTS} times Kix read it to take fields back. Stop what keeps updating {resource} (or cede those fields with `ownership.cede`), then run the deploy again."
     )]
     KeepsChanging { resource: String },
 
@@ -181,7 +181,7 @@ fn kix_cluster_conflict(
         message.push_str(&line);
     }
     message.push_str(&format!(
-        " The Kix clusters render this shared object differently, and Kubernetes does not let one Kix cluster overwrite fields another one applies. Make the definitions agree, or stop deploying {resource} from all but one of the Kix clusters. Running the command again with `--force-conflicts` takes these fields for this Kix cluster, and {next} will be refused in the same way. Kubernetes reported: {}",
+        " Each Kix cluster renders {resource} with different values, and Kubernetes rejects overwriting fields owned by another Kix cluster's field manager unless forced. Make the definitions agree, or deploy {resource} from only one Kix cluster. Running with `--force-conflicts` takes ownership for this Kix cluster, but {next} will be refused in the same way. Kubernetes reported: {}",
         reported(source)
     ));
     message
@@ -434,7 +434,7 @@ pub(crate) async fn apply_resource(
             tracing::warn!(
                 resource = %rid.display_id(),
                 manager = %manager,
-                "SSA response has no managedFields entry for this field manager, so no applied hash is recorded"
+                "server-side apply response has no managedFields entry for this field manager; skipping applied-hash recording"
             );
         }
         h

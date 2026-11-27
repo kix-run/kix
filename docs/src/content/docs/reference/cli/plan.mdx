@@ -83,18 +83,18 @@ permissions of the deploy it previews. A user who may only `get` and `list`
 gets `forbidden` refusals. Use `kix plan --read-only` for a comparison that
 needs only `get` and `list`.
 
-`kix plan` reads the live object of everything the build makes and everything
-the cluster's [revisions](/docs/reference/annotations-crds-and-receipts/#packageinstancerevision)
-name, because it decides from them what the deploy writes (see
+`kix plan` reads the live state of every object in the build and every object
+referenced by the cluster's [revisions](/docs/reference/annotations-crds-and-receipts/#packageinstancerevision)
+to determine what the deploy will write (see
 [How a deploy decides what to write](/docs/reference/cli/deploy/#how-a-deploy-decides-what-to-write)).
-It sends one cluster-wide `list` request per kind. For a kind the account
-cannot list across the cluster, it reads each object it needs with `get`. When
-the account may neither list nor get a kind, the plan stops and names the
-kinds and the permissions to grant.
+It sends one cluster-wide `list` request per resource kind, falling back to
+individual `get` requests for any kind the account cannot list cluster-wide. If
+the account can neither `list` nor `get` a kind, `kix plan` stops and reports
+the missing permissions.
 
-`kix plan` also needs `list` on `activationheads.kix.run` and on
-`packageinstancerevisions.kix.run`, to read which objects each Kix cluster on
-the Kubernetes cluster deploys. Without it the plan stops before planning.
+`kix plan` also requires `list` permission on `activationheads.kix.run` and
+`packageinstancerevisions.kix.run` to see which objects each Kix cluster on the
+Kubernetes cluster deploys; without it, planning stops immediately.
 
 ## What it reports
 
@@ -125,15 +125,13 @@ Before connecting, `kix plan` prints the kubeconfig context and API server URL
 It then prints the same package-grouped plan as `kix deploy`, with every field
 change shown.
 A change that puts back a drifted field is tagged `(reverts drift)`. Below the
-packages, one line counts each kind of write the build did not cause: a line
-starting with `↻` for objects that hold what a stopped deploy applied, objects
-a deploy with failures did not reach, and unchanged objects Kix applies again
-because it has no record of what it applied, and a line starting with `↺` for
-objects that changed on the cluster, whose fields the deploy takes back. A
-second `↻` line counts objects that hold fields another Kix cluster applied,
-which the deploy applies without force. On the
-first deploy with this version, a line starting with `Upgrade:` counts the
-objects whose metadata the deploy rewrites once.
+package list, summary lines count writes not caused by manifest changes in the
+build: a `↻` line for objects modified by an interrupted deploy, missed by a
+degraded deploy, or missing a recorded applied hash; a `↺` line for drifted
+objects whose changed fields the deploy takes back; and a separate `↻` line for
+objects with fields owned by another Kix cluster, which the deploy applies
+without force. On the first deploy after upgrading to revisions, an `Upgrade:`
+line counts the objects whose metadata Kix updates once.
 After the packages come these sections, each only when it has something to
 say:
 
@@ -225,8 +223,8 @@ Its JSON Schema is `cli/kix-cli/schema/plan.schema.json`.
 | `kubernetes` | `{ context, server }` for the Kubernetes cluster the plan read: the kubeconfig context and its API server URL, each `null` when not set in the kubeconfig. `null` when the command did not connect to a cluster (`kix plan --offline` and `kix diff`). |
 | `build` | The build the plan is for: `{ store_path, identity_hash }`. `store_path` is the build's result directory, the path a deploy records as `kix.run/built-via`; it locates the build. `identity_hash` is the Activation record's `kix.run/identity-hash`, a hash of every rendered manifest and what is upstream of it; two builds with the same identity hash deploy the same objects. Present whether or not anything changes. |
 | `head` | The cluster's [deploy lock](/docs/reference/cli/deploy/#the-deploy-lock) state read by the plan: `{ generation, current, lock }`. `generation` is the lock generation a deploy of this plan checks (`0` when the cluster has no `ActivationHead` yet), `current` names the active record on `ActivationHead`, and `lock` is either `null` or the lock holder: `{ holder, hint, purpose, activation, renewed, seconds_since_renewal, probably_dead }`. `seconds_since_renewal` is measured by this machine's clock, and `probably_dead` is `true` when it exceeds the 30-second lease. `head` is `null` when the plan did not read `ActivationHead` (`kix plan --offline`, `kix plan --read-only`, `kix diff`, or when this account cannot read `activationheads.kix.run`). |
-| `objects` | Every object the deploy writes or deletes: `{ writes, deletes }`. Each write is `{ kind, group, namespace, name, package, store_hash, change, reason }`, and each delete `{ kind, group, namespace, name }`. `reason` says why Kix writes an object its build did not change, and is left out for a change the new build makes: `{ kind: "applied_by_record", record }` (the live object is what a `Failed` or `Partial` deployment record applied), `{ kind: "left_by_degraded", record }` (the current deploy finished with failures and did not reach it), `{ kind: "applied_hash_missing" }` (Kix has no record of what it applied), `{ kind: "reverts_drift", changed_by }` (fields Kix applied changed on the cluster, and the deploy takes them back with force; `changed_by` lists `{ manager, fields }`), or `{ kind: "held_by_other_cluster", changed_by }` (the changed fields belong to another Kix cluster, and the deploy applies the object without force). `null` from `kix diff`. |
-| `metadata_rewrites` | How many objects the first deploy with this version moves from an earlier version's annotations to revisions, once. See [The first deploy after upgrading](/docs/explanation/server-side-apply-and-drift/#the-first-deploy-after-upgrading). Left out when there are none. |
+| `objects` | Every object the deploy writes or deletes: `{ writes, deletes }`. Each write is `{ kind, group, namespace, name, package, store_hash, change, reason }`, and each delete is `{ kind, group, namespace, name }`. `reason` is omitted when the new build changed the object, and otherwise explains why Kix writes it: `{ kind: "applied_by_record", record }` (applied by an earlier `Failed` or `Partial` deployment record), `{ kind: "left_by_degraded", record }` (missed by a `Degraded` deploy), `{ kind: "applied_hash_missing" }` (no recorded applied hash), `{ kind: "reverts_drift", changed_by }` (drifted fields taken back with force, with `changed_by` listing `{ manager, fields }`), or `{ kind: "held_by_other_cluster", changed_by }` (changed fields owned by another Kix cluster, applied without force). `null` from `kix diff`. |
+| `metadata_rewrites` | Number of objects whose metadata the first deploy after upgrading updates to remove legacy annotations and rename the field manager. See [The first deploy after upgrading](/docs/explanation/server-side-apply-and-drift/#the-first-deploy-after-upgrading). Omitted when zero. |
 | `deployed` | The build the plan compares against: `{ activation, identity_hash, store_path }` from the cluster's current Activation record (the cached record with `--offline`). `null` on a first deploy. |
 | `flags` | The planning flags: `{ prune, reconcile, force_conflicts, accept_migrations, only, operator_removed }`. `prune` says what the deploy does with orphans: `delete` with `--prune`, `skip` with `--skip-orphan-check`, and `warn_only` otherwise. `only` lists the sorted instance names passed to `--only`, and is omitted when `--only` is not set. `operator_removed` is `true` with `--operator-removed`, and is omitted otherwise. `null` from `kix plan --read-only` and `kix diff`. |
 | `left_alone` | With `--only`, `{ writes, orphans }`: `writes` counts resources in the build outside this step that differ from the active deployment record (earlier `--only` runs may already have applied some of them), and `orphans` counts removed resources left untouched for a full deploy. `packages`, `objects`, and `prune` include only what this step changes. Omitted without `--only`. |
@@ -296,7 +294,7 @@ plan reports it as an ownership conflict naming the manager. With
 | `namespace_missing` | The namespace does not exist and the build does not create it. |
 | `unknown_kind` | The apiserver does not serve the kind and the build has no CRD for it. |
 | `decryption` | A SOPS Secret could not be decrypted. |
-| `kix_cluster_conflict` | Another Kix cluster on the same Kubernetes cluster applies the object and sets some of its fields to other values. `message` is the `[K5636]` error the deploy would stop with, naming the other Kix cluster and its fields. Listed here and not under `conflicts`. |
+| `kix_cluster_conflict` | Another Kix cluster on the same Kubernetes cluster manages the object and sets conflicting values on shared fields. `message` contains the `[K5636]` error naming the other Kix cluster and the conflicting fields. Reported here rather than under `conflicts`. |
 | `sops_not_flat` | A top-level value in the Secret's SOPS file is a map, a list, or `null` (`[K6746]`). |
 | `other` | Kix refused the object before sending it, the dry-run write failed without a response, or the apiserver returned another error. |
 
@@ -331,7 +329,7 @@ to restore what the build defines.
 | `reason` | Meaning |
 | --- | --- |
 | `crd_created_by_this_deploy` | Its kind comes from a CRD this deploy creates. |
-| `crd_installed_by_kix` | Its kind is one of Kix's own (such as `Activation` or `PackageInstance`), the build does not carry its CRD, and the cluster does not serve the kind yet. Kix installs the CRD when the deploy starts. `because` names the CRD. Seen on a cluster Kix has not deployed to. |
+| `crd_installed_by_kix` | Its kind is a Kix custom resource (such as `Activation` or `PackageInstance`) that the Kubernetes cluster does not serve yet. `kix deploy`, `kix rollback`, `kix gc`, `kix migrate domain`, and the Kix operator install Kix's CRDs automatically before modifying the cluster; `because` names the CRD. Appears on a Kubernetes cluster where Kix has not installed its CRDs yet. |
 | `crd_installed_outside_kix` | Its kind comes from a CRD that is not on the cluster yet and is referenced externally (`scope.mkCRDRef` or `kix.mkImport`). Kix does not create the CRD. During deploy, Kix waits for an operator in the build or an external tool to install it, and fails if it never appears. `because` names the CRD when the build references only one external CRD in that API group. Otherwise, `because` is left out. |
 | `crd_changed_by_this_deploy` | Its kind's CRD is changed by this deploy, and the cluster refused the object when checking it against the CRD it has now. The deploy applies the CRD first, so the refusal may not happen. |
 | `namespace_created_by_this_deploy` | Its namespace is created by this deploy. |
@@ -407,9 +405,9 @@ own fields and drops the rest: server defaults, status, and fields set by
 controllers or `kubectl`. A cluster that matches its build reports no
 differences.
 
-The live side holds only the named cluster's resources: those its deployment
-records name, through their revisions, or, for a Kix cluster an earlier version
-of Kix deployed last, through the `kix.run/activations` annotation. When
+The live side holds only the named cluster's resources: those referenced by its
+deployment records via revisions (or via `kix.run/activations` on clusters not
+yet upgraded to revisions). When
 the Kubernetes cluster also runs other Kix clusters, their resources are not
 reported as removals, and stderr says how many were skipped and which
 clusters they belong to. A

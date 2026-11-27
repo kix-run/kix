@@ -38,9 +38,9 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--plan <FILE>] [--prune | --skip-orphan-c
 | `--force-conflicts` | Take ownership of fields another field manager owns. Without it, a conflict is a refused write in the plan, naming the fields and their current owner, and under `--on-error stop` the deploy stops before applying anything. |
 | `--accept-migrations` | Proceed when the plan removes an object that holds data from a stateful package and adds another that holds data in its place. Without it such a deploy stops, even with `--yes`. Kix does not copy data. |
 | `--only <NAMESPACE/INSTANCE>` | Deploy only this package instance and the instances and resources it depends on, leaving the rest of the build for a later `kix deploy`. Repeatable. Cannot be combined with `--prune` or `--operator`. See [Deploy one instance at a time](#deploy-one-instance-at-a-time). |
-| `--offline` | Plan from the previous activation in the local cache instead of the cluster. The offline plan compares the new build with the build this machine deployed last, so it cannot see changes on the cluster, deploys that stopped part way, or orphans that earlier deploys kept. With `--dry-run` nothing contacts the cluster. Without `--dry-run`, the deploy refuses before applying anything when the cached build is not the Active build of the cluster in the current context: the cache is keyed by cluster name only, so another context's cluster of the same name can have written it. The offline plan is a preview: after you confirm it, the deploy connects, plans again from the live cluster, and runs that plan only when it writes and deletes the same objects. Otherwise it stops with `[K3811]` before taking the deploy lock, lists the objects only one of the two plans writes or deletes, and applies nothing; run `kix deploy` without `--offline` to see and confirm the full plan. |
+| `--offline` | Plan from the previous activation in the local cache instead of reading the cluster. Because the offline plan compares the new build only against the build this machine last deployed, it cannot see live cluster drift, interrupted deploys, or kept orphans from earlier deploys. With `--dry-run`, nothing contacts the cluster. Without `--dry-run`, Kix stops before applying if the cached build does not match the cluster's `Active` build in the current context (the cache is keyed by cluster name alone, so another context's cluster with the same name may have written it). After you confirm the offline preview, Kix connects, plans again against the live cluster, and proceeds only if the live plan writes and deletes the exact same objects. Otherwise it stops with `[K3811]` before taking the deploy lock, lists the differing objects, and applies nothing; run `kix deploy` without `--offline` to review and confirm the full live plan. |
 | `--operator` | Hand the build to the Kix operator instead of applying it from this machine. Cannot be combined with `--only`, because the operator always deploys the full build. Fails with `[K7218]` if combined with `--timeout`, `--on-error continue`, `--reconcile`, `--skip-orphan-check`, `--force-conflicts`, `--log-format` (other than `pretty`), or `--group-by` (other than `package`), because operator mode uses fixed deploy settings and progress output. See [Operator mode](/docs/reference/cli/operator-mode/). |
-| `--operator-removed` | State that no Kix operator runs for this Kix cluster: before planning, take the cluster back from an operator older than this Kix that was uninstalled, which clears the `[K9557]` refusal for good. Cannot be combined with `--operator`. See [Take a cluster back from a removed operator](#take-a-cluster-back-from-a-removed-operator). |
+| `--operator-removed` | Confirm that no Kix operator is running for this Kix cluster: before planning, take the cluster back from an uninstalled operator from an earlier version of Kix, clearing the `[K9557]` refusal permanently. Cannot be combined with `--operator`. See [Take a cluster back from a removed operator](#take-a-cluster-back-from-a-removed-operator). |
 | `--log-format <FORMAT>` | `pretty` (default): interactive progress, coloured when stdout is a terminal; falls back to `line` when stdin is not a terminal. `line`: one plain line per resource outcome. `json`: JSON deploy events, one per line, ending with a `summary` object; stdout holds only the events, and the plan and other text go to stderr. `tui`: a live dependency tree while deploying; falls back to `line` when the terminal is not interactive. |
 | `--group-by <GROUP>` | How `--log-format tui` groups the tree: `package` (default) or `namespace`. Execution order does not change. Other log formats ignore it. |
 | `--flake`, `--context`, `--override-input` | See [Global flags](/docs/reference/cli/global-flags/). Without `--dry-run`, `-o` accepts only `text`, and `--no-cache` has no effect; use `--log-format` to choose the deploy's output. |
@@ -57,18 +57,19 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
    `cluster.kubernetes.uid` is unset, Kix also prints a note with the setting
    to [bind the definition](/docs/how-to/operate-a-cluster/bind-a-cluster-definition-to-its-kubernetes-cluster/)
    to this Kubernetes cluster. Kix reads the cluster's deployment records and
-   the [`PackageInstanceRevision`](/docs/reference/annotations-crds-and-receipts/#packageinstancerevision)
-   objects they name, which list what each deploy applied, and lists the live
-   objects of every kind the build or those revisions name. For each object
-   of the build it then decides what to write (see
+   their [`PackageInstanceRevision`](/docs/reference/annotations-crds-and-receipts/#packageinstancerevision)
+   objects (which list what each deploy applied), then lists the live objects
+   of every kind referenced by the build or those revisions to decide what to
+   write (see
    [How a deploy decides what to write](#how-a-deploy-decides-what-to-write)).
-   With `--offline`, Kix reads none of this and compares the build with the
-   build this machine deployed last, from the local cache.
+   With `--offline`, Kix skips reading the cluster during planning and compares
+   the new build against the last build deployed from this machine's local
+   cache.
 3. Resources from an earlier deploy that stopped part way or ran with `--only`
    are folded into the plan: they are re-applied or reported as orphans. Kix
    counts a resource from an unfinished deploy as present on the cluster only
-   when the live object carries the build hash that deployment record's
-   revision gives it, so resources that deploy never created are neither
+   when the live object carries the `kix.run/identity-hash` recorded in that
+   deployment record's revision, so resources that deploy never created are neither
    reported as orphans nor deleted. Fields written by an unfinished deploy
    appear under `earlier_deploys` attributed to that deployment record instead
    of appearing as drift.
@@ -119,26 +120,28 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
    apart from the `resources` that prune may delete.
 
    An orphan that another Kix cluster still deploys is not pruned. The plan
-   lists it as kept, then as `kept <resource>, still deployed by Kix cluster
-   <name>`, read from that Kix cluster's records and revisions and from the
-   field managers on the live resource. At the start of the prune step, Kix
-   gives up this cluster's fields on each such resource with one empty apply,
-   so the other Kix cluster owns it alone. If that apply fails, the resource
-   stays on the kept-orphans list and the next deploy tries again. `kix rollback --prune` and a default
-   `kix gc` follow the same rule. With `--offline` the plan has not read
+   lists it as kept (`kept <resource>, still deployed by Kix cluster <name>`),
+   determined from that Kix cluster's deployment records and revisions and from
+   `metadata.managedFields` on the live resource. At the start of pruning, Kix
+   releases this cluster's field ownership on each shared resource with one
+   empty Server-Side Apply so the other Kix cluster owns it alone; if that
+   apply fails, the resource stays on the kept-orphans list so the next deploy
+   retries. `kix rollback --prune` and default `kix gc` follow the same rule.
+   With `--offline` the plan has not read
    the cluster yet, so it says the check comes once the deploy connects.
    The prune checks each orphan again right before deleting it, and leaves
    one that another cluster started deploying, or that changed, since the
    plan (`prune_kept` in `--log-format json`).
 
-   Orphans a deploy keeps stay pruneable. The Activation it finalizes names a
-   kept-orphans revision that lists them, together with the orphans earlier
-   deploys kept that are still on the cluster, and the next deploy's plan
-   includes them again, so `kix deploy --prune` or a default `kix gc` deletes
-   them. A deploy that deletes them all names no kept-orphans revision. An
-   orphan whose kind the cluster does not serve during the deploy stays on the
-   list. If the list is missing or cannot be read, the deploy refuses to
-   prune; run `kix gc --full-scan` to build it again.
+   Orphans kept by a deploy remain pruneable. The finalized Activation links a
+   kept-orphans revision listing them alongside any orphans from earlier
+   deploys that still exist on the cluster. The next deploy's plan includes
+   them again so `kix deploy --prune` or default `kix gc` deletes them; once
+   all kept orphans are deleted, the Activation omits the kept-orphans
+   revision. Any orphan whose resource kind the cluster does not currently
+   serve stays on the list. If the kept-orphans revision is missing or
+   unreadable, the deploy refuses to prune; run `kix gc --full-scan` to
+   rebuild it.
 
    With `--prune`, Kix deletes dependents before the objects they depend on,
    deletes independent objects in parallel, and waits for each object to be
@@ -155,7 +158,7 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
    with `[K2794]` (exit code `1`), marks the Activation `Degraded`, and lists
    any remaining finalizers and how long Kix waited. Kix skips deleting any
    orphans that the build records as dependencies of the stuck object, reports
-   them as kept (`prune_kept` in `--log-format json`), and keeps the builds
+   them as kept (`prune_kept` in `--log-format json`), and keeps those orphans
    on the kept-orphans list so the next `kix deploy --prune` or `kix gc` tries
    again. When a package sets `controller` on `scope.mkCRD`
    or `scope.mkCRDRef`, custom resources of that kind depend on the operator,
@@ -193,12 +196,13 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
 7. Marks the Activation `Active`, or `Degraded` or `Failed` when resources
    failed.
 
-   Before it prunes and finalizes, Kix must record in the revisions what the
-   run applied. If that write fails, the deploy stops with "Kix could not
-   record what this run applied": the objects are applied, the record is
-   marked `Failed`, nothing is pruned, and the previous deployment record
-   stays current. Run the deploy again. It takes in what the stopped run
-   applied and finishes the record.
+   Before pruning and finalizing, Kix writes the applied hashes into the
+   deployment's revisions. If that write fails, the deploy stops with "every
+   object reached a result, but Kix could not record the applied hashes":
+   the workload objects remain applied, the new record is marked `Failed`,
+   nothing is pruned, and the previous deployment record stays active. Run
+   `kix deploy` again to pick up the applied objects and finish recording the
+   deploy.
 
 `Ctrl-C` cancels the run and marks the record `Failed`. A run that makes no
 progress for 600 seconds is cancelled; set `KIX_STALL_TIMEOUT` to a number of
@@ -214,62 +218,59 @@ non-interactive.
 
 ## How a deploy decides what to write
 
-Kix decides from the live cluster and the cluster's revisions, with the same
-rules for `kix plan`, `kix deploy`, `kix rollback`, and the Kix operator. For
-each object of the build, in this order:
+`kix plan`, `kix deploy`, `kix rollback`, and the Kix operator evaluate each
+object in the build against the live cluster and the cluster's revisions, in
+this order:
 
-1. **The object is missing, being deleted, or carries another build hash.**
-   Kix applies it. When the live object is what a `Failed` or `Partial`
-   deploy applied, the plan says so and names that deployment record.
-2. **Kix has no applied hash for the object.** Kix applies it again and
-   records the hash. The plan counts these objects in a line that starts
-   with `↻`.
+1. **The object is missing, being deleted, or has a different `kix.run/identity-hash`.**
+   Kix applies it. If the live object matches an earlier `Failed` or `Partial`
+   deploy, the plan notes that deployment record.
+2. **Kix has no recorded applied hash for the object.** Kix reapplies it and
+   records the hash. The plan counts these objects on a `↻` line.
 3. **A field Kix applied changed on the cluster.** The plan counts these
-   objects in a line that starts with `↺`, lists each changed field under
-   `Drift:` with the field manager that changed it, and `kix deploy` applies
-   the build again with force, which takes the fields back from that manager.
-   Kix takes back only what the plan showed: the same fields, from the same
-   field managers, at the same values. Right before the forced apply it reads
-   the object again. A status update, or a change to a field the plan did not
-   show, does not stop it. When the fields it would take back, their managers,
-   or their values changed after the plan, the deploy stops, names the object,
-   and asks you to plan again. If the object changes again between that check
-   and the write, Kix checks again, up to 5 times, then stops with "something
-   else changed it each of the 5 times Kix read it"; find what keeps writing
-   to the object and deploy again. A field the
-   object cedes with [`ownership.cede`](/docs/how-to/adopt-existing-resources/cede-fields-to-a-controller/)
-   never counts as drift. Kix never takes a field another Kix cluster
-   applies: it applies such an object without force, and the plan counts it
-   in a line that starts with `↻`. Kubernetes then adds this cluster's own
-   entry when the values agree, and refuses the apply when they differ, which
-   `kix plan` and the dry run already show as `[K5636]`.
+   objects on a `↺` line and lists each modified field and its current field
+   manager under `Drift:`. `kix deploy` reapplies the object with force to take
+   those fields back. Kix forces only what the plan showed: the same fields,
+   owned by the same managers, with the same live values. Right before sending
+   the forced apply, Kix re-reads the live object: controller status updates
+   and changes to other fields do not block the apply, but if any planned
+   drifted field, its owning manager, or its live value changed after planning,
+   the deploy stops, names the object, and asks you to run `kix plan` again. If
+   another writer modifies the object between that check and the apply, Kix
+   retries up to 5 times before stopping with "another writer modified it on
+   each of the 5 times Kix read it"; stop whatever is continuously modifying
+   the object and run `kix deploy` again. Fields listed in
+   [`ownership.cede`](/docs/how-to/adopt-existing-resources/cede-fields-to-a-controller/)
+   never count as drift. Kix never forces fields away from another Kix cluster:
+   it applies such objects without force (counted on a `↻` line), so Kubernetes
+   adds this cluster's field manager entry when the values match and rejects
+   the apply with `[K5636]` when they conflict.
 
-Kix writes nothing to any other object of the build. `--force-conflicts`
-forces every apply, also those of rule 1. Without it, a conflict on an
-object of rule 1 stops the deploy.
+Kix leaves all other objects in the build untouched. `--force-conflicts` forces
+every apply, including objects matched by rule 1; without it, a field ownership
+conflict on rule 1 stops the deploy.
 
-During planning, Kix lists the objects of each kind the build and the revisions
-name, across the cluster, with one `list` request per kind. For a kind the
-account may not list, Kix reads each object it needs with `get`, and the plan
-stops, naming the kinds, when the account may do neither.
-The first deploy after the upgrade is stricter. When a deployment record that
-an earlier version of Kix wrote does not name its objects (Kix 0.9 and earlier
-wrote no names), Kix finds them by listing every object that carries its label,
-and it stops with `[K9558]`, naming the kinds, when the account may not `list`
-one of those kinds across the cluster. Grant the account that `list`, or run
-that one deploy with an account that has it (see
+During planning, Kix sends one cluster-wide `list` request for each resource
+kind referenced by the build or the revisions. If your Kubernetes account
+cannot list a kind cluster-wide, Kix falls back to `get` for each individual
+object, and stops naming the missing permissions only when the account can
+neither `list` nor `get` that kind.
+The first deploy after upgrading to revisions requires cluster-wide `list`
+whenever an earlier deployment record lacks object names (as in Kix 0.9 and
+earlier): Kix must list every object carrying `app.kubernetes.io/managed-by=kix`
+to find what that record deployed, and stops with `[K9558]` naming the kinds if
+cluster-wide `list` is forbidden. Grant cluster-wide `list` on those kinds or
+run that first deploy once with an account that has it (see
 [The first deploy after upgrading](/docs/explanation/server-side-apply-and-drift/#the-first-deploy-after-upgrading)).
-In the
-[`Plan` document](/docs/reference/cli/plan/#the-plan-document), each entry in
-`objects.writes` says in `reason` why Kix writes an object the build did not
-change.
+In the [`Plan` document](/docs/reference/cli/plan/#the-plan-document),
+`objects.writes[].reason` records why Kix writes any object whose manifest did
+not change in the build.
 
-The first deploy of a Kix cluster with this version first gives the
-deployment records an earlier version wrote their revisions, before it writes
-any object, and then rewrites the metadata of each object once, to remove that
-version's annotations. The plan counts those objects in a line that starts with
-`Upgrade:`.
-See [The first deploy after upgrading](/docs/explanation/server-side-apply-and-drift/#the-first-deploy-after-upgrading).
+On the first deploy of a Kix cluster after upgrading, Kix converts earlier
+deployment records to revisions before modifying any workload object, and
+updates each object's metadata once to remove the retired annotations. `kix plan`
+reports that count on an `Upgrade:` line. See
+[The first deploy after upgrading](/docs/explanation/server-side-apply-and-drift/#the-first-deploy-after-upgrading).
 
 ## The deploy lock
 
@@ -279,19 +280,19 @@ Only one run can change a Kix cluster at a time. Each Kix cluster has an
 `kix deploy`, `kix deploy --only`, `kix rollback`, `kix gc`, `kix migrate
 domain`, and the Kix operator take the lock before changing the cluster.
 Commands run with `--operator` do not take the lock themselves; they submit a
-request to the Kix operator, which takes the lock. Before it takes the lock,
-Kix installs any of its four CustomResourceDefinitions that is missing, which
-requires `get` and `create` permissions on `customresourcedefinitions` once
-(see [Kix's own CRDs](/docs/reference/annotations-crds-and-receipts/#activationhead)).
-Every command that changes a Kix cluster stops with `[K9557]`, before it
-plans, while a current, queued, or deploying record of that Kix cluster was
-submitted to the Kix operator and the operator does not list the `revisions`
-feature, because an older operator writes back the annotations this version
-removes. An operator from Kix 0.9 or earlier is refused too. Other Kix
-clusters on the same Kubernetes cluster are not affected. Kix cannot tell an operator older than this Kix from one that was
-uninstalled. If the operator still runs, upgrade it, then run the command
-again (see [Operator mode](/docs/reference/cli/operator-mode/#requirements)).
-If it was uninstalled, run `kix deploy <cluster> --operator-removed` once (see
+request to the Kix operator, which takes the lock. Before taking the lock, Kix
+installs any missing Kix CustomResourceDefinitions, which requires `get` and
+`create` permissions on `customresourcedefinitions` once (see
+[Kix's own CRDs](/docs/reference/annotations-crds-and-receipts/#activationhead)).
+Every command that modifies a Kix cluster stops with `[K9557]` before planning
+if a current, queued, or deploying record for that cluster was submitted to the
+Kix operator and the operator does not advertise the `revisions` feature
+(including operators from Kix 0.9 or earlier), because an older operator would
+write back the retired annotations. Other Kix clusters on the same Kubernetes
+cluster are unaffected. Kix cannot distinguish an older running operator from
+one that was uninstalled: if the operator is still running, upgrade it first
+(see [Operator mode](/docs/reference/cli/operator-mode/#requirements)); if it
+was uninstalled, run `kix deploy <cluster> --operator-removed` once (see
 [Take a cluster back from a removed operator](#take-a-cluster-back-from-a-removed-operator)).
 
 Right after building and connecting, before reading cluster state for the
@@ -362,30 +363,30 @@ waiting.
 
 ### Take a cluster back from a removed operator
 
-`kix deploy <cluster> --operator-removed` states that no Kix operator runs for
-the Kix cluster. When a current, queued, or deploying record of the cluster
-was submitted to an operator that does not list `revisions`, the deploy takes
-the cluster back before it plans, under the deploy lock:
+`kix deploy <cluster> --operator-removed` confirms that no Kix operator is
+running for the Kix cluster. If a current, queued, or deploying record for the
+cluster was submitted to an operator without `revisions` support, the deploy
+reclaims the cluster under the deploy lock before planning:
 
-- a queued record the operator never started becomes `Superseded`;
-- a record the operator was deploying becomes `Failed`, with a reason that
-  names the flag, and the plan takes in what it applied;
-- those records and the current record lose `spec.source`, the build path
-  the operator reads, so they read as records the command line deployed.
+- any `Queued` record the operator never started is marked `Superseded`;
+- any `Deploying` record is marked `Failed` (noting `--operator-removed`), and
+  the plan folds in any resources it already applied;
+- `spec.source` is cleared on those records and on the active record so Kix
+  treats them as CLI-deployed records.
 
-This happens before the plan is shown, so it also happens when you then
-decline the plan. Afterwards the deploy runs as a plain `kix deploy`, and
-later commands need no flag. When no such record exists, the flag changes
-nothing. `kix rollback` to an older record the operator deployed makes it
-current again with its build path, which brings the `[K9557]` refusal back;
-the same flag clears it again.
+Because this runs before Kix shows the plan, the records remain updated even if
+you decline the confirmation prompt. The deploy then continues as a normal
+`kix deploy`, and subsequent commands do not need the flag. If no matching
+operator-submitted record exists, the flag is a no-op. Rolling back with
+`kix rollback` to an older operator-deployed record restores that record (with
+its `spec.source`) as active, which triggers `[K9557]` again until you pass
+`--operator-removed` once more.
 
-Do not use the flag while an older operator still runs: it would keep writing
-the annotations this version removes. `--operator-removed` cannot be combined
-with `--operator`. `kix plan` accepts the flag, records it in the plan as
-`flags.operator_removed`, and changes nothing, so you can save a plan for a
-deploy with the flag. A plan saved without the flag cannot be deployed with
-it.
+Never pass `--operator-removed` while an older operator is still running, or it
+will continue writing back the retired annotations. `--operator-removed` cannot
+be combined with `--operator`. `kix plan --operator-removed` records
+`flags.operator_removed` in a saved plan without modifying the cluster; a plan
+saved without `--operator-removed` cannot be deployed with that flag.
 
 ## Required stops
 
@@ -494,7 +495,7 @@ any of these:
 | Lock generation | The generation of the cluster's [deploy lock](#the-deploy-lock): another run modified the cluster after the plan was saved (such as `kix deploy --only` or `kix gc`). Skipped when the saved plan has no lock generation (for example, from `--offline` or an older Kix). |
 | Planning flags | `--prune`, `--skip-orphan-check`, `--reconcile`, `--force-conflicts`, `--accept-migrations`, `--operator-removed`, or `--only`. Passing a flag on the command line that was not set when the plan was saved fails before building. `--only` must match the saved plan: pass the exact same `--only` instances for a partial plan, and omit `--only` for a full plan. |
 | Refusals | A conflict, by object, or an admission refusal, by object and reason, that the reviewed plan did not have. |
-| Reverted drift | A drifted field, by object and path, that the deploy would put back and the reviewed plan did not list, or one whose live value is no longer the value the reviewed plan showed. A plan saved by an earlier version records no live values, so only the fields are compared. |
+| Reverted drift | A drifted field (by object and path) that the deploy would restore and the reviewed plan did not list, or one whose live value changed since the reviewed plan was saved. Plans saved by earlier versions omit live values, so Kix compares only the field paths. |
 | Prune deletes | An orphan the deploy would delete that the reviewed plan did not list. |
 | Objects not checked | An object the dry run checked for the reviewed plan and cannot check now, for example because a webhook it calls lost dry-run support. Its refusals and drift would not show. |
 

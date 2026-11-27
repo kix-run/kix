@@ -111,12 +111,12 @@ async fn open_records(client: &kube::Client) -> anyhow::Result<Records> {
     Records::open(client, &discover().await?)?;
     kix::cluster::own_crds::ensure_all(client)
         .await
-        .context("could not install Kix's own CustomResourceDefinitions")?;
+        .context("could not install Kix's CustomResourceDefinitions")?;
     let records = Records::open(client, &discover().await?)?
         .into_records()
         .with_context(|| {
             format!(
-                "the Activation CRD ({}) is not served on this cluster yet. The operator stops, and checks again when Kubernetes restarts it",
+                "CustomResourceDefinition `{}` is not served on this cluster yet; exiting so Kubernetes can restart the operator and check again",
                 keys::ACTIVATIONS_CRD
             )
         })?;

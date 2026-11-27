@@ -135,7 +135,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     let records = retirement
         .records
         .clone()
-        .ok_or_else(|| miette!("the deployment records of '{cluster}' cannot be read"))?;
+        .ok_or_else(|| miette!("could not read deployment records for '{cluster}'"))?;
     let tenancy = ctx.runtime()?.block_on(read_tenancy(&records, &cluster))?;
     let kept_baseline = ctx.runtime()?.block_on(async {
         let discovery = match tenancy.own_source() {
@@ -601,7 +601,7 @@ async fn update_kept(
                     .map_err(|e| miette!("{e}"))?;
                 baseline::sync_kept_roots(cluster, &[]);
                 crate::say!(
-                    "  {} {}: no objects that left the build remain to record",
+                    "  {} {}: no kept orphaned objects remain to record",
                     output::dim("="),
                     active.name
                 );
@@ -628,7 +628,7 @@ async fn clear_kept(cluster: &str, records: &Records, active: &Record) {
         Ok(()) => {
             baseline::sync_kept_roots(cluster, &[]);
             crate::say!(
-                "  {} {}: no objects that left the build remain to record",
+                "  {} {}: no kept orphaned objects remain to record",
                 output::dim("="),
                 active.name
             );
@@ -657,7 +657,7 @@ async fn clear_kept_locked(
     let unneeded = match keep::unneeded(records.client(), records, cluster).await {
         Ok(names) => !names.is_empty(),
         Err(e) => {
-            tracing::warn!(error = %e, "could not list the revisions no record needs");
+            tracing::warn!(error = %e, "could not list unused PackageInstanceRevision objects");
             false
         }
     };
@@ -692,7 +692,7 @@ async fn clean_revisions(cluster: &str, retirement: &RecordRetirement) {
         return;
     };
     if let Err(e) = keep::clean(records.client(), records, cluster).await {
-        tracing::warn!(error = %e, "could not delete the revisions no record needs; the next deploy or `kix gc` deletes them");
+        tracing::warn!(error = %e, "could not delete unused PackageInstanceRevision objects; the next deploy or `kix gc` will delete them");
     }
 }
 
@@ -1041,26 +1041,26 @@ async fn rebuild_kept_list(
         .unwrap_or_default();
     let objects = kept_to_rebuild(sweep, in_build);
     crate::say!(
-        "{} {problem}. Kix rebuilds the list from the {} live object(s) that this Kix cluster applied, that no other deployment record of it names, and that {compared} does not hold.",
+        "{} {problem}. Rebuilding the kept-orphans list from the {} live object(s) that this Kix cluster applied, that no other deployment record of this cluster lists, and that are not in {compared}.",
         output::yellow("Note:"),
         objects.len(),
     );
     if args.dry_run {
-        crate::say!("Nothing was changed on the cluster, because `--dry-run` is set.");
+        crate::say!("`--dry-run` is set, so nothing was changed on the cluster.");
         return Ok(());
     }
     let Some(record) = tenancy.own_current().map(str::to_string) else {
         return Err(miette!(
-            "{problem}. Kix cluster {cluster_name} has no current deployment record to name a rebuilt list on. Nothing was deleted."
+            "{problem}. Kix cluster '{cluster_name}' has no current deployment record to save the rebuilt kept-orphans list on. Nothing was deleted."
         ));
     };
     let Some(opened) = records.records() else {
         return Err(miette!(
-            "the deployment records of '{cluster_name}' cannot be read. Nothing was deleted."
+            "could not read deployment records for '{cluster_name}'. Nothing was deleted."
         ));
     };
     let name = write_rebuilt(client, opened, cluster_name, &record, objects, generation).await?;
-    crate::say!("Named kept-orphans revision {name} on deployment record {record}.");
+    crate::say!("Saved rebuilt kept-orphans revision {name} on deployment record {record}.");
     Box::pin(run_hard_async(
         args,
         global,
@@ -1137,7 +1137,7 @@ async fn write_rebuilt(
     .await;
     super::lock::release(&lock).await;
     written.map_err(|e| {
-        miette!("could not write the rebuilt kept-orphans list: {e}. Nothing was deleted.")
+        miette!("could not save the rebuilt kept-orphans list: {e}. Nothing was deleted.")
     })
 }
 

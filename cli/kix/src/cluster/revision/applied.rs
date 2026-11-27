@@ -130,7 +130,7 @@ impl AppliedHashes {
         if !missing.is_empty() {
             tracing::warn!(
                 revisions = ?missing,
-                "deployment records name revisions Kix could not read; the applied hashes of the objects they name are not known, so those objects are applied again or reported as not checked"
+                "deployment records reference PackageInstanceRevision objects that Kix could not read; Kix will reapply their objects or report them as not checked"
             );
         }
         AppliedHashes {

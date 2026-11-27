@@ -149,13 +149,13 @@ fn delete_id(d: &ObjectDelete) -> ResourceId {
 fn why(write: &ObjectWrite) -> String {
     match &write.reason {
         Some(WriteReason::AppliedByRecord { record }) => {
-            format!("holds what deployment record {record} applied before it stopped")
+            format!("applied by deployment record {record} before it stopped")
         }
         Some(WriteReason::LeftByDegraded { record }) => {
-            format!("deployment record {record} finished with failures and did not reach it")
+            format!("not reached by deployment record {record}, which finished with failures")
         }
         Some(WriteReason::AppliedHashMissing) => {
-            "Kix has no record of what it applied to it".to_string()
+            "Kix has no recorded applied hash for this object".to_string()
         }
         Some(WriteReason::RevertsDrift { changed_by }) if changed_by.is_empty() => {
             "changed on the cluster since Kix applied it".to_string()
@@ -173,7 +173,7 @@ fn why(write: &ObjectWrite) -> String {
         Some(WriteReason::HeldByOtherCluster { changed_by }) => {
             let by: Vec<&str> = changed_by.iter().map(|o| o.manager.as_str()).collect();
             format!(
-                "holds fields that {} applied; the deploy applies it without force",
+                "shares fields with {}; the deploy applies it without force",
                 by.join(", ")
             )
         }
@@ -181,7 +181,7 @@ fn why(write: &ObjectWrite) -> String {
             WriteChange::Added => "added by the build",
             WriteChange::Modified => "changed by the build",
             WriteChange::DepAffected => "changed by a dependency in the build",
-            WriteChange::Reapplied => "unchanged in the build, and applied again",
+            WriteChange::Reapplied => "unchanged in the build, reapplied",
             WriteChange::IfLastRunFailed => "a Job that runs again if its last run failed",
         }
         .to_string(),
@@ -200,7 +200,7 @@ impl fmt::Display for OfflinePlanDiffers {
         writeln!(f)?;
         writeln!(
             f,
-            "  Kix planned the deploy again from the live cluster, and that plan differs from the plan you confirmed."
+            "  After connecting, Kix planned the deploy against the live cluster and found differences from the offline plan you confirmed."
         )?;
         for (heading, list) in [
             ("The live plan also writes", &self.writes_added),
@@ -227,7 +227,7 @@ impl fmt::Display for OfflinePlanDiffers {
         writeln!(f, "  Why:")?;
         writeln!(
             f,
-            "    An offline plan compares the new build with the build this machine deployed last. It cannot see the live objects or the deployment records on the cluster. Kix does not run a plan that differs from the one you confirmed."
+            "    An offline plan compares the new build only against the last build cached on this machine, without reading live cluster state or deployment records. Kix refuses to apply changes that differ from the plan you confirmed."
         )?;
         writeln!(f)?;
         writeln!(f, "  Next:")?;
@@ -532,11 +532,11 @@ mod tests {
             [
                 (
                     "ConfigMap/calm@app",
-                    Some("Kix has no record of what it applied to it")
+                    Some("Kix has no recorded applied hash for this object")
                 ),
                 (
                     "ConfigMap/web@app",
-                    Some("Kix has no record of what it applied to it")
+                    Some("Kix has no recorded applied hash for this object")
                 ),
             ]
         );
@@ -561,7 +561,7 @@ mod tests {
             [Differing {
                 object: "ConfigMap/web@app".into(),
                 why: Some(format!(
-                    "holds what deployment record {} applied before it stopped",
+                    "applied by deployment record {} before it stopped",
                     record.as_str().unwrap()
                 )),
             }]

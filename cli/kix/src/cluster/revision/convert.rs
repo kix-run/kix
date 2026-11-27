@@ -94,9 +94,9 @@ pub enum Refusal {
     /// Kix needs the live objects to learn what a record names, and could
     /// not list some kinds.
     #[error(
-        "[K9558] Kix cannot give deployment record `{record}` revisions, because this account may not `list` {kinds} across the cluster. Nothing was changed on the cluster. \
-         An older Kix wrote the record without the names of its objects, so Kix finds them by listing every object that carries Kix's label, and objects of those kinds would be missed. \
-         Next: let this account `list` those kinds in every namespace, then run the command again",
+        "[K9558] cannot convert deployment record `{record}` to PackageInstanceRevision resources because this Kubernetes account cannot `list` {kinds} across the cluster. Nothing was changed on the cluster. \
+         An earlier version of Kix wrote `{record}` without full object names, so Kix must list all Kix-labeled objects on the cluster to avoid missing {kinds}. \
+         Next: grant this account cluster-wide `list` permission on {kinds}, then run the command again",
         kinds = .kinds.join(", ")
     )]
     NotListed { record: String, kinds: Vec<String> },
@@ -112,7 +112,7 @@ pub enum ConvertError {
     #[error(transparent)]
     Records(#[from] RecordsError),
     #[error(
-        "cannot list the objects of the Kix cluster to give its deployment records revisions: {0}"
+        "cannot list Kix-labeled objects on the cluster to convert earlier deployment records: {0}"
     )]
     Listing(String),
 }
@@ -346,13 +346,13 @@ pub fn plan(
         if record.package_index.is_none() && set.cluster_level.stored_bytes() > MAX_BYTES {
             return Err(Refusal::TooLarge(Box::new(TooLarge {
                 what: format!(
-                    "deployment record {}, which a Kix older than 0.6 wrote without a package index,",
+                    "deployment record {} (written without a package index by a version older than Kix 0.6)",
                     record.name
                 ),
                 objects: set.cluster_level.spec.objects.len(),
                 bytes: set.cluster_level.stored_bytes(),
-                next: "Without an index Kix cannot split the record's objects by package instance. \
-                       Deploy a changed build of this Kix cluster once with Kix 0.9, which writes a package index on the new deployment record, then deploy with this Kix.",
+                next: "Without a package index, Kix cannot split the record's objects by package instance. \
+                       Deploy an updated build of this cluster once with Kix 0.9 to write a package index, then upgrade Kix and deploy again.",
             })));
         }
         set.check_size()
@@ -364,10 +364,13 @@ pub fn plan(
             && kept.stored_bytes() > MAX_BYTES
         {
             return Err(Refusal::TooLarge(Box::new(TooLarge {
-                what: format!("the objects deployment record {} kept", record.name),
+                what: format!(
+                    "the kept-orphans list for deployment record {}",
+                    record.name
+                ),
                 objects: kept.spec.objects.len(),
                 bytes: kept.stored_bytes(),
-                next: "Delete some of those objects with `kix gc`, then deploy again.",
+                next: "Run `kix gc` to delete orphaned objects from earlier deploys, then run the deploy again.",
             })));
         }
         let map = RevisionMap {

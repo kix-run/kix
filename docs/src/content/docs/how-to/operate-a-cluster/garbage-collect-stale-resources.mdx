@@ -68,17 +68,18 @@ them with the resources in the active deployment's build (or the build from
 your local files when the cluster has no active deployment).
 
 When one Kubernetes cluster hosts more than one Kix cluster, a full scan
-judges only the named cluster's resources. It finds them through the
-revisions each cluster's Activation records name, skips the other clusters'
-resources, and keeps a resource another Kix cluster still deploys.
+judges only the named cluster's resources. It identifies them from the
+revisions linked to each cluster's Activation records, skips the other
+clusters' resources, and keeps any shared resource that another Kix cluster
+still deploys.
 
 Leftover resources from a deploy or rollback without `--prune` are still
 deleted by a full scan even after `kix gc` retires the Activation record that
-deployed them. Because the `Active` record's kept-orphans revision lists
-them, Kix still knows they belong to this cluster and deletes them without
+deployed them. Because the `Active` record's kept-orphans revision tracks
+those leftovers, Kix knows they belong to this cluster and deletes them without
 `--include unattributed`.
 
-If no Activation record on the cluster names a resource, Kix cannot tell which Kix cluster owns it. A full
+If no Activation record on the cluster references a resource, Kix cannot tell which Kix cluster owns it. A full
 scan lists it under "Objects with no matching deployment record" and keeps it,
 even when only one Kix cluster has records there. The resource may come from an
 earlier deploy whose records
@@ -203,9 +204,9 @@ Kix deletes every resource from the previous deployment except:
   definition.
 - **Kix's own CustomResourceDefinitions** (`activations.kix.run`,
   `packageinstances.kix.run`, `activationheads.kix.run`, and
-  `packageinstancerevisions.kix.run`). Kix installs them itself, and every Kix
-  cluster on the same Kubernetes cluster shares them, so delete them only when
-  no other Kix clusters remain.
+  `packageinstancerevisions.kix.run`). Kix installs these CRDs automatically,
+  and every Kix cluster on the same Kubernetes cluster shares them, so delete
+  them only after removing the last Kix cluster.
 
 Delete the remaining records, Namespaces, and CustomResourceDefinitions you no
 longer need with `kubectl delete`.

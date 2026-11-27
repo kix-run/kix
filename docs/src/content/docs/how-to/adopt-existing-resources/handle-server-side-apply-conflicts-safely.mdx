@@ -1,6 +1,6 @@
 ---
 title: "Handle server-side-apply conflicts safely"
-description: "Identify the field manager that changed a field Kix applied, and decide whether Kix takes it back or leaves it with that manager."
+description: "Find which field manager changed a field Kix applied, and either take ownership back or cede the field to that manager."
 ---
 
 import Command from '/src/components/Command.astro';
@@ -10,8 +10,9 @@ import clean from '/src/command-output/how-to/adoption-ssa-conflicts/clean.json'
 
 Kubernetes records which field manager owns each field of an object. When
 another manager changes a field Kix applied, it becomes that field's owner.
-Kix shows this as drift before it changes anything. Decide who should own the
-field, then either let Kix take it back or leave it with the other manager.
+Kix reports this as drift before changing anything. Decide who should own the
+field, then either let Kix take ownership back or cede the field to the other
+manager.
 
 The example below starts with a Kix-managed Deployment. A separate manager
 named `autoscaler` then takes ownership of `spec.replicas` and changes it from
@@ -32,9 +33,9 @@ names three things:
   deployed build.
 
 The `↺` line under `Objects:` counts the objects that changed on the cluster
-since Kix applied them. A plain `kix deploy` applies each of them again and
-takes the changed fields back from the other manager. You don't need
-`--reconcile` or `--force-conflicts` for that.
+since Kix applied them. A plain `kix deploy` reapplies each of them and takes
+the changed fields back from the other manager. You do not need `--reconcile`
+or `--force-conflicts` for that.
 
 ## Inspect the other manager
 
@@ -74,8 +75,8 @@ Choose one manager either way, rather than letting both repeatedly take
 ownership from each other.
 
 If Kix should manage the field, first disable or reconfigure the other manager
-for this resource. Otherwise it changes the field again after the deploy, and
-the next plan shows the same drift.
+for this resource. Otherwise, it will overwrite the field again after the
+deploy, and the next plan will report the same drift.
 
 ## Take the field back
 
@@ -83,14 +84,14 @@ Run a plain deploy:
 
 <Command {...resolve} />
 
-The deploy applies the drifted Deployment again with force, which moves
-`spec.replicas` back to the Kix cluster's field manager and restores the
-replica count from the Kix definition. It writes nothing to the resources that
-did not change. Kix takes back only what the plan showed: the
-same field, from the same manager, at the same value. A status update by the
-Deployment controller does not stop it. If the field, its manager, or its value
-changed after the plan, the deploy stops, names the object, and asks you to
-plan again.
+The deploy reapplies the drifted Deployment with force, transferring
+`spec.replicas` back to the Kix cluster's field manager and restoring the
+replica count from your cluster definition. Unchanged resources are not touched.
+Kix forces only what the plan showed: the same field, owned by the same
+manager, with the same live value. Controller status updates do not block the
+apply, but if the field, its owning manager, or its live value changed after
+the plan, the deploy stops, names the object, and asks you to run `kix plan`
+again.
 
 Plan again to confirm that nothing is left to do:
 
@@ -109,12 +110,13 @@ conflict:
   the fields. See
   [Take ownership of kubectl-managed resources](/docs/how-to/adopt-existing-resources/take-ownership-of-kubectl-managed-resources/)
   and [Take ownership of Helm-managed resources](/docs/how-to/adopt-existing-resources/take-ownership-of-helm-managed-resources/).
-- **A field another Kix cluster applies.** Kix never takes it back. When the
-  two Kix clusters set different values, the deploy stops with `[K5636]`.
-  Make the two definitions agree.
+- **A field applied by another Kix cluster.** Kix never forces fields away from
+  another Kix cluster. When two Kix clusters set different values for the same
+  field, the deploy stops with `[K5636]`. Update the cluster definitions to
+  match.
 
-`--force-conflicts` forces every apply of the run, so keep it out of routine
-commands. It can hide a new ownership dispute that needs a separate decision.
+`--force-conflicts` forces every apply in the run, so avoid passing it on
+routine deploys where it could mask a new ownership conflict.
 
 :::note[Use it for a migration]
 See [Take ownership of kubectl-managed resources](/docs/how-to/adopt-existing-resources/take-ownership-of-kubectl-managed-resources/)

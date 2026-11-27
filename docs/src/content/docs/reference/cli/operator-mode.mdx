@@ -50,21 +50,21 @@ yet; pull-based Git sync is planned.
   with `spec.source.path` set, so it ignores records created by `kix deploy`
   without `--operator`. Drift repair pauses while another operator-managed
   Activation for the same Kix cluster is `Queued` or `Deploying`. It decides
-  what to repair with the same rules as `kix deploy` (see
-  [How a deploy decides what to write](/docs/reference/cli/deploy/#how-a-deploy-decides-what-to-write)). The
-  operator never takes fields from another field manager. When another
-  manager changed fields the build sets, such as with `kubectl edit`, the
-  operator leaves that resource as it is. It posts a `DriftNotReverted`
-  Warning Event that names the manager and the fields, and repairs every
-  other resource, including the ones that depend on it. Run `kix deploy` to
-  take the fields back, or declare them with `ownership.cede` if the other
-  manager is meant to own them. On a resource where the operator has no field
-  manager entry of its own, it applies without force, which adds its entry
-  when the values agree. A field the resource cedes never counts as
-  drift. A change no manager owns, such as a removed field or `kubectl scale
-  --replicas=0`, is repaired. On a Kix cluster an earlier version of Kix
-  deployed last, the first repair first gives that version's deployment
-  records their revisions, as the first `kix deploy` does.
+  what to repair using the same rules as `kix deploy` (see
+  [How a deploy decides what to write](/docs/reference/cli/deploy/#how-a-deploy-decides-what-to-write)),
+  except that the operator never forces fields away from another field manager.
+  When another manager modified fields set by the build (for example, via
+  `kubectl edit`), the operator leaves that resource untouched, emits a
+  `DriftNotReverted` Warning Event naming the manager and fields, and continues
+  repairing all other resources (including dependents). Run `kix deploy` to
+  take those fields back, or list them in `ownership.cede` if the other manager
+  should keep owning them. On a resource with no `managedFields` entry for this
+  Kix cluster, the operator applies without force, adding its entry when values
+  match. Fields listed in `ownership.cede` never count as drift, while changes
+  with no owning manager (such as a deleted field or `kubectl scale --replicas=0`)
+  are repaired automatically. If an earlier version of Kix last deployed the
+  cluster, the first drift repair converts its deployment records to revisions,
+  just like `kix deploy`.
 - **Deploying from Git today:** Run `kix deploy` (with or without `--operator`)
   from CI after a merge.
 
@@ -94,10 +94,10 @@ does not contact the operator.
 
 The operator fails any resource that goes 300 seconds without progress toward
 becoming ready, and stops the deploy at the first failure. It deletes orphaned
-resources, never takes over fields owned by another field manager, and writes
-nothing to unchanged resources. Its deploy of a Kix cluster that an earlier
-version of Kix deployed last moves the cluster to revisions, as the first
-`kix deploy` with this version does (see
+resources, never takes over fields owned by another field manager, and leaves
+unchanged resources untouched. When deploying a Kix cluster last deployed by an
+earlier version of Kix, the operator migrates its deployment records and object
+metadata to revisions just like `kix deploy` (see
 [The first deploy after upgrading](/docs/explanation/server-side-apply-and-drift/#the-first-deploy-after-upgrading)).
 
 ### Retries after a failure
@@ -341,13 +341,12 @@ A timeout ends the CLI only. The operator keeps working on the record.
 
 ## Requirements
 
-- The operator is running. When it starts, it installs Kix's four
-  CustomResourceDefinitions if they are missing (`activations.kix.run`,
-  `packageinstances.kix.run`, `activationheads.kix.run`, and
-  `packageinstancerevisions.kix.run`), and replaces one whose definition is
-  older than its own. The account running the `--operator` command can list
-  Activation records. The `--operator` commands check this before changing
-  anything.
+- The operator is running. On startup, it installs any missing Kix
+  CustomResourceDefinitions (`activations.kix.run`, `packageinstances.kix.run`,
+  `activationheads.kix.run`, and `packageinstancerevisions.kix.run`) and updates
+  any CRD definition older than its own. Your Kubernetes account must be able
+  to list `Activation` records; `--operator` commands check this before making
+  changes.
 - The operator watches the `kix.run` API group.
 - The operator runs a matching or newer version of Kix, its Kubernetes account
   can patch CustomResourceDefinition `activations.kix.run`, and your account
@@ -356,31 +355,27 @@ A timeout ends the CLI only. The operator keeps working on the record.
   `kix deploy --operator` and `kix rollback --operator` check that annotation
   before changing anything and stop with `[K9557]` if any of the three
   features is missing.
-- Upgrade the operator first, before you run an upgraded `kix` against its
-  cluster. An older operator deploys without taking the deploy lock, and it
-  writes the annotations `kix.run/activations` and `kix.run/applied-hash`
-  back onto every resource it applies after this version removed them. Every
-  command that changes a Kix cluster, such as `kix deploy`, `kix rollback`,
-  and `kix gc`, stops with `[K9557]` before it plans while a current, queued,
-  or deploying record of that Kix cluster was submitted to the operator and
-  the annotation does not list `revisions`. An operator from Kix 0.9 or
-  earlier writes no annotation and is refused too. Other Kix clusters on the
-  same Kubernetes cluster are not affected.
-- Kix cannot tell an older operator from one that was uninstalled, so
-  uninstalling an older operator leaves its Kix clusters refused with
-  `[K9557]`. Run `kix deploy <cluster> --operator-removed` once for each: it
-  takes the cluster back from the operator before it plans, and later
-  commands need no flag (see
+- Upgrade the operator before running an upgraded `kix` CLI against its
+  clusters. An older operator deploys without taking the deploy lock and writes
+  the retired `kix.run/activations` and `kix.run/applied-hash` annotations back
+  onto every resource it applies. Every command that modifies a Kix cluster
+  (`kix deploy`, `kix rollback`, `kix gc`) stops with `[K9557]` before planning
+  if a current, queued, or deploying record for that cluster was submitted to
+  the operator and `kix.run/operator-features` lacks `revisions` (including
+  operators from Kix 0.9 or earlier, which write no annotation). Other Kix
+  clusters on the same Kubernetes cluster are unaffected.
+- Because Kix cannot distinguish an older running operator from one that was
+  uninstalled, uninstalling an older operator leaves its Kix clusters blocked
+  with `[K9557]`. Run `kix deploy <cluster> --operator-removed` once per
+  cluster to reclaim it before planning; subsequent commands need no flag (see
   [Take a cluster back from a removed operator](/docs/reference/cli/deploy/#take-a-cluster-back-from-a-removed-operator)).
-  Do not use it while the operator still runs.
-- The operator's Kubernetes account can `get`, `create`, and `update`
-  CustomResourceDefinitions, to install and update Kix's own CRDs, and
-  `patch` to write its features annotation. It can `get`, `list`, `create`,
-  and `update` `activationheads.kix.run`, which holds each Kix cluster's
-  deploy lock. It can `get`, `list`, `create`, and `delete`
-  `packageinstancerevisions.kix.run`, which list the objects each deploy
-  applied, and `patch` their `status`, which holds the applied hashes. For
-  example:
+  Never pass `--operator-removed` while the operator is still running.
+- The operator's Kubernetes account must be able to `get`, `create`, `update`,
+  and `patch` CustomResourceDefinitions (to install and update Kix's CRDs and
+  set `kix.run/operator-features`); `get`, `list`, `create`, and `update`
+  `activationheads.kix.run` (for deploy locks); `get`, `list`, `create`, and
+  `delete` `packageinstancerevisions.kix.run`; and `patch`
+  `packageinstancerevisions/status` (to record applied hashes). For example:
 
   ```yaml
   - apiGroups: ["apiextensions.k8s.io"]

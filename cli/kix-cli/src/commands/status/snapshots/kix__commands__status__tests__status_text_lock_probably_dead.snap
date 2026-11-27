@@ -12,7 +12,7 @@ vault/vaultwarden
   Secret vault/vaultwarden-db   missing, needed by Deployment vault/vaultwarden
 
 4 resources: 0 ok, 1 not ready, 1 missing, 2 not checked.
-Next: run `kix deploy shop` to put back what is missing or changed. `kix plan shop` shows what it would change first.
+Next: run `kix deploy shop` to restore what is missing or changed, or `kix plan shop` to preview the changes first.
 kix deploy by ana@laptop, process 7 holds the deploy lock (deploy of shop-new), renewed 300s ago. Its 30s lease has expired, so that run has likely stopped; the next command that changes the cluster will take over the lock.
 
 This account may not list secrets, so Kix did not check objects of those kinds.

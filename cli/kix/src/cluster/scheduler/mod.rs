@@ -193,13 +193,13 @@ pub enum DeployError {
     /// could not be written to its revisions, so the run stopped before it
     /// finalized.
     #[error(
-        "every object reached a result, but Kix could not record what this run applied\n  \
+        "every object reached a result, but Kix could not record the applied hashes\n  \
          Cause:\n    {message}\n\n  \
          Cluster state:\n    \
-         - The objects were applied.\n    \
-         - This run's deployment record was not finalized, and the previous deployment record remains current.\n\n  \
+         - Resource changes were applied to the cluster.\n    \
+         - This deployment record was not finalized, so the previous deployment record remains current.\n\n  \
          Next:\n    \
-         Run the deploy again. It takes in what this run applied and finishes the record."
+         Run the deploy again to record the applied hashes and finalize the deployment record."
     )]
     AppliedNotRecorded {
         message: String,
@@ -940,7 +940,7 @@ impl<'a> Run<'a> {
                 Ok(Err(e)) => e.to_string(),
                 Err(_) => format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs()),
             };
-        let reason = format!("could not record the hashes of what this run applied: {message}");
+        let reason = format!("could not record applied hashes for this deploy: {message}");
         self.emit(DeployEvent::Stopped {
             reason: reason.clone(),
         });
@@ -1153,7 +1153,7 @@ impl<'a> Run<'a> {
             while let Some(joined) = set.join_next().await {
                 if let Ok(Err((rid, e))) = joined {
                     failures += 1;
-                    tracing::warn!(resource = %rid.display_id(), error = %e, "could not tidy the metadata of an unchanged resource");
+                    tracing::warn!(resource = %rid.display_id(), error = %e, "could not update Kix metadata on unchanged resource");
                 }
             }
         }
@@ -1161,7 +1161,7 @@ impl<'a> Run<'a> {
             self.emit(DeployEvent::BestEffortFailed {
                 what: "metadata of unchanged resources".into(),
                 message: format!(
-                    "{failures} of {} not tidied; the deploy itself is unaffected and the next deploy tidies them",
+                    "{failures} of {} could not be updated; the deploy itself is unaffected and the next deploy will retry them",
                     candidates.len()
                 ),
             });
@@ -1197,7 +1197,7 @@ impl<'a> Run<'a> {
             self.emit(DeployEvent::BestEffortFailed {
                 what: "objects another Kix cluster still deploys".into(),
                 message: format!(
-                    "{}; the deployment record lists them, and the next deploy gives up this Kix cluster's fields on them",
+                    "{}; recorded in the kept-orphans list so the next deploy will retry releasing field ownership",
                     failed.join("; ")
                 ),
             });

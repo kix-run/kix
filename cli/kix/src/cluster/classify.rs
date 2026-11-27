@@ -177,8 +177,8 @@ impl<'a> Context<'a> {
                     reason: UncheckedReason::CrdInstalledByKix,
                     because: Some(crd),
                     detail: format!(
-                        "kind {kind} is one of Kix's own. The build does not carry its CRD, \
-                         and Kix installs it when the deploy starts"
+                        "kind {kind} is a Kix custom resource whose CustomResourceDefinition \
+                         Kix installs when the deploy starts"
                     ),
                 },
                 _ => Verdict::NotChecked {

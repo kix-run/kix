@@ -230,7 +230,7 @@ impl ActivationRecord {
                 Some(Err(e)) => {
                     let record = current.map_or("", |c| c.name.as_str());
                     return Err(RecordWriteError::KeptOrphans(format!(
-                        "the current deployment record `{record}` cannot be read: {e}"
+                        "current deployment record `{record}` cannot be read: {e}"
                     )));
                 }
             };
@@ -241,7 +241,7 @@ impl ActivationRecord {
                     .map_err(|e| RecordWriteError::KeptOrphans(e.to_string()))?
                     .ok_or_else(|| {
                         RecordWriteError::KeptOrphans(format!(
-                            "the current deployment record names kept-orphans revision `{earlier}`, which is missing"
+                            "current deployment record names kept-orphans revision `{earlier}`, which is missing from the cluster"
                         ))
                     })?;
                 objects.extend(revision.spec.objects);
@@ -323,10 +323,10 @@ impl ActivationRecord {
         match tokio::time::timeout(BEST_EFFORT_TIMEOUT, clean).await {
             Ok(Ok(_)) => {}
             Ok(Err(e)) => {
-                tracing::warn!(error = %e, "could not delete the revisions no record needs; the next deploy or `kix gc` deletes them")
+                tracing::warn!(error = %e, "could not delete unused PackageInstanceRevision objects; the next deploy or `kix gc` will delete them")
             }
             Err(_) => tracing::warn!(
-                "deleting the revisions no record needs did not finish in time; the next deploy or `kix gc` deletes them"
+                "timed out deleting unused PackageInstanceRevision objects; the next deploy or `kix gc` will delete them"
             ),
         }
     }

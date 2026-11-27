@@ -94,7 +94,7 @@ pub async fn require_features(client: &Client) -> Result<()> {
          Nothing was applied to the cluster.\n\n  \
          Why:\n    \
          CustomResourceDefinition `{crd}` does not list {listed} in its `{key}` annotation. \
-         `--operator` commands require an operator that reads `spec.request` (`{requests}`), takes the cluster's deploy lock before making changes (`{lock}`), and keeps what a deploy did in revisions (`{revisions}`). \
+         `--operator` commands require an operator that reads `spec.request` (`{requests}`), takes the cluster's deploy lock before making changes (`{lock}`), and records deployed objects in revisions (`{revisions}`). \
          Because the operator writes `{key}` at startup, it is either older than Kix {version}, still starting, or missing permission to patch `{crd}`.\n\n  \
          Next:\n    \
          Make sure the Kix operator is running Kix {version} or newer and its Kubernetes account can patch CustomResourceDefinition `{crd}`, then wait for it to start (or restart it) and run the command again.",

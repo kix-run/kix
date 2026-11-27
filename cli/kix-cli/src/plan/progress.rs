@@ -62,7 +62,7 @@ pub fn print(event: PlanEvent<'_>) {
         }
         PlanEvent::KeptBuildUnusable { activation, error } => {
             warning_always(&format!(
-                "earlier deployment {}'s build (which has kept orphaned objects) could not be loaded ({error}).",
+                "could not load the build for earlier deployment {}, which has kept orphaned objects ({error}).",
                 output::bold(activation)
             ));
             eprintln!(
@@ -132,24 +132,24 @@ pub fn print(event: PlanEvent<'_>) {
         PlanEvent::LockHeld(lock) => crate::commands::lock::say_watching(lock),
         PlanEvent::TookBack { cluster, taken } => {
             crate::say!(
-                "  {} Took Kix cluster {cluster} back from the Kix operator, because `--operator-removed` says it was uninstalled.",
+                "  {} Took Kix cluster {cluster} back from the uninstalled Kix operator (`--operator-removed`).",
                 output::yellow("!"),
             );
             if let Some(current) = &taken.current {
                 crate::say!(
-                    "    The current deployment record {} no longer names a build for the operator.",
+                    "    Cleared the operator build path from current deployment record {}.",
                     output::bold(current),
                 );
             }
             if !taken.superseded.is_empty() {
                 crate::say!(
-                    "    Marked queued deployment record(s) {} Superseded. The operator never started them.",
+                    "    Marked queued deployment record(s) {} Superseded because the operator never started them.",
                     taken.superseded.join(", "),
                 );
             }
             if !taken.failed.is_empty() {
                 crate::say!(
-                    "    Marked deployment record(s) {} Failed. The operator stopped while it deployed them.",
+                    "    Marked deployment record(s) {} Failed because the operator stopped while deploying them.",
                     taken.failed.join(", "),
                 );
             }
@@ -175,7 +175,7 @@ pub fn print(event: PlanEvent<'_>) {
             }
         },
         PlanEvent::FailedValuesUnknown(record) => crate::say!(
-            "    the build of {} is not on this machine. Kix takes in what it applied from its revisions, but the plan cannot tell the values it wrote from drift, so it lists them as drift.",
+            "    the build for {} is not in Kix's local store on this machine. Kix still includes the objects that deploy applied from its revisions, but the plan cannot distinguish the values it wrote from live cluster edits, so those fields appear under Drift.",
             record.name,
         ),
         PlanEvent::FailedUnresolved { records, cluster } => {

@@ -275,8 +275,9 @@ pub enum PlanError {
          operator reconciles {record} to match its build, so it would revert changes from `--only` \
          and delete any new resources it creates. Next: deploy the full build with \
          `kix deploy {cluster} --operator`, or take the cluster over from this machine with \
-         `kix deploy {cluster}`. If the operator is older than this Kix, upgrade it first; if it \
-         was uninstalled, run `kix deploy {cluster} --operator-removed` instead."
+         `kix deploy {cluster}`. If the operator is older than Kix {version}, upgrade it first; if it \
+         was uninstalled, run `kix deploy {cluster} --operator-removed` instead.",
+        version = crate::version::running()
     )]
     OnlyUnderOperator { cluster: String, record: String },
     #[error("{0}")]

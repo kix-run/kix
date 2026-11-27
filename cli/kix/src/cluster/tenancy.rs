@@ -59,7 +59,7 @@ pub enum Source {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Problem {
     #[error(
-        "deployment record `{record}` of Kix cluster {cluster} names {} `{revision}`, which is not on the cluster. {}",
+        "deployment record `{record}` of Kix cluster '{cluster}' references {} `{revision}`, which is missing from the cluster. {}",
         revision::KIND,
         remedy(*kept)
     )]
@@ -71,7 +71,7 @@ pub enum Problem {
         kept: bool,
     },
     #[error(
-        "deployment record `{record}` of Kix cluster {cluster} names {} `{revision}`, which Kix cannot read: {reason}. {}",
+        "deployment record `{record}` of Kix cluster '{cluster}' references {} `{revision}`, which Kix cannot read: {reason}. {}",
         revision::KIND,
         remedy(*kept)
     )]
@@ -83,7 +83,7 @@ pub enum Problem {
         kept: bool,
     },
     #[error(
-        "deployment record `{record}` of Kix cluster {cluster} cannot be read by this version of Kix: {source}. A later version of Kix probably wrote it, so this version cannot tell which objects the record deploys"
+        "deployment record `{record}` of Kix cluster '{cluster}' cannot be read by this version of Kix ({source}); a newer version of Kix likely wrote it, so Kix cannot determine which objects it deploys"
     )]
     UnreadableMap {
         cluster: String,
@@ -91,13 +91,13 @@ pub enum Problem {
         source: revision::UnreadableMap,
     },
     #[error(
-        "cannot list the {} objects: {reason}. Kix reads which objects each Kix cluster deploys the way earlier versions wrote it. Check that this account has `list` permission on `{}`",
+        "cannot list {} objects: {reason}. Falling back to legacy tracking on deployed objects and deployment records; check that this account has `list` permission on `{}`",
         head::KIND,
         head::crd_name()
     )]
     Heads { reason: String },
     #[error(
-        "cannot list the {} objects: {reason}. Check that this account has `list` permission on `{}`",
+        "cannot list {} objects: {reason}. Check that this account has `list` permission on `{}`",
         revision::KIND,
         revision::crd_name()
     )]
@@ -106,9 +106,9 @@ pub enum Problem {
 
 fn remedy(kept: bool) -> &'static str {
     if kept {
-        "It lists the objects earlier deploys left on the cluster, so Kix cannot tell which of them are still the Kix cluster's to delete"
+        "That revision lists orphaned objects kept from earlier deploys, so Kix cannot determine which objects remain to clean up without a full scan"
     } else {
-        "A deploy of that record's build writes it again"
+        "Redeploying that record's build recreates it"
     }
 }
 

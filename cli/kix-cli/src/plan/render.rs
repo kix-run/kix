@@ -64,7 +64,7 @@ fn write_metadata_rewrites(out: &mut String, plan: &Plan, markdown: bool) -> fmt
         format!("{n} objects")
     };
     let line = format!(
-        "This deploy also rewrites the metadata of {objects} once, to move them to this version of Kix's bookkeeping. It renames their field manager `kix` to `kix/{cluster}` and removes the annotations `{activations}` and `{applied}`. Controllers that copy annotations may restart their Pods once.",
+        "This deploy also rewrites the metadata of {objects} once: it renames field manager `kix` to `kix/{cluster}` and removes retired annotations `{activations}` and `{applied}`. Controllers that copy annotations onto Pods may restart those Pods once.",
         cluster = plan.cluster,
         activations = kix::manifest::keys::ACTIVATIONS,
         applied = kix::manifest::keys::APPLIED_HASH,
@@ -228,7 +228,7 @@ fn reason_lines(writes: &[&ObjectWrite]) -> Vec<String> {
     });
     if n > 0 {
         lines.push(format!(
-            "{} {n} object(s) hold what deployment record(s) {names} applied before stopping; the deploy applies this build over them",
+            "{} {n} object(s) were applied by stopped deployment record(s) {names}; this deploy reapplies them from the current build",
             output::yellow("↻"),
         ));
     }
@@ -245,21 +245,21 @@ fn reason_lines(writes: &[&ObjectWrite]) -> Vec<String> {
     let n = count(|r| matches!(r, WriteReason::AppliedHashMissing));
     if n > 0 {
         lines.push(format!(
-            "{} {n} unchanged object(s) applied again because Kix has no record of what it applied to them; the deploy records it",
+            "{} {n} unchanged object(s) will be reapplied because Kix has no recorded applied hash for them",
             output::yellow("↻"),
         ));
     }
     let n = count(|r| matches!(r, WriteReason::RevertsDrift { .. }));
     if n > 0 {
         lines.push(format!(
-            "{} {n} object(s) changed on the cluster since Kix applied them; the deploy applies the build again and takes back the fields other field managers changed",
+            "{} {n} object(s) changed on the cluster since Kix applied them; this deploy restores the build's values and takes back fields modified by other field managers",
             output::yellow("↺"),
         ));
     }
     let n = count(|r| matches!(r, WriteReason::HeldByOtherCluster { .. }));
     if n > 0 {
         lines.push(format!(
-            "{} {n} object(s) hold fields another Kix cluster applied; the deploy applies them without force, which adds this Kix cluster's own entry when the values agree and stops on a conflict when they differ",
+            "{} {n} object(s) share fields with another Kix cluster; this deploy applies them without force, sharing ownership when values match and stopping on a conflict when they differ",
             output::yellow("↻"),
         ));
     }
@@ -518,7 +518,7 @@ fn write_drift(out: &mut String, plan: &Plan) -> fmt::Result {
                     (true, None) if takes_back(plan, d) && !d.managers.is_empty() => {
                         let managers = d.managers.join(", ");
                         output::yellow(&format!(
-                            "the deploy writes this object and takes the field back from {managers}. If {managers} is meant to own this field, declare it with `ownership.cede` and Kix leaves it alone"
+                            "this deploy overwrites the field and takes ownership back from {managers}; if {managers} should keep owning it, list the field in `ownership.cede`"
                         ))
                         .into_owned()
                     }
@@ -573,7 +573,7 @@ fn drift_unchecked_line(plan: &Plan) -> Option<String> {
     match plan.drift_unchecked {
         0 => None,
         n => Some(format!(
-            "{n} object(s) not checked for drift: Kix has no record of what it applied to them, or Kubernetes records no fields Kix owns. `kix deploy` applies an object with no record again and records it."
+            "{n} object(s) not checked for drift: Kix has no recorded applied hash for them, or Kubernetes records no Kix-owned fields. `kix deploy` reapplies objects without a recorded hash and records them."
         )),
     }
 }
@@ -694,7 +694,7 @@ fn write_drift_markdown(out: &mut String, plan: &Plan) -> fmt::Result {
                 (true, None) if takes_back(plan, d) && !d.managers.is_empty() => {
                     let managers = d.managers.join(", ");
                     format!(
-                        "the deploy writes this object and takes the field back from `{managers}`. If `{managers}` is meant to own this field, declare it with `ownership.cede` and Kix leaves it alone"
+                        "this deploy overwrites the field and takes ownership back from `{managers}`; if `{managers}` should keep owning it, list the field in `ownership.cede`"
                     )
                 }
                 (true, None) => {
@@ -1061,7 +1061,7 @@ fn write_not_checked(out: &mut String, plan: &Plan) -> fmt::Result {
                     "uses a CustomResourceDefinition created by this deploy"
                 }
                 UncheckedReason::CrdInstalledByKix => {
-                    "is of a kind Kix installs when the deploy starts (the build does not carry its CustomResourceDefinition)"
+                    "uses a Kix CustomResourceDefinition that Kix installs when the deploy starts"
                 }
                 UncheckedReason::CrdInstalledOutsideKix => {
                     "uses a CustomResourceDefinition not yet on the cluster (Kix does not create it, and the deploy waits for an operator or external tool to install it)"
@@ -1837,9 +1837,8 @@ mod tests {
         assert!(render_drift_text(&plan).is_empty());
         plan.drift_unchecked = 1;
         assert!(
-            render_drift_text(&plan).contains(
-                "1 object(s) not checked for drift: Kix has no record of what it applied"
-            )
+            render_drift_text(&plan)
+                .contains("1 object(s) not checked for drift: Kix has no recorded applied hash")
         );
     }
 

@@ -403,19 +403,19 @@ pub(crate) enum RecordWriteError {
     /// The records an older Kix wrote could not be given revisions, so the
     /// run stops before it writes any object.
     #[error(
-        "cannot give the deployment records an earlier version of Kix wrote the revisions this version reads: {0}. Nothing was applied"
+        "cannot convert earlier deployment records to PackageInstanceRevision resources: {0}. Nothing was applied"
     )]
     Convert(super::revision::convert::ConvertError),
     /// The applied hashes of the objects the run applied could not be
     /// written to the revisions.
     #[error(
-        "cannot record the applied hashes of the objects this run applied: {0}. The next deploy reads their hashes as unknown"
+        "cannot record applied hashes on PackageInstanceRevision resources: {0}. The next deploy will treat those objects' applied hashes as unknown"
     )]
     Applied(super::revision::keep::CleanError),
     /// The list of objects a deploy left on the cluster could not be read
     /// or written, so finalizing would lose track of them.
     #[error(
-        "cannot record the objects this deploy left on the cluster: {0}. The deploy is not marked finished, so the next deploy or `kix gc` still sees the objects it left"
+        "cannot record the orphaned objects kept on the cluster: {0}. The deployment record was left unfinished so the next deploy or `kix gc` still tracks those objects"
     )]
     KeptOrphans(String),
     /// The write did not answer within the implementation's bound.
