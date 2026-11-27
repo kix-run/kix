@@ -23,7 +23,7 @@ use crate::manifest::types::ResourceId;
 
 /// Schema version (`YYYY-MM-DD`) of the last breaking change to the log format.
 /// Readers should reject versions they do not recognize.
-pub const SCHEMA_VERSION: &str = "2026-11-25";
+pub const SCHEMA_VERSION: &str = "2026-11-27";
 
 /// One line of the log.
 ///

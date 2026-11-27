@@ -684,7 +684,7 @@ When the plan has nothing to apply or prune, Kix writes only the
 all other counts set to `0`. If the build has no resources, Kix does not
 connect to the cluster and writes only that `summary` line, with
 `"unchanged": 0`. Every
-line includes `schema_version` (currently `"2026-11-25"`), the date of the
+line includes `schema_version` (currently `"2026-11-27"`), the date of the
 latest breaking change to the log format. For a deleted object
 (`"kind": "delete"`), Kix emits the `ready` event only after the object is
 removed from the cluster. If an object being pruned is already absent, its
