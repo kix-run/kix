@@ -594,21 +594,27 @@ fn deploy_and_gc() {
     // the deploy on itself; repaired, the same deploy goes through. The
     // deploy starts before the new pod reports ImagePullBackOff. The check
     // waits for it, because the old pod that still runs does not make the
-    // Deployment ready.
+    // Deployment ready. The break adds an init container, a field Kix does
+    // not set, so the plan finds no drift to revert and leaves the
+    // Deployment unchanged.
     eprintln!("\n=== Phase 6: Unchanged dependency checked before its dependent ===");
 
     let broken = kubectl(
         KUBE_CTX,
         &[
-            "set",
-            "image",
+            "patch",
             "deployment/echo-server",
             "-n",
             "echo",
-            "nginx=docker.io/nginxinc/nginx-unprivileged:no-such-tag",
+            "--field-manager=kubectl-break",
+            "-p",
+            r#"{"spec":{"template":{"spec":{"initContainers":[{"name":"broken","image":"docker.io/nginxinc/nginx-unprivileged:no-such-tag","securityContext":{"runAsNonRoot":true,"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"seccompProfile":{"type":"RuntimeDefault"}}}]}}}}"#,
         ],
     );
-    assert!(broken.status.success(), "should set a bad image");
+    assert!(
+        broken.status.success(),
+        "should add an init container with a bad image: {broken:?}"
+    );
 
     let over_broken = kix(KIND_CLUSTER)
         .args(["deploy", "kind-port", "--yes", "--timeout", "60s"])
@@ -655,7 +661,7 @@ fn deploy_and_gc() {
         KUBE_CTX,
         &["rollout", "undo", "deployment/echo-server", "-n", "echo"],
     );
-    assert!(undone.status.success(), "should undo the bad image");
+    assert!(undone.status.success(), "should undo the init container");
     let rolled = kubectl(
         KUBE_CTX,
         &[
