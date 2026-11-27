@@ -45,7 +45,7 @@ To try Kix on a local `kind` cluster with [kix-examples](https://github.com/kix-
 
 ### Build and run from source
 
-Kix (the CLI, the operator, the Kix library, and the built-in packages) is open source under the Apache License 2.0. To run `kix` from [`cli/`](cli/) with Cargo, enter the Nix development shell so `KIX_RUNTIME_DIR` points at the Kix runtime and `CARGO_TARGET_DIR` stays outside the checkout:
+To run `kix` from [`cli/`](cli/) with Cargo, enter the Nix development shell so `KIX_RUNTIME_DIR` points at the Kix runtime and `CARGO_TARGET_DIR` stays outside the checkout:
 
 ```sh
 nix develop
