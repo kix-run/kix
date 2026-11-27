@@ -775,6 +775,10 @@ pub enum RefusalReason {
     /// A SOPS file has a top-level value that is a map, a list, or null, so
     /// Kix cannot make the Secret's keys from it.
     SopsNotFlat,
+    /// Another Kix cluster applies the object and owns fields this build
+    /// sets to other values. The message names that Kix cluster and the
+    /// fields.
+    KixClusterConflict,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

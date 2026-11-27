@@ -301,6 +301,76 @@ mod tests {
         ));
     }
 
+    /// A dry run that meets fields another Kix cluster applies refuses the
+    /// write as the apply would, with the message that names that Kix
+    /// cluster and its fields, not as a conflict that `--force-conflicts`
+    /// settles.
+    #[tokio::test]
+    async fn a_conflict_with_another_kix_cluster_is_refused_as_the_apply_refuses_it() {
+        use crate::cluster::apply::{Takeover, apply_resource};
+        use crate::cluster::field_manager::FieldManager;
+        use crate::cluster::preview::Refusal;
+
+        let api = FakeApi::default();
+        api.track_owners();
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let (ar, scope) = discovery
+            .iter()
+            .find(|(ar, _)| ar.kind == "ConfigMap")
+            .cloned()
+            .unwrap();
+        let cm = |value: &str| {
+            json!({
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": { "name": "shared", "namespace": "app" },
+                "data": { "owner": value },
+            })
+        };
+        let apply = |cluster: &str, dry_run: bool| {
+            let (client, ar, scope) = (client.clone(), ar.clone(), scope.clone());
+            let manager = FieldManager::of(cluster);
+            let manifest = cm(cluster);
+            async move {
+                apply_resource(
+                    &client,
+                    &ar,
+                    scope,
+                    &manager,
+                    &manifest,
+                    dry_run,
+                    Takeover::No,
+                )
+                .await
+            }
+        };
+        apply("b", false).await.unwrap();
+        let refused = apply("a", true).await.unwrap_err().to_string();
+
+        let dry = dry_run(&api).await;
+        assert!(
+            dry.apply(
+                &cm("a"),
+                Duration::from_secs(1),
+                &CancelToken::new(),
+                &|_| {}
+            )
+            .await
+            .is_err()
+        );
+        let answers = dry.take_answers();
+        let DryRunOutcome::Refused(Refusal::KixClusterConflict { clusters, message }) =
+            &answers[0].outcome
+        else {
+            panic!("{:?}", answers[0].outcome);
+        };
+        assert_eq!(clusters[0].manager, "b");
+        assert_eq!(clusters[0].fields, [".data.owner"]);
+        assert!(message.starts_with("[K5636] ConfigMap/shared@app was not updated."));
+        assert_eq!(message, &refused);
+    }
+
     /// An apply onto an object being deleted is answered as a recreate that
     /// keeps the whole live object, so the plan can say what its delete
     /// waits for. The deploy goes on.

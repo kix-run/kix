@@ -471,6 +471,9 @@ fn refusal_title(r: &AdmissionRefusal) -> String {
         }
         (RefusalReason::WebhookUnreachable, None) => "an admission webhook is unreachable".into(),
         (RefusalReason::SopsNotFlat, _) => "its SOPS file has a nested or empty value".into(),
+        (RefusalReason::KixClusterConflict, _) => {
+            "another Kix cluster sets some of its fields to other values".into()
+        }
         (RefusalReason::Other, _) => "refused".into(),
     }
 }

@@ -431,10 +431,14 @@ fn deploy_and_gc() {
     assert_eq!(replicas.trim(), "2", "the build's replicas, not kubectl's");
 
     // The cluster now runs that build, so a deploy of it writes other
-    // objects against another deployed build.
+    // objects against another deployed build, and the deploy moved the
+    // cluster's deploy lock to a later generation.
     let stale = check(&forced, &["-o", "json"]);
     assert_eq!(stale.status.code(), Some(4));
-    assert_eq!(mismatched_rules(&stale), vec!["objects", "deployed_build"]);
+    assert_eq!(
+        mismatched_rules(&stale),
+        vec!["objects", "deployed_build", "generation"]
+    );
     let _ = std::fs::remove_dir_all(&dir);
 
     // Put the first build back for the phases below.
@@ -525,9 +529,30 @@ fn deploy_and_gc() {
         String::from_utf8_lossy(&create_result.stderr)
     );
 
-    // Hard GC should now detect this as garbage
-    let gc_orphan = kix(KIND_CLUSTER)
+    // No deployment record names the object, so hard GC lists it and keeps
+    // it until `--include unattributed` is passed.
+    let gc_listed = kix(KIND_CLUSTER)
         .args(["gc", KIX_CLUSTER, "--full-scan", "--yes"])
+        .output()
+        .expect("hard gc with orphan should run");
+    let gc_listed_out = String::from_utf8_lossy(&gc_listed.stdout);
+    eprintln!("{gc_listed_out}");
+    assert!(
+        gc_listed_out.contains("Objects with no matching deployment record")
+            && gc_listed_out.contains("ConfigMap/orphan-test@echo")
+            && gc_listed_out.contains("Nothing to delete"),
+        "hard gc should list the orphan-test configmap and keep it, got:\n{gc_listed_out}"
+    );
+
+    let gc_orphan = kix(KIND_CLUSTER)
+        .args([
+            "gc",
+            KIX_CLUSTER,
+            "--full-scan",
+            "--include",
+            "unattributed",
+            "--yes",
+        ])
         .output()
         .expect("hard gc with orphan should run");
 
@@ -569,21 +594,27 @@ fn deploy_and_gc() {
     // the deploy on itself; repaired, the same deploy goes through. The
     // deploy starts before the new pod reports ImagePullBackOff. The check
     // waits for it, because the old pod that still runs does not make the
-    // Deployment ready.
+    // Deployment ready. The break adds an init container, a field Kix does
+    // not set, so the plan finds no drift to revert and leaves the
+    // Deployment unchanged.
     eprintln!("\n=== Phase 6: Unchanged dependency checked before its dependent ===");
 
     let broken = kubectl(
         KUBE_CTX,
         &[
-            "set",
-            "image",
+            "patch",
             "deployment/echo-server",
             "-n",
             "echo",
-            "nginx=docker.io/nginxinc/nginx-unprivileged:no-such-tag",
+            "--field-manager=kubectl-break",
+            "-p",
+            r#"{"spec":{"template":{"spec":{"initContainers":[{"name":"broken","image":"docker.io/nginxinc/nginx-unprivileged:no-such-tag","securityContext":{"runAsNonRoot":true,"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"seccompProfile":{"type":"RuntimeDefault"}}}]}}}}"#,
         ],
     );
-    assert!(broken.status.success(), "should set a bad image");
+    assert!(
+        broken.status.success(),
+        "should add an init container with a bad image: {broken:?}"
+    );
 
     let over_broken = kix(KIND_CLUSTER)
         .args(["deploy", "kind-port", "--yes", "--timeout", "60s"])
@@ -600,7 +631,7 @@ fn deploy_and_gc() {
         "a deploy over a broken unchanged Deployment fails"
     );
     assert!(
-        text.contains("Deployment/echo-server@echo")
+        text.contains("Deployment.apps/echo-server@echo")
             && text.contains("ImagePullBackOff")
             && text.contains("This deploy did not change it"),
         "the failure names the unchanged Deployment with its own status, got:\n{text}"
@@ -630,7 +661,7 @@ fn deploy_and_gc() {
         KUBE_CTX,
         &["rollout", "undo", "deployment/echo-server", "-n", "echo"],
     );
-    assert!(undone.status.success(), "should undo the bad image");
+    assert!(undone.status.success(), "should undo the init container");
     let rolled = kubectl(
         KUBE_CTX,
         &[
@@ -931,7 +962,7 @@ fn two_kix_clusters_share_one_kind_cluster() {
     //    removals.
     let (ok, out) = flake.kix(&ctx, &["plan", "sweep-a", "--read-only"]);
     assert!(ok, "diff sweep-a should report no change:\n{out}");
-    assert!(out.contains("belong to Kix cluster sweep-b"), "{out}");
+    assert!(out.contains("belong to Kix cluster 'sweep-b'"), "{out}");
 
     // 2. `kix status sweep-a` and `kix snapshot sweep-a` contain none
     //    of sweep-b's objects.
@@ -1002,7 +1033,7 @@ fn two_kix_clusters_share_one_kind_cluster() {
     let (ok, out) = flake.kix(&ctx, &["deploy", "sweep-a", "--prune", "--yes"]);
     assert!(ok, "{out}");
     assert!(
-        out.contains("kept ClusterRole/sweep-test-reader")
+        out.contains("kept ClusterRole.rbac.authorization.k8s.io/sweep-test-reader")
             && out.contains("still deployed by Kix cluster sweep-b"),
         "{out}"
     );
@@ -1024,7 +1055,7 @@ fn two_kix_clusters_share_one_kind_cluster() {
     let (ok, out) = flake.kix(&ctx, &["gc", "sweep-a", "--include", "unattributed"]);
     assert!(!ok && out.contains("--full-scan"), "{out}");
 
-    // 6. Binding. `kix status` shows the kind cluster's ID, and sweep-a
+    // 6. Binding. `kix status -v` shows the kind cluster's ID, and sweep-a
     //    bound to it deploys and labels its record. From then on the
     //    unbound sweep-b is refused, a sweep-b bound to another ID is
     //    refused before the plan, and a sweep-b bound to this ID deploys.
@@ -1040,7 +1071,7 @@ fn two_kix_clusters_share_one_kind_cluster() {
         ],
     );
     let uid = uid.trim().to_string();
-    let (ok, out) = flake.kix(&ctx, &["status", "sweep-a"]);
+    let (ok, out) = flake.kix(&ctx, &["status", "sweep-a", "-v"]);
     assert!(
         ok && out.contains(&format!("Kubernetes cluster ID: {uid}")),
         "{out}"
@@ -1064,13 +1095,11 @@ fn two_kix_clusters_share_one_kind_cluster() {
     let (ok, out) = flake.kix(&ctx, &["deploy", "sweep-b", "--yes"]);
     let out = unwrapped(&out);
     assert!(
-        !ok && out.contains("sweep-b's definition does not set cluster.kubernetes.uid"),
+        !ok && out.contains("but 'sweep-b' sets no `cluster.kubernetes.uid`"),
         "{out}"
     );
     assert!(
-        out.contains(&format!(
-            "sweep-a was deployed here with cluster.kubernetes.uid = \"{uid}\""
-        )),
+        out.contains(&format!("is locked to UID '{uid}' by cluster 'sweep-a'")),
         "{out}"
     );
     let (ok, out) = flake.kix(&ctx, &["plan", "sweep-b", "--read-only"]);
@@ -1080,17 +1109,20 @@ fn two_kix_clusters_share_one_kind_cluster() {
     let elsewhere = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
     flake.write_cluster_bound("b", "hello from sweep-b", true, Some(elsewhere));
     let (ok, out) = flake.kix(&ctx, &["plan", "sweep-b"]);
-    let out = unwrapped(&out);
+    // The message pads its two UID labels to one column.
+    let out = out.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        !ok && out.contains(&format!(
-            "sweep-b's definition sets cluster.kubernetes.uid = \"{elsewhere}\""
-        )),
+        !ok && out.contains("cluster 'sweep-b' does not match"),
         "{out}"
     );
     assert!(
         out.contains(&format!(
-            "This cluster's kube-system namespace has UID \"{uid}\"."
+            "`cluster.kubernetes.uid` in 'sweep-b': {elsewhere}"
         )),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!("`kube-system` UID on connected cluster: {uid}")),
         "{out}"
     );
 
@@ -1668,7 +1700,9 @@ fn drift_is_reverted_and_ceded_fields_are_left_alone() {
     assert_eq!(code, Some(2), "{text}");
     assert!(text.contains("editor"), "{text}");
     assert!(text.contains("ownership.cede"), "{text}");
-    assert!(!text.contains("drift-ceded"), "{text}");
+    // The library's warning about the unreferenced ConfigMap names
+    // `drift-ceded` too, so look for the plan's own `Kind/name@namespace`.
+    assert!(!text.contains("ConfigMap/drift-ceded@"), "{text}");
 
     let (ok, out) = flake.kix(&ctx, &["deploy", "hold", "--yes"]);
     assert!(ok, "{out}");

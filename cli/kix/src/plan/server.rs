@@ -185,7 +185,9 @@ impl Overlay<'_> {
                 // "added" (the old side may not have known the object, made
                 // by hand or by another tool) is wrong. List it as changed;
                 // the conflict says what about it.
-                DryRunOutcome::Refused(Refusal::Conflict { .. }) => {
+                DryRunOutcome::Refused(
+                    Refusal::Conflict { .. } | Refusal::KixClusterConflict { .. },
+                ) => {
                     if let Some((key, version)) = membership.get(rid)
                         && let Some(entry) = entry(diff, key, version.clone())
                         && entry.added_resources.contains(rid)

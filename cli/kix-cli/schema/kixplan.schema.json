@@ -1823,6 +1823,11 @@
           "const": "sops_not_flat",
           "description": "A SOPS file has a top-level value that is a map, a list, or null, so\nKix cannot make the Secret's keys from it.",
           "type": "string"
+        },
+        {
+          "const": "kix_cluster_conflict",
+          "description": "Another Kix cluster applies the object and owns fields this build\nsets to other values. The message names that Kix cluster and the\nfields.",
+          "type": "string"
         }
       ]
     },

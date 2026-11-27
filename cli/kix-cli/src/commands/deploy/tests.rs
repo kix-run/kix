@@ -693,6 +693,48 @@ mod stop_advice_tests {
         assert!(!text.contains("could not decrypt"), "{text}");
     }
 
+    /// A write refused because another Kix cluster sets the same fields to
+    /// other values shows the apply's message, which names that Kix cluster,
+    /// and none of the advice for a conflict with another field manager.
+    #[test]
+    fn a_conflict_with_another_kix_cluster_shows_the_apply_message() {
+        use crate::commands::plan::admission_reason;
+        use kix::cluster::preview::{ConflictOwner, Refusal};
+
+        let message = "[K5636] ConfigMap/shared@app was not updated. Kix cluster `b` also deploys it and sets some of its fields to other values.";
+        let refused = Refusal::KixClusterConflict {
+            clusters: vec![ConflictOwner {
+                manager: "b".into(),
+                fields: vec![".data.owner".into()],
+            }],
+            message: message.into(),
+        };
+        let (reason, webhook) = admission_reason(&refused);
+        assert_eq!((reason, webhook), (RefusalReason::KixClusterConflict, None));
+        let doc = plan(
+            Vec::new(),
+            vec![AdmissionRefusal {
+                resource: "ConfigMap/shared@app".into(),
+                reason,
+                webhook: None,
+                message: refused.message(),
+            }],
+        );
+        let text = crate::plan::render::render_text(&doc);
+        assert!(
+            text.contains("another Kix cluster sets some of its fields to other values"),
+            "{text}"
+        );
+        assert!(text.contains(message), "{text}");
+        assert!(
+            !text.contains("--force-conflicts takes the fields"),
+            "{text}"
+        );
+        let advice = super::super::stop_advice(&doc, super::super::Command::Deploy).join("\n");
+        assert!(!advice.contains("--force-conflicts"), "{advice}");
+        assert!(!advice.contains("ownership.cede"), "{advice}");
+    }
+
     /// The reason of a refused write says what stopped it. A webhook that
     /// could not be reached has its own reason, so a refusal that only
     /// names a webhook is not taken for one.
