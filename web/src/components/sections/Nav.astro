@@ -14,7 +14,7 @@ const currentPath = Astro.url.pathname.replace(/\/$/, '') || '/';
   <Container>
     <nav aria-label="Main" class="flex h-[68px] items-center justify-between gap-6">
       <div class="flex items-center gap-9">
-        <a href="/" class="rounded-md"><Logo /><span class="sr-only">Kix home</span></a>
+        <a href="/" class="-translate-y-[3px] rounded-md"><Logo /><span class="sr-only">Kix home</span></a>
         <ul class="hidden items-center gap-7 lg:flex">
           {
             NAV_LINKS.map((link) => {
