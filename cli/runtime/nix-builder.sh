@@ -73,8 +73,8 @@ EOF
 )"
 proj="$tmp/proj"
 mkdir -p "$proj"
-cp -R "$repo/tests/helm-test-chart" "$proj/helm-test-chart"
-sed 's|\.\./tests/helm-test-chart|./helm-test-chart|' "$repo/clusters/test-helm.nix" >"$proj/cluster.nix"
+cp -R "$repo/clusters/test-helm/helm-test-chart" "$proj/helm-test-chart"
+sed 's|\./test-helm/helm-test-chart|./helm-test-chart|' "$repo/clusters/test-helm.nix" >"$proj/cluster.nix"
 cat >"$proj/flake.nix" <<EOF
 {
   inputs = {

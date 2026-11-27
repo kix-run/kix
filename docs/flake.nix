@@ -25,8 +25,8 @@
     # runtime built from it, and kix refuses a runtime whose programs differ
     # from the versions compiled into it (cli/kix-core/runtime/programs.json).
     kix.url = "path:..";
-    # Fetched via the GitHub fetcher. kix-examples is private, so a
-    # consumer must supply `access-tokens = github.com=…` to Nix.
+    # Fetched via the GitHub fetcher. kix-examples is public, so the fetch
+    # needs no token.
     kix-examples.url = "github:kix-run/kix-examples";
     # kix-examples declares its own `kix` input, and this flake uses only its
     # source tree (snippet regions, and the workspace the captures runner

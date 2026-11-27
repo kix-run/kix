@@ -33,6 +33,7 @@ const maintainerFiles = [
   join(repoRoot, 'web', 'public', 'llms.txt'),
   join(repoRoot, 'web', 'src', 'lib', 'links.ts'),
   ...walkFiles(join(repoRoot, '.claude', 'skills'), ['.md']),
+  ...walkFiles(join(repoRoot, '.claude', 'rules'), ['.md']),
 ].filter((path) => existsSync(path));
 
 const mdxFiles = walkFiles(contentRoot, ['.mdx']);

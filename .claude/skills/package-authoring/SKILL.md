@@ -93,7 +93,7 @@ rewrites the later ones.
   the facade, never the server (D5).
 - A second implementation of an existing alias answers the existing contract
   unchanged. A field it cannot honour means a different alias, not a `null`
-  (`v2_discussions/148_clickhouse_packages_plan.md:39`).
+  (`discussions/148_clickhouse_packages_plan.md:39`).
 - CRDs: vendor or `mkCRDRef` markers (crd-vendoring skill §1). An operator
   with admission webhooks lists a webhook-check Job in `crRequires` on every
   `scope.mkCRD` or `scope.mkCRDRef` call for the kinds those webhooks admit (C21). Every declaration sets `holdsData`: `true` when deleting a custom
@@ -667,7 +667,7 @@ deploy is the slowest and most informative step.
 2. **Red team.** A fresh agent, given the code and not your conclusions, runs
    package-review and `docs/src/content/docs/explanation/packages-and-clusters.mdx` against the change. Past passes found
    Keeper ACLs, a silently dropped config injection, and a dangerous upstream
-   default (`v2_discussions/148_clickhouse_packages_plan.md:150-157, 179-188`).
+   default (`discussions/148_clickhouse_packages_plan.md:150-157, 179-188`).
    Take every finding, or record in housekeeping why not.
 3. **Kind deploy.** Create the kind cluster the test cluster's header gives,
    with no default CNI so Cilium from the test cluster enforces policy. A

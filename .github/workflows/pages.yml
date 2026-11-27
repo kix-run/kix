@@ -41,10 +41,9 @@ name: Deploy site to Cloudflare Pages
 # KIX_INDEX_SIGNING_KEY holds the index key. It is not the release key, so
 # this workflow never holds the key that signs a release.
 #
-# kix-examples is a separate private repository (kix-run/kix-examples) that
-# the snippet pipeline reads. CI checks it out with the KIX_EXAMPLES_TOKEN
-# secret and overrides the docs flake's input with that checkout, so the
-# input itself keeps pointing at a local folder for development.
+# kix-examples is a separate public repository (kix-run/kix-examples) that
+# the snippet pipeline reads. CI checks it out and overrides the docs
+# flake's input with that checkout.
 #
 # The site is deployed to Cloudflare Pages by direct upload. It needs two
 # repository secrets: CLOUDFLARE_API_TOKEN (scoped to "Cloudflare Pages:
@@ -135,7 +134,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: kix-run/kix-examples
-          token: ${{ secrets.KIX_EXAMPLES_TOKEN }}
           path: kix-examples
           fetch-depth: 0
 

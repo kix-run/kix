@@ -7,7 +7,7 @@ secret `KIX_RELEASE_SIGNING_KEY` and writes the signature as `SHA256SUMS.sig`.
 A manual run with the `rehearse` input runs the same script and installs the
 result without publishing it (`cli/README.md` § Releases). kix.run lists a release only when
 it has one (`web/scripts/release-index.mjs`). The design is
-`v2_discussions/163_cli_install_versions_and_upgrades.md` § 3. The release
+`discussions/163_cli_install_versions_and_upgrades.md` § 3. The release
 index has a key of its own, in `cli/kix/index-keys/`.
 
 ## Format

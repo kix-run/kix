@@ -44,7 +44,7 @@ say() { printf '%-6s %s\n' "$1" "$2"; }
 # Paths that keep old versions and digests as a record: release history,
 # problem logs, design notes, and recorded test fixtures. The docs' command
 # output is left out too, because the release regenerates it.
-history=(':!changes' ':!CHANGELOG.md' ':!housekeeping' ':!v2_discussions' ':!*/tests/fixtures/*' ':!docs/src/command-output')
+history=(':!changes' ':!CHANGELOG.md' ':!housekeeping' ':!discussions' ':!*/tests/fixtures/*' ':!docs/src/command-output')
 
 # Run one check with its output in a log file, and print its last lines
 # when it fails.

@@ -228,7 +228,7 @@ everything that reports a Kix version (`kix --version`, a plan's
 
 An installed Kix and the install script fetch only from kix.run, so moving
 the archives to another host changes no shipped binary
-(`v2_discussions/163_cli_install_versions_and_upgrades.md` § 2):
+(`discussions/163_cli_install_versions_and_upgrades.md` § 2):
 
 | URL | Source |
 | --- | --- |
@@ -287,8 +287,8 @@ releases on disk. `pages.yml` runs both, and shellcheck, before it deploys.
 
 ## Versions, selection, and installs
 
-`v2_discussions/163_cli_install_versions_and_upgrades.md` is the design of
-installs and the hand-over, and `v2_discussions/169_version_from_flake_lock.md`
+`discussions/163_cli_install_versions_and_upgrades.md` is the design of
+installs and the hand-over, and `discussions/169_version_from_flake_lock.md`
 of where a project names its Kix: the release tag of its `kix` input in
 `flake.lock`. Every Kix can run, or install and run, the version a lock
 pins.
@@ -464,7 +464,7 @@ search CHANGELOG.md for the id, and tools match it.
 
 ### Several versions of Kix in one project
 
-`v2_discussions/archive/174a_kix_versions_in_one_flake.md` is the design. A project
+`discussions/archive/174a_kix_versions_in_one_flake.md` is the design. A project
 may hold clusters on different versions of Kix. Each version is an input of
 `flake.nix`: `kix`, and one more for each version a cluster is held back on,
 such as `kix-stable`. The `[versions]` table of `kix.toml` lists the clusters

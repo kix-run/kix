@@ -22,7 +22,7 @@ This is a rename, but not a search and replace. The domain is written into live 
 | `docs-legacy`, `cli/README.md`, `kix/lib/architecture.md`, `.claude/skills` | 7 | 72 | HANDBOOK (26), FEATURE-CATALOG (13), BEST-PRACTICES (5), cli/README (16), architecture.md (7), the migration skill and its SECRETS.md (5) |
 | `scripts`, `demo`, `ludo` | 8 | 18 | `scripts/parity/normalize.py` strips `kix.dev/` and `build.kix.dev/` before diffing; the vhs demo tapes; a comment in `ludo/secrets/valkey.yaml` |
 | `kix/libv1` | 7 | about 60 | The previous library. Referenced from no flake output. Out of scope; it keeps `kix.dev`. |
-| `v2_discussions` | 65 | 289 | History. Stays as written. |
+| `discussions` | 65 | 289 | History. Stays as written. |
 | Lithus monorepo | 1 | 1 | `CLAUDE.kix.md` names the annotation family |
 
 The checklist for the sweep is one command: `grep -rho 'kix\.dev/[a-zA-Z0-9_.-]*' kix/lib kix/packages cli --include='*.nix' --include='*.rs' | sort -u`. About fifty distinct keys.
@@ -62,7 +62,7 @@ Today the domain is a string literal in about 65 files. It becomes one constant 
   apiVersion = "kix.run/v1alpha1";
   key = name: "kix.run/${name}";      # spelled once below, not interpolated from domain, so grep finds it
   keys = { identityHash = ...; dependsOn = ...; readiness = ...; rerun = ...; hook = ...; ... };
-  # Compatibility with clusters deployed under kix.dev. See v2_discussions/137
+  # Compatibility with clusters deployed under kix.dev. See discussions/137
   # and the removal checklist there. Delete this attribute when the layer goes.
   legacyDomains = [ "kix.dev" ];
 }
