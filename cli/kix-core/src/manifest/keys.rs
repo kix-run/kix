@@ -333,28 +333,27 @@ pub fn contains_meta(map: &BTreeMap<String, String>, key: &str) -> bool {
 /// today. Every relation is a dependency the deploy orders on, so the prefix
 /// is dropped whatever it says.
 pub fn depends_on_hashes(value: &str) -> impl Iterator<Item = &str> {
+    depends_on_entries(value).map(|(_, hash)| hash)
+}
+
+/// Return each entry of a [`DEPENDS_ON`] value as its relation and its
+/// identity hash. The relation is `None` for an entry with no
+/// `<relation>:` prefix.
+pub fn depends_on_entries(value: &str) -> impl Iterator<Item = (Option<&str>, &str)> {
     value
         .split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|s| s.rsplit_once(':').map_or(s, |(_, hash)| hash))
+        .map(|s| match s.rsplit_once(':') {
+            Some((relation, hash)) => (Some(relation), hash),
+            None => (None, s),
+        })
 }
 
 /// The [`DEPENDS_ON`] relation of a custom resource's controller: the
 /// workload that its kind's `scope.mkCRD` or `scope.mkCRDRef` names as
 /// `controller`. Older releases of Kix order on it like any other entry.
 pub const CONTROLLER_RELATION: &str = "controller";
-
-/// Return the identity hashes a [`DEPENDS_ON`] value lists under
-/// [`CONTROLLER_RELATION`].
-pub fn controller_hashes(value: &str) -> impl Iterator<Item = &str> {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter_map(|s| s.split_once(':'))
-        .filter(|(relation, _)| *relation == CONTROLLER_RELATION)
-        .map(|(_, hash)| hash)
-}
 
 /// Return the `namespace/instance` key of the package that stamped
 /// `manifest`, or `None` when it carries no package stamp.
@@ -429,14 +428,17 @@ mod tests {
         assert_eq!(hashes, ["a", "b", "c", "d", "e"]);
     }
 
-    /// Only `controller:` entries name a controller; a plain or `requires:`
-    /// entry for the same object does not.
     #[test]
-    fn controller_hashes_reads_only_controller_entries() {
-        let hashes: Vec<_> =
-            controller_hashes("a,requires:b, controller:c ,extra:d,controller:e").collect();
-        assert_eq!(hashes, ["c", "e"]);
-        assert_eq!(controller_hashes("a,requires:b").count(), 0);
+    fn depends_on_entries_keep_the_relation() {
+        let entries: Vec<_> = depends_on_entries(" a,requires:b,, controller:c ").collect();
+        assert_eq!(
+            entries,
+            [
+                (None, "a"),
+                (Some("requires"), "b"),
+                (Some("controller"), "c")
+            ]
+        );
     }
 
     #[test]

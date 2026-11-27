@@ -14,6 +14,7 @@ use chrono::Utc;
 
 use super::super::apply::{ApplyAction, ApplyError, ApplyResult, ChangeAction};
 use super::super::cancel::CancelToken;
+use super::super::edges::Prior;
 use super::super::graph::DeleteOrder;
 use super::super::ops::{RecreateError, ResourceIo, SecretHydrator};
 use super::super::readiness::{self, DeletePath, ReadinessResult, Runner};
@@ -625,13 +626,13 @@ async fn wait_live(ctx: &NodeCtx, entry: &PlanNodeEntry, rid: &ResourceId) -> No
 }
 
 /// Return the orphans in an order that deletes each before the orphans it
-/// depends on, with the dependencies of the whole previous build
-/// (`old_manifests`), so a dependency through an object that stays still
-/// counts. Orphans without a matching manifest have no known dependencies
-/// and come last.
-pub(crate) fn prune_order(orphan_rids: &[ResourceId], old_manifests: &[Value]) -> DeleteOrder {
+/// depends on, with the dependencies of every object earlier deploys made
+/// (`prior`), so a dependency through an object that stays still counts.
+/// Orphans without a matching manifest have no known dependencies and come
+/// last.
+pub(crate) fn prune_order(orphan_rids: &[ResourceId], prior: &Prior) -> DeleteOrder {
     let orphan_set: HashSet<&ResourceId> = orphan_rids.iter().collect();
-    let mut order = DeleteOrder::of_manifests(old_manifests);
+    let mut order = DeleteOrder::of(&prior.manifests, &prior.edges);
     order.retain(|rid| orphan_set.contains(rid));
     for rid in orphan_rids {
         order.push(rid.clone());

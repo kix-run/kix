@@ -9,6 +9,7 @@ pub mod client;
 pub mod deploy_log;
 pub mod discovery;
 pub mod drift;
+pub mod edges;
 pub mod errors;
 #[cfg(any(test, feature = "test-util"))]
 pub mod fake_api;

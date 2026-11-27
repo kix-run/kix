@@ -32,6 +32,7 @@ impl RevisionObject {
             kind: rid.kind.clone(),
             namespace: (rid.namespace != CLUSTER_SCOPED).then(|| rid.namespace.clone()),
             name: rid.name.clone(),
+            needs: Vec::new(),
         }
     }
 }

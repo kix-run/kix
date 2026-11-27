@@ -56,6 +56,7 @@ use crate::cluster::apply::ChangeAction;
 use crate::cluster::binding;
 use crate::cluster::client::{self, ResiliencePolicy};
 use crate::cluster::discovery;
+use crate::cluster::edges::Prior;
 use crate::cluster::errors;
 use crate::cluster::errors::FetchError;
 use crate::cluster::graph::DeleteOrder;
@@ -178,9 +179,13 @@ pub struct CheckedPlan {
     /// The Kix cluster the check found its records and shared orphans by.
     /// The run finalizes its record and prunes under it.
     cluster: String,
-    /// The baseline's manifests ([`Baseline::manifests`]), which order the
-    /// prune.
-    old_manifests: Vec<Value>,
+    /// The baseline's manifests ([`Baseline::manifests`]) and the edges
+    /// between them, which order the prune and fill the run's kept-orphans
+    /// revision. A plan that read the cluster takes the edges from this Kix
+    /// cluster's revisions ([`Ledger::edges`]), because some manifests may
+    /// be live objects. A plan made with `--offline` read only builds, and
+    /// takes them from their annotations.
+    prior: Prior,
     /// The new build's revisions, which the run's record names. A plan
     /// made with `--only` names every instance of the build too.
     revisions: RevisionSet,
@@ -454,7 +459,7 @@ impl CheckedPlan {
     /// still declares is not listed.
     pub fn kinds_leaving(&self) -> Vec<(ResourceId, String)> {
         let added = self.plan.nodes().iter().filter_map(|n| n.action.written());
-        kinds_leaving(&self.old_manifests, &self.orphans, added)
+        kinds_leaving(&self.prior.manifests, &self.orphans, added)
     }
 
     /// Return the package-grouped comparison of the old side with the new build.
@@ -613,6 +618,11 @@ impl CheckedPlan {
         self.shared_orphans.extend(shared.iter().cloned());
     }
 
+    /// Return the order in which the prune deletes the plan's orphans.
+    pub(crate) fn prune_order(&self) -> DeleteOrder {
+        scheduler::prune_order(&self.orphans, &self.prior)
+    }
+
     /// Run the engine over the plan with every write sent as a dry run, and
     /// return what the apiserver answered for each object. First ask what
     /// each forced apply takes ([`CheckedPlan::ask_takes_back`]), which the
@@ -637,19 +647,14 @@ impl CheckedPlan {
             Cluster::dry_run(dry.clone()),
             self.plan.clone(),
             &self.orphans,
-            &self.old_manifests,
+            &self.prior,
             self.ending(),
             &config,
             observer,
         )
         .await;
         let mut answers = dry.take_answers();
-        read_prune_controllers(
-            &mut answers,
-            &scheduler::prune_order(&self.orphans, &self.old_manifests),
-            &*dry,
-        )
-        .await;
+        read_prune_controllers(&mut answers, &self.prune_order(), &*dry).await;
         (result, answers)
     }
 
@@ -698,7 +703,7 @@ impl CheckedPlan {
             cluster,
             self.plan,
             &self.orphans,
-            &self.old_manifests,
+            &self.prior,
             ending,
             &config,
             observer,
@@ -1611,10 +1616,19 @@ impl<'a> Planner<'a> {
             record: record.cloned(),
             consumed_failed,
             cluster: cluster.to_string(),
-            old_manifests: crate::cluster::apply::baseline_manifests(
-                &baseline.manifests(),
-                &[orphan_manifests],
-            ),
+            prior: {
+                let manifests = crate::cluster::apply::baseline_manifests(
+                    &baseline.manifests(),
+                    &[orphan_manifests],
+                );
+                match ledger {
+                    Some(ledger) => Prior {
+                        edges: ledger.edges(&manifests),
+                        manifests,
+                    },
+                    None => Prior::of_build(manifests),
+                }
+            },
             revisions,
             target_checks: TargetChecks::of(new_graph),
             left_alone: selection.as_ref().map(|s| s.left_alone),
@@ -2013,7 +2027,7 @@ mod tests {
                 },
             })
         };
-        let order = DeleteOrder::of_manifests(&[
+        let order = DeleteOrder::of_build(&[
             manifest("ConfigMap", "held", "h1", "controller:op"),
             manifest("ConfigMap", "free", "h2", "controller:op"),
             manifest("ConfigMap", "plain", "h3", ""),

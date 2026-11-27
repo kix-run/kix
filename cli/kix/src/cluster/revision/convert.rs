@@ -17,7 +17,11 @@
 //!
 //! What a record names comes, in this order, from its package index when
 //! the index names the objects, from the live objects whose build hash the
-//! index lists, and from the live objects whose note lists the record.
+//! index lists, and from the live objects whose note lists the record. What
+//! each object depends on comes from the `kix.run/depends-on` note of its
+//! live object, and an instance's lifecycle from the `kix.run/lifecycle`
+//! note of its live objects, because an older Kix recorded them nowhere
+//! else.
 //!
 //! The conversion is safe to run twice and safe to stop between any two of
 //! its writes. A revision's name is a hash of its content, so a second
@@ -36,7 +40,9 @@ use kube::discovery::{ApiResource, Scope};
 use thiserror::Error;
 
 use super::map::RevisionMap;
-use super::spec::{MAX_BYTES, Revision, RevisionObject, RevisionSet, RevisionSpec, Slot, TooLarge};
+use super::spec::{
+    MAX_BYTES, Need, Revision, RevisionObject, RevisionSet, RevisionSpec, Slot, TooLarge,
+};
 use super::store::{RevisionError, Revisions};
 use crate::cluster::activation::{Record, Records, RecordsError};
 use crate::eval::package_index::{IndexedName, RecordPackageIndex};
@@ -180,6 +186,33 @@ impl<'a> Live<'a> {
         out.sort();
         out
     }
+
+    /// Return `object` with the edges the `kix.run/depends-on` note of its
+    /// live object lists, each hash named by the live object that carries
+    /// it. The note describes the build that wrote the object last, which
+    /// may be a later one than `object` names. Those edges still order its
+    /// delete better than none. An edge to an object that no longer carries
+    /// the hash is lost.
+    fn with_noted_needs(&self, object: RevisionObject) -> RevisionObject {
+        let Some(obj) = self.by_id.get(&object.resource_id()) else {
+            return object;
+        };
+        let manifest = crate::manifest::types::to_manifest_value(obj);
+        let needs = Need::of_depends_on(&manifest, |hash| {
+            let found = self.by_hash.get(hash)?.first()?;
+            Some(crate::cluster::drift::resource_id(found))
+        });
+        object.with_needs(needs)
+    }
+
+    /// Return the lifecycle the `kix.run/lifecycle` note gives the first of
+    /// `objects` whose live object carries one.
+    fn lifecycle_of(&self, objects: &[RevisionObject]) -> Option<String> {
+        objects.iter().find_map(|o| {
+            let obj = self.by_id.get(&o.resource_id())?;
+            keys::get_meta(obj.metadata.annotations.as_ref()?, keys::LIFECYCLE).map(str::to_string)
+        })
+    }
 }
 
 fn build_hash(obj: &DynamicObject) -> Option<&str> {
@@ -261,6 +294,10 @@ fn named_by(record: &Record, live: &Live<'_>) -> BTreeMap<Option<String>, Vec<Re
     }
     for objects in out.values_mut() {
         objects.retain(|o| o.kind != lifecycle::RECORD_KIND);
+        *objects = std::mem::take(objects)
+            .into_iter()
+            .map(|o| live.with_noted_needs(o))
+            .collect();
     }
     out
 }
@@ -330,6 +367,7 @@ pub fn plan(
                 let slot = Slot::Instance {
                     namespace: namespace.to_string(),
                     name: name.to_string(),
+                    lifecycle: live.lifecycle_of(objects),
                 };
                 let spec = RevisionSpec::new(cluster, slot, objects.clone());
                 Some((key.clone(), with_applied(spec, &live)))
@@ -422,7 +460,11 @@ fn kept_of(
             // object, so only an object whose note names the kept build is
             // one. An object of the same name made since by something else
             // carries no such note.
-            None => objects.extend(live.noting(&source.identity_hash)),
+            None => objects.extend(
+                live.noting(&source.identity_hash)
+                    .into_iter()
+                    .map(|o| live.with_noted_needs(o)),
+            ),
         }
     }
     objects.retain(|o| !named.contains(&o.resource_id()));

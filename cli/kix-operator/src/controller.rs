@@ -1174,7 +1174,7 @@ async fn handle_delete(
                 .filter(|rid| !kix::manifest::lifecycle::is_record_kind(&rid.kind))
                 .collect();
 
-            let mut order = DeleteOrder::of_manifests(&manifests);
+            let mut order = DeleteOrder::of_build(&manifests);
             order.retain(|rid| all_rids.contains(rid));
 
             // A record with no cluster label uses the head named after

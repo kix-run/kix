@@ -444,3 +444,55 @@ fn a_record_without_an_index_too_large_for_one_revision_is_refused() {
         "{text}"
     );
 }
+
+/// An older Kix recorded an object's dependencies only in its
+/// `kix.run/depends-on` note, and an instance's lifecycle only in its
+/// objects' `kix.run/lifecycle` note. The conversion writes both into the
+/// revisions, each hash named by the live object that carries it.
+#[test]
+fn the_conversion_records_the_noted_edges_and_lifecycle() {
+    let own_values = [record(
+        "cur",
+        PHASE_ACTIVE,
+        Some(index(&[("web", &h("web")), ("db", &h("db"))], true)),
+        &[],
+    )];
+    let own = parsed(&own_values);
+    let mut web = live("web", &h("web"), &[&h("cur")]);
+    web["metadata"]["annotations"][keys::DEPENDS_ON] =
+        json!(format!("requires:{},{}", h("db"), h("nothing")));
+    web["metadata"]["annotations"][keys::LIFECYCLE] = json!("stateful");
+    let live_values = [web, live("db", &h("db"), &[&h("cur")])];
+    let conversion = plan(
+        CLUSTER,
+        current_of(None, &own),
+        &own,
+        &[],
+        &objects(&live_values),
+        &[],
+    )
+    .unwrap();
+    let converted = &conversion.records()[0];
+    let instance = converted
+        .revisions
+        .iter()
+        .find(|r| r.name == converted.map.instances["app/web"])
+        .unwrap();
+    assert!(instance.spec.records_edges());
+    assert!(matches!(
+        &instance.spec.slot,
+        Slot::Instance { lifecycle: Some(l), .. } if l == "stateful"
+    ));
+    let web = instance
+        .spec
+        .objects
+        .iter()
+        .find(|o| o.name == "web")
+        .unwrap();
+    let needs: Vec<(&str, Option<&str>)> = web
+        .needs
+        .iter()
+        .map(|n| (n.name.as_str(), n.role.as_deref()))
+        .collect();
+    assert_eq!(needs, [("db", Some("requires"))]);
+}

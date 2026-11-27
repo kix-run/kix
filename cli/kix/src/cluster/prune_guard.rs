@@ -1317,7 +1317,7 @@ mod tests {
         let removals = delete_in_order(
             &api.client(),
             "a",
-            DeleteOrder::of_manifests(&[cm, secret, other]),
+            DeleteOrder::of_build(&[cm, secret, other]),
             Duration::from_secs(10),
             &CancelToken::new(),
             &mut |rid: &ResourceId, step: Step<'_>| {
@@ -1399,7 +1399,7 @@ mod tests {
                 "availableReplicas": ready_replicas,
             },
         });
-        let order = DeleteOrder::of_manifests(&[cm.clone(), operator.clone()]);
+        let order = DeleteOrder::of_build(&[cm.clone(), operator.clone()]);
         let mut objects = vec![record("a", "a1", lifecycle::PHASE_ACTIVE), cm];
         if ready_replicas.is_some() {
             objects.push(operator);
@@ -1483,7 +1483,7 @@ mod tests {
         };
         let cm = object("ConfigMap", "cm", "hash_cm", "hash_s", cm_finalizers);
         let secret = object("Secret", "needed", "hash_s", "", &[]);
-        let order = DeleteOrder::of_manifests(&[cm.clone(), secret.clone()]);
+        let order = DeleteOrder::of_build(&[cm.clone(), secret.clone()]);
         let api = FakeApi::new([record("a", "a1", lifecycle::PHASE_ACTIVE), cm, secret]);
         (api, order)
     }
@@ -1560,7 +1560,7 @@ mod tests {
                 }],
             },
         });
-        let order = DeleteOrder::of_manifests(&[cr.clone(), operator.clone()]);
+        let order = DeleteOrder::of_build(&[cr.clone(), operator.clone()]);
         let objects = [
             record("a", "a1", lifecycle::PHASE_ACTIVE),
             cr,

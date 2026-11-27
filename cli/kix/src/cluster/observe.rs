@@ -23,6 +23,7 @@ use kube::discovery::{ApiResource, Scope};
 
 use super::activation::{OpenedRecords, Record};
 use super::drift::{self, DriftVerdict};
+use super::edges::Edges;
 use super::errors::FetchError;
 use super::field_manager::FieldManager;
 use super::inventory;
@@ -277,11 +278,13 @@ pub async fn observe(
         let lookup = |hashes: &[&str]| store_graph::lookup_hashes(hashes.iter().copied());
         let index = tenancy.index_of(&deploy.current);
         let manager = tenancy.manager_of(&cluster);
+        let edges = edges_of(tenancy, &deploy.current);
         let mut view = view(
             cluster.clone(),
             deploy.current,
             index,
             &live,
+            &edges,
             &apis,
             &applied,
             &manager,
@@ -290,8 +293,9 @@ pub async fn observe(
         view.leaving = leaving(&view, &sweep.managed, |obj| tenancy.owners_of(obj));
         view.failed = deploy.failed_since.map(|record| {
             let index = tenancy.index_of(&record);
+            let edges = edges_of(tenancy, &record);
             let failed = self::view(
-                cluster, record, index, &live, &apis, &applied, &manager, lookup,
+                cluster, record, index, &live, &edges, &apis, &applied, &manager, lookup,
             );
             failed_only(&view, failed)
         });
@@ -370,6 +374,16 @@ impl<'a> Live<'a> {
     }
 }
 
+/// Return the dependency edges `record`'s revisions record, or none for a
+/// record without a readable map. [`view`] reads the edges of an object they
+/// do not record from its live object.
+fn edges_of(tenancy: &super::tenancy::Tenancy, record: &Record) -> Edges {
+    match &record.revisions {
+        Some(Ok(map)) => Edges::of_revisions(map.names().filter_map(|n| tenancy.revision(n))),
+        _ => Edges::default(),
+    }
+}
+
 /// One expected object before it is checked.
 struct Expected {
     hash: String,
@@ -378,8 +392,11 @@ struct Expected {
 
 /// Build the view of one cluster's current deploy from the live objects.
 ///
-/// `index` lists the record's objects ([`super::tenancy::Tenancy::index_of`]).
-/// `lookup` names identity hashes from the local store (see
+/// `index` lists the record's objects ([`super::tenancy::Tenancy::index_of`]),
+/// and `edges` what each of them depends on. An object whose edges `edges`
+/// does not record is one of a record an older Kix wrote, or of a format 1
+/// revision. Its edges come from the `kix.run/depends-on` note of its live
+/// object. `lookup` names identity hashes from the local store (see
 /// [`store_graph::lookup_hashes`]). It runs at most once, and only for a
 /// record without names.
 #[allow(clippy::too_many_arguments)]
@@ -388,6 +405,7 @@ fn view(
     record: Record,
     index: Option<RecordPackageIndex>,
     live: &Live<'_>,
+    edges: &Edges,
     apis: &Apis,
     applied: &AppliedHashes,
     manager: &FieldManager,
@@ -464,7 +482,7 @@ fn view(
     };
 
     let expected_hashes: HashSet<&str> = expected.iter().map(|e| e.hash.as_str()).collect();
-    let objects = expected
+    let mut objects: Vec<ObjectView> = expected
         .iter()
         .map(|e| {
             let by_hash = live.by_hash.get(e.hash.as_str()).copied();
@@ -504,10 +522,14 @@ fn view(
             let (presence, content, readiness, depends_on) = match obj {
                 Some(obj) => {
                     let marker = lifecycle_of_live(obj) == Lifecycle::Marker;
-                    let depends_on = depends_on(obj)
-                        .filter(|d| expected_hashes.contains(d))
-                        .map(str::to_string)
-                        .collect();
+                    let recorded = name.as_ref().is_some_and(|rid| edges.records(rid));
+                    let noted = match recorded {
+                        true => Vec::new(),
+                        false => noted_depends_on(obj)
+                            .filter(|d| expected_hashes.contains(d))
+                            .map(str::to_string)
+                            .collect(),
+                    };
                     (
                         if marker {
                             Presence::External
@@ -520,7 +542,7 @@ fn view(
                         } else {
                             readiness_of(obj)
                         },
-                        depends_on,
+                        noted,
                     )
                 }
                 None if ambiguous.is_some() => {
@@ -543,6 +565,24 @@ fn view(
             }
         })
         .collect();
+
+    // An object on the cluster depends on each object of the deploy that
+    // `edges` names for it.
+    let hash_by_rid: HashMap<ResourceId, String> = objects
+        .iter()
+        .filter(|o| o.named)
+        .map(|o| (o.rid.clone(), o.identity_hash.clone()))
+        .collect();
+    for object in &mut objects {
+        let on_cluster = matches!(object.presence, Presence::Present | Presence::External);
+        if on_cluster && object.named && edges.records(&object.rid) {
+            object.depends_on = edges
+                .needs(&object.rid)
+                .filter_map(|n| hash_by_rid.get(&n.resource_id()).cloned())
+                .collect();
+            object.depends_on.dedup();
+        }
+    }
 
     ClusterView {
         cluster,
@@ -585,7 +625,8 @@ fn leaving(
 }
 
 /// Follow `kix.run/depends-on` from the live object with identity hash
-/// `root`. Return the live objects reached, and each dependency hash with no
+/// `root`, for a record an older Kix wrote without a package index. Return
+/// the live objects reached, and each dependency hash with no
 /// live object together with the SOPS source hashes of the objects that
 /// named it.
 fn walk_depends_on<'a>(
@@ -606,7 +647,7 @@ fn walk_depends_on<'a>(
         let sops = annotation(obj, keys::SOPS_SOURCE)
             .map(|p| store_graph::store_hash(std::path::Path::new(p)))
             .filter(|h| !h.is_empty());
-        for dep in depends_on(obj) {
+        for dep in noted_depends_on(obj) {
             match live.by_hash.get_key_value(dep) {
                 Some((&key, _)) => {
                     if visited.insert(key) {
@@ -680,7 +721,9 @@ fn readiness_of(obj: &DynamicObject) -> Readiness {
     }
 }
 
-fn depends_on(obj: &DynamicObject) -> impl Iterator<Item = &str> {
+/// Return the identity hashes the `kix.run/depends-on` note of `obj` lists,
+/// for an object whose record recorded its edges nowhere else.
+fn noted_depends_on(obj: &DynamicObject) -> impl Iterator<Item = &str> {
     keys::depends_on_hashes(annotation(obj, keys::DEPENDS_ON).unwrap_or(""))
 }
 

@@ -130,7 +130,9 @@ impl RevisionMap {
             };
             add_names(revision);
             let is_instance = |o: &&super::RevisionObject| match &revision.spec.slot {
-                Slot::Instance { namespace, name } => {
+                Slot::Instance {
+                    namespace, name, ..
+                } => {
                     o.kind == PACKAGE_INSTANCE_KIND
                         && o.group == keys::GROUP
                         && o.namespace.as_deref() == Some(namespace.as_str())

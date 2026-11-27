@@ -153,7 +153,8 @@ fn the_same_build_gives_the_same_names_in_any_order() {
         web_rev.spec.slot,
         Slot::Instance {
             namespace: "apps".into(),
-            name: "web".into()
+            name: "web".into(),
+            lifecycle: None,
         }
     );
     let kinds: Vec<&str> = web_rev
@@ -354,6 +355,7 @@ fn a_manifest_names_its_object_by_its_identity_hash() {
             kind: "ConfigMap".into(),
             namespace: Some("apps".into()),
             name: "a".into(),
+            needs: Vec::new(),
         })
     );
 }
@@ -390,6 +392,7 @@ fn a_revision_too_large_to_store_names_its_instance() {
             kind: "ConfigMap".into(),
             namespace: Some("data".into()),
             name: format!("config-{i}"),
+            needs: Vec::new(),
         })
         .collect();
     let slot = set.instances["data/db"].spec.slot.clone();
@@ -401,6 +404,193 @@ fn a_revision_too_large_to_store_names_its_instance() {
     let message = err.to_string();
     assert!(message.contains("package instance data/db"), "{message}");
     assert!(message.contains("Split the instance"), "{message}");
+}
+
+/// A graph whose ConfigMap `b` depends on `a`, on the ClusterRole
+/// `system:auth-delegator` as `requires`, and on a hash no manifest of the
+/// build carries, in a package whose lifecycle is `stateful`.
+fn graph_with_edges() -> StoreGraph {
+    let role = json!({
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "ClusterRole",
+        "metadata": { "name": "system:auth-delegator" },
+    });
+    let mut b = cm("apps", "b");
+    b["metadata"]["annotations"] = json!({
+        (keys::DEPENDS_ON): format!("{:a>32},requires:{:a>32},{:a>32}", "2", "6", "f"),
+    });
+    let package = Package {
+        namespace: "apps",
+        name: "web",
+        instance: "1",
+        resources: vec![("2", cm("apps", "a")), ("3", b)],
+    };
+    let mut g = graph(&[package], &[("6", role)], "8");
+    for node in g.packages.values_mut() {
+        node.lifecycle = Some("stateful".into());
+    }
+    g
+}
+
+/// A revision records each object's dependencies by name, with the
+/// relation `kix.run/depends-on` gives them, and the lifecycle of its
+/// instance. A hash that names no manifest of the build is left out.
+#[test]
+fn a_revision_records_needs_by_name_and_the_lifecycle() {
+    let set = RevisionSet::of(CLUSTER, &graph_with_edges());
+    let web = &set.instances["apps/web"];
+    assert_eq!(web.spec.format, FORMAT);
+    assert!(matches!(
+        &web.spec.slot,
+        Slot::Instance { lifecycle: Some(l), .. } if l == "stateful"
+    ));
+    let b = web.spec.objects.iter().find(|o| o.name == "b").unwrap();
+    let needs: Vec<(&str, &str, Option<&str>)> = b
+        .needs
+        .iter()
+        .map(|n| (n.kind.as_str(), n.name.as_str(), n.role.as_deref()))
+        .collect();
+    assert_eq!(
+        needs,
+        [
+            ("ConfigMap", "a", None),
+            ("ClusterRole", "system:auth-delegator", Some("requires")),
+        ]
+    );
+    let stored = serde_json::to_value(&web.spec).unwrap();
+    let entry = stored["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["name"] == "b")
+        .unwrap();
+    assert_eq!(
+        entry["needs"],
+        json!([
+            { "kind": "ConfigMap", "namespace": "apps", "name": "a" },
+            {
+                "group": "rbac.authorization.k8s.io",
+                "kind": "ClusterRole",
+                "name": "system:auth-delegator",
+                "as": "requires",
+            },
+        ])
+    );
+}
+
+/// Two machines that build the same graph write the same bytes, so they
+/// name its revisions the same.
+#[test]
+fn a_spec_built_twice_from_one_build_is_the_same_bytes() {
+    let first = RevisionSet::of(CLUSTER, &graph_with_edges());
+    let again = RevisionSet::of(CLUSTER, &graph_with_edges());
+    for (a, b) in first.all().zip(again.all()) {
+        assert_eq!(
+            serde_json::to_vec(&a.spec).unwrap(),
+            serde_json::to_vec(&b.spec).unwrap()
+        );
+        assert_eq!(a.name, b.name);
+    }
+}
+
+/// A dependency whose name holds a colon is stored as fields of its own,
+/// so it reads back whole.
+#[tokio::test]
+async fn a_need_with_a_colon_in_its_name_reads_back() {
+    let api = FakeApi::new([]);
+    let store = Revisions::new(&api.client());
+    let set = RevisionSet::of(CLUSTER, &graph_with_edges());
+    let web = set.instances["apps/web"].clone();
+    store.create(&web).await.unwrap();
+    let read = store.get(&web.name).await.unwrap().unwrap();
+    assert_eq!(read, web);
+    let b = read.spec.objects.iter().find(|o| o.name == "b").unwrap();
+    assert!(b.needs.iter().any(|n| n.name == "system:auth-delegator"));
+}
+
+/// A revision an earlier build of Kix wrote has no `format`, no `needs`,
+/// and no lifecycle. It reads as format 1, records no edges, and keeps its
+/// name.
+#[test]
+fn a_format_one_revision_reads() {
+    // The bytes an earlier build of Kix hashed for the name, in its field
+    // order.
+    let written = format!(
+        r#"{{"cluster":"{CLUSTER}","slot":{{"kind":"instance","namespace":"apps","name":"web"}},"objects":[{{"hash":"{:a>32}","group":"","kind":"ConfigMap","namespace":"apps","name":"a"}}]}}"#,
+        "2"
+    );
+    let spec: Value = serde_json::from_str(&written).unwrap();
+    let hash = &format!(
+        "{:x}",
+        <sha2::Sha256 as sha2::Digest>::digest(written.as_bytes())
+    )[..32];
+    let name = format!("{CLUSTER}-{hash}");
+    let obj: kube::api::DynamicObject = serde_json::from_value(json!({
+        "apiVersion": keys::API_VERSION,
+        "kind": KIND,
+        "metadata": { "name": name },
+        "spec": spec,
+    }))
+    .unwrap();
+    let read = Revision::from_object(&obj).unwrap();
+    assert_eq!(read.spec.format, 1);
+    assert!(!read.spec.records_edges());
+    assert!(read.spec.objects[0].needs.is_empty());
+    assert!(matches!(
+        read.spec.slot,
+        Slot::Instance {
+            lifecycle: None,
+            ..
+        }
+    ));
+    let edges = crate::cluster::edges::Edges::of_revisions([&read]);
+    assert!(!edges.records(&read.spec.objects[0].resource_id()));
+}
+
+/// The size estimate counts each object's `needs`.
+#[test]
+fn the_size_estimate_counts_needs() {
+    let slot = Slot::ClusterLevel;
+    let dep = crate::manifest::types::ResourceId::new("", "ConfigMap", "data", "dep");
+    let object = |needs: usize| RevisionObject {
+        hash: format!("{:a>32}", "1"),
+        group: String::new(),
+        kind: "ConfigMap".into(),
+        namespace: Some("data".into()),
+        name: "config".into(),
+        needs: (0..needs)
+            .map(|i| Need::of(&dep, Some(&format!("role{i}"))))
+            .collect(),
+    };
+    let bare = Revision::new(RevisionSpec::new(CLUSTER, slot.clone(), vec![object(0)]));
+    let with = Revision::new(RevisionSpec::new(CLUSTER, slot, vec![object(3)]));
+    let added = serde_json::to_vec(&with.spec.objects[0].needs)
+        .unwrap()
+        .len();
+    assert!(with.stored_bytes() >= bare.stored_bytes() + added);
+}
+
+/// Entries for one object and build hash merge into one, with the edges of
+/// both.
+#[test]
+fn entries_for_one_object_and_hash_merge_their_needs() {
+    let rid = crate::manifest::types::ResourceId::new("", "ConfigMap", "data", "x");
+    let need = |name: &str| {
+        Need::of(
+            &crate::manifest::types::ResourceId::new("", "ConfigMap", "data", name),
+            None,
+        )
+    };
+    let spec = RevisionSpec::new(
+        CLUSTER,
+        Slot::KeptOrphans,
+        vec![
+            RevisionObject::of_id("h", &rid).with_needs([need("a")]),
+            RevisionObject::of_id("h", &rid).with_needs([need("b")]),
+        ],
+    );
+    assert_eq!(spec.objects.len(), 1);
+    assert_eq!(spec.objects[0].needs, [need("a"), need("b")]);
 }
 
 #[test]
@@ -721,6 +911,7 @@ mod applied_tests {
             kind: "ConfigMap".into(),
             namespace: Some("app".into()),
             name: name.into(),
+            needs: Vec::new(),
         }
     }
 
@@ -730,6 +921,7 @@ mod applied_tests {
             Slot::Instance {
                 namespace: "app".into(),
                 name: "web".into(),
+                lifecycle: None,
             },
             objects,
         ));
@@ -866,6 +1058,23 @@ mod applied_tests {
                 "new".to_string(),
                 BTreeMap::from([(hash, "hn".to_string()), (x.hash.clone(), "hx".to_string())])
             )])
+        );
+    }
+
+    /// An object whose edges changed and whose build hash did not keeps
+    /// its applied hash when the run carries hashes into the new revision.
+    #[test]
+    fn an_applied_hash_is_carried_when_only_the_needs_differ() {
+        let x = object("x", "x");
+        let dep = crate::manifest::types::ResourceId::new("", "ConfigMap", "app", "dep");
+        let x_with_needs = x.clone().with_needs([Need::of(&dep, None)]);
+        let old = web(vec![x.clone()], &[(&x, "hx")]);
+        let mut new = web(vec![x_with_needs], &[]);
+        new.name = "new".into();
+        let writes = pending(&BTreeMap::new(), &[], &[(&old, &new)]);
+        assert_eq!(
+            writes,
+            BTreeMap::from([("new".to_string(), entries(&[(&x, "hx")]))])
         );
     }
 

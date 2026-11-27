@@ -56,16 +56,17 @@
 //! this Kix cluster's manager counts as this cluster's own, and only on an
 //! object a record of this cluster names ([`migration_write::takes_legacy`]).
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde_json::Value;
 
 use crate::cluster::apply::{self, ChangeAction, Deployed};
 use crate::cluster::drift::{self, DriftReport, DriftVerdict};
+use crate::cluster::edges::Edges;
 use crate::cluster::field_manager::FieldManager;
 use crate::cluster::inventory::{Live, LiveObjects, ReadForbidden};
 use crate::cluster::migration_write;
-use crate::cluster::revision::{AppliedHashes, RevisionObject};
+use crate::cluster::revision::{AppliedHashes, Need, RevisionObject};
 use crate::cluster::tenancy::{Problem, Tenancy};
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{self, PHASE_DEGRADED, PHASE_FAILED, PHASE_PARTIAL};
@@ -161,6 +162,8 @@ struct Named {
     role: Role,
     /// The build hash the revision gives the object.
     hash: String,
+    /// What the revision says the object depends on.
+    needs: Vec<Need>,
     /// The revision records an applied hash for the object.
     applied: bool,
 }
@@ -265,6 +268,7 @@ impl Ledger {
                         phase: record.phase.clone(),
                         role: role.clone(),
                         hash: object.hash.clone(),
+                        needs: object.needs.clone(),
                         applied: revision.applied.contains_key(&object.hash),
                     });
             }
@@ -358,15 +362,28 @@ impl Ledger {
         self.named.get(rid).into_iter().flatten()
     }
 
-    /// Return `rid` with each build hash a record gives it, once each.
+    /// Return `rid` with each build hash a record gives it, once each, and
+    /// the edges the records give it with that hash.
     fn named_objects(&self, rid: &ResourceId) -> Vec<RevisionObject> {
-        let mut out: Vec<RevisionObject> = self
-            .named(rid)
-            .map(|n| RevisionObject::of_id(&n.hash, rid))
-            .collect();
-        out.sort();
-        out.dedup();
-        out
+        let mut by_hash: BTreeMap<&str, Vec<Need>> = BTreeMap::new();
+        for n in self.named(rid) {
+            by_hash
+                .entry(n.hash.as_str())
+                .or_default()
+                .extend(n.needs.iter().cloned());
+        }
+        by_hash
+            .into_iter()
+            .map(|(hash, needs)| RevisionObject::of_id(hash, rid).with_needs(needs))
+            .collect()
+    }
+
+    /// Return the dependency edges that the revisions of this Kix cluster's
+    /// records record. An object that only format 1 revisions name takes its
+    /// edges from its manifest in `in_hand`
+    /// ([`Edges::with_format_one_annotations`]).
+    pub(crate) fn edges(&self, in_hand: &[Value]) -> Edges {
+        Edges::of_own_revisions(&self.tenancy, in_hand)
     }
 
     /// Return whether the live object `obj` is an orphan the deploy takes

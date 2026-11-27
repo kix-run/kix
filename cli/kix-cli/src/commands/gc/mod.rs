@@ -60,6 +60,7 @@ use kix::build_source::Build;
 use kix::cluster::activation::{OpenedRecords, Record, Records};
 use kix::cluster::binding;
 use kix::cluster::discovery;
+use kix::cluster::edges::Edges;
 use kix::cluster::graph::DeleteOrder;
 use kix::cluster::inventory;
 use kix::cluster::prune_guard::{self, Pruned, Removal, Step};
@@ -180,22 +181,13 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
-    // Order deletions in reverse topological order (dependents before
-    // dependencies) and exclude resources still deployed by another Kix cluster.
-    // The dependencies come from the Active build too, so one that passes
-    // through an object still in use orders the deletes.
-    let known: Vec<Value> = graph
+    // Exclude resources still deployed by another Kix cluster below.
+    let built: Vec<Value> = graph
         .resources
         .values()
         .map(|r| r.manifest.clone())
-        .chain(garbage.iter().cloned())
         .collect();
-    let mut order = DeleteOrder::of_manifests(&known);
-    let garbage_ids: HashSet<ResourceId> = garbage.iter().map(ResourceId::from_value).collect();
-    order.retain(|rid| garbage_ids.contains(rid));
-    for rid in &garbage_ids {
-        order.push(rid.clone());
-    }
+    let mut order = soft_order(built, &garbage, &tenancy);
     let (ordered_rids, kept) = split_never_pruned(order.ids().to_vec());
     let client = ctx
         .runtime()?
@@ -394,13 +386,45 @@ pub(super) fn check_files_build(
     ))
 }
 
-/// Order the garbage `entries` of a full scan by the `kix.run/depends-on`
-/// annotations of every `live` object, dependents first, so a stuck delete
-/// holds back what it depends on as in the default mode.
-fn live_order(live: &[kube::api::DynamicObject], entries: &[GarbageEntry]) -> DeleteOrder {
+/// Order the kept orphans `garbage` of the default mode in reverse
+/// topological order, dependents before dependencies. The dependencies come
+/// from the Active build `built` too, so one that passes through an object
+/// still in use orders the deletes. For a Kix cluster read from revisions the
+/// garbage manifests are live objects, so their edges come from the
+/// revisions. Otherwise they come from the builds that kept them.
+fn soft_order(built: Vec<Value>, garbage: &[Value], tenancy: &Tenancy) -> DeleteOrder {
+    let edges = match tenancy.own_source() {
+        Source::Revisions => Edges::of_build(&built).or(Edges::of_own_revisions(tenancy, garbage)),
+        Source::Records => Edges::of_build(&[built.as_slice(), garbage].concat()),
+    };
+    let known: Vec<Value> = built.into_iter().chain(garbage.iter().cloned()).collect();
+    let mut order = DeleteOrder::of(&known, &edges);
+    let garbage_ids: HashSet<ResourceId> = garbage.iter().map(ResourceId::from_value).collect();
+    order.retain(|rid| garbage_ids.contains(rid));
+    for rid in garbage.iter().map(ResourceId::from_value) {
+        order.push(rid);
+    }
+    order
+}
+
+/// Order the garbage `entries` of a full scan by the edges between the
+/// `live` objects, dependents first, so a stuck delete holds back what it
+/// depends on as in the default mode. The edges come from the revisions of
+/// the Kix cluster `tenancy` is read for. An object no revision names has
+/// none. For a Kix cluster whose records an older Kix wrote, which have no
+/// revisions, they come from the notes on the live objects.
+fn live_order(
+    live: &[kube::api::DynamicObject],
+    entries: &[GarbageEntry],
+    tenancy: &Tenancy,
+) -> DeleteOrder {
     let ids: HashSet<&ResourceId> = entries.iter().map(|g| &g.id).collect();
     let manifests: Vec<Value> = live.iter().map(ordering_stub).collect();
-    let mut order = DeleteOrder::of_manifests(&manifests);
+    let edges = match tenancy.own_source() {
+        Source::Revisions => Edges::of_own_revisions(tenancy, &manifests),
+        Source::Records => Edges::of_older_kix_notes(&manifests),
+    };
+    let mut order = DeleteOrder::of(&manifests, &edges);
     order.retain(|rid| ids.contains(rid));
     for entry in entries {
         order.push(entry.id.clone());
@@ -409,8 +433,10 @@ fn live_order(live: &[kube::api::DynamicObject], entries: &[GarbageEntry]) -> De
 }
 
 /// Return the parts of a live object that ordering reads: its identity and
-/// its `kix.run/identity-hash` and `kix.run/depends-on` annotations. Leaving
-/// out the rest keeps Secret data and managed fields out of memory.
+/// its `kix.run/identity-hash` and `kix.run/depends-on` annotations, which
+/// order only the objects of records without revisions or with format 1
+/// ones. Leaving out the rest keeps Secret data and managed fields out of
+/// memory.
 fn ordering_stub(obj: &kube::api::DynamicObject) -> Value {
     let rid = kix::cluster::drift::resource_id(obj);
     let mut annotations = serde_json::Map::new();
@@ -980,7 +1006,7 @@ async fn run_hard_async(
         let done = delete_resources(
             &lock.guarded(&client),
             cluster_name,
-            live_order(&live, &resource_entries),
+            live_order(&live, &resource_entries, &tenancy),
             budget,
         )
         .await?;

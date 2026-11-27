@@ -471,7 +471,7 @@ mod delete_tests {
         let done = delete_resources(
             &api.client(),
             "a",
-            DeleteOrder::of_manifests(&[cm.clone(), secret.clone()]),
+            DeleteOrder::of_build(&[cm.clone(), secret.clone()]),
             readiness::DEFAULT_TIMEOUT,
         )
         .await
@@ -503,7 +503,7 @@ mod delete_tests {
         let done = delete_resources(
             &api.client(),
             "a",
-            DeleteOrder::of_manifests(&[cm, secret]),
+            DeleteOrder::of_build(&[cm, secret]),
             budget,
         )
         .await
@@ -841,11 +841,12 @@ mod live_order_tests {
         }
     }
 
-    /// A full scan orders its garbage by the live objects' dependencies, also
-    /// through an object it keeps: `cm` needs `kept`, which needs `secret`,
-    /// so a stuck `cm` holds `secret` back.
+    /// A full scan of a Kix cluster whose records an older Kix wrote orders
+    /// its garbage by the notes on the live objects, also through an object
+    /// it keeps: `cm` needs `kept`, which needs `secret`, so a stuck `cm`
+    /// holds `secret` back.
     #[test]
-    fn a_full_scan_orders_by_live_dependencies() {
+    fn a_full_scan_of_an_older_kixs_records_orders_by_the_notes() {
         let objects = [
             live("ConfigMap", "cm", "h_cm", "h_kept"),
             live("ConfigMap", "kept", "h_kept", "h_secret"),
@@ -854,6 +855,7 @@ mod live_order_tests {
         let mut order = live_order(
             &objects,
             &[entry("Secret", "secret"), entry("ConfigMap", "cm")],
+            &Tenancy::fixture(&[], "a"),
         );
         let names: Vec<&str> = order.ids().iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, vec!["cm", "secret"]);
@@ -1041,6 +1043,93 @@ mod revision_tests {
                 "{written:?}"
             );
         }
+    }
+
+    /// Return the state of Kix cluster `a` whose current record kept a
+    /// custom resource `a-widget` (written as a ConfigMap) and the operator
+    /// that removes its finalizer, with the kept-orphans revision recording
+    /// that `a-widget` needs `operator`, and with neither live object carrying
+    /// `kix.run/depends-on` or `kix.run/identity-hash`.
+    fn kept_widget_and_operator() -> State {
+        use kix::cluster::revision::{Need, Revision, RevisionObject, RevisionSpec, Slot};
+        let recs = [Rec {
+            name: "a-cur",
+            cluster: "a",
+            hash: "cur",
+            phase: PHASE_ACTIVE,
+            current: true,
+            objects: &["web"],
+            kept: &["a-widget", "operator"],
+            ..Rec::default()
+        }];
+        let mut state = state(&recs, |_| Written::Revisions);
+        let rid = |name: &str| ResourceId::new("", "ConfigMap", "d", name);
+        let entry = |name: &str| RevisionObject::of_id(&format!("h-{name}"), &rid(name));
+        let kept = Revision::new(RevisionSpec::new(
+            "a",
+            Slot::KeptOrphans,
+            vec![
+                entry("a-widget").with_needs([Need::of(&rid("operator"), Some("controller"))]),
+                entry("operator"),
+            ],
+        ));
+        let old = state.revision_named("a-cur", "keptOrphans");
+        state.remove_revision(&old);
+        state
+            .revisions
+            .push(kix::cluster::tenancy_fixture::revision_value(&kept));
+        state.records[0]["status"]["revisions"]["keptOrphans"] = json!(kept.name);
+        for object in &mut state.objects {
+            let annotations = object["metadata"]["annotations"].as_object_mut().unwrap();
+            annotations.remove(keys::IDENTITY_HASH);
+            annotations.remove(keys::DEPENDS_ON);
+        }
+        state
+    }
+
+    /// Without edges, the order of two unrelated ConfigMaps is the reverse
+    /// of their names, so `operator` would come before `a-widget`.
+    fn position(order: &DeleteOrder, name: &str) -> usize {
+        order.ids().iter().position(|r| r.name == name).unwrap()
+    }
+
+    /// The default mode takes the edges of kept orphans from the
+    /// kept-orphans revision, so it deletes the custom resource before the
+    /// operator that removes its finalizer.
+    #[test]
+    fn the_default_mode_orders_kept_orphans_by_the_revisions() {
+        let state = kept_widget_and_operator();
+        let garbage: Vec<Value> = ["operator", "a-widget"]
+            .iter()
+            .map(|n| kix::manifest::types::to_manifest_value(&state.object(n)))
+            .collect();
+        let order = soft_order(Vec::new(), &garbage, &state.tenancy("a"));
+        assert!(position(&order, "a-widget") < position(&order, "operator"));
+    }
+
+    /// A full scan takes the edges from the revisions too.
+    #[test]
+    fn a_full_scan_orders_kept_orphans_by_the_revisions() {
+        let state = kept_widget_and_operator();
+        let live: Vec<_> = ["operator", "a-widget"]
+            .iter()
+            .map(|n| state.object(n))
+            .collect();
+        let entry = |name: &str| GarbageEntry {
+            id: ResourceId::new("", "ConfigMap", "d", name),
+            identity_hash: None,
+            package: None,
+            package_namespace: None,
+            activations: None,
+            reason: GarbageReason::HashNotExpected,
+            deleting: None,
+        };
+        let order = live_order(
+            &live,
+            &[entry("operator"), entry("a-widget")],
+            &state.tenancy("a"),
+        );
+        assert!(position(&order, "a-widget") < position(&order, "operator"));
     }
 
     async fn retirement_of(api: &FakeApi) -> RecordRetirement {

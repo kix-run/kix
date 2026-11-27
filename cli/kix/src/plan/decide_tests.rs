@@ -33,6 +33,7 @@ fn revision_object(name: &str, hash: &str) -> RevisionObject {
         kind: "ConfigMap".into(),
         namespace: Some("d".into()),
         name: name.into(),
+        needs: Vec::new(),
     }
 }
 
@@ -56,6 +57,7 @@ fn tenancy(recs: &[Rec<'_>]) -> Tenancy {
         let slot = Slot::Instance {
             namespace: "d".into(),
             name: rec.name.into(),
+            lifecycle: None,
         };
         let mut instance = revision(slot, rec.objects);
         instance.applied = rec
@@ -525,6 +527,7 @@ fn deployment_ledger(applied: &str) -> Ledger {
         Slot::Instance {
             namespace: "d".into(),
             name: "cur".into(),
+            lifecycle: None,
         },
         vec![RevisionObject {
             hash: "h-w".into(),
@@ -532,6 +535,7 @@ fn deployment_ledger(applied: &str) -> Ledger {
             kind: "Deployment".into(),
             namespace: Some("d".into()),
             name: "web".into(),
+            needs: Vec::new(),
         }],
     ));
     revision.applied = [("h-w".to_string(), applied.to_string())].into();

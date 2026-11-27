@@ -7,6 +7,7 @@ use crate::cluster::ops::scripted::{
     ApplyFailure, Behaviour, Call, Gate, NodeScript, Ready, ScriptedOps,
 };
 use crate::cluster::stream::{InFlight, NullObserver};
+use serde_json::Value;
 use serde_json::json;
 use std::sync::Mutex;
 use tokio::time::Instant;

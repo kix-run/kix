@@ -286,9 +286,10 @@ pub(crate) struct Left<'a> {
     /// Each orphan of a kind Kix never prunes (`lifecycle::never_pruned`).
     /// The kept-orphans revision names them so reports can list them.
     pub(crate) never_pruned: &'a [ResourceId],
-    /// The manifests the run's orphans came from: the earlier builds for the
-    /// CLI, the live objects for the operator.
-    pub(crate) manifests: &'a [Value],
+    /// The objects earlier deploys made, with the manifests the run's
+    /// orphans came from (the earlier builds for the CLI, the live objects
+    /// for the operator) and the edges between them.
+    pub(crate) prior: &'a crate::cluster::edges::Prior,
 }
 
 /// Decrypts SOPS-backed data in a Secret manifest before it is applied.

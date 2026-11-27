@@ -101,6 +101,13 @@ const KINDS: &[(&str, &str, &str, &str, bool)] = &[
     (
         keys::DOMAIN,
         "v1alpha1",
+        crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND,
+        "packageinstances",
+        true,
+    ),
+    (
+        keys::DOMAIN,
+        "v1alpha1",
         super::head::KIND,
         super::head::PLURAL,
         false,

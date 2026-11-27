@@ -77,7 +77,7 @@ pub fn all() -> [OwnCrd; 4] {
         OwnCrd {
             name: crate::cluster::revision::crd_name(),
             definition: crate::cluster::revision::crd::definition(),
-            number: 1,
+            number: 2,
             holds: "deployed object lists",
             verbs: "`get`, `list`, `create`, and `delete` (plus `patch` on `status`)",
         },

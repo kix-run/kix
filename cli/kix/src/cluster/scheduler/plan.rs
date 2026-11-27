@@ -134,11 +134,19 @@ impl DeployPlan {
             }
         }
 
+        // The graph holds the build's manifests, so their annotations are
+        // the build's edges.
+        let manifests: Vec<Value> = graph
+            .graph
+            .node_weights()
+            .map(|n| n.manifest.clone())
+            .collect();
         Ok(DeployPlan {
             nodes,
             edges,
             controllers: super::super::graph::controllers_of(
-                graph.graph.node_weights().map(|n| &n.manifest),
+                &manifests,
+                &crate::cluster::edges::Edges::of_build(&manifests),
             ),
         })
     }

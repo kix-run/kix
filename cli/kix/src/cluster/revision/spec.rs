@@ -1,7 +1,7 @@
 //! What a revision holds, how it is named, and how a build's objects are
 //! split into revisions.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use kube::api::DynamicObject;
@@ -33,6 +33,18 @@ const APPLIED_BYTES: usize = 120;
 /// Room for `apiVersion`, `kind`, and `metadata`.
 const OVERHEAD_BYTES: usize = 4096;
 
+/// The format of the revisions this Kix writes. Format 1 has no `needs`
+/// and no `slot.lifecycle`, and its `spec` has no `format` field.
+pub const FORMAT: u32 = 2;
+
+fn format_one() -> u32 {
+    1
+}
+
+fn is_format_one(format: &u32) -> bool {
+    *format == 1
+}
+
 /// One object of a revision.
 ///
 /// The field order is the sort order, so objects sort by build hash first.
@@ -48,6 +60,79 @@ pub struct RevisionObject {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
     pub name: String,
+    /// The objects this one depends on, sorted. Empty in a format 1
+    /// revision, where the edges are not recorded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub needs: Vec<Need>,
+}
+
+/// One object a revision entry depends on, by name.
+///
+/// It is an entry with fields rather than one string, because an object's
+/// name can hold a colon, such as the ClusterRole `system:auth-delegator`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct Need {
+    /// The API group, omitted for the core group.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub group: String,
+    pub kind: String,
+    /// `None` for a cluster-scoped object.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    pub name: String,
+    /// The relation the `kix.run/depends-on` entry names, such as
+    /// `requires` or `controller`, or `None` for an entry with none.
+    #[serde(rename = "as", default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+}
+
+impl Need {
+    /// Return the entry for the object `rid` in relation `role`.
+    pub fn of(rid: &ResourceId, role: Option<&str>) -> Need {
+        Need {
+            group: rid.group.clone(),
+            kind: rid.kind.clone(),
+            namespace: (rid.namespace != CLUSTER_SCOPED).then(|| rid.namespace.clone()),
+            name: rid.name.clone(),
+            role: role.map(str::to_string),
+        }
+    }
+
+    /// Return the entries of the `kix.run/depends-on` value of `manifest`,
+    /// sorted and once each. `resolve` names the object an identity hash
+    /// stands for. An entry it cannot name is left out.
+    pub fn of_depends_on(
+        manifest: &Value,
+        resolve: impl Fn(&str) -> Option<ResourceId>,
+    ) -> Vec<Need> {
+        let Some(value) = keys::get(manifest, keys::DEPENDS_ON) else {
+            return Vec::new();
+        };
+        let mut needs: Vec<Need> = keys::depends_on_entries(value)
+            .filter_map(|(role, hash)| Some(Need::of(&resolve(hash)?, role)))
+            .collect();
+        needs.sort();
+        needs.dedup();
+        needs
+    }
+
+    /// Return the group, kind, namespace, and name of the object.
+    pub fn resource_id(&self) -> ResourceId {
+        ResourceId {
+            group: self.group.clone(),
+            kind: self.kind.clone(),
+            namespace: self
+                .namespace
+                .clone()
+                .unwrap_or_else(|| CLUSTER_SCOPED.to_string()),
+            name: self.name.clone(),
+        }
+    }
+
+    /// Return whether the entry names the controller of a custom resource.
+    pub fn is_controller(&self) -> bool {
+        self.role.as_deref() == Some(keys::CONTROLLER_RELATION)
+    }
 }
 
 /// An object of a revision as the applied hashes key it: its resource id
@@ -70,6 +155,7 @@ impl RevisionObject {
             kind: _,
             namespace: _,
             name: _,
+            needs: _,
         } = self;
         AppliedKey {
             rid: self.resource_id(),
@@ -77,8 +163,12 @@ impl RevisionObject {
         }
     }
 
-    fn of(path: &Path, manifest: &Value) -> RevisionObject {
-        RevisionObject::with_hash(store_hash(path), manifest)
+    /// Return this object with `needs`, sorted and once each.
+    pub fn with_needs(mut self, needs: impl IntoIterator<Item = Need>) -> RevisionObject {
+        self.needs = needs.into_iter().collect();
+        self.needs.sort();
+        self.needs.dedup();
+        self
     }
 
     /// Return the object `manifest` describes, with the build hash its
@@ -111,6 +201,7 @@ impl RevisionObject {
             kind: rid.kind,
             namespace: (rid.namespace != CLUSTER_SCOPED).then_some(rid.namespace),
             name: rid.name,
+            needs: Vec::new(),
         }
     }
 }
@@ -119,8 +210,15 @@ impl RevisionObject {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Slot {
-    /// One package instance.
-    Instance { namespace: String, name: String },
+    /// One package instance. `lifecycle` is the lifecycle its package's
+    /// `meta` gives it, which the CLI stamps as `kix.run/lifecycle` on the
+    /// instance's objects.
+    Instance {
+        namespace: String,
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lifecycle: Option<String>,
+    },
     /// The objects of a build that belong to no instance, such as
     /// Namespaces.
     ClusterLevel,
@@ -131,6 +229,11 @@ pub enum Slot {
 /// The `spec` of a revision.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RevisionSpec {
+    /// The format the revision was written in. A format 1 `spec` has no
+    /// `format` field, and it serializes without one so that its name still
+    /// matches.
+    #[serde(default = "format_one", skip_serializing_if = "is_format_one")]
+    pub format: u32,
     /// The Kix cluster's name.
     pub cluster: String,
     pub slot: Slot,
@@ -139,15 +242,39 @@ pub struct RevisionSpec {
 }
 
 impl RevisionSpec {
-    /// Return a spec of `objects`, sorted.
-    pub fn new(cluster: &str, slot: Slot, mut objects: Vec<RevisionObject>) -> RevisionSpec {
+    /// Return a spec of `objects` in this Kix's format, sorted, with one
+    /// entry for each object and build hash. Entries with the same object
+    /// and build hash came from the same manifest, so they have the same
+    /// edges when their sources recorded them all. Their `needs` are merged,
+    /// so an entry that lost an edge on the way does not lose it here.
+    pub fn new(cluster: &str, slot: Slot, objects: Vec<RevisionObject>) -> RevisionSpec {
+        let mut merged: BTreeMap<AppliedKey, RevisionObject> = BTreeMap::new();
+        for object in objects {
+            match merged.entry(object.applied_key()) {
+                std::collections::btree_map::Entry::Vacant(e) => {
+                    e.insert(object);
+                }
+                std::collections::btree_map::Entry::Occupied(mut e) => {
+                    let held = e.get_mut();
+                    held.needs.extend(object.needs);
+                    held.needs.sort();
+                    held.needs.dedup();
+                }
+            }
+        }
+        let mut objects: Vec<RevisionObject> = merged.into_values().collect();
         objects.sort();
-        objects.dedup();
         RevisionSpec {
+            format: FORMAT,
             cluster: cluster.to_string(),
             slot,
             objects,
         }
+    }
+
+    /// Return whether the revision records each object's edges.
+    pub fn records_edges(&self) -> bool {
+        self.format >= 2
     }
 }
 
@@ -286,11 +413,21 @@ impl RevisionSet {
     /// cluster level a new revision on every deploy.
     pub fn of(cluster: &str, graph: &StoreGraph) -> RevisionSet {
         let groups = InstanceGroups::of(graph);
+        let by_hash: HashMap<String, ResourceId> = graph
+            .resources
+            .iter()
+            .map(|(path, node)| (store_hash(path), ResourceId::from_value(&node.manifest)))
+            .collect();
+        // A `kix.run/depends-on` hash that names no manifest of the build
+        // names no object the build makes: the build leaves Kix's own CRDs
+        // out, and Kix installs them before a deploy writes anything. The
+        // graph a deploy orders by drops such an entry too.
         let object = |path: &Path| {
-            graph
-                .resources
-                .get(path)
-                .map(|node| RevisionObject::of(path, &node.manifest))
+            graph.resources.get(path).map(|node| {
+                RevisionObject::with_hash(store_hash(path), &node.manifest).with_needs(
+                    Need::of_depends_on(&node.manifest, |hash| by_hash.get(hash).cloned()),
+                )
+            })
         };
         let instances = groups
             .instances
@@ -304,6 +441,7 @@ impl RevisionSet {
                 let slot = Slot::Instance {
                     namespace: node.namespace.clone(),
                     name: node.instance_name.clone(),
+                    lifecycle: node.lifecycle.clone(),
                 };
                 (
                     key.clone(),

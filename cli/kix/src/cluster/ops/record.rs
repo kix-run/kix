@@ -202,7 +202,9 @@ impl ActivationRecord {
     /// revisions.
     ///
     /// It lists the orphans the run left, as the manifests they came from
-    /// describe them. When the plan did not read the cluster (`--offline`),
+    /// describe them, each with the edges `left.prior` records for it, so an
+    /// orphan kept across many deploys keeps its place in the delete order.
+    /// When the plan did not read the cluster (`--offline`),
     /// it also carries forward the objects of `current`'s kept-orphans
     /// revision unexamined. Refuse when that revision cannot be read, or the
     /// new one cannot be created, because the finalize that follows deletes
@@ -218,10 +220,20 @@ impl ActivationRecord {
         let store = Revisions::new(self.resources.client());
         let wanted: HashSet<&ResourceId> = left.orphans.iter().chain(left.never_pruned).collect();
         let mut objects: Vec<RevisionObject> = left
+            .prior
             .manifests
             .iter()
             .filter(|m| wanted.contains(&ResourceId::from_value(m)))
             .filter_map(RevisionObject::of_manifest)
+            .map(|o| {
+                let needs = left
+                    .prior
+                    .edges
+                    .needs(&o.resource_id())
+                    .cloned()
+                    .collect::<Vec<_>>();
+                o.with_needs(needs)
+            })
             .collect();
         let kept = &self.config.kept_orphans;
         objects.extend(kept.unknown.iter().cloned());
@@ -575,11 +587,16 @@ mod tests {
     use crate::cluster::discovery;
     use crate::cluster::fake_api::FakeApi;
 
-    const NONE_LEFT: Left<'static> = Left {
-        orphans: &[],
-        never_pruned: &[],
-        manifests: &[],
-    };
+    static NO_PRIOR: std::sync::LazyLock<crate::cluster::edges::Prior> =
+        std::sync::LazyLock::new(Default::default);
+
+    fn none_left() -> Left<'static> {
+        Left {
+            orphans: &[],
+            never_pruned: &[],
+            prior: &NO_PRIOR,
+        }
+    }
 
     async fn record(api: &FakeApi, name: Option<&str>) -> ActivationRecord {
         record_with_only(api, name, Vec::new()).await
@@ -626,7 +643,7 @@ mod tests {
             named.begin().await.unwrap_err(),
             named.checkpoint(1, 0, false).await.unwrap_err(),
             named.abort("stopped").await.unwrap_err(),
-            named.finalize(false, NONE_LEFT).await.unwrap_err(),
+            named.finalize(false, none_left()).await.unwrap_err(),
         ] {
             assert!(matches!(err, RecordWriteError::Domain(_)), "{err}");
             assert!(err.to_string().contains("kix migrate domain"), "{err}");
@@ -635,7 +652,13 @@ mod tests {
         let unnamed = record(&api, None).await;
         assert!(unnamed.begin().await.is_ok());
         assert!(unnamed.checkpoint(1, 0, false).await.is_ok());
-        assert!(unnamed.finalize(false, NONE_LEFT).await.unwrap().is_none());
+        assert!(
+            unnamed
+                .finalize(false, none_left())
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// Finalizing a deploy supersedes the cluster's current record and links
@@ -660,7 +683,7 @@ mod tests {
         let api = FakeApi::new([rec("old", "Active"), rec("new", "Deploying")]);
         let finalized = record(&api, Some("new"))
             .await
-            .finalize(false, NONE_LEFT)
+            .finalize(false, none_left())
             .await
             .unwrap()
             .unwrap();
@@ -677,7 +700,7 @@ mod tests {
         let api = FakeApi::new([rec("old", "Superseded"), rec("new", "Deploying")]);
         let finalized = record(&api, Some("new"))
             .await
-            .finalize(false, NONE_LEFT)
+            .finalize(false, none_left())
             .await
             .unwrap()
             .unwrap();
@@ -725,7 +748,7 @@ mod tests {
         );
         let mut run = record(&api, Some("new")).await;
         run.config.lock = Some(lock.clone());
-        let finalized = run.finalize(false, NONE_LEFT).await.unwrap().unwrap();
+        let finalized = run.finalize(false, none_left()).await.unwrap().unwrap();
         assert_eq!(finalized.previous.as_deref(), Some("old"));
         let head_status = |api: &FakeApi| api.object(head::KIND, "a").unwrap()["status"].clone();
         let status = head_status(&api);
@@ -819,6 +842,7 @@ mod tests {
                 kind: "ConfigMap".into(),
                 namespace: Some(ns.into()),
                 name: name.into(),
+                needs: Vec::new(),
             }
         }
 
@@ -828,6 +852,7 @@ mod tests {
                 Slot::Instance {
                     namespace: ns.into(),
                     name: name.into(),
+                    lifecycle: None,
                 },
                 vec![object(hash, ns, name)],
             ))
@@ -1115,7 +1140,7 @@ mod tests {
             let lock = lock(&api, "new").await;
             let run = run(&api, "new", Some(new.clone()), Some(lock.clone())).await;
             run.begin().await.unwrap();
-            run.finalize(false, NONE_LEFT).await.unwrap().unwrap();
+            run.finalize(false, none_left()).await.unwrap().unwrap();
             lock.release().await.unwrap();
 
             let left = api.names(revision::KIND);
@@ -1222,7 +1247,7 @@ mod tests {
                 Left {
                     orphans: &orphans,
                     never_pruned: &[],
-                    manifests: &manifests,
+                    prior: &crate::cluster::edges::Prior::of_build(manifests.to_vec()),
                 },
             )
             .await
@@ -1241,7 +1266,7 @@ mod tests {
                 Left {
                     orphans: &orphans[..1],
                     never_pruned: &[],
-                    manifests: &manifests,
+                    prior: &crate::cluster::edges::Prior::of_build(manifests.to_vec()),
                 },
             )
             .await
@@ -1260,9 +1285,84 @@ mod tests {
             let lock3 = lock(&api, "three").await;
             let three = run(&api, "three", Some(build("3")), Some(lock3.clone())).await;
             three.begin().await.unwrap();
-            three.finalize(false, NONE_LEFT).await.unwrap();
+            three.finalize(false, none_left()).await.unwrap();
             lock3.release().await.unwrap();
             assert_eq!(stored_map(&api, "three").unwrap().kept_orphans, None);
+        }
+
+        /// Each kept-orphans revision records what its orphans depend on,
+        /// and a later deploy whose manifests are live objects with no
+        /// `kix.run/depends-on` writes those edges again from the
+        /// revisions, so an
+        /// orphan kept across two deploys keeps them.
+        #[tokio::test]
+        async fn a_kept_orphan_keeps_its_edges_across_two_deploys() {
+            let api = FakeApi::new([activation("one", "Deploying", None)]);
+            let mut cr = left_manifest("cr", "1");
+            cr["metadata"]["annotations"][keys::DEPENDS_ON] =
+                json!(format!("controller:{:a>32}", "2"));
+            let built = [cr, left_manifest("operator", "2")];
+            let orphans: Vec<ResourceId> = built.iter().map(ResourceId::from_value).collect();
+            let needs_of_cr = |api: &FakeApi, record: &str| {
+                let kept = stored_map(api, record).unwrap().kept_orphans.unwrap();
+                let obj = api.object(revision::KIND, &kept).unwrap();
+                let cr = obj["spec"]["objects"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|o| o["name"] == "cr")
+                    .unwrap()
+                    .clone();
+                (cr["needs"].clone(), obj)
+            };
+
+            let lock1 = lock(&api, "one").await;
+            let one = run(&api, "one", Some(build("1")), Some(lock1.clone())).await;
+            one.begin().await.unwrap();
+            let left = Left {
+                orphans: &orphans,
+                never_pruned: &[],
+                prior: &crate::cluster::edges::Prior::of_build(built.to_vec()),
+            };
+            one.finalize(false, left).await.unwrap();
+            lock1.release().await.unwrap();
+            let (first, kept) = needs_of_cr(&api, "one");
+            let want = json!([{
+                "kind": "ConfigMap",
+                "namespace": "app",
+                "name": "operator",
+                "as": "controller",
+            }]);
+            assert_eq!(first, want);
+
+            // The second deploy has no build, only the live objects without
+            // their notes, and the edges of the revisions it read.
+            let kept = Revision::from_object(&serde_json::from_value(kept).unwrap()).unwrap();
+            let live: Vec<Value> = built
+                .iter()
+                .map(|m| {
+                    let mut m = m.clone();
+                    let annotations = m["metadata"]["annotations"].as_object_mut().unwrap();
+                    annotations.remove(keys::DEPENDS_ON);
+                    m
+                })
+                .collect();
+            let prior = crate::cluster::edges::Prior {
+                edges: crate::cluster::edges::Edges::of_revisions([&kept]),
+                manifests: live,
+            };
+            api.insert(activation("two", "Deploying", None));
+            let lock2 = lock(&api, "two").await;
+            let two = run(&api, "two", Some(build("2")), Some(lock2.clone())).await;
+            two.begin().await.unwrap();
+            let left = Left {
+                orphans: &orphans,
+                never_pruned: &[],
+                prior: &prior,
+            };
+            two.finalize(false, left).await.unwrap();
+            lock2.release().await.unwrap();
+            assert_eq!(needs_of_cr(&api, "two").0, want);
         }
 
         /// A plan that did not read the cluster carries the previous
@@ -1296,7 +1396,7 @@ mod tests {
                 Left {
                     orphans: &orphans,
                     never_pruned: &[],
-                    manifests: &manifests,
+                    prior: &crate::cluster::edges::Prior::of_build(manifests.to_vec()),
                 },
             )
             .await
@@ -1321,7 +1421,7 @@ mod tests {
             let mut new = run(&api, "new", Some(build("2")), Some(lock.clone())).await;
             new.config.kept_orphans.carry_current = true;
             new.begin().await.unwrap();
-            let err = new.finalize(false, NONE_LEFT).await.unwrap_err();
+            let err = new.finalize(false, none_left()).await.unwrap_err();
             assert!(matches!(err, RecordWriteError::KeptOrphans(_)), "{err}");
             assert!(err.to_string().contains("a-missing"), "{err}");
             assert_eq!(
@@ -1356,7 +1456,7 @@ mod tests {
                     Left {
                         orphans: &orphans,
                         never_pruned: &[],
-                        manifests: &manifests,
+                        prior: &crate::cluster::edges::Prior::of_build(manifests.to_vec()),
                     },
                 )
                 .await
@@ -1420,6 +1520,7 @@ mod tests {
                 Slot::Instance {
                     namespace: "app".into(),
                     name: "web".into(),
+                    lifecycle: None,
                 },
                 objects,
             ))
@@ -1683,7 +1784,7 @@ mod tests {
                 Left {
                     orphans: &[],
                     never_pruned: &[ResourceId::from_value(&namespace)],
-                    manifests: &manifests,
+                    prior: &crate::cluster::edges::Prior::of_build(manifests.to_vec()),
                 },
             )
             .await
@@ -1706,9 +1807,10 @@ mod tests {
                 kind: "Widget".into(),
                 namespace: Some("app".into()),
                 name: "unserved".into(),
+                needs: Vec::new(),
             }];
             one.begin().await.unwrap();
-            one.finalize(false, NONE_LEFT).await.unwrap();
+            one.finalize(false, none_left()).await.unwrap();
             lock.release().await.unwrap();
             assert_eq!(kept_objects(&api, "one"), ["unserved"]);
         }

@@ -85,6 +85,7 @@ fn revision_object(name: &str) -> RevisionObject {
         kind: "ConfigMap".into(),
         namespace: Some("d".into()),
         name: name.into(),
+        needs: Vec::new(),
     }
 }
 
@@ -97,7 +98,8 @@ pub fn revision_of(cluster: &str, slot: Slot, objects: &[&str]) -> Revision {
     ))
 }
 
-fn revision_value(revision: &Revision) -> Value {
+/// Return `revision` as the API server stores it.
+pub fn revision_value(revision: &Revision) -> Value {
     json!({
         "apiVersion": keys::API_VERSION,
         "kind": revision::KIND,
@@ -136,6 +138,7 @@ pub fn state(recs: &[Rec<'_>], written: impl Fn(&str) -> Written) -> State {
                 let slot = Slot::Instance {
                     namespace: "d".into(),
                     name: "app".into(),
+                    lifecycle: None,
                 };
                 let mut instance = revision_of(rec.cluster, slot, rec.objects);
                 for o in rec.objects.iter().filter(|o| !rec.unapplied.contains(o)) {

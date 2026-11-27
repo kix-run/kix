@@ -29,6 +29,7 @@ use thiserror::Error;
 use crate::cluster::activation::{Record, Records};
 use crate::cluster::apply::ChangeAction;
 use crate::cluster::discovery;
+use crate::cluster::edges::Prior;
 use crate::cluster::errors::FetchError;
 use crate::cluster::graph::{GraphError, ResourceGraph};
 use crate::cluster::inventory;
@@ -109,8 +110,9 @@ pub struct LivePlan {
     plan: DeployPlan,
     orphans: Vec<ResourceId>,
     shared_orphans: Vec<SharedOrphan>,
-    /// The live objects, which order the prune.
-    live: Vec<Value>,
+    /// The live objects and the edges this Kix cluster's revisions record
+    /// between them, which order the prune.
+    prior: Prior,
     /// The number of desired and live objects the plan compared.
     compared: usize,
     foreign: inventory::Foreign,
@@ -222,6 +224,12 @@ impl LivePlan {
             .map_err(fetch)?;
         let decided = decided_changes(desired, &made, &objects, &ledger, &sweep.tenancy)?;
         live = crate::cluster::apply::baseline_manifests(&live, &[decided.orphan_manifests]);
+        // Every manifest here is a live object, so the edges come from this
+        // Kix cluster's revisions.
+        let prior = Prior {
+            edges: ledger.edges(&live),
+            manifests: live,
+        };
         let drift_not_reverted = decided.drift_not_reverted;
         let unknown = decided.unknown;
         let (actions, shared_orphans) = (decided.actions, decided.shared);
@@ -245,7 +253,7 @@ impl LivePlan {
             plan,
             orphans,
             shared_orphans,
-            live,
+            prior,
             compared: actions.len(),
             foreign: sweep.foreign,
             unattributed: sweep.unattributed.len(),
@@ -253,6 +261,13 @@ impl LivePlan {
             drift_not_reverted,
             unknown,
         })
+    }
+
+    /// Return the order in which the run's prune deletes the plan's
+    /// orphans.
+    #[cfg(test)]
+    fn prune_order(&self) -> crate::cluster::graph::DeleteOrder {
+        crate::cluster::scheduler::prune_order(&self.orphans, &self.prior)
     }
 
     /// Return the drifted objects the plan leaves as they are, because
@@ -374,7 +389,7 @@ impl LivePlan {
             cluster,
             self.plan,
             &self.orphans,
-            &self.live,
+            &self.prior,
             // The operator always prunes: its orphans are live objects of
             // its own Kix cluster that the build no longer contains.
             scheduler::Ending::Finalize(PrunePolicy::Delete),
@@ -680,7 +695,7 @@ mod tests {
             plan: DeployPlan::from_graph_and_changes(&graph, &actions).unwrap(),
             orphans: Vec::new(),
             shared_orphans: Vec::new(),
-            live: Vec::new(),
+            prior: Prior::default(),
             compared: actions.len(),
             foreign: inventory::Foreign::default(),
             unattributed: 0,
@@ -737,10 +752,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["stale"]
         );
-        let kept: Vec<ResourceId> = plan.live.iter().map(ResourceId::from_value).collect();
-        assert!(kept.contains(&plan.orphans()[0]), "{:?}", plan.live);
+        let kept: Vec<ResourceId> = plan
+            .prior
+            .manifests
+            .iter()
+            .map(ResourceId::from_value)
+            .collect();
+        assert!(kept.contains(&plan.orphans()[0]), "{:?}", plan.prior);
         let manifest = plan
-            .live
+            .prior
+            .manifests
             .iter()
             .find(|m| ResourceId::from_value(m) == plan.orphans()[0])
             .unwrap();
@@ -763,8 +784,11 @@ mod tests {
     mod one_planner {
         use super::*;
         use crate::cluster::fake_api::FakeApi;
-        use crate::cluster::revision::{RevisionMap, Revisions};
+        use crate::cluster::revision::{
+            Revision, RevisionMap, RevisionObject, RevisionSpec, Revisions, Slot,
+        };
         use crate::eval::store_graph::StoreGraph;
+        use crate::manifest::lifecycle::RECORD_KIND;
 
         fn config_map(name: &str, value: &str) -> Value {
             json!({
@@ -842,6 +866,210 @@ mod tests {
 
         fn names(ids: &[ResourceId]) -> Vec<String> {
             ids.iter().map(|r| r.name.clone()).collect()
+        }
+
+        /// Return a build of Kix cluster `a` that holds `manifests`, each
+        /// at the store path `/nix/store/<hash>-<name>` its pair names, so
+        /// a test can write the identity hashes `kix.run/depends-on` lists.
+        fn build_at(manifests: &[(String, Value)]) -> StoreGraph {
+            let mut graph = StoreGraph::empty("a");
+            for (hash, manifest) in manifests {
+                let name = manifest["metadata"]["name"].as_str().unwrap();
+                let path = std::path::PathBuf::from(format!("/nix/store/{hash}-{name}"));
+                graph.resources.insert(
+                    path.clone(),
+                    crate::eval::store_graph::ResourceNode {
+                        store_path: path,
+                        manifest: manifest.clone(),
+                    },
+                );
+            }
+            crate::plan::fixtures::stamp(&graph).0
+        }
+
+        fn hash(c: char) -> String {
+            c.to_string().repeat(32)
+        }
+
+        fn depending(mut manifest: Value, deps: &str) -> Value {
+            manifest["metadata"]["annotations"] = json!({ (keys::DEPENDS_ON): deps });
+            manifest
+        }
+
+        /// Return a custom resource `cr` (written as a ConfigMap), the CRD
+        /// marker of its kind, and the operator that the marker requires,
+        /// which a build orders as `cr -> marker -> operator`.
+        fn custom_resource_chain() -> Vec<(String, Value)> {
+            let operator = json!({
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": {
+                    "name": "operator",
+                    "namespace": "app",
+                    "labels": { "app.kubernetes.io/managed-by": "kix" },
+                },
+                "spec": { "replicas": 1 },
+            });
+            let mut marker = json!({
+                "apiVersion": keys::API_VERSION,
+                "kind": crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND,
+                "metadata": {
+                    "name": "crd-ref-app-widgets-example-com",
+                    "namespace": "app",
+                    "labels": { "app.kubernetes.io/managed-by": "kix" },
+                },
+            });
+            marker = depending(marker, &format!("requires:{}", hash('o')));
+            marker["metadata"]["annotations"][keys::MODE] = json!("import");
+            let cr = depending(config_map("cr", "1"), &hash('m'));
+            vec![(hash('o'), operator), (hash('m'), marker), (hash('c'), cr)]
+        }
+
+        /// Return `manifest` as the cluster holds it after a later Kix:
+        /// without `kix.run/identity-hash` or `kix.run/depends-on`, and
+        /// written by Kix cluster `a`.
+        fn without_graph_notes(mut manifest: Value) -> Value {
+            if let Some(annotations) = manifest["metadata"]["annotations"].as_object_mut() {
+                annotations.remove(keys::IDENTITY_HASH);
+                annotations.remove(keys::DEPENDS_ON);
+            }
+            manifest["metadata"]["managedFields"] = json!([{
+                "manager": "kix/a",
+                "operation": "Apply",
+                "apiVersion": "v1",
+                "fieldsV1": { "f:metadata": { "f:labels": {} } },
+            }]);
+            manifest
+        }
+
+        fn position(order: &crate::cluster::graph::DeleteOrder, name: &str) -> usize {
+            order
+                .ids()
+                .iter()
+                .position(|r| r.name == name)
+                .unwrap_or_else(|| panic!("{name} is in the order {:?}", order.ids()))
+        }
+
+        /// Return the baseline a plan reads for Kix cluster `a` from
+        /// `client`, with no build of the current record on this machine.
+        async fn baseline_without_build(
+            client: &kube::Client,
+            record: &DynamicObject,
+        ) -> crate::plan::baseline::Baseline {
+            let opened = Records::open(
+                client,
+                &discovery::discover_resources(client).await.unwrap(),
+            )
+            .unwrap();
+            crate::plan::baseline::Baseline {
+                active: Some(Record::of(record)),
+                tenancy: crate::cluster::tenancy::read(&opened, "a").await.unwrap(),
+                ..crate::plan::baseline::Baseline::empty()
+            }
+        }
+
+        /// Plan with the CLI and the operator a build of `a` that drops the
+        /// custom resource chain, and return each one's prune order.
+        async fn prune_orders(
+            api: &FakeApi,
+            record: &DynamicObject,
+        ) -> [crate::cluster::graph::DeleteOrder; 2] {
+            let client = api.client();
+            let new = build(&[config_map("stays", "1")]);
+            let baseline = baseline_without_build(&client, record).await;
+            let planner = crate::plan::Planner::new(crate::plan::fixtures::flags(&[]), &|_| {});
+            let cli = planner
+                .plan(&new, "a", &baseline, Some(&client))
+                .await
+                .unwrap();
+            let operator = LivePlan::sweep(
+                &client,
+                record,
+                &manifests(&new),
+                Some(RevisionSet::of("a", &new)),
+                true,
+            )
+            .await
+            .unwrap();
+            [cli.prune_order(), operator.prune_order()]
+        }
+
+        /// With no build on this machine and no graph notes on the live
+        /// objects, the CLI and the operator take the edges from the
+        /// revisions, so they delete a custom resource before the CRD
+        /// marker of its kind, and the marker before the operator.
+        #[tokio::test]
+        async fn a_prune_without_build_or_notes_deletes_a_custom_resource_first() {
+            let mut chain = custom_resource_chain();
+            chain.push((hash('s'), config_map("stays", "1")));
+            let deployed = build_at(&chain);
+            let live: Vec<Value> = manifests(&deployed)
+                .into_iter()
+                .map(without_graph_notes)
+                .collect();
+            let (api, record) = cluster(&deployed, &live).await;
+            for order in prune_orders(&api, &record).await {
+                assert!(
+                    position(&order, "cr") < position(&order, "crd-ref-app-widgets-example-com")
+                );
+                assert!(
+                    position(&order, "crd-ref-app-widgets-example-com")
+                        < position(&order, "operator")
+                );
+            }
+        }
+
+        /// An orphan an earlier deploy kept keeps its edges in the
+        /// kept-orphans revision that each later deploy writes again. With
+        /// no build and no notes, the prune still deletes the custom
+        /// resource before the marker and the marker before the operator.
+        #[tokio::test]
+        async fn a_kept_orphan_keeps_its_place_in_the_delete_order() {
+            let first = build_at(&custom_resource_chain());
+            // Two deploys kept the chain: the first wrote the kept-orphans
+            // revision from the build it pruned, and the second wrote it
+            // again from the first one's revision.
+            let kept_once: Vec<RevisionObject> = RevisionSet::of("a", &first)
+                .all()
+                .flat_map(|r| r.spec.objects.clone())
+                .collect();
+            let once = Revision::new(RevisionSpec::new("a", Slot::KeptOrphans, kept_once));
+            let edges = crate::cluster::edges::Edges::of_revisions([&once]);
+            let kept_twice: Vec<RevisionObject> = manifests(&first)
+                .iter()
+                .filter_map(RevisionObject::of_manifest)
+                .map(|o| {
+                    let needs: Vec<_> = edges.needs(&o.resource_id()).cloned().collect();
+                    o.with_needs(needs)
+                })
+                .collect();
+            let twice = Revision::new(RevisionSpec::new("a", Slot::KeptOrphans, kept_twice));
+            assert_eq!(twice.spec.objects, once.spec.objects);
+
+            let current = build(&[config_map("stays", "1")]);
+            let live: Vec<Value> = manifests(&first)
+                .into_iter()
+                .chain(manifests(&current))
+                .map(without_graph_notes)
+                .collect();
+            let (api, _) = cluster(&current, &live).await;
+            Revisions::new(&api.client()).create(&twice).await.unwrap();
+            let mut map = RevisionMap::of(&RevisionSet::of("a", &current));
+            map.kept_orphans = Some(twice.name.clone());
+            api.patch_object(RECORD_KIND, "a-cur", |o| {
+                o["status"]["revisions"] = map.to_value();
+            });
+            let record: DynamicObject =
+                serde_json::from_value(api.object(RECORD_KIND, "a-cur").unwrap()).unwrap();
+            for order in prune_orders(&api, &record).await {
+                assert!(
+                    position(&order, "cr") < position(&order, "crd-ref-app-widgets-example-com")
+                );
+                assert!(
+                    position(&order, "crd-ref-app-widgets-example-com")
+                        < position(&order, "operator")
+                );
+            }
         }
 
         /// The CLI and the operator decide the same writes and orphans

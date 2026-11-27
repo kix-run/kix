@@ -13,6 +13,17 @@ use crate::manifest::keys;
 /// It has no `app.kubernetes.io/managed-by` label, so no sweep of Kix's own
 /// objects lists it or its objects as something a build made.
 pub(crate) fn definition() -> Value {
+    let need = json!({
+        "type": "object",
+        "required": ["kind", "name"],
+        "properties": {
+            "group": { "type": "string" },
+            "kind": { "type": "string" },
+            "namespace": { "type": "string" },
+            "name": { "type": "string" },
+            "as": { "type": "string" },
+        },
+    });
     let object = json!({
         "type": "object",
         "required": ["hash", "kind", "name"],
@@ -22,6 +33,7 @@ pub(crate) fn definition() -> Value {
             "kind": { "type": "string" },
             "namespace": { "type": "string" },
             "name": { "type": "string" },
+            "needs": { "type": "array", "items": need },
         },
     });
     let slot = json!({
@@ -31,6 +43,7 @@ pub(crate) fn definition() -> Value {
             "kind": { "type": "string" },
             "namespace": { "type": "string" },
             "name": { "type": "string" },
+            "lifecycle": { "type": "string" },
         },
     });
     json!({
@@ -64,6 +77,7 @@ pub(crate) fn definition() -> Value {
                                 "message": "spec cannot change, because the revision's name is a hash of it",
                             }],
                             "properties": {
+                                "format": { "type": "integer" },
                                 "cluster": { "type": "string" },
                                 "slot": slot,
                                 "objects": { "type": "array", "items": object },

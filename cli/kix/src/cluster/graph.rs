@@ -1,7 +1,8 @@
-//! DAG construction from kix.run/depends-on annotations and the RBAC
+//! DAG construction from recorded dependency edges ([`Edges`]) and the RBAC
 //! bindings that grant a workload's ServiceAccount its rights.
 //! Used for wave computation (deploy ordering) and visualization (kix graph).
 
+use crate::cluster::edges::Edges;
 use crate::manifest::keys;
 use crate::manifest::kinds::{self, GroupKind};
 use crate::manifest::types::ResourceId;
@@ -47,10 +48,13 @@ pub struct ResourceGraph {
 }
 
 impl ResourceGraph {
-    /// Build a dependency graph from annotated manifests, with the
-    /// dependencies [`dependency_pairs`] finds.
+    /// Build the dependency graph of a build's manifests, with the
+    /// dependencies [`dependency_pairs`] finds from their annotations.
     pub fn from_manifests(manifests: &[serde_json::Value]) -> Result<Self, GraphError> {
-        Self::with_pairs(manifests, dependency_pairs(manifests))
+        Self::with_pairs(
+            manifests,
+            dependency_pairs(manifests, &Edges::of_build(manifests)),
+        )
     }
 
     /// Build the graph of `manifests` with the dependencies `pairs` gives,
@@ -375,9 +379,10 @@ fn get_annotation(manifest: &serde_json::Value, key: &str) -> Option<String> {
 /// the dependent first. Apply creates a dependency before its dependent and
 /// waits for it to be ready, and a delete removes the dependent first.
 ///
-/// Most dependencies are the `kix.run/depends-on` entries that name another
-/// manifest of the set. The library writes those from the references in a
-/// manifest. Two more come from what Kubernetes does with a manifest,
+/// Most dependencies are the edges `edges` records between manifests of the
+/// set. The library writes those from the references in a manifest, and a
+/// build or a revision records them. Two more come from what Kubernetes does
+/// with a manifest,
 /// whatever the package wrote, because the object a workload needs names the
 /// workload's pods and nothing in the workload names it:
 ///
@@ -395,10 +400,10 @@ fn get_annotation(manifest: &serde_json::Value, key: &str) -> Option<String> {
 /// out, because the package recorded the opposite order. An operator that
 /// removes the finalizer of a binding it manages for its own ServiceAccount is
 /// one case.
-pub fn dependency_pairs(manifests: &[serde_json::Value]) -> Vec<(usize, usize)> {
+pub fn dependency_pairs(manifests: &[serde_json::Value], edges: &Edges) -> Vec<(usize, usize)> {
     let mut added = grants(manifests);
     added.extend(selecting_policies(manifests));
-    with_added(manifests, recorded_pairs(manifests), added)
+    with_added(manifests, recorded_pairs(manifests, edges), added)
 }
 
 /// Return the pairs of [`dependency_pairs`], and the pairs that order only
@@ -408,33 +413,38 @@ pub fn dependency_pairs(manifests: &[serde_json::Value]) -> Vec<(usize, usize)> 
 /// apply, because a configuration often has to exist before what serves it
 /// can start, for example when a controller writes the webhook's certificate
 /// into it.
-pub fn removal_pairs(manifests: &[serde_json::Value]) -> Vec<(usize, usize)> {
+pub fn removal_pairs(manifests: &[serde_json::Value], edges: &Edges) -> Vec<(usize, usize)> {
     with_added(
         manifests,
-        dependency_pairs(manifests),
+        dependency_pairs(manifests, edges),
         webhook_services(manifests),
     )
 }
 
-/// Return the pairs of each `kix.run/depends-on` entry that names another
-/// manifest of `manifests`. An entry may name an imported object outside
-/// the set.
-fn recorded_pairs(manifests: &[serde_json::Value]) -> Vec<(usize, usize)> {
-    let mut by_hash: HashMap<String, usize> = HashMap::new();
-    for (i, m) in manifests.iter().enumerate() {
-        if let Some(hash) = get_annotation(m, keys::IDENTITY_HASH) {
-            by_hash.insert(hash, i);
-        }
-    }
+/// Return the pairs of each edge of `edges` between two manifests of
+/// `manifests`. An edge may name an object outside the set, such as an
+/// imported one.
+fn recorded_pairs(manifests: &[serde_json::Value], edges: &Edges) -> Vec<(usize, usize)> {
+    let by_id = index_by_id(manifests);
     let mut pairs = Vec::new();
     for (i, m) in manifests.iter().enumerate() {
-        if let Some(deps) = get_annotation(m, keys::DEPENDS_ON) {
-            pairs.extend(
-                keys::depends_on_hashes(&deps).filter_map(|hash| Some((i, *by_hash.get(hash)?))),
-            );
-        }
+        pairs.extend(
+            edges
+                .needs(&ResourceId::from_value(m))
+                .filter_map(|need| Some((i, *by_id.get(&need.resource_id())?))),
+        );
     }
     pairs
+}
+
+/// Return the index of each object's manifest in `manifests`, the first
+/// one when an object has several.
+fn index_by_id(manifests: &[serde_json::Value]) -> HashMap<ResourceId, usize> {
+    let mut by_id = HashMap::new();
+    for (i, m) in manifests.iter().enumerate() {
+        by_id.entry(ResourceId::from_value(m)).or_insert(i);
+    }
+    by_id
 }
 
 /// Return `pairs` with each pair of `added` whose target does not already
@@ -716,7 +726,9 @@ fn namespace_of(manifest: &serde_json::Value) -> Option<&str> {
 }
 
 /// Return the object a controller manifest stands for: the workload itself,
-/// or for an import marker, the workload it imports.
+/// or for an import marker, the workload it imports. A marker's target is
+/// read from the marker's manifest in hand, which in a delete order with no
+/// build is the live marker.
 fn controller_id(manifest: &serde_json::Value) -> ResourceId {
     match crate::cluster::readiness::import_target_from_manifest(manifest) {
         Ok(Some(target)) => ResourceId::new(
@@ -733,26 +745,26 @@ fn controller_id(manifest: &serde_json::Value) -> ResourceId {
 }
 
 /// Return the controllers that the kind of each object of `manifests` names,
-/// from its `controller:` entries of `kix.run/depends-on`, for the objects
-/// whose kind names any. A controller that is an import marker is listed as
-/// the object the marker stands for. An entry whose manifest is not in
-/// `manifests` is skipped.
-pub fn controllers_of<'a>(
-    manifests: impl IntoIterator<Item = &'a serde_json::Value>,
+/// from its `controller` edges in `edges`, for the objects whose kind names
+/// any. A controller that is an import marker is listed as the object the
+/// marker stands for. An edge to an object with no manifest in `manifests`
+/// is skipped.
+pub fn controllers_of(
+    manifests: &[serde_json::Value],
+    edges: &Edges,
 ) -> HashMap<ResourceId, Vec<ResourceId>> {
-    let manifests: Vec<&serde_json::Value> = manifests.into_iter().collect();
-    let by_hash: HashMap<String, &serde_json::Value> = manifests
-        .iter()
-        .filter_map(|m| Some((get_annotation(m, keys::IDENTITY_HASH)?, *m)))
-        .collect();
+    let by_id = index_by_id(manifests);
     manifests
         .iter()
         .filter_map(|m| {
-            let deps = get_annotation(m, keys::DEPENDS_ON)?;
-            let named: Vec<ResourceId> = keys::controller_hashes(&deps)
-                .filter_map(|hash| by_hash.get(hash).map(|c| controller_id(c)))
+            let rid = ResourceId::from_value(m);
+            let named: Vec<ResourceId> = edges
+                .needs(&rid)
+                .filter(|need| need.is_controller())
+                .filter_map(|need| by_id.get(&need.resource_id()))
+                .map(|&i| controller_id(&manifests[i]))
                 .collect();
-            (!named.is_empty()).then(|| (ResourceId::from_value(m), named))
+            (!named.is_empty()).then_some((rid, named))
         })
         .collect()
 }
@@ -802,14 +814,20 @@ pub enum Walked<'a, T> {
 }
 
 impl DeleteOrder {
+    /// Order the objects of a build's manifests by the dependencies their
+    /// annotations record ([`DeleteOrder::of`]).
+    pub fn of_build(manifests: &[serde_json::Value]) -> Self {
+        DeleteOrder::of(manifests, &Edges::of_build(manifests))
+    }
+
     /// Order the objects of `manifests` by the dependencies
-    /// [`removal_pairs`] finds, dependents first, and record those dependencies. When
-    /// they form a cycle, keep the order of `manifests`; the walk then
-    /// reports the objects of the cycle instead of deleting them. Callers
-    /// pass every manifest they know and [`DeleteOrder::retain`] the objects
-    /// to delete.
-    pub fn of_manifests(manifests: &[serde_json::Value]) -> Self {
-        let pairs = removal_pairs(manifests);
+    /// [`removal_pairs`] finds from `edges` and their content, dependents
+    /// first, and record those dependencies. When they form a cycle, keep
+    /// the order of `manifests`; the walk then reports the objects of the
+    /// cycle instead of deleting them. Callers pass every manifest they know
+    /// and [`DeleteOrder::retain`] the objects to delete.
+    pub fn of(manifests: &[serde_json::Value], edges: &Edges) -> Self {
+        let pairs = removal_pairs(manifests, edges);
         let mut needs: HashMap<ResourceId, Vec<ResourceId>> = HashMap::new();
         for &(from, to) in &pairs {
             let id = ResourceId::from_value(&manifests[from]);
@@ -826,7 +844,7 @@ impl DeleteOrder {
             ids,
             needs,
             held: HashMap::new(),
-            controllers: controllers_of(manifests.iter()),
+            controllers: controllers_of(manifests, edges),
         }
     }
 
@@ -1030,7 +1048,7 @@ mod tests {
         let job = manifest("Job", "check", "ops", "hash_job", "hash_op");
         let cr = manifest("ConfigMap", "resource", "app", "hash_cr", "hash_job");
         let other = manifest("Secret", "other", "app", "hash_other", "");
-        let mut order = DeleteOrder::of_manifests(&[operator, job, cr, other]);
+        let mut order = DeleteOrder::of_build(&[operator, job, cr, other]);
         let id = |kind: &str, ns: &str, name: &str| {
             let group = if kind == "Deployment" {
                 "apps"
@@ -1148,7 +1166,7 @@ mod tests {
             "hash_res",
             "controller:hash_op",
         );
-        let mut order = DeleteOrder::of_manifests(&[
+        let mut order = DeleteOrder::of_build(&[
             sa,
             operator,
             cluster_role,
@@ -1220,10 +1238,11 @@ mod tests {
                 .unwrap()
                 .to_string()
         };
-        let pairs: Vec<(String, String)> = dependency_pairs(&manifests)
-            .into_iter()
-            .map(|(from, to)| (names(from), names(to)))
-            .collect();
+        let pairs: Vec<(String, String)> =
+            dependency_pairs(&manifests, &Edges::of_build(&manifests))
+                .into_iter()
+                .map(|(from, to)| (names(from), names(to)))
+                .collect();
         assert_eq!(
             pairs,
             vec![
@@ -1239,7 +1258,7 @@ mod tests {
             .map(|n| n.id.name.as_str())
             .collect();
         assert_eq!(deps, vec!["web"]);
-        let ids = DeleteOrder::of_manifests(&manifests).ids().to_vec();
+        let ids = DeleteOrder::of_build(&manifests).ids().to_vec();
         let pos = |rid: &ResourceId| ids.iter().position(|r| r == rid).unwrap();
         assert!(
             pos(&web) < pos(&rbac_id("RoleBinding", "app", "web")),
@@ -1304,7 +1323,7 @@ mod tests {
         for cluster in ["cert-manager", "velero", "external-secrets"] {
             let text = std::fs::read_to_string(dir.join(format!("{cluster}.json"))).unwrap();
             let manifests: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
-            let base = DeleteOrder::of_manifests(&manifests);
+            let base = DeleteOrder::of_build(&manifests);
             let resources: Vec<ResourceId> = base.controllers().keys().cloned().collect();
             assert!(
                 !resources.is_empty(),
@@ -1404,12 +1423,12 @@ mod tests {
             ),
         ];
         let names = |i: usize| manifests[i]["metadata"]["name"].as_str().unwrap();
-        let pairs: Vec<(&str, &str)> = removal_pairs(&manifests)
+        let pairs: Vec<(&str, &str)> = removal_pairs(&manifests, &Edges::of_build(&manifests))
             .into_iter()
             .map(|(from, to)| (names(from), names(to)))
             .collect();
         assert_eq!(pairs, vec![("validate", "webhook"), ("mutate", "webhook")]);
-        assert!(dependency_pairs(&manifests).is_empty());
+        assert!(dependency_pairs(&manifests, &Edges::of_build(&manifests)).is_empty());
     }
 
     /// A controller that writes a webhook's certificate into its
@@ -1445,7 +1464,7 @@ mod tests {
             "validate",
         );
         assert!(dependencies(&graph, &config_id).is_empty());
-        let order = DeleteOrder::of_manifests(&manifests);
+        let order = DeleteOrder::of_build(&manifests);
         let service = ResourceId::new("", "Service", "ops", "webhook");
         assert_eq!(order.needs[&config_id], vec![service.clone()]);
         let ids = order.ids();
@@ -1465,7 +1484,7 @@ mod tests {
         for cluster in ["cert-manager", "external-secrets"] {
             let text = std::fs::read_to_string(dir.join(format!("{cluster}.json"))).unwrap();
             let manifests: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
-            let order = DeleteOrder::of_manifests(&manifests);
+            let order = DeleteOrder::of_build(&manifests);
             let mut checked = 0;
             for config in manifests.iter().filter(|m| {
                 m["kind"]
@@ -1519,7 +1538,7 @@ mod tests {
         for cluster in ["cert-manager", "velero", "external-secrets"] {
             let text = std::fs::read_to_string(dir.join(format!("{cluster}.json"))).unwrap();
             let manifests: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
-            let order = DeleteOrder::of_manifests(&manifests);
+            let order = DeleteOrder::of_build(&manifests);
             let mut foreground = 0;
             for m in &manifests {
                 let rid = ResourceId::from_value(m);
@@ -1644,7 +1663,7 @@ mod tests {
             host,
         ];
         let names = |i: usize| manifests[i]["metadata"]["name"].as_str().unwrap();
-        let mut deps: Vec<&str> = dependency_pairs(&manifests)
+        let mut deps: Vec<&str> = dependency_pairs(&manifests, &Edges::of_build(&manifests))
             .into_iter()
             .filter(|(from, _)| *from == 0)
             .map(|(_, to)| names(to))
@@ -1653,7 +1672,7 @@ mod tests {
         assert_eq!(deps, ["app-ns", "cluster-dns", "deny", "egress", "tier"]);
         let agent = manifests.len() - 1;
         assert!(
-            dependency_pairs(&manifests)
+            dependency_pairs(&manifests, &Edges::of_build(&manifests))
                 .iter()
                 .all(|(from, _)| *from != agent)
         );
@@ -1672,12 +1691,14 @@ mod tests {
         for cluster in ["cert-manager", "velero", "external-secrets"] {
             let text = std::fs::read_to_string(dir.join(format!("{cluster}.json"))).unwrap();
             let manifests: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
-            let base = DeleteOrder::of_manifests(&manifests);
+            let base = DeleteOrder::of_build(&manifests);
             // A pair the recorded dependencies contradict is left out, as
             // `dependency_pairs` does: a policy that needs its enforcer's own
             // agent, for example.
             let kept: std::collections::HashSet<(usize, usize)> =
-                dependency_pairs(&manifests).into_iter().collect();
+                dependency_pairs(&manifests, &Edges::of_build(&manifests))
+                    .into_iter()
+                    .collect();
             let selects: Vec<(usize, usize)> = selecting_policies(&manifests)
                 .into_iter()
                 .filter(|p| kept.contains(p))
@@ -1723,7 +1744,9 @@ mod tests {
         let manifests: Vec<serde_json::Value> =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let pairs: std::collections::HashSet<(usize, usize)> =
-            dependency_pairs(&manifests).into_iter().collect();
+            dependency_pairs(&manifests, &Edges::of_build(&manifests))
+                .into_iter()
+                .collect();
         let selected = selecting_policies(&manifests);
         let name = |i: usize| ResourceId::from_value(&manifests[i]).to_string();
         let skipped: Vec<(String, String)> = selected
@@ -1733,7 +1756,7 @@ mod tests {
             .collect();
         assert!(selected.len() > 20, "{}", selected.len());
         assert!(skipped.is_empty(), "{skipped:#?}");
-        let order = DeleteOrder::of_manifests(&manifests);
+        let order = DeleteOrder::of_build(&manifests);
         let ids = order.ids();
         let pos = |rid: &ResourceId| ids.iter().position(|r| r == rid).unwrap();
         let webhook = ResourceId::new("apps", "Deployment", "cert-manager", "cert-manager-webhook");
@@ -1754,7 +1777,7 @@ mod tests {
         let operator = manifest("Deployment", "operator", "ops", "hash_op", "");
         let job = manifest("Job", "check", "ops", "hash_job", "hash_op");
         let cr = manifest("ConfigMap", "resource", "app", "hash_cr", "hash_job");
-        let mut order = DeleteOrder::of_manifests(&[operator, job, cr]);
+        let mut order = DeleteOrder::of_build(&[operator, job, cr]);
         let op = ResourceId::new("apps", "Deployment", "ops", "operator");
         let cr = ResourceId::new("", "ConfigMap", "app", "resource");
         order.retain(|rid| *rid == op || *rid == cr);
@@ -1827,7 +1850,7 @@ mod tests {
             "hash_plain",
             "requires:hash_op",
         );
-        let order = DeleteOrder::of_manifests(&[operator, marker, named, imported, plain]);
+        let order = DeleteOrder::of_build(&[operator, marker, named, imported, plain]);
         let id = |name: &str| ResourceId::new("", "ConfigMap", "app", name);
         let op = ResourceId::new("apps", "Deployment", "ops", "operator");
         assert_eq!(
@@ -1850,6 +1873,68 @@ mod tests {
         assert!(pos(&id("plain")) < pos(&op), "{ids:?}");
     }
 
+    /// Edges a revision records by name order deletes and name controllers
+    /// as the annotations of a build do, for manifests that carry no
+    /// `kix.run/depends-on` or `kix.run/identity-hash`. A controller edge to
+    /// an import marker names the object the marker imports.
+    #[test]
+    fn edges_by_name_order_deletes_and_name_controllers() {
+        use crate::cluster::edges::Edges;
+        use crate::cluster::revision::{Need, Revision, RevisionObject, RevisionSpec, Slot};
+        let bare = |kind: &str, name: &str, ns: &str| {
+            let mut m = manifest(kind, name, ns, "", "");
+            m["metadata"].as_object_mut().unwrap().remove("annotations");
+            m
+        };
+        let marker = json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "PackageInstance",
+            "metadata": {
+                "name": "crd-ref-dns",
+                "namespace": "app",
+                "annotations": {
+                    (keys::MODE): "import",
+                    (keys::IMPORT_KIND): "Deployment",
+                    (keys::IMPORT_API_VERSION): "apps/v1",
+                    (keys::IMPORT_NAME): "coredns",
+                },
+            },
+        });
+        let cr = bare("ConfigMap", "cr", "app");
+        let operator = bare("Deployment", "operator", "ops");
+        let rid = |m: &serde_json::Value| ResourceId::from_value(m);
+        let entry = |m: &serde_json::Value| RevisionObject::of_id("h", &rid(m));
+        let revision = Revision::new(RevisionSpec::new(
+            "a",
+            Slot::KeptOrphans,
+            vec![
+                entry(&cr).with_needs([Need::of(&rid(&marker), Some("controller"))]),
+                entry(&marker).with_needs([Need::of(&rid(&operator), Some("requires"))]),
+                entry(&operator),
+            ],
+        ));
+        let edges = Edges::of_revisions([&revision]);
+        let order = DeleteOrder::of(&[operator.clone(), marker.clone(), cr.clone()], &edges);
+        let ids = order.ids().to_vec();
+        let pos = |m: &serde_json::Value| ids.iter().position(|r| *r == rid(m)).unwrap();
+        assert!(pos(&cr) < pos(&marker), "{ids:?}");
+        assert!(pos(&marker) < pos(&operator), "{ids:?}");
+        assert_eq!(
+            order.controllers().get(&rid(&cr)),
+            Some(&vec![ResourceId::new(
+                "apps",
+                "Deployment",
+                "app",
+                "coredns"
+            )])
+        );
+        assert!(
+            DeleteOrder::of_build(&[operator, marker, cr])
+                .controllers()
+                .is_empty()
+        );
+    }
+
     /// Objects in a dependency cycle are reported, not deleted, and the
     /// walk still deletes what does not depend on the cycle.
     #[tokio::test]
@@ -1857,7 +1942,7 @@ mod tests {
         let a = manifest("ConfigMap", "a", "app", "hash_a", "hash_b");
         let b = manifest("ConfigMap", "b", "app", "hash_b", "hash_a");
         let c = manifest("ConfigMap", "c", "app", "hash_c", "");
-        let mut order = DeleteOrder::of_manifests(&[a, b, c]);
+        let mut order = DeleteOrder::of_build(&[a, b, c]);
         let mut seen = Vec::new();
         order
             .walk(

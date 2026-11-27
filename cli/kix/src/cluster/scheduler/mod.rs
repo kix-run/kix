@@ -34,7 +34,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::Value;
 use thiserror::Error;
 use tokio::task::JoinSet;
 
@@ -45,6 +44,7 @@ use crate::manifest::{keys, lifecycle, types::CLUSTER_SCOPED};
 
 use super::apply::ApplyAction;
 use super::cancel::CancelToken;
+use super::edges::Prior;
 use super::graph::Walked;
 use super::ops::{Cluster, DeployRecord, Left, RecordWriteError, ResourceIo};
 use super::prune_guard::Pruned;
@@ -269,7 +269,7 @@ pub(crate) async fn run_deploy(
     cluster: Cluster,
     plan: DeployPlan,
     orphan_rids: &[ResourceId],
-    old_manifests: &[Value],
+    prior: &Prior,
     ending: Ending,
     config: &SchedulerConfig,
     observer: Arc<dyn DeployObserver>,
@@ -278,15 +278,7 @@ pub(crate) async fn run_deploy(
         Ending::Finalize(prune) => prune,
         Ending::Partial => PrunePolicy::Skip,
     };
-    let mut run = Run::new(
-        &cluster,
-        &plan,
-        orphan_rids,
-        old_manifests,
-        prune,
-        config,
-        observer,
-    );
+    let mut run = Run::new(&cluster, &plan, orphan_rids, prior, prune, config, observer);
 
     // Run the watchdog on its own task and timer so it fires even if the
     // scheduler loop stalls. It reports through the observer and cancels the
@@ -324,10 +316,10 @@ pub(crate) async fn run_deploy(
 /// State for a single execution of [`run_deploy`].
 struct Run<'a> {
     config: &'a SchedulerConfig,
-    /// Orphaned resource IDs and the previous build's manifests used to order
-    /// pruning.
+    /// Orphaned resource IDs, and the objects earlier deploys made, which
+    /// order the prune and fill the kept-orphans revision.
     orphan_rids: &'a [ResourceId],
-    old_manifests: &'a [Value],
+    prior: &'a Prior,
     prune: PrunePolicy,
     progress: Arc<Progress>,
     observer: Arc<dyn DeployObserver>,
@@ -367,7 +359,7 @@ impl<'a> Run<'a> {
         cluster: &Cluster,
         plan: &DeployPlan,
         orphan_rids: &'a [ResourceId],
-        old_manifests: &'a [Value],
+        prior: &'a Prior,
         prune: PrunePolicy,
         config: &'a SchedulerConfig,
         observer: Arc<dyn DeployObserver>,
@@ -403,7 +395,7 @@ impl<'a> Run<'a> {
         Self {
             config,
             orphan_rids,
-            old_manifests,
+            prior,
             prune,
             progress,
             observer,
@@ -1240,7 +1232,7 @@ impl<'a> Run<'a> {
         if effective_orphans.is_empty() || prune == PrunePolicy::Skip {
             return left;
         }
-        let mut order = prune_order(&effective_orphans, self.old_manifests);
+        let mut order = prune_order(&effective_orphans, self.prior);
         let delete = prune == PrunePolicy::Delete;
         let (kept, prunable): (Vec<ResourceId>, Vec<ResourceId>) = order
             .ids()
@@ -1532,7 +1524,7 @@ impl<'a> Run<'a> {
                     Left {
                         orphans: &left,
                         never_pruned: &never_pruned,
-                        manifests: self.old_manifests,
+                        prior: self.prior,
                     },
                 ),
             )
@@ -1719,7 +1711,7 @@ pub async fn run_scripted(
     ops: Arc<super::ops::scripted::ScriptedOps>,
     plan: DeployPlan,
     orphan_rids: &[ResourceId],
-    old_manifests: &[Value],
+    old_manifests: &[serde_json::Value],
     ending: Ending,
     config: &SchedulerConfig,
     observer: Arc<dyn DeployObserver>,
@@ -1728,7 +1720,7 @@ pub async fn run_scripted(
         Cluster::scripted(ops),
         plan,
         orphan_rids,
-        old_manifests,
+        &Prior::of_build(old_manifests.to_vec()),
         ending,
         config,
         observer,

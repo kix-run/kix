@@ -372,6 +372,7 @@ fn a_record_without_names_names_a_missing_object_from_the_store() {
         record.clone(),
         record.package_index.clone(),
         &live,
+        &crate::cluster::edges::Edges::default(),
         &Apis::default(),
         &AppliedHashes::from_annotations(),
         &crate::cluster::field_manager::FieldManager::unmigrated("shop"),
@@ -408,6 +409,7 @@ fn an_object_live_under_another_hash_is_present() {
         record.clone(),
         record.package_index.clone(),
         &Live::of(&objects),
+        &crate::cluster::edges::Edges::default(),
         &Apis::default(),
         &AppliedHashes::from_annotations(),
         &crate::cluster::field_manager::FieldManager::unmigrated("shop"),
@@ -454,6 +456,7 @@ fn a_record_without_an_index_follows_depends_on() {
         record.clone(),
         record.package_index.clone(),
         &Live::of(&objects),
+        &crate::cluster::edges::Edges::default(),
         &Apis::default(),
         &AppliedHashes::from_annotations(),
         &crate::cluster::field_manager::FieldManager::unmigrated("shop"),
@@ -493,6 +496,7 @@ fn a_record_with_nothing_to_follow_lists_no_objects() {
         record.clone(),
         record.package_index.clone(),
         &Live::of(&[]),
+        &crate::cluster::edges::Edges::default(),
         &Apis::default(),
         &AppliedHashes::from_annotations(),
         &crate::cluster::field_manager::FieldManager::unmigrated("shop"),
@@ -586,6 +590,7 @@ fn an_object_from_an_index_without_groups_is_found_through_discovery() {
             record.clone(),
             record.package_index.clone(),
             &Live::of(&objects),
+            &crate::cluster::edges::Edges::default(),
             apis,
             &AppliedHashes::from_annotations(),
             &crate::cluster::field_manager::FieldManager::unmigrated("shop"),
@@ -823,4 +828,66 @@ async fn expected_objects_come_from_the_revisions() {
         "{:?}",
         seen.problems
     );
+}
+
+/// A Kix cluster read from revisions takes what each object depends on
+/// from the revisions, so `kix status` says which objects need a missing
+/// one when the live objects carry no `kix.run/depends-on` and no
+/// `kix.run/identity-hash`.
+#[tokio::test]
+async fn needed_by_comes_from_the_revisions() {
+    use crate::cluster::revision::{Need, Revision, RevisionObject, RevisionSpec, Slot};
+    use crate::cluster::tenancy_fixture::{Rec, Written, revision_value, state};
+    use crate::manifest::lifecycle::PHASE_ACTIVE;
+    let recs = [Rec {
+        name: "a-cur",
+        cluster: "a",
+        hash: "acur",
+        phase: PHASE_ACTIVE,
+        current: true,
+        objects: &["web", "db", "gone"],
+        ..Rec::default()
+    }];
+    let mut state = state(&recs, |_| Written::Revisions);
+    let rid = |name: &str| ResourceId::new("", "ConfigMap", "d", name);
+    let entry = |name: &str| RevisionObject::of_id(&format!("h-{name}"), &rid(name));
+    let instance = Revision::new(RevisionSpec::new(
+        "a",
+        Slot::Instance {
+            namespace: "d".into(),
+            name: "app".into(),
+            lifecycle: None,
+        },
+        vec![
+            entry("web").with_needs([Need::of(&rid("db"), None), Need::of(&rid("gone"), None)]),
+            entry("db"),
+            entry("gone"),
+        ],
+    ));
+    let old = state.revision_named("a-cur", "instance");
+    state.remove_revision(&old);
+    state.revisions.push(revision_value(&instance));
+    state.records[0]["status"]["revisions"]["instances"]["d/app"] = json!(instance.name);
+    state.objects.retain(|o| o["metadata"]["name"] != "gone");
+    for object in &mut state.objects {
+        let annotations = object["metadata"]["annotations"].as_object_mut().unwrap();
+        annotations.remove(keys::IDENTITY_HASH);
+        annotations.remove(keys::DEPENDS_ON);
+    }
+    let api = FakeApi::new(state.all());
+
+    let seen = observe_fake(&api, ObserveScope::Cluster("a")).await;
+    let [view] = seen.clusters.as_slice() else {
+        panic!("one cluster: {:?}", seen.clusters);
+    };
+    let needed_by = |hash: &str| -> Vec<String> {
+        view.needed_by(hash)
+            .iter()
+            .map(|o| o.rid.name.clone())
+            .collect()
+    };
+    assert_eq!(by_name(view, "gone").presence, Presence::Missing);
+    assert_eq!(needed_by("h-gone"), ["web"]);
+    assert_eq!(needed_by("h-db"), ["web"]);
+    assert_eq!(at_risk(view), BTreeSet::from(["h-web".to_string()]));
 }
