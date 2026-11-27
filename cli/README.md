@@ -1592,8 +1592,16 @@ it and the next deploy tries again.
 `kix-cli`'s `lock::take`, a command that changes a Kix cluster refuses when
 a record of it that is current, queued, or deploying is operator-driven and
 the Activation CRD does not list `revisions`
-(`activation::features::operator_without_revisions`, `[K9557]`). `--operator`
-commands keep `require_features`.
+(`activation::features::operator_without_revisions`, `[K9557]`). Kix cannot
+tell such an operator from an uninstalled one, so `kix deploy
+--operator-removed` (`PlanFlags::operator_removed`, recorded in a saved plan)
+states that none runs: before the deploy plans, `Planner::take_back` takes the
+deploy lock and `features::take_back` marks each queued record the operator
+drives `Superseded`, each one it was deploying `Failed`, and removes
+`spec.source` from those and from the current record, so no record is refused
+any more and later commands need no flag (`PlanEvent::TookBack`). `kix plan`
+records the flag and writes nothing. `--operator` commands keep
+`require_features`.
 
 `kix gc --full-scan` rebuilds a kept-orphans list whose revision is missing
 or cannot be read (`Tenancy::only_kept_unreadable`): it names every labelled

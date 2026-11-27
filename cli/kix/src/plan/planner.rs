@@ -51,7 +51,7 @@ use super::server::Overlay;
 use super::{PackageDiff, PlanError, PlanEvent, UnknownInstances, diff_graphs};
 use crate::build_source::InstallableBuild;
 use crate::build_source::SopsSources;
-use crate::cluster::activation::{KeptOrphans, OpenedRecords, Record, Records};
+use crate::cluster::activation::{KeptOrphans, OpenedRecords, Record, Records, features};
 use crate::cluster::apply::ChangeAction;
 use crate::cluster::binding;
 use crate::cluster::client::{self, ResiliencePolicy};
@@ -923,6 +923,8 @@ impl<'a> Planner<'a> {
                     .run(&client, &connection)
                     .await?;
                 if let Some(settle) = &self.settle {
+                    self.take_back(&client, &new_graph.cluster_name, settle)
+                        .await?;
                     refuse_older_operator(&client, &new_graph.cluster_name).await?;
                     self.settle_lock(&client, new_graph, settle).await?;
                 }
@@ -961,6 +963,7 @@ impl<'a> Planner<'a> {
         let graph = build.graph();
         let cluster = &graph.cluster_name;
         if let Some(settle) = &self.settle {
+            self.take_back(&client, cluster, settle).await?;
             refuse_older_operator(&client, cluster).await?;
             self.settle_lock(&client, graph, settle).await?;
         }
@@ -1001,6 +1004,69 @@ impl<'a> Planner<'a> {
     /// Settle a lock another run holds on the Kix cluster of `graph`, saying
     /// first who holds it ([`PlanEvent::LockHeld`]). A dead run's record is
     /// continued rather than marked `Failed` when it is this build's record.
+    /// With [`PlanFlags::operator_removed`], take Kix cluster `cluster` back
+    /// from the Kix operator ([`features::take_back`]) under its deploy lock,
+    /// before the plan reads the records. Take the lock only when a record
+    /// needs it, and read the records again under it. The writes raise the
+    /// lock's generation when it is released, so a plan made before them is
+    /// refused at its take.
+    pub(crate) async fn take_back(
+        &self,
+        client: &Client,
+        cluster: &str,
+        settle: &Settle,
+    ) -> Result<(), PlanError> {
+        if !self.flags.operator_removed {
+            return Ok(());
+        }
+        let failed = |e: features::TakeBackError| PlanError::TakeBack {
+            cluster: cluster.to_string(),
+            source: Box::new(e),
+        };
+        let discovery = discovery::discover_resources(client)
+            .await
+            .map_err(|e| PlanError::Discovery(Box::new(e)))?;
+        let opened = Records::open(client, &discovery).map_err(PlanError::Domain)?;
+        let Some(records) = opened.records() else {
+            return Ok(());
+        };
+        let driven = features::driven_by_older_operator(client, records, cluster)
+            .await
+            .map_err(|e| failed(e.into()))?;
+        if driven.is_empty() {
+            return Ok(());
+        }
+        let request = head::Request {
+            cluster: cluster.to_string(),
+            holder: head::Holder::cli(settle.command),
+            purpose: settle.purpose,
+            activation: None,
+            expect: None,
+        };
+        let held = head::read(client, cluster)
+            .await
+            .map_err(|e| PlanError::ReadHead(Box::new(e)))?
+            .and_then(|h| h.lock().cloned());
+        if let Some(held) = &held {
+            (self.report)(PlanEvent::LockHeld(held));
+        }
+        let lock = head::take(client, request, head::system_clock(), &|_| {})
+            .await
+            .map_err(|e| PlanError::Lock(Box::new(e)))?;
+        let guarded = lock.guarded(client);
+        let taken = features::take_back(&guarded, &records.through(&guarded), cluster).await;
+        let released = lock.release().await;
+        let taken = taken.map_err(failed)?;
+        released.map_err(|e| PlanError::Lock(Box::new(e.into())))?;
+        if !taken.is_empty() {
+            (self.report)(PlanEvent::TookBack {
+                cluster,
+                taken: &taken,
+            });
+        }
+        Ok(())
+    }
+
     async fn settle_lock(
         &self,
         client: &Client,
@@ -1509,7 +1575,7 @@ async fn ledger_for(
 /// Refuse when a record of Kix cluster `cluster` is driven by a Kix operator
 /// older than this Kix ([`crate::cluster::activation::features::operator_without_revisions`]),
 /// before a command that will take the lock plans anything.
-async fn refuse_older_operator(client: &Client, cluster: &str) -> Result<(), PlanError> {
+pub(crate) async fn refuse_older_operator(client: &Client, cluster: &str) -> Result<(), PlanError> {
     let discovery = discovery::discover_resources(client)
         .await
         .map_err(|e| PlanError::Discovery(Box::new(e)))?;
@@ -2185,6 +2251,7 @@ mod tests {
             reconcile: false,
             force_conflicts: false,
             accept_migrations: false,
+            operator_removed: false,
             only: Vec::new(),
         };
         Planner::new(flags, &report)
@@ -2242,6 +2309,7 @@ mod tests {
             reconcile: false,
             force_conflicts: false,
             accept_migrations: false,
+            operator_removed: false,
             only: Vec::new(),
         };
         let new_manifests = manifests_of(build.graph());

@@ -672,6 +672,21 @@ impl Records {
         Ok(())
     }
 
+    /// Remove `spec.source` from record `name`, the build a Kix operator
+    /// deploys for it. The record then reads as one the CLI deployed, which
+    /// no operator acts on.
+    pub async fn clear_source(&self, name: &str) -> Result<(), RecordsError> {
+        self.api()
+            .patch(
+                name,
+                &PatchParams::default(),
+                &Patch::Merge(&json!({ "spec": { "source": null } })),
+            )
+            .await
+            .map_err(RecordsError::on("patch", name))?;
+        Ok(())
+    }
+
     /// Delete `record` only if its `uid` and `resourceVersion` still match the
     /// object that was read.
     ///

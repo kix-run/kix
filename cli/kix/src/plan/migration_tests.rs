@@ -772,3 +772,124 @@ async fn an_object_another_cluster_applied_is_applied_when_a_build_adds_it() {
     kept.sort();
     assert_eq!(notes(&api, "ConfigMap", "shared").0, Some(kept.join(",")));
 }
+
+/// A Kix cluster an older operator drives: an operator-driven current
+/// record, a queued one, and one the operator stopped deploying. Return the
+/// next build.
+async fn handed_to_an_older_operator(api: &FakeApi) -> StoreGraph {
+    // An operator older than the features annotation left the CRD without
+    // it.
+    api.insert(json!({
+        "apiVersion": "apiextensions.k8s.io/v1",
+        "kind": "CustomResourceDefinition",
+        "metadata": { "name": keys::ACTIVATIONS_CRD },
+        "spec": { "versions": [{ "name": "v1alpha1", "served": true, "storage": true }] },
+        "status": { "conditions": [{ "type": "Established", "status": "True" }] },
+    }));
+    let old = release("a", "a-r0", &[config_map("web", "1")]);
+    deployed_by_an_older_kix(api, "a", &old, PHASE_ACTIVE, &[]).await;
+    let current = record_of(&old)["metadata"]["name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let source = json!({ "type": "storePath", "path": "/nix/store/x" });
+    api.patch_object(lifecycle::RECORD_KIND, &current, |o| {
+        o["spec"]["source"] = source.clone();
+    });
+    for (name, phase) in [("a-queued", ""), ("a-deploying", "Deploying")] {
+        api.insert(json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": lifecycle::RECORD_KIND,
+            "metadata": {
+                "name": name,
+                "labels": { "app.kubernetes.io/managed-by": "kix", (keys::CLUSTER_LABEL): "a" },
+                "annotations": { (keys::IDENTITY_HASH): name },
+            },
+            "spec": { "cluster": "a", "source": source },
+            "status": { "phase": phase },
+        }));
+    }
+    release("a", "a-r1", &[config_map("web", "2")])
+}
+
+fn phase(api: &FakeApi, name: &str) -> String {
+    api.object(lifecycle::RECORD_KIND, name).unwrap()["status"]["phase"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Without `--operator-removed`, a Kix cluster an older operator drives is
+/// refused, and the planner changes nothing. With it, the deploy takes the
+/// cluster back before it plans: the queued record is `Superseded`, the
+/// deploying one `Failed`, and no record names a build for the operator.
+/// After that deploy, no command is refused, without the flag.
+#[tokio::test]
+async fn a_deploy_with_operator_removed_takes_the_cluster_back_for_good() {
+    let api = FakeApi::new([]);
+    api.track_owners();
+    let new = handed_to_an_older_operator(&api).await;
+    let client = api.client();
+    let settle = crate::plan::planner::Settle {
+        command: "kix deploy",
+        purpose: crate::cluster::head::Purpose::Deploy,
+    };
+    let refused = crate::plan::planner::refuse_older_operator(&client, "a")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(refused, crate::plan::PlanError::OperatorWithoutRevisions(_)),
+        "{refused}"
+    );
+    let text = refused.to_string();
+    assert!(
+        text.starts_with("[K9557]") && text.contains("kix deploy a --operator-removed"),
+        "{text}"
+    );
+    Planner::new(crate::plan::fixtures::flags(&[]), &|_| {})
+        .take_back(&client, "a", &settle)
+        .await
+        .unwrap();
+    assert_eq!(phase(&api, "a-queued"), "");
+    assert!(
+        crate::plan::planner::refuse_older_operator(&client, "a")
+            .await
+            .is_err()
+    );
+
+    let flags = crate::plan::document::PlanFlags {
+        operator_removed: true,
+        ..crate::plan::fixtures::flags(&[])
+    };
+    let reported = std::sync::Mutex::new(Vec::new());
+    let report = |event: crate::plan::PlanEvent<'_>| {
+        if let crate::plan::PlanEvent::TookBack { taken, .. } = event {
+            reported.lock().unwrap().push(taken.clone());
+        }
+    };
+    Planner::new(flags.clone(), &report)
+        .take_back(&client, "a", &settle)
+        .await
+        .unwrap();
+    let taken = reported.lock().unwrap().clone();
+    assert_eq!(taken.len(), 1);
+    assert_eq!(taken[0].superseded, ["a-queued"]);
+    assert_eq!(taken[0].failed, ["a-deploying"]);
+    assert!(taken[0].current.is_some());
+    assert_eq!(phase(&api, "a-queued"), "Superseded");
+    assert_eq!(phase(&api, "a-deploying"), "Failed");
+    crate::plan::planner::refuse_older_operator(&client, "a")
+        .await
+        .unwrap();
+    // A second run finds nothing to take back.
+    Planner::new(flags, &report)
+        .take_back(&client, "a", &settle)
+        .await
+        .unwrap();
+    assert_eq!(reported.lock().unwrap().len(), 1);
+
+    deploy(&api, "a", &new).await.unwrap();
+    crate::plan::planner::refuse_older_operator(&client, "a")
+        .await
+        .unwrap();
+}

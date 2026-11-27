@@ -1234,6 +1234,10 @@
           },
           "type": "array"
         },
+        "operator_removed": {
+          "description": "`--operator-removed`: no Kix operator runs for the Kix cluster, so\nthe deploy takes back the records an older operator was handed.\nLeft out when not set.",
+          "type": "boolean"
+        },
         "prune": {
           "$ref": "#/$defs/PrunePolicy",
           "description": "What the deploy does with orphans: `delete` with `--prune`, `skip`\nwith `--skip-orphan-check`, and `warn_only` otherwise."

@@ -149,6 +149,7 @@ pub fn flags_for(
             (given.reconcile, "--reconcile"),
             (given.accept_migrations, "--accept-migrations"),
             (!given.only.is_empty(), "--only"),
+            (given.operator_removed, "--operator-removed"),
         ]
         .into_iter()
         .filter_map(|(set, flag)| set.then_some(flag))
@@ -229,6 +230,11 @@ pub fn flags_for(
             given.accept_migrations,
             planned.accept_migrations,
             "--accept-migrations",
+        ),
+        (
+            given.operator_removed,
+            planned.operator_removed,
+            "--operator-removed",
         ),
     ] {
         if set && !in_plan {
@@ -609,6 +615,7 @@ mod tests {
             reconcile: false,
             force_conflicts: false,
             accept_migrations: false,
+            operator_removed: false,
             only: Vec::new(),
         });
         p.conflicts = Checked::found(Vec::new());
@@ -776,6 +783,7 @@ mod tests {
 
         let accepting = PlanFlags {
             accept_migrations: true,
+            operator_removed: false,
             ..plan().flags.unwrap()
         };
         assert!(flags_for(&diff, &accepting, "p.kixplan", "c").is_err());
@@ -810,6 +818,38 @@ mod tests {
         };
         let err = flags_for(&plan(), &given, "p.kixplan", "c").unwrap_err();
         assert!(err.contains("--reconcile"), "{err}");
+    }
+
+    /// A plan saved without `--operator-removed` cannot be deployed with it,
+    /// and one saved with it deploys with the flag, given or not.
+    #[test]
+    fn operator_removed_must_agree_with_the_plan() {
+        let none = plan().flags.unwrap();
+        let removed = PlanFlags {
+            operator_removed: true,
+            ..none.clone()
+        };
+        let err = flags_for(&plan(), &removed, "p.kixplan", "c").unwrap_err();
+        assert!(err.contains("--operator-removed"), "{err}");
+        let mut saved = plan();
+        saved.flags = Some(removed.clone());
+        assert_eq!(
+            flags_for(&saved, &none, "p.kixplan", "c"),
+            Ok(removed.clone())
+        );
+        assert_eq!(
+            flags_for(&saved, &removed, "p.kixplan", "c"),
+            Ok(removed.clone())
+        );
+        let mut diff = plan();
+        diff.flags = None;
+        assert!(flags_for(&diff, &removed, "p.kixplan", "c").is_err());
+        // Left out of a saved plan when not set, as older plans have it.
+        let text = serde_json::to_string(&none).unwrap();
+        assert!(!text.contains("operatorRemoved"), "{text}");
+        let read: PlanFlags =
+            serde_json::from_str(&serde_json::to_string(&removed).unwrap()).unwrap();
+        assert!(read.operator_removed);
     }
 
     /// A saved plan of part of a build deploys only with the same `--only`,

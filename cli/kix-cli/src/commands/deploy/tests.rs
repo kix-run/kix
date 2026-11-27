@@ -104,6 +104,28 @@ mod prune_flag_tests {
             };
         assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
+
+    /// `--operator-removed` says no operator runs, and `--operator` hands
+    /// the deploy to one, so a deploy takes one or the other. `kix plan`
+    /// takes the flag too, so a saved plan can carry it.
+    #[test]
+    fn operator_removed_conflicts_with_operator() {
+        let err =
+            match Cli::try_parse_from(["kix", "deploy", "x", "--operator", "--operator-removed"]) {
+                Ok(_) => panic!("both must not parse"),
+                Err(e) => e,
+            };
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+        let Command::Deploy(args) =
+            Cli::try_parse_from(["kix", "deploy", "x", "--operator-removed"])
+                .expect("args parse")
+                .command
+        else {
+            panic!("not a deploy");
+        };
+        assert!(crate::commands::plan::flags_of(&args.plan).operator_removed);
+        assert!(Cli::try_parse_from(["kix", "plan", "x", "--operator-removed"]).is_ok());
+    }
 }
 
 mod cached_baseline_tests {

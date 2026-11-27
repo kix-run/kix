@@ -1622,6 +1622,7 @@ mod tests {
             reconcile: false,
             force_conflicts: false,
             accept_migrations: false,
+            operator_removed: false,
             only: Vec::new(),
         });
         let text = render_text(&plan);
@@ -1768,6 +1769,7 @@ mod tests {
             reconcile: false,
             force_conflicts: true,
             accept_migrations: false,
+            operator_removed: false,
         });
         let text = render_drift_text(&forced);
         assert!(
@@ -1872,6 +1874,7 @@ mod tests {
             reconcile: false,
             force_conflicts: false,
             accept_migrations: false,
+            operator_removed: false,
             only: vec!["app/web".into()],
         });
         plan.left_alone = Some(kix::plan::document::LeftAlone {

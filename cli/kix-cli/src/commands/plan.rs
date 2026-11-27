@@ -116,6 +116,7 @@ pub(crate) fn flags_of(args: &PlanArgs) -> PlanFlags {
         reconcile: args.reconcile,
         force_conflicts: args.force_conflicts,
         accept_migrations: args.accept_migrations,
+        operator_removed: args.operator_removed,
         only: PlanFlags::only_of(&args.only),
     }
 }
@@ -968,6 +969,7 @@ mod tests {
             reconcile: false,
             force_conflicts: false,
             accept_migrations: false,
+            operator_removed: false,
             only: Vec::new(),
         });
         doc.prune = Checked::found(entries);

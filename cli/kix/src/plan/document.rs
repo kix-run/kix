@@ -312,6 +312,11 @@ pub struct PlanFlags {
     pub reconcile: bool,
     pub force_conflicts: bool,
     pub accept_migrations: bool,
+    /// `--operator-removed`: no Kix operator runs for the Kix cluster, so
+    /// the deploy takes back the records an older operator was handed.
+    /// Left out when not set.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub operator_removed: bool,
     /// The instances (`namespace/instance`) that `--only` names, sorted. The
     /// deploy applies them and what they depend on, and leaves the rest of
     /// the build for a later deploy. Left out when the deploy applies the
@@ -1320,6 +1325,7 @@ mod tests {
                 reconcile: false,
                 force_conflicts: false,
                 accept_migrations: false,
+                operator_removed: false,
                 only: Vec::new(),
             };
             let json = serde_json::to_value(&flags).unwrap();
@@ -1346,6 +1352,7 @@ mod tests {
             reconcile: false,
             force_conflicts: false,
             accept_migrations: false,
+            operator_removed: false,
             only: PlanFlags::only_of(&["web/b".into(), "app/a".into(), "web/b".into()]),
         };
         assert_eq!(flags.only, ["app/a", "web/b"]);
