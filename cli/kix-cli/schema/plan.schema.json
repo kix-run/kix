@@ -1617,6 +1617,11 @@
           "type": "string"
         },
         {
+          "const": "crd_installed_by_kix",
+          "description": "Its kind is one of Kix's own. The build does not carry its CRD, and\nKix installs that CRD when the deploy takes its lock.",
+          "type": "string"
+        },
+        {
           "const": "crd_installed_outside_kix",
           "description": "Its kind comes from a CRD that is not on the cluster, and the build\ndeclares it installed outside Kix with an import marker. Kix does\nnot create it, and the deploy waits for something else to install\nit, such as an operator in the build or another tool.",
           "type": "string"

@@ -185,7 +185,10 @@ impl std::error::Error for OfflinePlanDiffers {}
 
 impl fmt::Display for OfflinePlanDiffers {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "the cluster differs from what the offline plan assumed")?;
+        writeln!(
+            f,
+            "[K3811] the cluster differs from what the offline plan assumed"
+        )?;
         writeln!(f, "  Nothing was applied to the cluster.")?;
         writeln!(f)?;
         writeln!(

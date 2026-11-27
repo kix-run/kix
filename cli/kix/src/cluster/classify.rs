@@ -1,11 +1,12 @@
 //! Sort a dry run's answers into accepted, refused, and not checked.
 //!
 //! A dry-run answer about an object is final only when the deploy does not
-//! change what produced the answer. Kix can tell in four cases: the object's
+//! change what produced the answer. Kix can tell in these cases: the object's
 //! namespace is created by the deploy, its CRD is created or changed by the
-//! deploy, or its admission webhook could not reach a backend the deploy
-//! writes. Each of these is "not checked". Every other refusal is final, and
-//! stops the deploy before it writes anything.
+//! deploy, its kind is one of Kix's own, whose CRD Kix installs when the
+//! deploy takes its lock, or its admission webhook could not reach a backend
+//! the deploy writes. Each of these is "not checked". Every other refusal is
+//! final, and stops the deploy before it writes anything.
 //!
 //! `kix plan`, the deploy gate, saved plans, and `kix rollback` all sort the
 //! answers with [`classify`], so they agree on what stops.
@@ -18,6 +19,7 @@ use kube::discovery::{ApiResource, Scope};
 
 use crate::cluster::apply::ChangeAction;
 use crate::cluster::discovery;
+use crate::cluster::own_crds;
 use crate::cluster::readiness;
 use crate::cluster::scheduler::DeployPlan;
 use crate::manifest::keys;
@@ -92,7 +94,7 @@ struct Context<'a> {
     scope: &'a DeployScope<'a>,
     manifests: HashMap<ResourceId, &'a Value>,
     namespaces: HashSet<&'a str>,
-    crds: BuildCrds,
+    crds: InstalledKinds,
     changed: ChangedCrds,
     writes: HashSet<ResourceId>,
     /// The package of each object the deploy writes.
@@ -124,7 +126,7 @@ impl<'a> Context<'a> {
         Context {
             scope,
             namespaces,
-            crds: BuildCrds::of(scope.build),
+            crds: InstalledKinds::of(scope.build),
             changed: ChangedCrds::of(answers),
             writes: applied.iter().map(|m| ResourceId::from_value(m)).collect(),
             written_packages: applied.iter().filter_map(|m| keys::package_of(m)).collect(),
@@ -170,6 +172,14 @@ impl<'a> Context<'a> {
                     reason: UncheckedReason::CrdCreatedByThisDeploy,
                     because: Some(crd),
                     detail: format!("kind {kind} is served once this deploy installs its CRD"),
+                },
+                Some(CrdSource::Kix(crd)) => Verdict::NotChecked {
+                    reason: UncheckedReason::CrdInstalledByKix,
+                    because: Some(crd),
+                    detail: format!(
+                        "kind {kind} is one of Kix's own. The build does not carry its CRD, \
+                         and Kix installs it when the deploy starts"
+                    ),
                 },
                 _ => Verdict::NotChecked {
                     reason: UncheckedReason::CrdInstalledOutsideKix,
@@ -304,9 +314,14 @@ impl ChangedCrds {
 }
 
 /// Where the CRD of a custom resource's kind comes from.
+#[derive(Clone)]
 enum CrdSource {
     /// A `CustomResourceDefinition` manifest in the build.
     Created(ResourceId),
+    /// A CRD of Kix's own kinds, which the build does not carry. Kix
+    /// installs it when the deploy takes its lock, before it writes any
+    /// object of the build.
+    Kix(ResourceId),
     /// An import marker (`scope.mkCRDRef`) in the build, which says the CRD
     /// is installed outside Kix, by an operator in the build or by something
     /// else. The deploy waits for it and never creates it. The CRD is known
@@ -318,26 +333,45 @@ impl CrdSource {
     fn imported(self) -> Option<ResourceId> {
         match self {
             CrdSource::Imported(crd) => crd,
-            CrdSource::Created(_) => None,
+            CrdSource::Created(_) | CrdSource::Kix(_) => None,
         }
     }
 }
 
-/// Custom resource kinds and API groups the build brings, either as
-/// `CustomResourceDefinition` manifests or through import markers.
-struct BuildCrds {
-    kinds: HashMap<(String, String), ResourceId>,
+/// The custom resource kinds a deploy of a build brings to the cluster, and
+/// where each one's CRD comes from. This is the one answer to "does this
+/// deploy install this kind" that the dry run's verdicts use.
+///
+/// A kind comes from a `CustomResourceDefinition` manifest in the build, from
+/// the CRDs Kix installs itself ([`own_crds::all`]), or from an import marker
+/// that names a CRD of its API group.
+struct InstalledKinds {
+    /// The kinds whose CRD the deploy applies, from the build or from Kix.
+    kinds: HashMap<(String, String), CrdSource>,
     /// The CRDs that import markers wait for, by API group.
     groups: HashMap<String, Vec<ResourceId>>,
 }
 
-impl BuildCrds {
+impl InstalledKinds {
     fn of(manifests: &[Value]) -> Self {
-        let kinds = manifests
+        let own = own_crds::all().into_iter().filter_map(|crd| {
+            Some((
+                defined_by(&crd.definition)?,
+                CrdSource::Kix(crd_id(&crd.name)),
+            ))
+        });
+        // A build that carries a CRD of Kix's own kinds, as builds of earlier
+        // releases do, applies it itself, so the build's entry wins.
+        let built = manifests
             .iter()
             .filter(|m| GroupKind::of_manifest(m) == kinds::CUSTOM_RESOURCE_DEFINITION)
-            .filter_map(|m| Some((defined_by(m)?, ResourceId::from_value(m))))
-            .collect();
+            .filter_map(|m| {
+                Some((
+                    defined_by(m)?,
+                    CrdSource::Created(ResourceId::from_value(m)),
+                ))
+            });
+        let kinds = own.chain(built).collect();
         let mut groups: HashMap<String, Vec<ResourceId>> = HashMap::new();
         for target in manifests
             .iter()
@@ -351,16 +385,16 @@ impl BuildCrds {
                     .push(crd_id(&target.name));
             }
         }
-        BuildCrds { kinds, groups }
+        InstalledKinds { kinds, groups }
     }
 
     /// Return where the CRD of `manifest`'s kind comes from, or `None` when
-    /// the build has neither the CRD nor an import marker for its group. An
-    /// import marker names a CRD by group only.
+    /// neither the build nor Kix installs it and the build has no import
+    /// marker for its group. An import marker names a CRD by group only.
     fn source(&self, manifest: &Value) -> Option<CrdSource> {
         let key = crd_key(manifest)?;
-        if let Some(crd) = self.kinds.get(&key) {
-            return Some(CrdSource::Created(crd.clone()));
+        if let Some(source) = self.kinds.get(&key) {
+            return Some(source.clone());
         }
         match self.groups.get(&key.0).map(Vec::as_slice)? {
             [one] => Some(CrdSource::Imported(Some(one.clone()))),
@@ -766,13 +800,52 @@ mod tests {
     }
 
     #[test]
-    fn build_crds_match_group_and_kind() {
-        let crds = BuildCrds::of(&[crd("example.com", "Widget", "v1")]);
+    fn installed_kinds_match_group_and_kind() {
+        let crds = InstalledKinds::of(&[crd("example.com", "Widget", "v1")]);
         let widget = |api: &str| json!({"apiVersion": api, "kind": "Widget"});
         assert!(matches!(
             crds.source(&widget("example.com/v1")),
             Some(CrdSource::Created(_))
         ));
         assert!(crds.source(&widget("other.io/v1")).is_none());
+    }
+
+    /// Kix installs the CRD of each of its own kinds when the deploy takes
+    /// its lock, so an object of one is not checked on a cluster that does
+    /// not serve the kind yet, although the build carries no CRD for it. A
+    /// build that carries the CRD, as builds of earlier releases do, applies
+    /// it itself.
+    #[test]
+    fn a_kind_kix_installs_is_not_checked() {
+        let record = object(keys::API_VERSION, "Activation", CLUSTER_SCOPED, "r", "app");
+        let unknown = DryRunAnswer {
+            rid: ResourceId::from_value(&record),
+            outcome: DryRunOutcome::Refused(Refusal::UnknownKind {
+                kind: "Activation".into(),
+            }),
+        };
+        let crd_name = keys::ACTIVATIONS_CRD;
+        let verdicts = run(
+            std::slice::from_ref(&record),
+            &[&record],
+            std::slice::from_ref(&unknown),
+        );
+        assert_eq!(
+            webhook_reason(&verdicts[0]),
+            Some((&UncheckedReason::CrdInstalledByKix, &Some(crd_id(crd_name))))
+        );
+
+        let (group, _) = keys::API_VERSION.split_once('/').unwrap();
+        let mut carried = crd(group, "Activation", "v1alpha1");
+        carried["metadata"]["name"] = json!(crd_name);
+        let build = [carried, record.clone()];
+        let verdicts = run(&build, &[&record], &[unknown]);
+        assert_eq!(
+            webhook_reason(&verdicts[0]),
+            Some((
+                &UncheckedReason::CrdCreatedByThisDeploy,
+                &Some(crd_id(crd_name))
+            ))
+        );
     }
 }

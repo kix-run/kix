@@ -189,7 +189,7 @@ fn deploy_and_gc() {
     assert!(first.status.success(), "first deploy should succeed");
     assert!(stdout1.contains("created"), "should create resources");
     assert!(
-        stdout1.contains("No previous activation"),
+        stdout1.contains("No previous deployment record on the cluster"),
         "should detect no previous activation"
     );
 
@@ -333,7 +333,11 @@ fn deploy_and_gc() {
         "{}",
         String::from_utf8_lossy(&from_diff.stderr)
     );
-    assert!(String::from_utf8_lossy(&from_diff.stderr).contains("save a plan from `kix plan`"));
+    let refusal = String::from_utf8_lossy(&from_diff.stderr).into_owned();
+    assert!(
+        refusal.contains("which only `kix plan` records"),
+        "{refusal}"
+    );
 
     let contradicted = check(&unforced, &["--prune"]);
     assert_eq!(contradicted.status.code(), Some(1));

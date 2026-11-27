@@ -2027,6 +2027,77 @@ mod tests {
         assert_eq!(ran.created + ran.configured + ran.failed, 0);
     }
 
+    /// A first deploy to a cluster that serves none of Kix's kinds passes
+    /// the dry run. The build carries no CRD for the deployment record or the
+    /// package instances, and Kix installs those CRDs when the deploy takes
+    /// its lock, so their objects are not checked rather than refused.
+    #[tokio::test]
+    async fn a_first_deploy_to_a_cluster_without_kix_kinds_passes_the_dry_run() {
+        use crate::cluster::classify::{DeployScope, Verdict, classify};
+        use crate::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
+        use crate::plan::document::UncheckedReason;
+
+        let build = crate::plan::fixtures::kix_enterprise_test();
+        let checked = crate::plan::fixtures::plan(
+            &Baseline::empty(),
+            &build,
+            crate::plan::fixtures::flags(&[]),
+        )
+        .unwrap();
+        let (_, manifests) = crate::plan::fixtures::stamp(&build);
+        let api = FakeApi::new([]);
+        api.serve_no_kix_kinds();
+        let target = Target::connect(api.client(), crate::build_source::SopsSources::Local)
+            .await
+            .unwrap();
+        let served = target.discovery().to_vec();
+        let config = SchedulerConfig {
+            timeout: std::time::Duration::from_secs(5),
+            on_error: OnErrorPolicy::Continue,
+            cancel: crate::cluster::cancel::CancelToken::new(),
+            concurrency: scheduler::CONCURRENCY,
+            stall: crate::cluster::watchdog::StallPolicy::off(),
+            check_unchanged: true,
+            names_flags: true,
+        };
+        let (_, answers) = checked
+            .dry_run(
+                target,
+                config,
+                std::sync::Arc::new(crate::cluster::stream::NullObserver),
+            )
+            .await;
+        let scope = DeployScope {
+            cluster: &checked.cluster,
+            build: &manifests,
+            plan: checked.plan(),
+            served: &served,
+        };
+        let verdicts = classify(&answers, &scope);
+        let refused: Vec<String> = verdicts
+            .iter()
+            .filter(|(_, v)| matches!(v, Verdict::Refused(_)))
+            .map(|(rid, v)| format!("{} {v:?}", rid.display_id()))
+            .collect();
+        assert!(refused.is_empty(), "{refused:#?}");
+        let mut by_kix: Vec<&str> = verdicts
+            .iter()
+            .filter(|(_, v)| {
+                matches!(
+                    v,
+                    Verdict::NotChecked {
+                        reason: UncheckedReason::CrdInstalledByKix,
+                        ..
+                    }
+                )
+            })
+            .map(|(rid, _)| rid.kind.as_str())
+            .collect();
+        by_kix.sort();
+        by_kix.dedup();
+        assert_eq!(by_kix, ["Activation", "PackageInstance"]);
+    }
+
     /// A plan with nothing to do starts no run, so no finalize supersedes
     /// the failed records it folded in. `start` supersedes them, as it does
     /// for `kix deploy` and `kix rollback` alike.

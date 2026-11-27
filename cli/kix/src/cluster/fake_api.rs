@@ -35,6 +35,8 @@
 //! plain-text error, as the apiserver does for a path it has not registered.
 //! [`FakeApi::serve_retired_records`] adds the Activation kind under a
 //! retired domain to discovery, as on a cluster that has not migrated.
+//! [`FakeApi::serve_no_kix_kinds`] leaves Kix's own kinds out of
+//! discovery, as on a cluster Kix has never deployed to.
 //!
 //! An apply that sends `metadata.resourceVersion` is refused with 409 when
 //! the object has another one, as Kubernetes does. [`FakeApi::track_owners`]
@@ -147,6 +149,8 @@ struct State {
     failures: Vec<(String, u32, u16)>,
     /// Discovery also serves [`RETIRED_RECORDS`].
     retired_records: bool,
+    /// Discovery leaves out the kinds of [`keys::DOMAIN`].
+    no_kix_kinds: bool,
     /// What `/version` answers, once set.
     version: Option<Value>,
     /// Applies keep `metadata.managedFields` ([`FakeApi::track_owners`]).
@@ -386,6 +390,12 @@ impl FakeApi {
         self.state.lock().unwrap().retired_records = true;
     }
 
+    /// Leave Kix's own kinds out of discovery, as on a cluster whose
+    /// CustomResourceDefinitions Kix has not installed yet.
+    pub fn serve_no_kix_kinds(&self) {
+        self.state.lock().unwrap().no_kix_kinds = true;
+    }
+
     /// Answer `/version` with `git_version`, `major`, and `minor`, as the
     /// API server reports them (`"v1.31.4+k3s1"`, `"1"`, `"31"`; EKS writes
     /// `minor` as `"31+"`). Until this is called, `/version` answers 404.
@@ -547,6 +557,9 @@ impl FakeApi {
         let mut kinds = KINDS.to_vec();
         if st.retired_records {
             kinds.push(RETIRED_RECORDS);
+        }
+        if st.no_kix_kinds {
+            kinds.retain(|(group, ..)| *group != keys::DOMAIN);
         }
         if let Some(doc) = discovery(&kinds, path) {
             return (200, doc);

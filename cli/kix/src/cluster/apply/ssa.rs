@@ -168,7 +168,7 @@ fn kix_cluster_conflict(
         .map(|c| format!("Kix cluster `{}` owns {}.", c.manager, c.fields.join(", ")))
         .collect();
     let mut message =
-        format!("{resource} was not updated. {who} some of its fields to other values.");
+        format!("[K5636] {resource} was not updated. {who} some of its fields to other values.");
     for line in fields {
         message.push(' ');
         message.push_str(&line);
