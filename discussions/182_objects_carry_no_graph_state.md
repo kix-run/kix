@@ -170,8 +170,11 @@ status:
 Size: the homelab cluster has 334 objects and 980 edges, 2.9 for each
 object. An edge is about 60 bytes, so edges add about 180 bytes to an
 object's 130. A revision still holds about 4,500 objects before it reaches
-Kubernetes' limit. The existing refusal for a revision that is too large
-covers the rest.
+Kubernetes' limit, down from about 11,000. No single instance comes near
+that. Two revisions cannot be split by instance. The cluster-level one
+holds Namespaces, which have almost no edges. The kept-orphans one fills
+sooner than before. The existing refusal for a revision that is too large
+covers both.
 
 ### 4.3 One rule for the plan
 
