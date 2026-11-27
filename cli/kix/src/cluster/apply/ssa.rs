@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 
+use super::super::drift::{self, TakenField};
 use super::super::errors::FailureClass;
 use super::super::field_manager::{FieldManager, Whose};
 use super::super::fieldsv1;
@@ -57,12 +58,18 @@ pub enum ApplyError {
         source: kube::Error,
     },
 
-    /// A forced apply of an object the plan read at one `resourceVersion`
-    /// found it at another.
+    /// What a forced apply would take back is not what the plan showed.
     #[error(
-        "{resource} changed on the cluster after the plan was made (not updated). Kix takes fields back from other field managers only when the object is as the plan read it, so this change was not overwritten. Run the command again to plan from the cluster as it is now."
+        "{resource} not updated, because the fields Kix would take back from other field managers changed after the plan was made. Kix takes back only the fields and values the plan showed, so this change was not overwritten. Run the command again to plan from the cluster as it is now."
     )]
     ChangedSincePlan { resource: String },
+
+    /// A forced apply found the object changed between its read and its
+    /// write each time it tried.
+    #[error(
+        "{resource} not updated, because something else changed it each of the {TAKEOVER_ATTEMPTS} times Kix read it before taking fields back. Find what keeps writing to {resource}, then run the deploy again."
+    )]
+    KeepsChanging { resource: String },
 
     #[error(
         "immutable field changed on {resource} (not updated). Kubernetes does not allow changing this field in place, and Kix did not recreate {resource} automatically; review the impact of deleting {resource}, delete it, and run the deploy again. Kubernetes reported: {}", reported(.source)
@@ -282,11 +289,18 @@ pub(crate) enum Takeover {
     No,
     /// Yes, whatever the object holds (`--force-conflicts`).
     Always,
-    /// Yes, when the live object still has this `resourceVersion`, the one
-    /// the plan read. Otherwise the apply fails with
-    /// [`ApplyError::ChangedSincePlan`].
-    IfUnchangedSince(String),
+    /// Yes, while the forced apply takes back exactly these fields, at these
+    /// live values: what the plan showed ([`drift::taken_back`]). The apply
+    /// reads the object, judges it, and sends the write with the
+    /// `resourceVersion` it read, so the judgement and the write are one
+    /// step. Otherwise it fails with [`ApplyError::ChangedSincePlan`].
+    IfTakesBack(Vec<TakenField>),
 }
+
+/// How many times a forced apply under [`Takeover::IfTakesBack`] reads,
+/// judges, and writes an object that changes between its read and its
+/// write before it gives up with [`ApplyError::KeepsChanging`].
+pub(crate) const TAKEOVER_ATTEMPTS: usize = 5;
 
 /// Apply a single resource via server-side apply under `manager`.
 pub(crate) async fn apply_resource(
@@ -309,6 +323,7 @@ pub(crate) async fn apply_resource(
         });
     }
     let api: Api<DynamicObject> = super::super::discovery::api_for(client, ar, &scope, &rid);
+    let original = manifest;
     let mut manifest = string_data_as_data(manifest);
 
     // Default to non-force SSA so ownership conflicts return their field paths
@@ -317,71 +332,92 @@ pub(crate) async fn apply_resource(
     if takeover != Takeover::No {
         pp = pp.force();
     }
-    // A `resourceVersion` in the applied object makes the API server refuse
-    // the apply with 409 when the object changed since that version. A forced
-    // apply never conflicts on fields, so a 409 then means only that.
-    if let Takeover::IfUnchangedSince(version) = &takeover
-        && let Some(meta) = manifest
-            .to_mut()
-            .get_mut("metadata")
-            .and_then(Value::as_object_mut)
-    {
-        meta.insert("resourceVersion".into(), Value::String(version.clone()));
-    }
-    let manifest = &*manifest;
     if dry_run {
         pp = pp.dry_run();
     }
 
-    // Check if resource exists to determine Created vs Configured. A dry run
-    // keeps the live object for its preview.
-    let live = api.get_opt(&name).await.ok().flatten();
-    let existed = live.is_some();
-    if let Some(reason) = live
-        .as_ref()
-        .and_then(super::super::readiness::deletion_reason)
-    {
-        return Err(ApplyError::BeingDeleted {
-            resource: rid.display_id(),
-            reason,
-            uid: live.as_ref().and_then(|o| o.metadata.uid.clone()),
-        });
-    }
-
-    // Transient errors (429, 5xx, connection loss) are retried by the
-    // client transport (cluster::client), not here. 409 conflicts are
-    // permanent and surface immediately as ApplyError::Conflict so the user
-    // sees an actionable error pointing at --force-conflicts.
-    let (echo, stripped) = match apply_patch(&api, &name, &pp, manifest, &rid).await {
-        Ok(echo) => (echo, None),
-        Err(ApplyError::Conflict { resource, .. })
-            if matches!(takeover, Takeover::IfUnchangedSince(_)) =>
+    let mut attempts = 0;
+    let (live, echo, stripped) = loop {
+        // Check if resource exists to determine Created vs Configured. A dry
+        // run keeps the live object for its preview.
+        let live = api.get_opt(&name).await.ok().flatten();
+        if let Some(reason) = live
+            .as_ref()
+            .and_then(super::super::readiness::deletion_reason)
         {
-            return Err(ApplyError::ChangedSincePlan { resource });
+            return Err(ApplyError::BeingDeleted {
+                resource: rid.display_id(),
+                reason,
+                uid: live.as_ref().and_then(|o| o.metadata.uid.clone()),
+            });
         }
-        Err(ApplyError::Conflict { resource, source }) => {
-            // A conflict confined to fields the resource ceded is not a
-            // failure: the other manager has taken what it was meant to
-            // take. Apply again without those fields and it keeps them.
-            let message = match &source {
-                kube::Error::Api(resp) => resp.message.clone(),
-                _ => String::new(),
-            };
-            match without_ceded_conflicts(manifest, &message) {
-                Some(stripped) => {
-                    tracing::info!(
-                        resource = %rid.display_id(),
-                        fields = %conflict_paths(&message).join(", "),
-                        "another manager owns ceded fields; applying without them"
-                    );
-                    let echo = apply_patch(&api, &name, &pp, &stripped, &rid).await?;
-                    (echo, Some(stripped))
-                }
-                None => return Err(conflict_error(&rid, manager, resource, source)),
+        // A `resourceVersion` in the applied object makes the API server
+        // refuse the apply with 409 when the object changed since that
+        // version. A forced apply never conflicts on fields, so a 409 then
+        // means only that, and the apply reads and judges the object again.
+        if let Takeover::IfTakesBack(shown) = &takeover {
+            let unchanged = live
+                .as_ref()
+                .is_some_and(|obj| drift::taken_back(obj, original, manager) == *shown);
+            if !unchanged {
+                return Err(ApplyError::ChangedSincePlan {
+                    resource: rid.display_id(),
+                });
+            }
+            let version = live
+                .as_ref()
+                .and_then(|o| o.metadata.resource_version.clone())
+                .unwrap_or_default();
+            if let Some(meta) = manifest
+                .to_mut()
+                .get_mut("metadata")
+                .and_then(Value::as_object_mut)
+            {
+                meta.insert("resourceVersion".into(), Value::String(version));
             }
         }
-        Err(e) => return Err(e),
+        let sent = &*manifest;
+
+        // Transient errors (429, 5xx, connection loss) are retried by the
+        // client transport (cluster::client), not here. 409 conflicts are
+        // permanent and surface immediately as ApplyError::Conflict so the
+        // user sees an actionable error pointing at --force-conflicts.
+        match apply_patch(&api, &name, &pp, sent, &rid).await {
+            Ok(echo) => break (live, echo, None),
+            Err(ApplyError::Conflict { resource, .. })
+                if matches!(takeover, Takeover::IfTakesBack(_)) =>
+            {
+                attempts += 1;
+                if attempts == TAKEOVER_ATTEMPTS {
+                    return Err(ApplyError::KeepsChanging { resource });
+                }
+            }
+            Err(ApplyError::Conflict { resource, source }) => {
+                // A conflict confined to fields the resource ceded is not a
+                // failure: the other manager has taken what it was meant to
+                // take. Apply again without those fields and it keeps them.
+                let message = match &source {
+                    kube::Error::Api(resp) => resp.message.clone(),
+                    _ => String::new(),
+                };
+                match without_ceded_conflicts(sent, &message) {
+                    Some(stripped) => {
+                        tracing::info!(
+                            resource = %rid.display_id(),
+                            fields = %conflict_paths(&message).join(", "),
+                            "another manager owns ceded fields; applying without them"
+                        );
+                        let echo = apply_patch(&api, &name, &pp, &stripped, &rid).await?;
+                        break (live, echo, Some(stripped));
+                    }
+                    None => return Err(conflict_error(&rid, manager, resource, source)),
+                }
+            }
+            Err(e) => return Err(e),
+        }
     };
+    let existed = live.is_some();
+    let manifest = &*manifest;
 
     let result = serde_json::to_value(&echo).unwrap_or(Value::Null);
     let not_kept = kept::not_kept(stripped.as_ref().unwrap_or(manifest), &result);

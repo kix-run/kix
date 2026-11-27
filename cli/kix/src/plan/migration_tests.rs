@@ -739,9 +739,9 @@ async fn an_object_whose_apply_failed_after_its_tidy_is_still_named() {
 }
 
 /// On the first deploy, an object drifted by hand is reverted: its
-/// migration write tests the version the plan read and hands the version
-/// it leaves to the forced apply, so the apply does not read the write as
-/// a change made after the plan.
+/// migration write and then the forced apply each judge what the forced
+/// apply takes back on the object they read, so the apply does not read the
+/// migration write as a change made after the plan.
 #[tokio::test]
 async fn a_drifted_object_is_reverted_on_the_first_deploy() {
     let api = FakeApi::new([]);

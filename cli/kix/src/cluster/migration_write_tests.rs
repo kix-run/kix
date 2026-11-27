@@ -316,7 +316,10 @@ async fn judge(api: &FakeApi) -> PruneGuard {
     PruneGuard::new(client, opened, "a")
 }
 
-async fn write_cm(api: &FakeApi, expect: Option<&str>) -> Result<Written, WriteError> {
+async fn write_cm(
+    api: &FakeApi,
+    takes_back: Option<(&Value, &[drift::TakenField])>,
+) -> Result<Written, WriteError> {
     let cms = config_maps(api.client());
     let judge = judge(api).await;
     write(&Write {
@@ -326,7 +329,7 @@ async fn write_cm(api: &FakeApi, expect: Option<&str>) -> Result<Written, WriteE
         manager: &FieldManager::of("a"),
         record: Some(RECORD),
         judge: &judge,
-        expect,
+        takes_back,
     })
     .await
 }
@@ -367,8 +370,9 @@ async fn the_write_moves_an_object_once() {
 }
 
 /// An object that changes between the read and the write is read again and
-/// the write built again from what it holds then. With the version the
-/// plan read, the same change fails the write as changed since the plan.
+/// the write built again from what it holds then. For an object the run
+/// forces, a change to what the forced apply takes back fails the write as
+/// changed since the plan, and any other change is read again.
 #[tokio::test]
 async fn a_change_between_the_read_and_the_write_is_read_again() {
     let notes = json!({ (keys::ACTIVATIONS): OWN_OLD, (keys::IDENTITY_HASH): "i" });
@@ -391,15 +395,43 @@ async fn a_change_between_the_read_and_the_write_is_read_again() {
             .is_none()
     );
 
+    let manifest = json!({
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": { "name": "cm", "namespace": "app" },
+        "data": { "k": "v" },
+    });
+    let api = fake(notes.clone(), vec![entry("kix", "Apply")]);
+    api.after_get("cm", |obj| {
+        obj["metadata"]["labels"]["other"] = json!("x");
+    });
+    assert!(matches!(
+        write_cm(&api, Some((&manifest, &[]))).await.unwrap(),
+        Written::Rewritten { .. }
+    ));
+
     let api = fake(notes, vec![entry("kix", "Apply")]);
-    let read = api.object("ConfigMap", "cm").unwrap()["metadata"]["resourceVersion"]
-        .as_str()
-        .unwrap()
-        .to_string();
     api.after_get("cm", |obj| {
         obj["data"]["k"] = json!("changed");
+        // `kubectl` takes the field from Kix's entry.
+        obj["metadata"]["managedFields"] = json!([
+            {
+                "manager": "kix",
+                "operation": "Apply",
+                "apiVersion": "v1",
+                "fieldsType": "FieldsV1",
+                "fieldsV1": {},
+            },
+            {
+                "manager": "kubectl",
+                "operation": "Update",
+                "apiVersion": "v1",
+                "fieldsType": "FieldsV1",
+                "fieldsV1": { "f:data": { "f:k": {} } },
+            },
+        ]);
     });
-    let err = write_cm(&api, Some(&read)).await.unwrap_err();
+    let err = write_cm(&api, Some((&manifest, &[]))).await.unwrap_err();
     assert!(matches!(err, WriteError::ChangedSincePlan { .. }), "{err}");
 }
 

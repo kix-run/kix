@@ -78,9 +78,9 @@ pub(crate) enum Force {
     /// Every apply (`--force-conflicts`).
     All,
     /// The applies of these objects, the ones the plan labels as reverting
-    /// drift, each while the object still has the `resourceVersion` the plan
-    /// read.
-    Only(HashMap<ResourceId, String>),
+    /// drift, each while its forced apply takes back what the plan showed
+    /// ([`crate::cluster::drift::taken_back`]).
+    Only(HashMap<ResourceId, Vec<crate::cluster::drift::TakenField>>),
 }
 
 impl Force {
@@ -90,7 +90,7 @@ impl Force {
             Force::None => apply::Takeover::No,
             Force::All => apply::Takeover::Always,
             Force::Only(ids) => match ids.get(rid) {
-                Some(version) => apply::Takeover::IfUnchangedSince(version.clone()),
+                Some(shown) => apply::Takeover::IfTakesBack(shown.clone()),
                 None => apply::Takeover::No,
             },
         }
@@ -199,14 +199,15 @@ impl KubeResources {
     }
 
     /// Write the migration write to the object `rid` of kind `ar`. With
-    /// `expect`, the object must still be at the `resourceVersion` the plan
-    /// read ([`migration_write::Write::expect`]).
+    /// `takes_back`, the write goes on only while a forced apply of the
+    /// object would take back what the plan showed
+    /// ([`migration_write::Write::takes_back`]).
     async fn migrate(
         &self,
         ar: &ApiResource,
         scope: &Scope,
         rid: &ResourceId,
-        expect: Option<&str>,
+        takes_back: Option<(&Value, &[crate::cluster::drift::TakenField])>,
     ) -> Result<migration_write::Written, WriteError> {
         let api = self.api_for(ar, scope, rid);
         let resource = rid.display_id();
@@ -221,7 +222,7 @@ impl KubeResources {
             manager: &self.manager,
             record: self.migrations.record.as_deref(),
             judge,
-            expect,
+            takes_back,
         })
         .await
     }
@@ -407,21 +408,16 @@ impl KubeResources {
         } else {
             &self.manager
         };
-        let mut takeover = self.force.of(&rid);
+        let takeover = self.force.of(&rid);
         if !self.dry() && self.take_unmigrated(&rid) {
-            // An object the plan forces is applied only while it is as the
-            // plan read it, so the migration write tests that version and
-            // the apply then tests the version the write left.
-            let expect = match &takeover {
-                apply::Takeover::IfUnchangedSince(version) => Some(version.clone()),
+            // An object the plan forces is written only while its forced
+            // apply takes back what the plan showed, so the migration write
+            // judges the object it reads first, as the apply does after it.
+            let takes_back = match &takeover {
+                apply::Takeover::IfTakesBack(shown) => Some((manifest, shown.as_slice())),
                 apply::Takeover::No | apply::Takeover::Always => None,
             };
-            match self.migrate(ar, &scope, &rid, expect.as_deref()).await {
-                Ok(migration_write::Written::Rewritten { resource_version })
-                    if expect.is_some() =>
-                {
-                    takeover = apply::Takeover::IfUnchangedSince(resource_version);
-                }
+            match self.migrate(ar, &scope, &rid, takes_back).await {
                 Ok(_) => {}
                 Err(WriteError::ChangedSincePlan { .. }) => {
                     return Err(ApplyError::ChangedSincePlan {
@@ -1126,15 +1122,11 @@ mod discovery_tests {
             .unwrap()
             .clone();
         let drifted = ResourceId::from_value(&config_map("drifted"));
-        let version = api.object("ConfigMap", "drifted").unwrap()["metadata"]["resourceVersion"]
-            .as_str()
-            .unwrap()
-            .to_string();
         let ops = KubeResources::new(
             client,
             discovery,
             "a".into(),
-            Force::Only([(drifted, version)].into()),
+            Force::Only([(drifted, Vec::new())].into()),
         );
         for name in ["drifted", "other"] {
             ops.apply_as(&ar, scope.clone(), &config_map(name))

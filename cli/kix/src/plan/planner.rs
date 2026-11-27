@@ -103,8 +103,8 @@ struct Changes {
     /// run leaves on the cluster.
     kept_orphans: KeptOrphans,
     /// The objects the run applies with force, the ones that revert drift,
-    /// with the `resourceVersion` the plan read for each.
-    force: HashMap<ResourceId, String>,
+    /// with what each forced apply takes back ([`crate::cluster::drift::taken_back`]).
+    force: HashMap<ResourceId, Vec<crate::cluster::drift::TakenField>>,
     /// Why the run writes each object whose write the new build alone does
     /// not explain.
     reasons: HashMap<ResourceId, WriteReason>,
@@ -195,8 +195,8 @@ pub struct CheckedPlan {
     /// made with `--only` applies in full too. Empty otherwise.
     needed: Vec<String>,
     /// The objects the plan labels as reverting drift, which the run applies
-    /// with force while each still has the `resourceVersion` the plan read.
-    force: HashMap<ResourceId, String>,
+    /// with force while each forced apply takes back what the plan showed.
+    force: HashMap<ResourceId, Vec<crate::cluster::drift::TakenField>>,
     /// The migration writes the run makes.
     migrations: Migrations,
     /// A run of the plan first gives records an older Kix wrote revisions
@@ -1307,10 +1307,8 @@ impl<'a> Planner<'a> {
         let mut reasons = HashMap::new();
         let mut actions = Vec::with_capacity(decided.decisions.len() + decided.orphans.len());
         for decision in decided.decisions {
-            if let (Label::RevertsDrift(_), Some(version)) =
-                (&decision.label, &decision.resource_version)
-            {
-                force.insert(decision.id.clone(), version.clone());
+            if let (Label::RevertsDrift(_), Some(shown)) = (&decision.label, &decision.takes_back) {
+                force.insert(decision.id.clone(), shown.clone());
             }
             if let Some(reason) = write_reason(&decision.label) {
                 reasons.insert(decision.id, reason);

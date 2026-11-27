@@ -567,7 +567,7 @@ fn an_autoscaled_ceded_field_is_not_drift() {
 
 /// A forced revert of drift leaves out each ceded field another manager
 /// owns, so it takes back the edited image and leaves the replicas to the
-/// autoscaler. It records the `resourceVersion` it read. The operator,
+/// autoscaler. It records what the forced apply takes back. The operator,
 /// which never forces, writes nothing and reports the drift, because
 /// another manager owns a field the build sets.
 #[test]
@@ -589,7 +589,13 @@ fn a_forced_revert_leaves_ceded_fields_to_their_manager_and_the_operator_reports
         sent.pointer("/spec/template/spec/image"),
         Some(&json!("web:1"))
     );
-    assert_eq!(cli.decisions[0].resource_version.as_deref(), Some("7"));
+    // The forced apply takes back the image from `kubectl-edit`, at its
+    // live value, and leaves the ceded replicas count alone.
+    let taken = cli.decisions[0].takes_back.as_ref().unwrap();
+    assert_eq!(taken.len(), 1, "{taken:?}");
+    assert_eq!(taken[0].manager, "kubectl-edit");
+    assert!(taken[0].path.contains("image"), "{taken:?}");
+    assert!(taken[0].live.is_some(), "{taken:?}");
     let Label::RevertsDrift(report) = &cli.decisions[0].label else {
         panic!("reverts drift");
     };

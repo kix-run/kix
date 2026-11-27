@@ -42,7 +42,7 @@ With those two hashes, `kix plan` and `kix deploy` decide what to do with each o
 
 1. **The object is missing, or its build hash differs from the new build's.** Kix applies it. This is a change the build makes.
 2. **The build hashes match, but Kix has no applied hash for the object.** Kix applies it again and records the hash. This happens once after a deploy stopped between an apply and the write of the hash, or after a backup was restored without the revisions' status.
-3. **The applied hash differs from the hash of the fields Kix owns on the live object.** Something changed a field Kix applied. The plan labels the object as changed on the cluster, names the field manager and the fields, and `kix deploy` applies the build again with force, which takes those fields back. If the object changes again after the plan, the deploy stops instead of overwriting a change you have not seen.
+3. **The applied hash differs from the hash of the fields Kix owns on the live object.** Something changed a field Kix applied. The plan labels the object as changed on the cluster, names the field manager and the fields, and `kix deploy` applies the build again with force, which takes those fields back. Kix takes back only the fields, from the managers, at the values the plan showed. If any of those changed after the plan, the deploy stops instead of overwriting a change you have not seen. A status update by a controller, or a change to a field the plan did not show, does not stop it.
 
 Otherwise the object is unchanged, and Kix does not write to it.
 

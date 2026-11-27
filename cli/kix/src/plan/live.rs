@@ -972,14 +972,10 @@ mod tests {
                 .unwrap();
             assert_eq!(written(cli.plan()), ["web"]);
             let web = ResourceId::from_value(&config_map("web", "1"));
-            let version = api.object("ConfigMap", "web").unwrap()["metadata"]["resourceVersion"]
-                .as_str()
-                .unwrap()
-                .to_string();
-            assert_eq!(
-                cli.force(),
-                crate::cluster::ops::Force::Only([(web, version)].into())
-            );
+            let crate::cluster::ops::Force::Only(forced) = cli.force() else {
+                panic!("forces only the drifted object");
+            };
+            assert_eq!(forced.keys().collect::<Vec<_>>(), [&web]);
             assert!(matches!(
                 cli.objects().writes[0].reason,
                 Some(crate::plan::document::WriteReason::RevertsDrift { .. })
@@ -1184,6 +1180,15 @@ mod tests {
             graph: &StoreGraph,
         ) -> Result<crate::cluster::stream::DeployResult, DeployError> {
             let checked = cli_plan(api, graph).await;
+            cli_run(api, checked).await
+        }
+
+        /// Run `checked` as `kix deploy` does, and return what the run
+        /// reports.
+        async fn cli_run(
+            api: &FakeApi,
+            checked: crate::plan::CheckedPlan,
+        ) -> Result<crate::cluster::stream::DeployResult, DeployError> {
             let client = api.client();
             let lock = crate::cluster::head::take(
                 &client,
@@ -1487,9 +1492,9 @@ mod tests {
             );
         }
 
-        /// A forced revert of drift is sent with the `resourceVersion` the
-        /// plan read, so an edit made after the plan stops the deploy rather
-        /// than being overwritten.
+        /// A forced revert of drift takes back only what the plan showed, so
+        /// an edit made after the plan to a field it takes back stops the
+        /// deploy rather than being overwritten.
         #[tokio::test]
         async fn a_forced_revert_stops_on_an_object_changed_after_the_plan() {
             let api = FakeApi::new([]);
@@ -1542,12 +1547,133 @@ mod tests {
                     .unwrap_or_else(|e| e.partial().failures.clone())
             );
             assert!(
-                failure.contains("changed on the cluster after the plan was made"),
+                failure.contains("changed after the plan was made"),
                 "{failure}"
             );
             assert_eq!(
                 api.object("Deployment", "web").unwrap()["spec"]["template"]["spec"]["image"],
                 json!("web:later")
+            );
+        }
+
+        /// Return the failures a run reported, as text.
+        fn failures_of(
+            result: &Result<crate::cluster::stream::DeployResult, DeployError>,
+        ) -> String {
+            format!(
+                "{:?}",
+                match result {
+                    Ok(r) => &r.failures,
+                    Err(e) => &e.partial().failures,
+                }
+            )
+        }
+
+        /// A Deployment that `kubectl-edit` changed, planned as reverting
+        /// drift.
+        async fn drifted(api: &FakeApi) -> (StoreGraph, crate::plan::CheckedPlan) {
+            api.track_owners();
+            let v1 = release("a-v1", &[deployment("web", false)]);
+            cli_deploy(api, &v1).await.unwrap();
+            api.update_as("kubectl-edit", None, "Deployment", "web", |o| {
+                o["spec"]["template"]["spec"]["image"] = json!("web:edited");
+            });
+            let checked = cli_plan(api, &v1).await;
+            assert_eq!(writes(&checked), ["web"]);
+            (v1, checked)
+        }
+
+        /// A controller writes the object's `status` after the plan, which
+        /// moves its `resourceVersion` but not what the forced apply takes
+        /// back, so the revert goes on.
+        #[tokio::test]
+        async fn a_forced_revert_goes_on_when_only_status_changed() {
+            let api = FakeApi::new([]);
+            let (_, checked) = drifted(&api).await;
+            api.update_as(
+                "deployment-controller",
+                Some("status"),
+                "Deployment",
+                "web",
+                |o| {
+                    o["status"]["observedGeneration"] = json!(2);
+                },
+            );
+            let result = cli_run(&api, checked).await;
+            assert_eq!(failures_of(&result), "[]");
+            assert_eq!(
+                api.object("Deployment", "web").unwrap()["spec"]["template"]["spec"]["image"],
+                json!("web:1")
+            );
+        }
+
+        /// Another manager takes one more field the build sets after the
+        /// plan, so the forced apply would take back more than the plan
+        /// showed. Nothing is forced.
+        #[tokio::test]
+        async fn a_forced_revert_stops_when_another_field_is_taken() {
+            let api = FakeApi::new([]);
+            let (_, checked) = drifted(&api).await;
+            api.update_as("kubectl-scale", None, "Deployment", "web", |o| {
+                o["spec"]["replicas"] = json!(4);
+            });
+            let result = cli_run(&api, checked).await;
+            assert!(
+                failures_of(&result).contains("changed after the plan was made"),
+                "{}",
+                failures_of(&result)
+            );
+            let web = api.object("Deployment", "web").unwrap();
+            assert_eq!(web["spec"]["replicas"], json!(4));
+            assert_eq!(
+                web["spec"]["template"]["spec"]["image"],
+                json!("web:edited")
+            );
+        }
+
+        /// The object changes once between the forced apply's read and its
+        /// write: the apply reads it again, judges it again, and goes on.
+        /// An object that changes every time fails with a bounded error.
+        #[tokio::test]
+        async fn a_forced_revert_reads_again_when_the_object_moves_under_it() {
+            let api = FakeApi::new([]);
+            let (_, checked) = drifted(&api).await;
+            api.after_get("web", |o| {
+                o["status"]["observedGeneration"] = json!(3);
+            });
+            let before = api.requests().len();
+            let result = cli_run(&api, checked).await;
+            assert_eq!(failures_of(&result), "[]");
+            let forced = api.requests()[before..]
+                .iter()
+                .filter(|r| {
+                    r.starts_with("PATCH")
+                        && r.contains("/deployments/web?")
+                        && r.contains("force=true")
+                })
+                .count();
+            assert_eq!(forced, 2, "{:?}", &api.requests()[before..]);
+            assert_eq!(
+                api.object("Deployment", "web").unwrap()["spec"]["template"]["spec"]["image"],
+                json!("web:1")
+            );
+
+            let api = FakeApi::new([]);
+            let (_, checked) = drifted(&api).await;
+            for _ in 0..20 {
+                api.after_get("web", |o| {
+                    o["status"]["observedGeneration"] = json!(4);
+                });
+            }
+            let result = cli_run(&api, checked).await;
+            assert!(
+                failures_of(&result).contains("each of the 5 times"),
+                "{}",
+                failures_of(&result)
+            );
+            assert_eq!(
+                api.object("Deployment", "web").unwrap()["spec"]["template"]["spec"]["image"],
+                json!("web:edited")
             );
         }
 

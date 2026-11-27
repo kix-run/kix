@@ -228,8 +228,15 @@ each object of the build, in this order:
    objects in a line that starts with `↺`, lists each changed field under
    `Drift:` with the field manager that changed it, and `kix deploy` applies
    the build again with force, which takes the fields back from that manager.
-   Kix sends the `resourceVersion` the plan read, so when something changes the
-   object after the plan, the deploy stops and names the object. A field the
+   Kix takes back only what the plan showed: the same fields, from the same
+   field managers, at the same values. Right before the forced apply it reads
+   the object again. A status update, or a change to a field the plan did not
+   show, does not stop it. When the fields it would take back, their managers,
+   or their values changed after the plan, the deploy stops, names the object,
+   and asks you to plan again. If the object changes again between that check
+   and the write, Kix checks again, up to 5 times, then stops with "something
+   else changed it each of the 5 times Kix read it"; find what keeps writing
+   to the object and deploy again. A field the
    object cedes with [`ownership.cede`](/docs/how-to/adopt-existing-resources/cede-fields-to-a-controller/)
    never counts as drift. Kix never takes a field another Kix cluster
    applies: it applies such an object without force, and the plan counts it
@@ -487,7 +494,7 @@ any of these:
 | Lock generation | The generation of the cluster's [deploy lock](#the-deploy-lock): another run modified the cluster after the plan was saved (such as `kix deploy --only` or `kix gc`). Skipped when the saved plan has no lock generation (for example, from `--offline` or an older Kix). |
 | Planning flags | `--prune`, `--skip-orphan-check`, `--reconcile`, `--force-conflicts`, `--accept-migrations`, `--operator-removed`, or `--only`. Passing a flag on the command line that was not set when the plan was saved fails before building. `--only` must match the saved plan: pass the exact same `--only` instances for a partial plan, and omit `--only` for a full plan. |
 | Refusals | A conflict, by object, or an admission refusal, by object and reason, that the reviewed plan did not have. |
-| Reverted drift | A drifted field, by object and path, that the deploy would put back and the reviewed plan did not list. |
+| Reverted drift | A drifted field, by object, path, and field manager, that the deploy would put back and the reviewed plan did not list. The live values are not compared, so a field the same manager changed again after the plan was saved is not noticed here. The deploy still checks values from its fresh plan to the apply. |
 | Prune deletes | An orphan the deploy would delete that the reviewed plan did not list. |
 | Objects not checked | An object the dry run checked for the reviewed plan and cannot check now, for example because a webhook it calls lost dry-run support. Its refusals and drift would not show. |
 

@@ -1480,9 +1480,18 @@ The plan document carries the labels as `objects.writes[].reason`
 with force exactly the objects labelled `RevertsDrift` (`ops::Force::Only`;
 `--force-conflicts` still forces every apply), so a revert of drift takes back
 the fields others changed and any other conflict still stops the deploy. Each
-forced apply carries the `resourceVersion` the plan read
-(`apply::Takeover::IfUnchangedSince`), so an object changed after the plan
-fails with `ApplyError::ChangedSincePlan` and the deploy stops. The plan's
+forced apply goes on only while it takes back what the plan showed
+(`apply::Takeover::IfTakesBack`): the plan records, for each object it
+forces, the fields other managers took from Kix that the sent manifest sets,
+with manager and live value (`drift::taken_back`, built on the same
+`drift::foreign_fields` the decision uses). The apply reads the object,
+computes the same list with the same function, and sends the forced apply
+with the `resourceVersion` of that read, so the check and the write are one
+step. A 409 means the object moved in between, and the apply reads and
+judges again, up to `TAKEOVER_ATTEMPTS` times (`ApplyError::KeepsChanging`).
+A list that differs fails with `ApplyError::ChangedSincePlan` and the deploy
+stops. A write to `status` or to any field the list does not hold does not
+stop it. The plan's
 drift line for a field another manager took names the manager and points at
 `ownership.cede`. The operator never forces: it writes no object labelled
 `DriftReported`, which does not count as a failure, so its dependents go on.
@@ -1580,8 +1589,9 @@ only where `takes_legacy` holds. Any other object it applies, which adds the
 cluster's own entry. The plan document counts the writes in
 `metadataRewrites`, and `Work::Changes` holds while any is left or a record
 needs converting. The run writes it in `KubeResources::apply_as` before an
-object's first apply (for an object the plan forces, testing the version
-the plan read and handing the version it leaves to the forced apply), and
+object's first apply (for an object the plan forces, judging the object it
+reads with `drift::taken_back` as the forced apply does, and testing that
+read's version), and
 after the nodes to each unchanged object and each kept orphan
 (`Run::migrate_unchanged`, best-effort). A dry run applies a renamed object
 under `kix`, which owns the fields `kix/<cluster>` will own.

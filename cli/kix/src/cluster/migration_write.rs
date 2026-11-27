@@ -43,6 +43,7 @@ use kube::api::{Api, DynamicObject, Patch, PatchParams};
 use serde_json::{Value, json};
 use thiserror::Error;
 
+use super::drift;
 use super::field_manager::{self, FieldManager};
 use super::prune_guard::PruneGuard;
 use super::tenancy::Tenancy;
@@ -70,9 +71,9 @@ pub enum WriteError {
         "could not tidy the metadata of {resource}, because something else changed it each of the {ATTEMPTS} times Kix read it. Find what keeps writing to {resource}, then run the deploy again"
     )]
     KeepsChanging { resource: String },
-    /// The plan read the object at another `resourceVersion`, and the run
-    /// applies it with force only while it is as the plan read it.
-    #[error("{resource} changed on the cluster after the plan was made")]
+    /// What the run's forced apply of the object would take back is not
+    /// what the plan showed.
+    #[error("what Kix would take back on {resource} changed after the plan was made")]
     ChangedSincePlan { resource: String },
     #[error("could not read {resource}: {source}")]
     Read {
@@ -233,6 +234,17 @@ pub fn needed(
     (!ops.is_empty()).then_some(ops)
 }
 
+/// Return the field manager to judge `obj` with as the migration write
+/// leaves it: one that counts the entry under `kix` as `manager`'s own when
+/// the write moves that entry to `manager` ([`renames`]).
+pub fn view_of(obj: &DynamicObject, manager: &FieldManager, tenancy: &Tenancy) -> FieldManager {
+    if renames(obj, manager, tenancy) {
+        manager.as_unmigrated()
+    } else {
+        manager.clone()
+    }
+}
+
 /// What [`write`] needs besides the object.
 pub struct Write<'a> {
     pub api: &'a Api<DynamicObject>,
@@ -245,9 +257,11 @@ pub struct Write<'a> {
     /// Reads which Kix clusters name the object, again when the object names
     /// a record the last read did not see ([`PruneGuard::tenancy_naming`]).
     pub judge: &'a PruneGuard,
-    /// The `resourceVersion` the plan read, for an object the run applies
-    /// with force only while it is as the plan read it.
-    pub expect: Option<&'a str>,
+    /// For an object the run applies with force: the manifest it sends and
+    /// what the plan showed the forced apply takes back
+    /// ([`drift::taken_back`]). The write goes on only while the object
+    /// gives the same answer.
+    pub takes_back: Option<(&'a Value, &'a [drift::TakenField])>,
 }
 
 /// Rewrite the object `w.name` if it needs the migration write
@@ -256,8 +270,9 @@ pub struct Write<'a> {
 /// The write tests the `resourceVersion` it read. When the test fails,
 /// something wrote in between, so Kix reads the object again and builds the
 /// write again, up to [`ATTEMPTS`] times. Any other refusal is reported as
-/// it is. With `w.expect`, an object that is not at that version, or that
-/// changes before the write, fails with [`WriteError::ChangedSincePlan`].
+/// it is. With `w.takes_back`, each round first judges the object it read,
+/// and an object whose forced apply would take back something else than
+/// the plan showed fails with [`WriteError::ChangedSincePlan`].
 pub async fn write(w: &Write<'_>) -> Result<Written, WriteError> {
     let read = |source| WriteError::Read {
         resource: w.resource.to_string(),
@@ -272,9 +287,6 @@ pub async fn write(w: &Write<'_>) -> Result<Written, WriteError> {
             return Ok(Written::NothingToDo);
         };
         let version = found.metadata.resource_version.clone().unwrap_or_default();
-        if w.expect.is_some_and(|v| v != version) {
-            return Err(changed());
-        }
         let tenancy = w
             .judge
             .tenancy_naming(found)
@@ -286,6 +298,11 @@ pub async fn write(w: &Write<'_>) -> Result<Written, WriteError> {
                     other => other.to_string(),
                 },
             })?;
+        if let Some((manifest, shown)) = w.takes_back
+            && drift::taken_back(found, manifest, &view_of(found, w.manager, &tenancy)) != shown
+        {
+            return Err(changed());
+        }
         let Some(mut ops) = needed(found, w.manager, &tenancy, w.record) else {
             return Ok(Written::NothingToDo);
         };
@@ -322,9 +339,6 @@ pub async fn write(w: &Write<'_>) -> Result<Written, WriteError> {
                 resource: w.resource.to_string(),
                 source: refused,
             });
-        }
-        if w.expect.is_some() {
-            return Err(changed());
         }
     }
     Err(WriteError::KeepsChanging {

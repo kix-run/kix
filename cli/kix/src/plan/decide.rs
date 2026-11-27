@@ -114,9 +114,11 @@ pub(crate) struct Decision {
     pub id: ResourceId,
     pub action: ChangeAction,
     pub label: Label,
-    /// The `resourceVersion` of the live object the decision read, or
-    /// `None` when the cluster does not hold it.
-    pub resource_version: Option<String>,
+    /// For an object the plan forces ([`Label::RevertsDrift`]), what the
+    /// forced apply takes back, read from the live object the decision read
+    /// ([`drift::taken_back`]). The run forces it only while the object
+    /// still gives the same answer.
+    pub takes_back: Option<Vec<drift::TakenField>>,
 }
 
 /// What [`decide`] found.
@@ -307,11 +309,7 @@ impl Ledger {
     /// manager only when the entry holds this cluster's fields
     /// ([`migration_write::takes_legacy`]).
     fn view_of(&self, obj: &kube::api::DynamicObject) -> FieldManager {
-        if migration_write::renames(obj, &self.manager, &self.tenancy) {
-            self.manager.as_unmigrated()
-        } else {
-            self.manager.clone()
-        }
+        migration_write::view_of(obj, &self.manager, &self.tenancy)
     }
 
     /// Return the `Failed` and `Partial` records whose leftovers the deploy
@@ -436,14 +434,13 @@ pub(crate) fn decide(
     let mut forbidden: BTreeSet<String> = BTreeSet::new();
     for manifest in new {
         let id = ResourceId::from_value(manifest);
-        let mut resource_version = None;
+        let mut takes_back = None;
         let (action, label) = match live.get(&id) {
             Live::Unread => {
                 forbidden.extend(live.forbidden_resource(&id).map(str::to_string));
                 continue;
             }
             Live::Present(obj) if obj.metadata.deletion_timestamp.is_none() => {
-                resource_version = obj.metadata.resource_version.clone();
                 if !lifecycle::is_record(manifest) && ledger.migrates(obj) {
                     out.migrations.push(id.clone());
                     if migration_write::renames(obj, &ledger.manager, &ledger.tenancy) {
@@ -451,7 +448,12 @@ pub(crate) fn decide(
                     }
                 }
                 match decide_present(manifest, &id, obj, ledger, forces) {
-                    Some((label, action)) => (action, label),
+                    Some((label, action)) => {
+                        if let (Label::RevertsDrift(_), Some(sent)) = (&label, action.written()) {
+                            takes_back = Some(drift::taken_back(obj, sent, &ledger.view_of(obj)));
+                        }
+                        (action, label)
+                    }
                     None if reconcile => (
                         apply::changed(manifest, Deployed::RerunHash(rerun_hash(obj)), false),
                         Label::Reconciled,
@@ -481,7 +483,7 @@ pub(crate) fn decide(
             id,
             action,
             label,
-            resource_version,
+            takes_back,
         });
     }
 
