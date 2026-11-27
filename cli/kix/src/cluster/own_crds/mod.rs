@@ -79,7 +79,7 @@ pub fn all() -> [OwnCrd; 4] {
             definition: crate::cluster::revision::crd::definition(),
             number: 1,
             holds: "the objects each deploy applied",
-            verbs: "`get`, `list`, `create`, `patch`, and `delete` (`patch` also on its `status`)",
+            verbs: "`get`, `list`, `create`, and `delete`, and `patch` on its `status`",
         },
     ]
 }

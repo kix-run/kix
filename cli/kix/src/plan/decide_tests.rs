@@ -770,6 +770,7 @@ fn a_cluster_an_older_kix_deployed_is_read_after_its_conversion() {
         own,
         &[],
         &swept,
+        &[],
     )
     .unwrap();
     let converted = tenancy.with_conversion(&conversion);

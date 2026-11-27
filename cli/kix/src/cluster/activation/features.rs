@@ -130,7 +130,8 @@ pub async fn operator_without_revisions(
 
 /// Return the records of Kix cluster `cluster` that an operator without
 /// [`REVISIONS`] would deploy or repair: each record the operator drives
-/// (`spec.source` set) that is the current record, queued, or deploying,
+/// (`spec.source` set) that is the current record (the one the deploy lock
+/// names, else the newest by phase), queued, or deploying,
 /// when the Activation CRD does not list [`REVISIONS`]. The operator acts
 /// only on such records, so a Kix cluster with none of them is safe beside
 /// any operator. A cluster without the CRD has no operator.
@@ -149,7 +150,15 @@ pub async fn driven_by_older_operator(
         .of_cluster(cluster)
         .await
         .map_err(FeaturesCheckError::Records)?;
-    let current = super::current_among(&own).map(|r| r.name.clone());
+    // The current record is the one the deploy lock names, when the head
+    // can be read, as for every run that takes the lock.
+    let head_current = crate::cluster::head::read(client, cluster)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|h| h.status.and_then(|s| s.current));
+    let current = crate::cluster::revision::convert::current_of(head_current.as_deref(), &own)
+        .map(|r| r.name.clone());
     Ok(own
         .into_iter()
         .filter(|r| r.operator_driven)

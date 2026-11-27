@@ -188,6 +188,23 @@ pub enum DeployError {
         message: String,
         partial: DeployResult,
     },
+
+    /// Every node reached a verdict, but the hashes of what the run applied
+    /// could not be written to its revisions, so the run stopped before it
+    /// finalized.
+    #[error(
+        "every object reached a result, but Kix could not record what this run applied\n  \
+         Cause:\n    {message}\n\n  \
+         Cluster state:\n    \
+         - The objects were applied.\n    \
+         - This run's deployment record was not finalized, and the previous deployment record remains current.\n\n  \
+         Next:\n    \
+         Run the deploy again. It takes in what this run applied and finishes the record."
+    )]
+    AppliedNotRecorded {
+        message: String,
+        partial: DeployResult,
+    },
 }
 
 impl DeployError {
@@ -199,7 +216,8 @@ impl DeployError {
             | DeployError::DiscoveryFailed { partial, .. }
             | DeployError::Cancelled { partial, .. }
             | DeployError::Internal { partial, .. }
-            | DeployError::FinalizeFailed { partial, .. } => partial,
+            | DeployError::FinalizeFailed { partial, .. }
+            | DeployError::AppliedNotRecorded { partial, .. } => partial,
         }
     }
 }
@@ -290,7 +308,7 @@ pub(crate) async fn run_deploy(
     run.begin().await?;
     run.run_nodes().await?;
     run.close_out().await?;
-    run.write_applied().await;
+    run.record_applied().await?;
     if run.stop_partial_closure().await {
         return Ok(run.result);
     }
@@ -882,6 +900,12 @@ impl<'a> Run<'a> {
     /// tells the next deploy to fold those changes into its plan.
     async fn abort_record(&self, reason: &str) {
         self.write_applied().await;
+        self.mark_stopped(reason).await;
+    }
+
+    /// Mark the Activation record as stopped ([`DeployRecord::abort`]), and
+    /// emit an event if the status write fails.
+    async fn mark_stopped(&self, reason: &str) {
         let Some(record) = &self.record else {
             return;
         };
@@ -895,6 +919,38 @@ impl<'a> Run<'a> {
             what: "activation abort".into(),
             message: failed,
         });
+    }
+
+    /// Write the applied hashes of every object the run applied, and carry
+    /// the current record's hashes into the run's revisions, before the run
+    /// tidies notes or finalizes. Finalizing supersedes the current record,
+    /// whose revisions the cleanup then deletes, so a hash that is not
+    /// written now is lost. A failed write stops the run with its record
+    /// marked as stopped, and the previous record stays current with its
+    /// revisions. An object whose hash was not written has no applied hash,
+    /// so the next deploy applies it again, writes the hashes, and
+    /// finalizes.
+    async fn record_applied(&mut self) -> Result<(), DeployError> {
+        let Some(record) = self.record.clone() else {
+            return Ok(());
+        };
+        let message =
+            match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, record.write_applied()).await {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(e)) => e.to_string(),
+                Err(_) => format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs()),
+            };
+        let reason = format!("could not record the hashes of what this run applied: {message}");
+        self.emit(DeployEvent::Stopped {
+            reason: reason.clone(),
+        });
+        // The hashes stay unwritten, so the next deploy applies those
+        // objects again, records their hashes, and finalizes.
+        self.mark_stopped(&reason).await;
+        Err(DeployError::AppliedNotRecorded {
+            message,
+            partial: self.result.clone(),
+        })
     }
 
     /// Write the applied hashes of the objects the run applied to the
@@ -1174,7 +1230,11 @@ impl<'a> Run<'a> {
                 .cloned()
                 .collect()
         };
-        if prune != PrunePolicy::Skip {
+        if prune == PrunePolicy::Skip {
+            // `--skip-orphan-check` writes nothing to orphans, so the
+            // record lists the shared ones and the next deploy releases them.
+            left.extend(self.resources.releases());
+        } else {
             self.release_shared(&mut left).await;
         }
         if effective_orphans.is_empty() || prune == PrunePolicy::Skip {

@@ -206,8 +206,8 @@ fn readable_map(record: &Record) -> Option<&RevisionMap> {
 ///   its hash.
 /// - `replaced` pairs each revision the run's record names that the current
 ///   record does not with the revisions the current record names. The new
-///   one takes an old one's hash of every object both name that the run did
-///   not apply.
+///   one takes the old ones' hash of every object both name that the run did
+///   not apply, when the old ones that record a hash for it agree.
 ///
 /// Leave out entries a revision already holds with the same value. A run
 /// that applied nothing still carries hashes into the revisions it replaces.
@@ -216,17 +216,41 @@ pub fn pending(
     kept: &[&Revision],
     replaced: &[(&Revision, &Revision)],
 ) -> BTreeMap<String, BTreeMap<String, String>> {
-    let mut out: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    // Old revisions that record different hashes for one object leave it
+    // without one, as a reader treats revisions that disagree.
+    let mut carried: BTreeMap<&str, BTreeMap<&str, Option<&String>>> = BTreeMap::new();
     for (old, new) in replaced {
         let in_old: HashSet<&RevisionObject> = old.spec.objects.iter().collect();
-        let carried = new
+        let entries = carried.entry(new.name.as_str()).or_default();
+        for object in new
             .spec
             .objects
             .iter()
             .filter(|o| !applied.contains_key(*o) && in_old.contains(o))
-            .filter_map(|o| Some((o.hash.clone(), old.applied.get(&o.hash)?.clone())));
-        out.entry(new.name.clone()).or_default().extend(carried);
+        {
+            let Some(value) = old.applied.get(&object.hash) else {
+                continue;
+            };
+            entries
+                .entry(object.hash.as_str())
+                .and_modify(|known| {
+                    if *known != Some(value) {
+                        *known = None;
+                    }
+                })
+                .or_insert(Some(value));
+        }
     }
+    let mut out: BTreeMap<String, BTreeMap<String, String>> = carried
+        .into_iter()
+        .map(|(name, entries)| {
+            let agreed = entries
+                .into_iter()
+                .filter_map(|(hash, value)| Some((hash.to_string(), value?.clone())))
+                .collect();
+            (name.to_string(), agreed)
+        })
+        .collect();
     for revision in kept {
         let entries = revision
             .spec

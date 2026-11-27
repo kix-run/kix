@@ -85,11 +85,28 @@ impl Conversion {
     }
 }
 
+/// Why [`plan`] refuses to convert the records of a Kix cluster.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum Refusal {
+    /// A revision would pass the size the API server stores.
+    #[error(transparent)]
+    TooLarge(Box<TooLarge>),
+    /// Kix needs the live objects to learn what a record names, and could
+    /// not list some kinds.
+    #[error(
+        "[K9558] Kix cannot give deployment record `{record}` revisions, because this account may not `list` {kinds} across the cluster. Nothing was changed on the cluster. \
+         An older Kix wrote the record without the names of its objects, so Kix finds them by listing every object that carries Kix's label, and objects of those kinds would be missed. \
+         Next: let this account `list` those kinds in every namespace, then run the command again",
+        kinds = .kinds.join(", ")
+    )]
+    NotListed { record: String, kinds: Vec<String> },
+}
+
 /// Why a conversion could not be written.
 #[derive(Debug, Error)]
 pub enum ConvertError {
     #[error(transparent)]
-    TooLarge(Box<TooLarge>),
+    Refused(Box<Refusal>),
     #[error(transparent)]
     Revisions(#[from] RevisionError),
     #[error(transparent)]
@@ -198,6 +215,21 @@ fn named(index: &RecordPackageIndex, hash: &str, live: &Live<'_>) -> Option<Revi
     ))
 }
 
+/// Return whether Kix needs the live objects to learn what `record` names:
+/// it has no package index, or its index does not name every object it
+/// lists with its group.
+fn needs_listing(record: &Record) -> bool {
+    let Some(index) = &record.package_index else {
+        return true;
+    };
+    index
+        .packages
+        .values()
+        .flat_map(|p| std::iter::once(&p.instance).chain(&p.resources))
+        .chain(&index.cluster_level)
+        .any(|h| !matches!(index.name_of(h), Some(IndexedName::Named(_))))
+}
+
 /// Return what `record` names, by instance key, with the objects no
 /// instance lists under `None`. See the module docs for the sources.
 fn named_by(record: &Record, live: &Live<'_>) -> BTreeMap<Option<String>, Vec<RevisionObject>> {
@@ -257,19 +289,38 @@ fn with_applied(spec: RevisionSpec, live: &Live<'_>) -> Revision {
 
 /// Return what a run that takes the lock writes to give the records of Kix
 /// cluster `cluster` revisions: `current` is the record [`current_of`]
-/// returns, `own` the cluster's records, `listed` its revisions, and `live`
-/// every live object that carries Kix's label. Refuse when a revision would
-/// pass the size the API server stores.
+/// returns, `own` the cluster's records, `listed` its revisions, `live`
+/// every live object that carries Kix's label, and `forbidden` the kinds
+/// the listing could not read. Refuse when a revision would pass the size
+/// the API server stores, and when a record needs the listing to say what
+/// it names and the listing missed a kind. A conversion written from a
+/// partial listing would forget those objects for good.
 pub fn plan(
     cluster: &str,
     current: Option<&Record>,
     own: &[Record],
     listed: &[Revision],
     live: &[DynamicObject],
-) -> Result<Conversion, Box<TooLarge>> {
+    forbidden: &[String],
+) -> Result<Conversion, Refusal> {
     let live = Live::of(live);
     let mut out = Conversion::default();
     for record in targets(current, own) {
+        let is_current = current.is_some_and(|c| c.name == record.name);
+        let reads_kept_notes = is_current
+            && record
+                .orphans_kept_from
+                .iter()
+                .any(|source| kept_map(own, &source.identity_hash).is_none());
+        if !forbidden.is_empty() && (needs_listing(record) || reads_kept_notes) {
+            let mut kinds = forbidden.to_vec();
+            kinds.sort();
+            kinds.dedup();
+            return Err(Refusal::NotListed {
+                record: record.name.clone(),
+                kinds,
+            });
+        }
         let groups = named_by(record, &live);
         let instances: BTreeMap<String, Revision> = groups
             .iter()
@@ -292,20 +343,32 @@ pub fn plan(
                 &live,
             ),
         };
-        set.check_size().map_err(Box::new)?;
-        let is_current = current.is_some_and(|c| c.name == record.name);
+        if record.package_index.is_none() && set.cluster_level.stored_bytes() > MAX_BYTES {
+            return Err(Refusal::TooLarge(Box::new(TooLarge {
+                what: format!(
+                    "deployment record {}, which a Kix older than 0.6 wrote without a package index,",
+                    record.name
+                ),
+                objects: set.cluster_level.spec.objects.len(),
+                bytes: set.cluster_level.stored_bytes(),
+                next: "Without an index Kix cannot split the record's objects by package instance. \
+                       Deploy a changed build of this Kix cluster once with Kix 0.9, which writes a package index on the new deployment record, then deploy with this Kix.",
+            })));
+        }
+        set.check_size()
+            .map_err(|e| Refusal::TooLarge(Box::new(e)))?;
         let kept = is_current
             .then(|| kept_of(cluster, record, own, listed, &set, &live))
             .flatten();
         if let Some(kept) = &kept
             && kept.stored_bytes() > MAX_BYTES
         {
-            return Err(Box::new(TooLarge {
+            return Err(Refusal::TooLarge(Box::new(TooLarge {
                 what: format!("the objects deployment record {} kept", record.name),
                 objects: kept.spec.objects.len(),
                 bytes: kept.stored_bytes(),
                 next: "Delete some of those objects with `kix gc`, then deploy again.",
-            }));
+            })));
         }
         let map = RevisionMap {
             kept_orphans: kept.as_ref().map(|k| k.name.clone()),
@@ -324,8 +387,8 @@ pub fn plan(
 /// Return the kept-orphans revision of `record`, the current record: the
 /// objects of each build its `status.orphansKeptFrom` lists that `set`, the
 /// record's own revisions, does not name. A build that is a record with a
-/// readable map is read from its revisions, any other from the record's
-/// package index or the notes.
+/// readable map is read from its revisions, any other from the live
+/// objects whose note names it.
 fn kept_of(
     cluster: &str,
     record: &Record,
@@ -340,10 +403,7 @@ fn kept_of(
         .collect();
     let mut objects: Vec<RevisionObject> = Vec::new();
     for source in &record.orphans_kept_from {
-        let built = own
-            .iter()
-            .find(|r| r.identity_hash.as_deref() == Some(source.identity_hash.as_str()));
-        match built.and_then(|r| r.revisions.as_ref()?.as_ref().ok()) {
+        match kept_map(own, &source.identity_hash) {
             Some(map) => {
                 let revisions = map
                     .instances
@@ -355,19 +415,24 @@ fn kept_of(
                     }
                 }
             }
-            None => {
-                let stand_in = Record {
-                    identity_hash: Some(source.identity_hash.clone()),
-                    package_index: built.and_then(|r| r.package_index.clone()),
-                    ..Record::default()
-                };
-                objects.extend(named_by(&stand_in, live).into_values().flatten());
-            }
+            // An older Kix found a kept orphan by the note on the live
+            // object, so only an object whose note names the kept build is
+            // one. An object of the same name made since by something else
+            // carries no such note.
+            None => objects.extend(live.noting(&source.identity_hash)),
         }
     }
     objects.retain(|o| !named.contains(&o.resource_id()));
     (!objects.is_empty())
         .then(|| Revision::new(RevisionSpec::new(cluster, Slot::KeptOrphans, objects)))
+}
+
+/// Return the readable revision map of the record of `own` whose build is
+/// `identity_hash`.
+fn kept_map<'a>(own: &'a [Record], identity_hash: &str) -> Option<&'a RevisionMap> {
+    own.iter()
+        .find(|r| r.identity_hash.as_deref() == Some(identity_hash))
+        .and_then(|r| r.revisions.as_ref()?.as_ref().ok())
 }
 
 /// Write `conversion`: create every revision and write its applied hashes,
@@ -421,8 +486,15 @@ pub async fn run(
     let live = crate::cluster::inventory::list_managed(client, discovery)
         .await
         .map_err(|e| ConvertError::Listing(e.to_string()))?;
-    let conversion =
-        plan(cluster, current, &own, &listed, &live.managed).map_err(ConvertError::TooLarge)?;
+    let conversion = plan(
+        cluster,
+        current,
+        &own,
+        &listed,
+        &live.managed,
+        &live.forbidden,
+    )
+    .map_err(|e| ConvertError::Refused(Box::new(e)))?;
     write(client, records, &conversion).await?;
     Ok(!conversion.is_empty())
 }
