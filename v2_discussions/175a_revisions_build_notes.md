@@ -1,6 +1,6 @@
 # 175a: Building the revisions (part 2 of 175)
 
-**Status:** Accepted, in progress (2026-11-26)
+**Status:** Accepted, built except the copy pass (2026-11-26)
 **Related:** `175_one_home_for_what_a_deploy_did.md`
 
 Type: implementation plan. Doc 175 holds the design. This document holds
@@ -93,13 +93,44 @@ Settled without a question, from the code:
 - **Cleanup refuses when it cannot be sure.** It refuses when the list of
   records does not hold the current record or the lock's record, and when a
   record's map is in a format this Kix cannot read.
-- **A kind the account may not list** stays skipped with a warning.
+- **A kind the account may not list** has its objects read one at a time,
+  and the plan refuses when it may not get them either (changed after the
+  planner review, section 5).
 - **The readers of the notes and of the package index stay for one
   release,** behind one constructor, for clusters and records an earlier
   Kix wrote.
 
+Settled while building stages 7 and 8:
+
+- **The manager name is `kix/<cluster>`.** A cluster name holds no `/`, so
+  it never equals `kix` or another fixed name. Until the migration moves an
+  object's `kix` entry, a reader of a cluster that is not migrated counts
+  `kix` as the cluster's own (`FieldManager::unmigrated`); after it, `kix`
+  belongs to a Kix cluster an older Kix still deploys.
+- **The CLI does not force a field another Kix cluster holds**
+  (`HeldByOtherCluster`). It applies without force, so a different
+  rendering is refused with K5636.
+- **A Kix cluster that stops deploying a shared object gives up its fields**
+  with one empty apply under its own manager, once. Otherwise its stale
+  entry would keep the object for ever.
+- **The migration write is one JSON patch** with a `test` on
+  `resourceVersion`, before the object's first apply under the new name.
+  An object an older Kix's cluster also deploys keeps its note, with this
+  record's hash added, and its `kix` entries, until that cluster migrates.
+- **An older Kix that deploys after this one** leaves the cluster read as
+  not migrated, and the next deploy migrates again.
+- **`kix deploy --only` refuses on a cluster that is not migrated,** because
+  a `Partial` run never finalizes the move.
+- **The operator migrates when it deploys, refuses to repair before that,**
+  and announces `revisions`; the CLI refuses an operator that published
+  features without it.
+- **`kix gc --full-scan` rebuilds a missing kept-orphans list** from live
+  objects with the cluster's `Apply` entry that no other revision names.
+
 Open: the cluster-level and kept-orphans revisions have no bound of their
-own (about 2,000 namespaces fill the first). They need a way to split.
+own (about 2,000 namespaces fill the first). They need a way to split. The
+CLI cannot see an operator from 0.9 or earlier, which publishes no features.
+Both are in `ROADMAP.md`.
 
 ## 4. Build order
 
@@ -116,14 +147,16 @@ beside the old before any reader moves.
    PackageInstance is what builds applied before, and stays the only number
    while a Kix that applies them from a build is still supported. A build
    from before this change loses its two CRDs when it is loaded.
-4. Applied hashes in revision status.
+4. Applied hashes in revision status. Built.
 5. One reader for "which Kix cluster deploys this object", from revisions,
-   with the old reader kept for clusters that are not migrated.
-6. The one planner: the three rules of doc 175, section 4.3.
+   with the old reader kept for clusters that are not migrated. Built.
+6. The one planner: the three rules of doc 175, section 4.3. Built.
 7. One field manager per Kix cluster, and the prune guard that reads it.
+   Built.
 8. Migration: the one write per object, the end of the second write, the
-   rule for a Kubernetes cluster with Kix clusters on two versions.
-9. Docs, change records, and the copy pass.
+   rule for a Kubernetes cluster with Kix clusters on two versions. Built.
+9. Docs, change records, and the copy pass. Docs and change records
+   written; copy pass not run yet.
 
 ## 5. Red-team reviews
 
@@ -135,3 +168,15 @@ are created", "The CLI and the operator", "A `Superseded` record", and
 orphans and left the list that named them, and that a kept-orphans list
 that could not be written was dropped with a warning. Both now fail or
 rewrite the list under the lock.
+
+**The planner, stages 4 to 6 (2026-11-26).** The review found four serious
+defects: a forced revert took back fields the package ceded, an object of a
+kind the account may not list was skipped and forgotten, one drifted object
+stopped the operator, and the planner fell back to comparing builds without
+saying so. Ceded fields are now out of the applied hash and the drift check;
+a forced apply carries the plan's `resourceVersion`; a listing answers
+present, absent, or not known, with a GET per object for a kind the account
+may not list; the choice of planner fails closed; and the operator reports
+drift another manager owns without writing it. The smaller findings on
+applied hashes (carry-forward, disagreeing revisions, unreadable maps) were
+fixed too.

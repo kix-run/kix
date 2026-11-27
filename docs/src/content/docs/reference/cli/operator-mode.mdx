@@ -13,9 +13,10 @@ same engine as `kix deploy` and, while an activation is Active, re-applies
 resources that have drifted and deletes the record's cluster's resources that
 the build no longer has. It reads only the resources of the record's Kix
 cluster, named by the record's `kix.run/cluster` label (or `spec.cluster` when
-the label is missing), found through the Activation records each resource
-names in `kix.run/activations`. It keeps a resource another Kix cluster's
-current build also contains, both when it prunes and when a deleted record's
+the label is missing), found through the
+[revisions](/docs/reference/annotations-crds-and-receipts/#packageinstancerevision)
+its Activation records name. It keeps a resource another Kix cluster still
+deploys, both when it prunes and when a deleted record's
 finalizer removes that record's resources.
 
 This page is hand-maintained. Check `cli/kix-cli/src/commands/operator.rs`,
@@ -48,7 +49,9 @@ yet; pull-based Git sync is planned.
   `KIX_REQUEUE_INTERVAL_SECS` environment variable). It only repairs records
   with `spec.source.path` set, so it ignores records created by `kix deploy`
   without `--operator`. Drift repair pauses while another operator-managed
-  Activation for the same Kix cluster is `Queued` or `Deploying`. The
+  Activation for the same Kix cluster is `Queued` or `Deploying`. It decides
+  what to repair with the same rules as `kix deploy` (see
+  [How a deploy decides what to write](/docs/reference/cli/deploy/#how-a-deploy-decides-what-to-write)). The
   operator never takes fields from another field manager. When another
   manager changed fields the build sets, such as with `kubectl edit`, the
   operator leaves that resource as it is. It posts a `DriftNotReverted`
@@ -57,7 +60,11 @@ yet; pull-based Git sync is planned.
   take the fields back, or declare them with `ownership.cede` if the other
   manager is meant to own them. A field the resource cedes never counts as
   drift. A change no manager owns, such as a removed field or `kubectl scale
-  --replicas=0`, is repaired.
+  --replicas=0`, is repaired. The operator does not repair drift on a Kix
+  cluster that an earlier version of Kix deployed last, until one deploy with
+  this version (`kix deploy <cluster>` or `kix deploy <cluster> --operator`)
+  has moved it to revisions. Until then, it logs the reason and tries again
+  every 30 seconds.
 - **Deploying from Git today:** Run `kix deploy` (with or without `--operator`)
   from CI after a merge.
 
@@ -87,8 +94,11 @@ does not contact the operator.
 
 The operator fails any resource that goes 300 seconds without progress toward
 becoming ready, and stops the deploy at the first failure. It deletes orphaned
-resources, never takes over fields owned by another field manager, and skips
-unchanged resources.
+resources, never takes over fields owned by another field manager, and writes
+nothing to unchanged resources. Its deploy of a Kix cluster that an earlier
+version of Kix deployed last moves the cluster to revisions, as the first
+`kix deploy` with this version does (see
+[The first deploy after upgrading](/docs/explanation/server-side-apply-and-drift/#the-first-deploy-after-upgrading)).
 
 ### Retries after a failure
 
@@ -341,18 +351,30 @@ A timeout ends the CLI only. The operator keeps working on the record.
 - The operator watches the `kix.run` API group.
 - The operator runs a matching or newer version of Kix, its Kubernetes account
   can patch CustomResourceDefinition `activations.kix.run`, and your account
-  can read that CRD. On startup, the operator writes `requests,head-lock` to
-  the `kix.run/operator-features` annotation on `activations.kix.run`.
+  can read that CRD. On startup, the operator writes `requests,head-lock,revisions`
+  to the `kix.run/operator-features` annotation on `activations.kix.run`.
   `kix deploy --operator` and `kix rollback --operator` check that annotation
-  before changing anything and stop if either feature is missing. Upgrade the
-  operator before deploying with the upgraded Kix, because an older operator
-  deploys without taking the deploy lock.
+  before changing anything and stop with `[K9557]` if any of the three
+  features is missing. Every other command that takes the
+  [deploy lock](/docs/reference/cli/deploy/#the-deploy-lock), such as
+  `kix deploy` and `kix gc`, stops with `[K9557]` when the annotation lists
+  features without `revisions`.
+- Upgrade the operator first, before you run an upgraded `kix` against its
+  cluster. An older operator deploys without taking the deploy lock, and it
+  writes the annotations `kix.run/activations` and `kix.run/applied-hash`
+  back onto every resource it applies after this version removed them. An
+  operator from Kix 0.9 or earlier writes no `kix.run/operator-features`
+  annotation at all, so the commands cannot tell it is there. Then run one
+  `kix deploy <cluster>` or `kix deploy <cluster> --operator` with the
+  upgraded Kix, after which the operator repairs drift again.
 - The operator's Kubernetes account can `get`, `create`, and `update`
   CustomResourceDefinitions, to install and update Kix's own CRDs, and
   `patch` to write its features annotation. It can `get`, `list`, `create`,
   and `update` `activationheads.kix.run`, which holds each Kix cluster's
-  deploy lock, and use `packageinstancerevisions.kix.run`, which lists the
-  objects each deploy applied. For example:
+  deploy lock. It can `get`, `list`, `create`, `patch`, and `delete`
+  `packageinstancerevisions.kix.run`, which list the objects each deploy
+  applied, and `patch` their `status`, which holds the applied hashes. For
+  example:
 
   ```yaml
   - apiGroups: ["apiextensions.k8s.io"]
@@ -363,10 +385,10 @@ A timeout ends the CLI only. The operator keeps working on the record.
     verbs: ["get", "list", "create", "update"]
   - apiGroups: ["kix.run"]
     resources: ["packageinstancerevisions"]
-    verbs: ["get", "list", "create", "delete"]
+    verbs: ["get", "list", "create", "patch", "delete"]
   - apiGroups: ["kix.run"]
     resources: ["packageinstancerevisions/status"]
-    verbs: ["get", "patch", "update"]
+    verbs: ["patch"]
   ```
 - The operator can read the store path the CLI wrote. It loads manifests from
   `spec.source.path`, so the build must be present in the store the operator

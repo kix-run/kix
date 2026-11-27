@@ -52,7 +52,7 @@ current deploy is the cluster's `Active` or `Degraded`
 | Check | Question | An object fails when |
 | --- | --- | --- |
 | `presence` | Is the object on the cluster? | It is gone, for example after a `kubectl delete`. |
-| `drift` | Does the object still hold what Kix applied? | The fields Kix owns no longer hash to the object's `kix.run/applied-hash` stamp. |
+| `drift` | Does the object still hold what Kix applied? | The fields Kix owns no longer hash to the applied hash Kix recorded for the object in its [revision's](/docs/reference/annotations-crds-and-receipts/#packageinstancerevision) `status.applied`. |
 | `readiness` | Is the object ready? | It is not ready by the rules [`kix deploy`](/docs/reference/cli/deploy/) waits on, such as a Deployment with fewer ready replicas than it wants. |
 
 `kix status` checks only the objects listed in the current deploy record, with
@@ -160,14 +160,14 @@ The text output has four parts:
 5. When an object is missing or changed, a `Next:` line that names
    `kix deploy <cluster> --reconcile`, which puts it back, and
    `kix plan <cluster> --reconcile`, which shows what that deploy would change
-   first. A deploy without `--reconcile` skips objects whose build did not
-   change, so it does not put back a missing or changed object. When another
-   field manager owns fields on a changed object and Kix does not co-own them
-   (for example, after `kubectl edit` or `kubectl scale`), a deploy stops with
-   a field ownership conflict. The `Next:` line then adds `--force-conflicts`
-   to take those fields back. Fields shared with Kix still hold what Kix
-   applied, so a manager that shares all its fields with Kix does not trigger
-   `--force-conflicts`.
+   first. When another field manager owns fields on a changed object and Kix
+   does not co-own them (for example, after `kubectl edit` or `kubectl scale`),
+   the `Next:` line adds `--force-conflicts`. Fields shared with Kix still hold
+   what Kix applied, so a manager that shares all its fields with Kix does not
+   trigger `--force-conflicts`. A plain `kix deploy` also puts back a missing
+   object and takes back the changed fields of an object it applied (see
+   [How a deploy decides what to write](/docs/reference/cli/deploy/#how-a-deploy-decides-what-to-write)),
+   and forces only those objects, so you need neither flag for that.
 
 ```text
 Cluster shop on Kubernetes v1.33.1 (context prod, https://prod.example:6443)
@@ -201,7 +201,7 @@ Last deploy: shop-7f3a2b1c0d9e  Active  2d0h ago
 ...
 vault/vaultwarden
   Deployment.apps vault/vaultwarden  not ready (0/1 ready, 0/1 updated)
-  ConfigMap vault/vaultwarden-env    not checked for changes: no applied-hash stamp yet, the next deploy adds it
+  ConfigMap vault/vaultwarden-env    not checked for changes: Kix has no record of what it applied; `kix deploy` applies it again and records it
   Secret vault/vaultwarden-db        missing, needed by Deployment.apps vault/vaultwarden
   Secret vault/vaultwarden-admin     not checked: this account may not list its kind
 (cluster-level)
@@ -220,10 +220,14 @@ not fail the command:
 - **A kind the account may not list.** When listing a resource type returns
   `403`, Kix cannot tell whether its objects are on the cluster, so it does
   not report them as missing. A closing line names the resource types.
-- **No applied-hash stamp yet.** The drift check needs the
-  `kix.run/applied-hash` annotation, and the next deploy adds it.
+- **No applied hash.** The drift check needs the hash of what Kix applied,
+  and Kix has none for the object, for example after a deploy stopped between
+  applying it and recording the hash. The next `kix deploy` applies the object
+  again and records it. On a Kix cluster an earlier version of Kix deployed
+  last, the hash comes from the object's `kix.run/applied-hash` annotation.
 - **No field ownership entry for Kix.** Kubernetes records no fields that the
-  `kix` field manager owns, so the drift check has nothing to compare.
+  Kix cluster's field manager (`kix/<cluster>`) owns, so the drift check has
+  nothing to compare.
 
 The summary line and the package lines count these objects as `not checked`.
 `ok` counts only the objects that every selected check passed.
@@ -233,16 +237,18 @@ The summary line and the package lines count these objects as `not checked`.
 A missing object is gone from the cluster, so Kix cannot read its kind or name
 there. Kix names it from the first of these that has it:
 
-1. The deploy record. From Kix 0.10, each deploy stores the kind, namespace,
-   and name of every object in the record's
-   [`status.packageIndex`](/docs/reference/annotations-crds-and-receipts/#activation-spec-and-status-fields).
+1. The deploy record. Each deploy names
+   [revisions](/docs/reference/annotations-crds-and-receipts/#packageinstancerevision)
+   that list the kind, namespace, and name of every object. A record an
+   earlier version of Kix wrote may list them in its
+   [`status.packageIndex`](/docs/reference/annotations-crds-and-receipts/#the-package-index).
 2. Kix's local store, when it holds the deployed build.
 3. Neither. The object is shown as `Unknown/(hash: xxxxxxxxxxxx...)`.
 
 The line for a missing object names the objects that depend on it, such as
 `missing, needed by Deployment.apps vault/vaultwarden`.
 
-A record written before Kix stored a package index lists no objects. Kix then
+A record written before Kix stored a package index, and without revisions, lists no objects. Kix then
 finds the deploy's objects through the `kix.run/depends-on` annotations of the
 deploy's live objects. When such a record's own object is also gone, Kix cannot
 tell which objects the deploy made, says so, and exits `1`.
@@ -262,7 +268,7 @@ fields and values they do not know.
 | `clusters[]` | One entry for each Kix cluster checked. |
 | `clusters[].cluster` | The Kix cluster name. |
 | `clusters[].deploy` | The current deploy record: `name`, `phase` (`Active` or `Degraded`), `identity_hash`, `deployed_at`, and `deployed_with` (the version of Kix that deployed, when the record says). |
-| `clusters[].objects_from` | Where Kix found the deploy's objects: `index` (the record's package index), `depends_on` (the live objects' `kix.run/depends-on` annotations), or `unknown` (nowhere; no object was checked). |
+| `clusters[].objects_from` | Where Kix found the deploy's objects: `index` (the record's revisions, or the package index of a record an earlier version of Kix wrote), `depends_on` (the live objects' `kix.run/depends-on` annotations), or `unknown` (nowhere; no object was checked). |
 | `clusters[].notes` | Warnings about the cluster, such as a changed platform interface, a `Partial` deployment record from [`kix deploy --only`](/docs/reference/cli/deploy/#deploy-one-instance-at-a-time), or an earlier `Failed` deployment record (excluding the newest failed deploy already reported in [Failed deploys](#failed-deploys)). |
 | `clusters[].packages[]` | One entry for each package, with `name` (`namespace/instance`, or `null` for the cluster-level objects), `summary`, and `resources`. |
 | `clusters[].failed_deploy` | The newest deploy that failed since `deploy`, or `null`: `name`, `identity_hash`, `failed_at`, `reason`, `packages` (objects present only in the failed build, in the same shape as `clusters[].packages`), and `summary` (counts for those objects, which are excluded from the cluster's `summary`). |

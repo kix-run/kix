@@ -71,8 +71,9 @@ renewal (measured by this machine's clock), the plan notes that the lease has
 expired, the holder has likely stopped, and the next command that changes the
 cluster will take over the lock. While any run other than operator drift
 repair holds the lock, the plan leaves out resources from earlier failed or
-partial deploys and notes that omission. If your account cannot read
-`activationheads.kix.run`, `kix plan` skips the lock check.
+partial deploys and notes that omission. If your account may not `get`
+`activationheads.kix.run`, `kix plan` skips the lock check, but it still needs
+`list` on that kind (see [Permissions](#permissions)).
 
 ## Permissions
 
@@ -81,12 +82,18 @@ permissions of the deploy it previews. A user who may only `get` and `list`
 gets `forbidden` refusals. Use `kix plan --read-only` for a comparison that
 needs only `get` and `list`.
 
-`kix plan` also needs cluster-wide `list` permission for each resource kind in
-the build. It sends one cluster-wide `list` request per kind to find resources
-that have not changed in the build but are missing from the cluster or being
-deleted, and includes them in the plan so the deploy recreates them. If the
-account cannot list a kind across the cluster, `kix plan` prints a warning and
-skips unchanged resources of that kind unless `--reconcile` is set.
+`kix plan` reads the live object of everything the build makes and everything
+the cluster's [revisions](/docs/reference/annotations-crds-and-receipts/#packageinstancerevision)
+name, because it decides from them what the deploy writes (see
+[How a deploy decides what to write](/docs/reference/cli/deploy/#how-a-deploy-decides-what-to-write)).
+It sends one cluster-wide `list` request per kind. For a kind the account
+cannot list across the cluster, it reads each object it needs with `get`. When
+the account may neither list nor get a kind, the plan stops and names the
+kinds and the permissions to grant.
+
+`kix plan` also needs `list` on `activationheads.kix.run` and on
+`packageinstancerevisions.kix.run`, to read which objects each Kix cluster on
+the Kubernetes cluster deploys. Without it the plan stops before planning.
 
 ## What it reports
 
@@ -116,7 +123,14 @@ Before connecting, `kix plan` prints the kubeconfig context and API server URL
 (for example, `Connecting to context prod (https://prod.example:6443)...`).
 It then prints the same package-grouped plan as `kix deploy`, with every field
 change shown.
-A change that puts back a drifted field is tagged `(reverts drift)`.
+A change that puts back a drifted field is tagged `(reverts drift)`. Below the
+packages, one line counts each kind of write the build did not cause: a line
+starting with `↻` for objects that hold what a stopped deploy applied, objects
+a deploy with failures did not reach, and unchanged objects Kix applies again
+because it has no record of what it applied, and a line starting with `↺` for
+objects that changed on the cluster, whose fields the deploy takes back. On the
+first deploy with this version, a line starting with `Upgrade:` counts the
+objects whose metadata the deploy rewrites once.
 After the packages come these sections, each only when it has something to
 say:
 
@@ -208,6 +222,8 @@ Its JSON Schema is `cli/kix-cli/schema/plan.schema.json`.
 | `kubernetes` | `{ context, server }` for the Kubernetes cluster the plan read: the kubeconfig context and its API server URL, each `null` when not set in the kubeconfig. `null` when the command did not connect to a cluster (`kix plan --offline` and `kix diff`). |
 | `build` | The build the plan is for: `{ store_path, identity_hash }`. `store_path` is the build's result directory, the path a deploy records as `kix.run/built-via`; it locates the build. `identity_hash` is the Activation record's `kix.run/identity-hash`, a hash of every rendered manifest and what is upstream of it; two builds with the same identity hash deploy the same objects. Present whether or not anything changes. |
 | `head` | The cluster's [deploy lock](/docs/reference/cli/deploy/#the-deploy-lock) state read by the plan: `{ generation, current, lock }`. `generation` is the lock generation a deploy of this plan checks (`0` when the cluster has no `ActivationHead` yet), `current` names the active record on `ActivationHead`, and `lock` is either `null` or the lock holder: `{ holder, hint, purpose, activation, renewed, seconds_since_renewal, probably_dead }`. `seconds_since_renewal` is measured by this machine's clock, and `probably_dead` is `true` when it exceeds the 30-second lease. `head` is `null` when the plan did not read `ActivationHead` (`kix plan --offline`, `kix plan --read-only`, `kix diff`, or when this account cannot read `activationheads.kix.run`). |
+| `objects` | Every object the deploy writes or deletes: `{ writes, deletes }`. Each write is `{ kind, group, namespace, name, package, store_hash, change, reason }`, and each delete `{ kind, group, namespace, name }`. `reason` says why Kix writes an object its build did not change, and is left out for a change the new build makes: `{ kind: "applied_by_record", record }` (the live object is what a `Failed` or `Partial` deployment record applied), `{ kind: "left_by_degraded", record }` (the current deploy finished with failures and did not reach it), `{ kind: "applied_hash_missing" }` (Kix has no record of what it applied), or `{ kind: "reverts_drift", changed_by }` (fields Kix applied changed on the cluster; `changed_by` lists `{ manager, fields }`). `null` from `kix diff`. |
+| `metadata_rewrites` | How many objects the first deploy with this version moves from an earlier version's annotations to revisions, once. See [The first deploy after upgrading](/docs/explanation/server-side-apply-and-drift/#the-first-deploy-after-upgrading). Left out when there are none. |
 | `deployed` | The build the plan compares against: `{ activation, identity_hash, store_path }` from the cluster's current Activation record (the cached record with `--offline`). `null` on a first deploy. |
 | `flags` | The planning flags: `{ prune, reconcile, force_conflicts, accept_migrations, only }`. `prune` says what the deploy does with orphans: `delete` with `--prune`, `skip` with `--skip-orphan-check`, and `warn_only` otherwise. `only` lists the sorted instance names passed to `--only`, and is omitted when `--only` is not set. `null` from `kix plan --read-only` and `kix diff`. |
 | `left_alone` | With `--only`, `{ writes, orphans }`: `writes` counts resources in the build outside this step that differ from the active deployment record (earlier `--only` runs may already have applied some of them), and `orphans` counts removed resources left untouched for a full deploy. `packages`, `objects`, and `prune` include only what this step changes. Omitted without `--only`. |
@@ -321,12 +337,12 @@ to restore what the build defines.
 ## Offline plans
 
 With `--offline`, `kix plan` connects to nothing. It compares the
-cached build with the new one, `made_by` is `builds`, and `conflicts`,
+cached build with the new one and cannot see changes on the cluster. `made_by` is `builds`, and `conflicts`,
 `admission`, `drift`, and `prune` are `not_checked` with reason
 `builds_only`. The
 cache is keyed by cluster name only; see
 [`kix deploy`](/docs/reference/cli/deploy/) for what an offline plan
-cannot see.
+cannot see, and for how `kix deploy --offline` plans again once it connects.
 
 ## Exit status
 
@@ -382,12 +398,13 @@ It cannot be combined with `--offline`, `--reconcile`, `--prune`,
 
 For each managed resource, Kix reads only the fields it applied. Kubernetes
 records which tool set each field through server-side apply, and Kix keeps its
-own fields and drops the rest: server defaults, status, fields set by
-controllers or `kubectl`, and the bookkeeping annotations Kix writes after
-every apply. A cluster that matches its build reports no differences.
+own fields and drops the rest: server defaults, status, and fields set by
+controllers or `kubectl`. A cluster that matches its build reports no
+differences.
 
-The live side holds only the named cluster's resources: those whose
-`kix.run/activations` annotation names one of its Activation records. When
+The live side holds only the named cluster's resources: those its deployment
+records name, through their revisions, or, for a Kix cluster an earlier version
+of Kix deployed last, through the `kix.run/activations` annotation. When
 the Kubernetes cluster also runs other Kix clusters, their resources are not
 reported as removals, and stderr says how many were skipped and which
 clusters they belong to. A

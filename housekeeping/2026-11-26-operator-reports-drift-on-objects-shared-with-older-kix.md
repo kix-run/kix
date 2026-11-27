@@ -1,0 +1,3 @@
+# 2026-11-26 · `cli/kix/src/plan/decide.rs` · The operator posts `DriftNotReverted` on every repair for an unchanged object it shares with a Kix cluster an older Kix still deploys.
+
+The migration write leaves such an object's `kix` entries in place, and a run that does not apply it adds no `kix/<cluster>` entry. The object then has a recorded applied hash and no field the cluster's own manager owns, which rule 3 reads as drift owned by `kix`. `kix deploy` applies it without force (`HeldByOtherCluster`) and adds the entry, but the operator never writes it and reports it on each repair until the other Kix cluster is deployed with this version.

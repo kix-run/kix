@@ -724,7 +724,7 @@ Part 1 changes nothing about the notes on objects, the package index, the
 baseline of a plan, or the prune guard between Kix clusters. Requirements 1
 and 2 of section 3 are not met until part 2.
 
-**Part 2: revisions.** In progress. `175a_revisions_build_notes.md` has the
+**Part 2: revisions.** Built on 2026-11-26, except the copy pass. `175a_revisions_build_notes.md` has the
 tests, the answers to questions 1 to 4 of section 8, decisions 13 to 16, and
 the order of the build.
 
