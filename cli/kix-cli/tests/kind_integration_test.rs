@@ -1028,7 +1028,7 @@ fn two_kix_clusters_share_one_kind_cluster() {
     let (ok, out) = flake.kix(&ctx, &["gc", "sweep-a", "--include", "unattributed"]);
     assert!(!ok && out.contains("--full-scan"), "{out}");
 
-    // 6. Binding. `kix status` shows the kind cluster's ID, and sweep-a
+    // 6. Binding. `kix status -v` shows the kind cluster's ID, and sweep-a
     //    bound to it deploys and labels its record. From then on the
     //    unbound sweep-b is refused, a sweep-b bound to another ID is
     //    refused before the plan, and a sweep-b bound to this ID deploys.
@@ -1044,7 +1044,7 @@ fn two_kix_clusters_share_one_kind_cluster() {
         ],
     );
     let uid = uid.trim().to_string();
-    let (ok, out) = flake.kix(&ctx, &["status", "sweep-a"]);
+    let (ok, out) = flake.kix(&ctx, &["status", "sweep-a", "-v"]);
     assert!(
         ok && out.contains(&format!("Kubernetes cluster ID: {uid}")),
         "{out}"
