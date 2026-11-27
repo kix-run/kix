@@ -58,7 +58,9 @@ yet; pull-based Git sync is planned.
   Warning Event that names the manager and the fields, and repairs every
   other resource, including the ones that depend on it. Run `kix deploy` to
   take the fields back, or declare them with `ownership.cede` if the other
-  manager is meant to own them. A field the resource cedes never counts as
+  manager is meant to own them. On a resource where the operator has no field
+  manager entry of its own, it applies without force, which adds its entry
+  when the values agree. A field the resource cedes never counts as
   drift. A change no manager owns, such as a removed field or `kubectl scale
   --replicas=0`, is repaired. On a Kix cluster an earlier version of Kix
   deployed last, the first repair first gives that version's deployment

@@ -1,4 +1,0 @@
-# 2026-11-26 · `cli/kix/src/plan/decide.rs` · The operator never gets its own entry on a shared object whose fields sit under `kix`, and reports it as drift on every repair.
-
-When a converted record names an object, Kix knows its applied hash, and the object has no `Apply` entry under this cluster's manager, the `NoFieldset` arm of `decide_present` asks `drift::conflicts`. With no own entry every field belongs to another manager, so the answer is always yes, and the operator, which never forces, decides `DriftReported` and skips the object. An unforced apply with the same values would succeed and add the entry, as `kix deploy` does through `HeldByOtherCluster`. Two operator-driven Kix clusters that share such an object both report it for ever (a `DriftNotReverted` Warning Event on each repair, counted on one Event).
-- Hit again 2026-11-27 in the second red-team pass of the migration rework (finding N3).

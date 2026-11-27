@@ -348,7 +348,11 @@ it left. A `Superseded` record names none. A finished deploy and `kix gc`
 delete the other revisions of the Kix cluster, and a rollback writes the
 revisions of the record it rolls back to again from its build. A revision
 holds at most about 1.5 MB, which is about 6,500 objects, so Kix refuses a
-package instance with more objects than that before it applies anything.
+package instance with more objects than that before it applies anything. A
+deployment record from a Kix older than 0.6 has no package index, so the first
+deploy with this version puts all its objects in one revision; if they do not
+fit, Kix refuses and says to deploy a changed build once with Kix 0.9, which
+writes a package index.
 
 When a record names a revision that is not on the cluster, `kix deploy`,
 `kix gc`, and the Kix operator refuse to delete anything, and `kix status`

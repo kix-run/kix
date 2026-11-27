@@ -1,6 +1,6 @@
 # 175a: Building the revisions (part 2 of 175)
 
-**Status:** Accepted, built except the copy pass (2026-11-26)
+**Status:** Accepted and built; the copy pass over the new messages and docs remains (2026-11-27)
 **Related:** `175_one_home_for_what_a_deploy_did.md`
 
 Type: implementation plan. Doc 175 holds the design. This document holds
@@ -136,9 +136,8 @@ review:
   objects this cluster applied that no other revision names.
 
 Open: the cluster-level and kept-orphans revisions have no bound of their
-own (about 2,000 namespaces fill the first). They need a way to split. The
-conversion does not yet refuse a listing it cannot complete. Both are in
-`ROADMAP.md`.
+own (about 2,000 namespaces fill the first). They need a way to split. It
+is in `ROADMAP.md`.
 
 ## 4. Build order
 
@@ -204,3 +203,16 @@ built), a shared object stays untidied while the other cluster has any old
 record, an operator never gets its own entry on such an object, a release is
 skipped under `--skip-orphan-check`, and applied hashes reach the new
 revisions by a best-effort write. Fixes are in progress.
+
+**Second pass fixed (2026-11-27).** The conversion refuses with K9558 when a
+record without object names needs a kind the account may not list. Only
+records an older Kix still acts on keep a shared object's notes. The operator
+applies unforced where it has no entry of its own. `--skip-orphan-check` keeps
+shared orphans on the kept list. A run that cannot write its applied hashes
+stops before it finalizes. The carry pairs against the map from before the
+run, and disagreeing old revisions carry no hash. Kept orphans are found by
+their note, the operator refusal reads the current record from the head, and
+a record with no index that is too large gets its own advice. Left as
+housekeeping: an operator downgraded below the features annotation, the plan
+and run converting from two listings, and a redeploy that never finalizes a
+complete `Failed` record of the same build.

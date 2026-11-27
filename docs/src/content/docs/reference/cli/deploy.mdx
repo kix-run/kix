@@ -193,6 +193,13 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
 7. Marks the Activation `Active`, or `Degraded` or `Failed` when resources
    failed.
 
+   Before it prunes and finalizes, Kix must record in the revisions what the
+   run applied. If that write fails, the deploy stops with "Kix could not
+   record what this run applied": the objects are applied, the record is
+   marked `Failed`, nothing is pruned, and the previous deployment record
+   stays current. Run the deploy again. It takes in what the stopped run
+   applied and finishes the record.
+
 `Ctrl-C` cancels the run and marks the record `Failed`. A run that makes no
 progress for 600 seconds is cancelled; set `KIX_STALL_TIMEOUT` to a number of
 seconds to change that, or `0` to disable it. A resource that is still being
@@ -238,7 +245,13 @@ During planning, Kix lists the objects of each kind the build and the revisions
 name, across the cluster, with one `list` request per kind. For a kind the
 account may not list, Kix reads each object it needs with `get`, and the plan
 stops, naming the kinds, when the account may do neither.
-{/* GAP: the one-time conversion of an earlier version's records refuses with `[K9558]` when it must list a kind the account may not list. Describe it here once it is built. */}
+The first deploy after the upgrade is stricter. When a deployment record that
+an earlier version of Kix wrote does not name its objects (Kix 0.9 and earlier
+wrote no names), Kix finds them by listing every object that carries its label,
+and it stops with `[K9558]`, naming the kinds, when the account may not `list`
+one of those kinds across the cluster. Grant the account that `list`, or run
+that one deploy with an account that has it (see
+[The first deploy after upgrading](/docs/explanation/server-side-apply-and-drift/#the-first-deploy-after-upgrading)).
 In the
 [`Plan` document](/docs/reference/cli/plan/#the-plan-document), each entry in
 `objects.writes` says in `reason` why Kix writes an object the build did not
