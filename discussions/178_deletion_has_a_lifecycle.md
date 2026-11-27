@@ -1,7 +1,7 @@
 # 178: Deletion has a lifecycle: prune waits until objects are gone
 
 **Status:** Draft (design doc). Written 2026-11-24 from code, three kind test logs, and five housekeeping entries. Nothing here is built.
-**Related:** `81_deploy_as_lifecycle_engine.md` (Delete as a transition), `98_deploy_execution_topology.md`, open PR #317 (`175_one_home_for_what_a_deploy_did.md`, `176_housekeeping_design_read.md` theme 3 and 4), `ROADMAP.md` ("Prune waits for custom-resource finalizers", "Interleaved prune waves")
+**Related:** `81_deploy_as_lifecycle_engine.md` (Delete as a transition), `98_deploy_execution_topology.md`, open PR #317 (`archive/175_one_home_for_what_a_deploy_did.md`, `176_housekeeping_design_read.md` theme 3 and 4), `ROADMAP.md` ("Prune waits for custom-resource finalizers", "Interleaved prune waves")
 **Housekeeping it would close:** `2026-10-02-prune-does-not-wait-for-crd-finalizers.md`, `2026-10-02-readiness-counts-terminating-objects-ready.md`, and on the keda and db-operator branches `2026-11-24-prune-log-says-deleted-objects-still-there.md`, `2026-11-24-no-convention-orders-crs-before-operator-prune.md`, `2026-11-24-deploy-log-says-pruned-objects-remain.md`. It also answers half of `2026-11-23-operator-teardown-drops-finalizer-after-failed-deletes.md`.
 
 All output text below is a sketch for the design. The copy pass writes the real wording later.

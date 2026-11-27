@@ -1,6 +1,6 @@
 # 175a: Building the revisions (part 2 of 175)
 
-**Status:** Accepted and built; the copy pass over the new messages and docs remains (2026-11-27)
+**Status:** Implemented (2026-11-27)
 **Related:** `175_one_home_for_what_a_deploy_did.md`
 
 Type: implementation plan. Doc 175 holds the design. This document holds

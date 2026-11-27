@@ -1,6 +1,6 @@
 # 175: One home for what a deploy did
 
-**Status:** Accepted, third version. Rewritten on 2026-11-24 after a red-team review (section 9). Brought up to date on 2026-11-26 for `kix deploy --only`, with the build order (section 10). Part 1 is built (branch `head-lock`, 2026-11-26); section 10 says what, and section 4.4 marks where it differs.
+**Status:** Implemented (2026-11-27). Part 1, the head and the lock, shipped in kix#360. Part 2, revisions, is built on branch `revisions`; `175a_revisions_build_notes.md` says where the build differs from this design. What stays open is in `ROADMAP.md` § Open design questions.
 **Related:** `122_runtime_content_drift.md` (the applied hash), `81_deploy_as_lifecycle_engine.md`, `55_shared_resource_ownership.md`, `archive/150_scope_managed_sweep_to_one_cluster.md` (several Kix clusters on one Kubernetes cluster), `archive/157_kix_plan_primary_preview.md` (the plan), `interesting_thoughts/54_activation_signing.md`, `housekeeping/reviews/2026-11-23.md` (themes 4 and 5)
 
 Type: design doc. It reads code at `origin/main` on 2026-11-26, with the
