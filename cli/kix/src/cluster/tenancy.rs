@@ -753,8 +753,10 @@ impl Tenancy {
         !self.cluster.is_empty() && cluster == self.cluster
     }
 
-    /// Return the sorted Kix clusters an object belongs to. A record names
-    /// itself through its own identity hash.
+    /// Return the sorted Kix clusters an object belongs to. An Activation
+    /// record belongs to the Kix cluster this read found it under, whatever
+    /// that cluster is read from. No revision names a record, so a cluster
+    /// read from revisions would otherwise own none of its records.
     pub fn owners_of(&self, obj: &DynamicObject) -> Vec<String> {
         let legacy = named_hashes(obj).filter_map(|h| {
             if self.legacy.own.contains(h) {
@@ -764,7 +766,12 @@ impl Tenancy {
             }
         });
         let claimed = self.claims_of(obj).iter().map(|c| c.cluster.clone());
-        let mut owners: Vec<String> = legacy.chain(claimed).collect();
+        let record = (lifecycle_of_live(obj) == Lifecycle::Record)
+            .then_some(obj.metadata.name.as_ref())
+            .flatten()
+            .and_then(|name| self.record_cluster.get(name))
+            .cloned();
+        let mut owners: Vec<String> = legacy.chain(claimed).chain(record).collect();
         owners.sort();
         owners.dedup();
         owners

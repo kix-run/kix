@@ -431,10 +431,14 @@ fn deploy_and_gc() {
     assert_eq!(replicas.trim(), "2", "the build's replicas, not kubectl's");
 
     // The cluster now runs that build, so a deploy of it writes other
-    // objects against another deployed build.
+    // objects against another deployed build, and the deploy moved the
+    // cluster's deploy lock to a later generation.
     let stale = check(&forced, &["-o", "json"]);
     assert_eq!(stale.status.code(), Some(4));
-    assert_eq!(mismatched_rules(&stale), vec!["objects", "deployed_build"]);
+    assert_eq!(
+        mismatched_rules(&stale),
+        vec!["objects", "deployed_build", "generation"]
+    );
     let _ = std::fs::remove_dir_all(&dir);
 
     // Put the first build back for the phases below.

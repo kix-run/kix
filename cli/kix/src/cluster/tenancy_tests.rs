@@ -363,6 +363,30 @@ mod both_sources {
         assert_eq!(seen[0].3, 1, "the deploying record's object");
     }
 
+    /// Each Activation record belongs to its own Kix cluster whichever
+    /// source that cluster is read from, so a sweep narrowed to one Kix
+    /// cluster keeps its records and leaves out the other cluster's.
+    #[test]
+    fn a_record_belongs_to_its_cluster_from_either_source() {
+        for written in [Written::Records, Written::Revisions] {
+            let state = state(&recs(), |_| written);
+            let a = state.tenancy("a");
+            for value in &state.records {
+                let record: DynamicObject = serde_json::from_value(value.clone()).unwrap();
+                let cluster = value["metadata"]["labels"][keys::CLUSTER_LABEL]
+                    .as_str()
+                    .unwrap()
+                    .to_string();
+                let expected = if cluster == "a" {
+                    Attribution::Ours
+                } else {
+                    Attribution::Foreign(vec![cluster])
+                };
+                assert_eq!(attribute(&record, &a), expected, "{written:?} {value}");
+            }
+        }
+    }
+
     /// A Kix cluster read from revisions takes nothing from
     /// `kix.run/activations`: an object that names its record's hash and
     /// that no revision names is not its object. Beside it, a Kix cluster
