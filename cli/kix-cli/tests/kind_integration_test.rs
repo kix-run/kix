@@ -1068,13 +1068,11 @@ fn two_kix_clusters_share_one_kind_cluster() {
     let (ok, out) = flake.kix(&ctx, &["deploy", "sweep-b", "--yes"]);
     let out = unwrapped(&out);
     assert!(
-        !ok && out.contains("sweep-b's definition does not set cluster.kubernetes.uid"),
+        !ok && out.contains("but 'sweep-b' sets no `cluster.kubernetes.uid`"),
         "{out}"
     );
     assert!(
-        out.contains(&format!(
-            "sweep-a was deployed here with cluster.kubernetes.uid = \"{uid}\""
-        )),
+        out.contains(&format!("is locked to UID '{uid}' by cluster 'sweep-a'")),
         "{out}"
     );
     let (ok, out) = flake.kix(&ctx, &["plan", "sweep-b", "--read-only"]);
@@ -1084,17 +1082,20 @@ fn two_kix_clusters_share_one_kind_cluster() {
     let elsewhere = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
     flake.write_cluster_bound("b", "hello from sweep-b", true, Some(elsewhere));
     let (ok, out) = flake.kix(&ctx, &["plan", "sweep-b"]);
-    let out = unwrapped(&out);
+    // The message pads its two UID labels to one column.
+    let out = out.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        !ok && out.contains(&format!(
-            "sweep-b's definition sets cluster.kubernetes.uid = \"{elsewhere}\""
-        )),
+        !ok && out.contains("cluster 'sweep-b' does not match"),
         "{out}"
     );
     assert!(
         out.contains(&format!(
-            "This cluster's kube-system namespace has UID \"{uid}\"."
+            "`cluster.kubernetes.uid` in 'sweep-b': {elsewhere}"
         )),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!("`kube-system` UID on connected cluster: {uid}")),
         "{out}"
     );
 
