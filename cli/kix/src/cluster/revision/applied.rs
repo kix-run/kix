@@ -15,7 +15,7 @@ use kube::Client;
 use kube::api::DynamicObject;
 
 use super::map::RevisionMap;
-use super::spec::{Revision, RevisionObject};
+use super::spec::{AppliedKey, Revision, RevisionObject};
 use super::store::{RevisionError, Revisions};
 use crate::cluster::activation::Record;
 use crate::cluster::drift;
@@ -49,7 +49,7 @@ impl RevisionObject {
 pub struct AppliedHashes {
     /// Each object a consulted revision names, with what the revisions
     /// record for it.
-    named: HashMap<RevisionObject, Recorded>,
+    named: HashMap<AppliedKey, Recorded>,
     /// The identity hashes of the consulted records without a map, or
     /// `None` to read every object's hash from its annotation
     /// ([`AppliedHashes::from_annotations`]).
@@ -95,7 +95,7 @@ impl AppliedHashes {
             .into_iter()
             .map(|r| (r.name.as_str(), r))
             .collect();
-        let mut named: HashMap<RevisionObject, Recorded> = HashMap::new();
+        let mut named: HashMap<AppliedKey, Recorded> = HashMap::new();
         let mut noted = std::collections::HashSet::new();
         let mut missing: Vec<String> = Vec::new();
         for record in records {
@@ -115,7 +115,9 @@ impl AppliedHashes {
             );
             for revision in map.names().filter_map(|n| by_name.get(n)) {
                 for object in &revision.spec.objects {
-                    let entry = named.entry(object.clone()).or_insert(Recorded::Nothing);
+                    let entry = named
+                        .entry(object.applied_key())
+                        .or_insert(Recorded::Nothing);
                     *entry = match (&*entry, revision.applied.get(&object.hash)) {
                         (_, None) => entry.clone(),
                         (Recorded::Nothing, Some(hash)) => Recorded::Hash(hash.clone()),
@@ -167,8 +169,10 @@ impl AppliedHashes {
     pub fn applied<'a>(&'a self, obj: &'a DynamicObject) -> Option<&'a str> {
         let annotations = obj.metadata.annotations.as_ref()?;
         let recorded = keys::get_meta(annotations, keys::IDENTITY_HASH).and_then(|hash| {
-            self.named
-                .get(&RevisionObject::of_id(hash, &drift::resource_id(obj)))
+            self.named.get(&AppliedKey {
+                rid: drift::resource_id(obj),
+                hash: hash.to_string(),
+            })
         });
         let from_note = || {
             let named_by_note = match &self.noted {
@@ -212,7 +216,7 @@ fn readable_map(record: &Record) -> Option<&RevisionMap> {
 /// Leave out entries a revision already holds with the same value. A run
 /// that applied nothing still carries hashes into the revisions it replaces.
 pub fn pending(
-    applied: &BTreeMap<RevisionObject, String>,
+    applied: &BTreeMap<AppliedKey, String>,
     kept: &[&Revision],
     replaced: &[(&Revision, &Revision)],
 ) -> BTreeMap<String, BTreeMap<String, String>> {
@@ -220,14 +224,17 @@ pub fn pending(
     // without one, as a reader treats revisions that disagree.
     let mut carried: BTreeMap<&str, BTreeMap<&str, Option<&String>>> = BTreeMap::new();
     for (old, new) in replaced {
-        let in_old: HashSet<&RevisionObject> = old.spec.objects.iter().collect();
-        let entries = carried.entry(new.name.as_str()).or_default();
-        for object in new
+        let in_old: HashSet<AppliedKey> = old
             .spec
             .objects
             .iter()
-            .filter(|o| !applied.contains_key(*o) && in_old.contains(o))
-        {
+            .map(RevisionObject::applied_key)
+            .collect();
+        let entries = carried.entry(new.name.as_str()).or_default();
+        for object in new.spec.objects.iter().filter(|o| {
+            let key = o.applied_key();
+            !applied.contains_key(&key) && in_old.contains(&key)
+        }) {
             let Some(value) = old.applied.get(&object.hash) else {
                 continue;
             };
@@ -256,7 +263,7 @@ pub fn pending(
             .spec
             .objects
             .iter()
-            .filter_map(|o| Some((o.hash.clone(), applied.get(o)?.clone())));
+            .filter_map(|o| Some((o.hash.clone(), applied.get(&o.applied_key())?.clone())));
         out.entry(revision.name.clone())
             .or_default()
             .extend(entries);

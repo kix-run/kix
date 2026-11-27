@@ -14,6 +14,7 @@ use crate::cluster::field_manager::FieldManager;
 use crate::manifest::diff::engine::structural_diff;
 use crate::manifest::diff::{DiffConfig, DiffKind, Difference};
 use crate::manifest::keys;
+use crate::manifest::sent;
 use crate::manifest::types::{self, ResourceId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -98,10 +99,11 @@ impl ThreeWay<'_> {
             .deployed
             .map(|d| structural_diff(d, self.new, "$", &config.clone().in_order()));
         // A field only the live object has is a server default or another
-        // manager's field; applying the build does not touch it.
+        // manager's field; applying the build does not touch it. The live
+        // object is compared with what Kix sent for the deployed build.
         let drift: Vec<Difference> = self
             .deployed
-            .map(|d| structural_diff(d, self.live, "$", &config))
+            .map(|d| structural_diff(&sent::of(d), self.live, "$", &config))
             .unwrap_or_default()
             .into_iter()
             .filter(|d| d.kind != DiffKind::ExtraInB)
@@ -114,7 +116,9 @@ impl ThreeWay<'_> {
             .map(|d| {
                 self.folded
                     .iter()
-                    .find(|(_, manifest)| value_at(manifest, &d.path) == d.b_value.as_ref())
+                    .find(|(_, manifest)| {
+                        value_at(&sent::of(manifest), &d.path) == d.b_value.as_ref()
+                    })
                     .map(|(by, _)| by)
             })
             .collect();
@@ -296,6 +300,11 @@ pub fn live_drift(
         } else {
             Some(new)
         };
+        // Foreign fields are compared with what Kix sends, not with the
+        // built manifests.
+        let applied = applied.map(sent::of);
+        let new = sent::of(new);
+        let new = &*new;
         let served = crate::cluster::fieldsv1::merge_typed_metadata(obj);
         let secret = types::is_secret(new);
         let max = super::MAX_SHOWN_VALUE_BYTES;
@@ -322,7 +331,7 @@ pub fn live_drift(
                 .diff_path(&served)
                 .or_else(|| field.diff_path(new))
                 .unwrap_or_else(|| format!("$.{path}"));
-            let before = applied.and_then(|a| field.value_in(a));
+            let before = applied.as_deref().and_then(|a| field.value_in(a));
             out.push(super::document::DriftChange {
                 deployed: shown(&path, before, None),
                 live: shown(&path, field.value_in(&served), before),

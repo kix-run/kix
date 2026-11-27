@@ -26,7 +26,7 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 ## Synopsis
 
 ```text
-kix gc <CLUSTER> [-y] [--dry-run] [--full-scan [--include unstamped,unattributed,copies]] [--operator]
+kix gc <CLUSTER> [-y] [--dry-run] [--full-scan [--include unattributed,copies]] [--operator]
        [--timeout <DURATION>] [--keep <N>] [--keep-max <N>] [--keep-for <DURATION>]
        [--flake <FLAKE>] [--context <CONTEXT>]
 ```
@@ -41,7 +41,6 @@ kix gc <CLUSTER> [-y] [--dry-run] [--full-scan [--include unstamped,unattributed
 
 | `--include` value | Resources it adds |
 | --- | --- |
-| `unstamped` | Resources written by Kix that carry the label without `kix.run/identity-hash`. Kix cannot match them to a build, so by default they are only listed. |
 | `unattributed` | Resources with no matching Activation record on the cluster. Kix cannot tell which Kix cluster they belong to, so by default they are only listed. |
 | `copies` | Resources with Kix's labels that Kix did not apply. Another controller or tool created or applied them, such as an operator copying a custom resource's labels onto a database volume claim or an Event. By default, copies are only listed. |
 | `--operator` | Delete the retired Activation records only; the operator's finalizer removes their resources. |

@@ -17,6 +17,7 @@ use serde_json::Value;
 use super::apply;
 use super::field_manager::{FieldManager, Whose};
 use super::fieldsv1;
+use crate::manifest::sent;
 use crate::manifest::types::ResourceId;
 
 /// Per-resource drift verdict.
@@ -418,17 +419,20 @@ pub struct TakenField {
     pub live: String,
 }
 
-/// Return whether applying `manifest` without force would be refused with a
-/// conflict on `obj`: `manifest` sets a field that another manager took from
-/// Kix, and the object does not cede that field.
+/// Return whether applying the built manifest `manifest` without force
+/// would be refused with a conflict on `obj`: the manifest Kix sends
+/// ([`sent::of`]) sets a field that another manager took from Kix, and the
+/// object does not cede that field.
 pub(crate) fn conflicts(obj: &DynamicObject, manifest: &Value, manager: &FieldManager) -> bool {
+    let manifest = sent::of(manifest);
     foreign_fields(obj, manager)
         .iter()
-        .any(|f| f.value_in(manifest).is_some())
+        .any(|f| f.value_in(&manifest).is_some())
 }
 
 /// Return the field managers of other Kix clusters, sorted, that own a
-/// field of `obj` that `manifest` sets and the object does not cede: the
+/// field of `obj` that the manifest Kix sends for the built manifest
+/// `manifest` ([`sent::of`]) sets and the object does not cede: the
 /// fields another Kix cluster applied with other values than `manager`'s
 /// Kix cluster did. Another Kix cluster's manager is named by the cluster's
 /// name. The legacy manager `kix` counts too when `manager` does not count
@@ -439,9 +443,10 @@ pub(crate) fn held_by_other_clusters(
     manifest: &Value,
     manager: &FieldManager,
 ) -> Vec<String> {
+    let manifest = sent::of(manifest);
     let mut clusters: Vec<String> = foreign_fields(obj, manager)
         .into_iter()
-        .filter(|f| f.value_in(manifest).is_some())
+        .filter(|f| f.value_in(&manifest).is_some())
         .filter_map(|f| match manager.whose(&f.manager) {
             Whose::OtherCluster(cluster) => Some(cluster.to_string()),
             Whose::Legacy => Some(f.manager.clone()),

@@ -42,8 +42,8 @@ pub use applied::AppliedHashes;
 pub use convert::Conversion;
 pub use map::{RevisionMap, UnreadableMap};
 pub use spec::{
-    MAX_BYTES, ReadError, Revision, RevisionObject, RevisionSet, RevisionSpec, Slot, TooLarge,
-    name_of,
+    AppliedKey, MAX_BYTES, ReadError, Revision, RevisionObject, RevisionSet, RevisionSpec, Slot,
+    TooLarge, name_of,
 };
 pub use store::{Created, Listed, RevisionError, Revisions};
 

@@ -655,21 +655,12 @@ mod hard_scope_tests {
         assert_eq!(names(&garbage), vec!["a-stale", "leftover"]);
     }
 
-    /// Verify that controller-created copies of Kix objects are excluded unless
-    /// `--include copies` is set.
+    /// Verify that copies another program made of Kix objects, and left
+    /// unowned, are excluded unless `--include copies` is set.
     #[test]
     fn hard_gc_judges_copies_only_with_the_flag() {
         let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");
         let mut copy = live("Service", "web-x-guest", Some("h-guest"), "g1");
-        copy.metadata.owner_references = Some(vec![
-            k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference {
-                api_version: "v1".into(),
-                kind: "Service".into(),
-                name: "syncer".into(),
-                uid: "u".into(),
-                ..Default::default()
-            },
-        ]);
         copy.metadata.managed_fields = Some(vec![
             k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry {
                 manager: Some("syncer".into()),
@@ -701,8 +692,9 @@ mod hard_scope_tests {
     }
 
     /// An operator's Event carries Kix's labels but no Kix annotation and no
-    /// `kix` field-manager entry. `--include copies` alone judges it, while an
-    /// object Kix wrote without a hash still waits for `--include unstamped`.
+    /// `kix` field-manager entry. `--include copies` alone judges it. An
+    /// object Kix wrote that names no record is unattributed, and
+    /// `--include unattributed` judges it whether or not it has a hash.
     #[test]
     fn include_copies_judges_a_copy_without_a_hash() {
         let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");
@@ -714,48 +706,34 @@ mod hard_scope_tests {
                 ..Default::default()
             },
         ]);
-        let sweep = inventory::scope_sweep(
-            inventory::partition_sweep(vec![
-                live("ConfigMap", "a-current", Some("h-cur"), "a2"),
-                event,
-                live("ConfigMap", "unannotated", None, ""),
-            ]),
-            inventory::SweepScope::Cluster("a"),
-            tenancy.clone(),
-        );
+        let sweep = || {
+            inventory::scope_sweep(
+                inventory::partition_sweep(vec![
+                    live("ConfigMap", "a-current", Some("h-cur"), "a2"),
+                    event.clone(),
+                    live("ConfigMap", "unannotated", None, ""),
+                ]),
+                inventory::SweepScope::Cluster("a"),
+                tenancy.clone(),
+            )
+        };
         let object_names = |objs: &[DynamicObject]| -> Vec<String> {
             objs.iter()
                 .filter_map(|o| o.metadata.name.clone())
                 .collect()
         };
-        assert_eq!(object_names(&sweep.copies), ["db.1a2b"]);
-        assert_eq!(object_names(&sweep.unattributed), ["unannotated"]);
-        let copies: HashSet<ResourceId> = sweep
-            .copies
-            .iter()
-            .map(kix::cluster::drift::resource_id)
-            .collect();
+        let scoped = sweep();
+        assert_eq!(object_names(&scoped.copies), ["db.1a2b"]);
+        assert_eq!(object_names(&scoped.unattributed), ["unannotated"]);
         let expected: HashSet<String> = ["h-cur".to_string()].into();
-        let judged = judged_objects(sweep, true, true);
-        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
 
-        let (held, rest) = hold_back_unstamped(garbage, &copies, false);
-        assert_eq!(names(&rest), vec!["db.1a2b"]);
-        assert_eq!(names(&held), vec!["unannotated"]);
-
-        let judged = judged_objects(
-            inventory::scope_sweep(
-                inventory::partition_sweep(vec![live("ConfigMap", "unannotated", None, "")]),
-                inventory::SweepScope::Cluster("a"),
-                tenancy.clone(),
-            ),
-            true,
-            true,
-        );
+        let judged = judged_objects(scoped, false, true);
         let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
-        let (held, rest) = hold_back_unstamped(garbage, &copies, true);
-        assert!(held.is_empty());
-        assert_eq!(names(&rest), vec!["unannotated"]);
+        assert_eq!(names(&garbage), vec!["db.1a2b"]);
+
+        let judged = judged_objects(sweep(), true, true);
+        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
+        assert_eq!(names(&garbage), vec!["db.1a2b", "unannotated"]);
     }
 
     /// Verify that hard GC does not delete another Kix cluster's objects

@@ -23,9 +23,9 @@
 //!   For a Kix cluster read from revisions, only the objects the
 //!   kept-orphans revision alone names are garbage.
 //!   With no Active record, the build from the current files takes its place.
-//!   Unstamped label carriers, resources that name no Activation record,
-//!   and copies other programs made of Kix objects are reported and only
-//!   deleted when `--include` names them.
+//!   Resources that name no Activation record, and copies other programs
+//!   made of Kix objects, are reported and only deleted when `--include`
+//!   names them.
 //! - **Operator (`--operator`):** Delete retired Superseded Activation records
 //!   and wait for the operator's finalizer.
 //!
@@ -837,9 +837,8 @@ async fn run_hard_async(
 
     if !output::quiet() {
         println!(
-            "Found {} live Kix-managed object(s) ({} without a Kix build annotation){}",
+            "Found {} live Kix-managed object(s){}",
             sweep.managed.len(),
-            sweep.unstamped.len(),
             crate::output::forbidden_note(&sweep.forbidden),
         );
         if let Some(note) = sweep.foreign_note() {
@@ -866,11 +865,6 @@ async fn run_hard_async(
         Some((ar, _)) => unread.contains(&format!("{}.{}", ar.plural, ar.group)),
     };
     let unattributed_judged = sweep.unattributed.is_empty() || args.includes(Include::Unattributed);
-    let copies: HashSet<ResourceId> = sweep
-        .copies
-        .iter()
-        .map(kix::cluster::drift::resource_id)
-        .collect();
     let live = judged_objects(
         sweep,
         args.includes(Include::Unattributed),
@@ -909,12 +903,6 @@ async fn run_hard_async(
         retirement.check_writer(cluster_name)?;
     }
     garbage.extend(record_garbage(&retirement.plan));
-
-    let (unstamped, garbage) =
-        hold_back_unstamped(garbage, &copies, args.includes(Include::Unstamped));
-    if !unstamped.is_empty() && !output::quiet() {
-        print_unstamped(&unstamped);
-    }
 
     if !shared.is_empty() {
         crate::say!();

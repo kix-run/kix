@@ -14,33 +14,6 @@ use kix::manifest::types::{ResourceId, to_manifest_value};
 
 use super::plan::{GarbageEntry, RecordRetirement};
 
-/// Print resources that carry the Kix label but no identity hash, and explain
-/// why GC leaves them alone by default.
-pub(super) fn print_unstamped(unstamped: &[GarbageEntry]) {
-    println!();
-    println!(
-        "{} {} object(s) carry Kix's label but no Kix build annotation:",
-        output::bold("No Kix build annotation:"),
-        unstamped.len(),
-    );
-    for entry in unstamped {
-        println!(
-            "    {} {}/{}/{}",
-            output::dim("?"),
-            entry.id.namespace,
-            entry.id.kind,
-            entry.id.name,
-        );
-    }
-    println!(
-        "  {}",
-        output::dim(
-            "Kept on the cluster because Kix cannot match them to a build. \
-             Review these objects, then pass `--include unstamped` to delete them."
-        ),
-    );
-}
-
 /// Print the objects that a pending deploy record of `cluster` names, which
 /// gc keeps, grouped by those records.
 pub(super) fn print_held(held: &[HeldObject], cluster: &str) {

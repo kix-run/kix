@@ -281,27 +281,6 @@ pub(super) fn judge_hard(
     }
 }
 
-/// Split out the unstamped objects that `--include unstamped` covers, unless
-/// `include_unstamped` is set, and return them with the rest of `garbage`.
-///
-/// An unstamped object is one Kix wrote without `kix.run/identity-hash`. A
-/// copy has no hash either, but the sweep already set it apart and
-/// `--include copies` judges it, so `copies` (the ids of the sweep's copies)
-/// stay in the rest. Protected kinds stay in the rest too, so the plan lists
-/// them as kept.
-pub(super) fn hold_back_unstamped(
-    garbage: Vec<GarbageEntry>,
-    copies: &HashSet<ResourceId>,
-    include_unstamped: bool,
-) -> (Vec<GarbageEntry>, Vec<GarbageEntry>) {
-    garbage.into_iter().partition(|g| {
-        g.reason == GarbageReason::NoIdentityHash
-            && !include_unstamped
-            && !copies.contains(&g.id)
-            && !lifecycle::never_pruned(g.id.group_kind())
-    })
-}
-
 /// Return `true` if `obj` carries annotation `key` in its raw data or typed metadata.
 pub(super) fn has_key(obj: &kube::api::DynamicObject, key: &str) -> bool {
     obj.data
@@ -335,7 +314,6 @@ pub(super) fn judged_objects(
     sweep
         .managed
         .into_iter()
-        .chain(sweep.unstamped)
         .chain(unattributed)
         .chain(copies)
         .collect()

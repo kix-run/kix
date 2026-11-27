@@ -9,6 +9,7 @@ use super::super::fieldsv1;
 use super::super::kept::{self, NotKeptField};
 use super::super::preview::ConflictOwner;
 use crate::manifest::keys;
+use crate::manifest::sent;
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use kube::{
     api::{Api, DynamicObject, Patch, PatchParams},
@@ -328,16 +329,27 @@ pub(crate) enum Takes {
     Unknown,
 }
 
-/// Return what a forced apply sends to the object `live` for `manifest`:
-/// without each field the manifest cedes that another manager holds on
-/// `live` ([`drift::without_ceded_taken`]), with a Secret's `stringData` as
-/// `data`.
+/// Return what a forced apply sends to the object `live` for the built
+/// manifest `manifest`: the manifest Kix sends ([`sent::of`]), without each
+/// field the manifest cedes that another manager holds on `live`
+/// ([`drift::without_ceded_taken`]), with a Secret's `stringData` as `data`.
+///
+/// This and [`unforced_manifest`] build every apply body Kix sends for a
+/// built manifest, the dry runs included.
 pub(crate) fn forced_manifest(
     manifest: &Value,
     live: &DynamicObject,
     manager: &FieldManager,
 ) -> Value {
-    string_data_as_data(&drift::without_ceded_taken(manifest, live, manager)).into_owned()
+    let manifest = sent::of(manifest);
+    string_data_as_data(&drift::without_ceded_taken(&manifest, live, manager)).into_owned()
+}
+
+/// Return what an apply without force sends for the built manifest
+/// `manifest`: the manifest Kix sends ([`sent::of`]), with a Secret's
+/// `stringData` as `data`.
+fn unforced_manifest(manifest: &Value) -> Value {
+    string_data_as_data(&sent::of(manifest)).into_owned()
 }
 
 /// Return `sent` bound to the `resourceVersion` of `live`. The API server
@@ -352,8 +364,9 @@ pub(crate) fn bound_to(mut sent: Value, live: &DynamicObject) -> Value {
 
 /// Ask the API server what a forced apply of `sent` under `manager` would
 /// take from other field managers, by sending `sent` without force as a dry
-/// run. Pass `sent` bound to the `resourceVersion` of `live`, the object just
-/// read ([`bound_to`]), so the answer is about that object.
+/// run. Build `sent` with [`forced_manifest`] and bind it to the
+/// `resourceVersion` of `live`, the object just read ([`bound_to`]), so the
+/// answer is about that object.
 ///
 /// A forced apply takes exactly the fields that the unforced apply is
 /// refused on, so the answer covers list keys the server defaults, values
@@ -512,7 +525,8 @@ fn closing_bracket(text: &str) -> Option<usize> {
     None
 }
 
-/// Apply a single resource via server-side apply under `manager`.
+/// Apply the built manifest `manifest` via server-side apply under
+/// `manager`. The body sent is [`forced_manifest`] or [`unforced_manifest`].
 pub(crate) async fn apply_resource(
     client: &Client,
     ar: &ApiResource,
@@ -571,7 +585,7 @@ pub(crate) async fn apply_resource(
             // sent again without it below.
             let sent = match (&takeover, &live) {
                 (Takeover::Always, Some(obj)) => forced_manifest(manifest, obj, manager),
-                _ => string_data_as_data(manifest).into_owned(),
+                _ => unforced_manifest(manifest),
             };
             // Transient errors (429, 5xx, connection loss) are retried by the
             // client transport (cluster::client), not here. 409 conflicts are

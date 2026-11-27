@@ -740,10 +740,10 @@ mod applied_tests {
         revision
     }
 
-    fn applied(entries: &[(&RevisionObject, &str)]) -> BTreeMap<RevisionObject, String> {
+    fn applied(entries: &[(&RevisionObject, &str)]) -> BTreeMap<AppliedKey, String> {
         entries
             .iter()
-            .map(|(o, h)| ((*o).clone(), h.to_string()))
+            .map(|(o, h)| (o.applied_key(), h.to_string()))
             .collect()
     }
 
@@ -831,6 +831,41 @@ mod applied_tests {
         assert_eq!(
             writes,
             BTreeMap::from([("new".to_string(), entries(&[(&w, "hw")]))])
+        );
+    }
+
+    /// The run notes what it applied by resource id and build hash. Each
+    /// revision entry with that id and hash takes the applied hash, and so
+    /// does a carry between two revisions that list the object.
+    #[test]
+    fn applied_hashes_key_on_the_resource_id_and_the_build_hash() {
+        let namespace = crate::manifest::types::ResourceId {
+            group: String::new(),
+            kind: "Namespace".into(),
+            namespace: crate::manifest::types::CLUSTER_SCOPED.into(),
+            name: "app".into(),
+        };
+        let hash = format!("{:a>32}", "n");
+        let entry = RevisionObject::of_id(&hash, &namespace);
+        assert_eq!(entry.namespace, None);
+        let x = object("x", "x");
+        let old = web(vec![entry.clone(), x.clone()], &[(&x, "hx")]);
+        let mut new = web(vec![entry.clone(), x.clone()], &[]);
+        new.name = "new".into();
+        let noted = BTreeMap::from([(
+            AppliedKey {
+                rid: namespace,
+                hash: hash.clone(),
+            },
+            "hn".to_string(),
+        )]);
+        let writes = pending(&noted, &[&new], &[(&old, &new)]);
+        assert_eq!(
+            writes,
+            BTreeMap::from([(
+                "new".to_string(),
+                BTreeMap::from([(hash, "hn".to_string()), (x.hash.clone(), "hx".to_string())])
+            )])
         );
     }
 

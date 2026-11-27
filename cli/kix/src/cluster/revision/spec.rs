@@ -50,7 +50,33 @@ pub struct RevisionObject {
     pub name: String,
 }
 
+/// An object of a revision as the applied hashes key it: its resource id
+/// and its build hash. Code that maps an object to its applied hash keys on
+/// this rather than on the whole [`RevisionObject`], so a field of the entry
+/// that says nothing about which build was applied cannot drop the hash.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AppliedKey {
+    pub rid: ResourceId,
+    pub hash: String,
+}
+
 impl RevisionObject {
+    /// Return the key the applied hashes use for this object.
+    pub fn applied_key(&self) -> AppliedKey {
+        // List every field, so a new field of the entry is a choice here.
+        let RevisionObject {
+            hash,
+            group: _,
+            kind: _,
+            namespace: _,
+            name: _,
+        } = self;
+        AppliedKey {
+            rid: self.resource_id(),
+            hash: hash.clone(),
+        }
+    }
+
     fn of(path: &Path, manifest: &Value) -> RevisionObject {
         RevisionObject::with_hash(store_hash(path), manifest)
     }

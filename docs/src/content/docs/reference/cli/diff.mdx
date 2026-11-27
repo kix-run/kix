@@ -117,7 +117,7 @@ Even when an object carries `app.kubernetes.io/managed-by=kix`, Kix separates wh
 
 If Kubernetes serves the same object under multiple API groups (such as `Event` under `v1` and `events.k8s.io/v1`), Kix includes it once, preferring the API group Kix applied it with.
 
-[`kix gc --full-scan`](/docs/reference/cli/gc/) lists unstamped objects, copies, and unattributed objects (objects with no matching Activation record on the cluster) and keeps them unless you include them with `--include` (for example, `--include unstamped,copies,unattributed`).
+[`kix gc --full-scan`](/docs/reference/cli/gc/) lists copies and unattributed objects (objects with no matching Activation record on the cluster) and keeps them unless you include them with `--include` (for example, `--include copies,unattributed`).
 
 The one exception for unlabelled objects is a name collision: if an unlabelled live object has the same kind, namespace, and name as a resource in the build, `kix plan` and `kix deploy` target that object. `kix plan` reports field ownership conflicts and names each field's current manager, and `kix deploy` stops on those conflicts unless `--force-conflicts` is passed.
 

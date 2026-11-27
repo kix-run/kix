@@ -244,7 +244,7 @@ pub const FLAGS: &[RemovedFlag] = &[
         takes_value: false,
         removed: Removed {
             old: "kix gc --include-unstamped",
-            new: "kix gc --full-scan --include unstamped",
+            new: "kix gc --full-scan --include unattributed",
             id: "K9205",
             note: "",
         },
@@ -505,6 +505,9 @@ pub fn refused(command: &crate::cli::Command) -> Option<&'static Removed> {
     use crate::cli::Command;
     match command {
         Command::Bundle(args) if args.removed_file.is_some() => Some(&BUNDLE_FILE),
+        Command::Gc(args) if args.includes(crate::cli::Include::Unstamped) => {
+            Some(&GC_INCLUDE_UNSTAMPED)
+        }
         Command::Diff(args)
             if args.from.is_none() && args.from_bundle.is_none() && args.bundle.is_none() =>
         {
@@ -513,6 +516,16 @@ pub fn refused(command: &crate::cli::Command) -> Option<&'static Removed> {
         _ => None,
     }
 }
+
+/// `kix gc --include unstamped`. Kix decides that an object is its own from
+/// its field managers, so no object Kix wrote is left out for lacking its
+/// identity hash annotation.
+pub const GC_INCLUDE_UNSTAMPED: Removed = Removed {
+    old: "kix gc --include unstamped",
+    new: "kix gc --full-scan --include unattributed",
+    id: "K5538",
+    note: "Kix now treats every object it wrote as its own, whether or not the object has Kix's identity hash annotation. An object Kix wrote that no deployment record names is unattributed.",
+};
 
 /// The variable `KIX_OUTPUT`, which set `-o` for every command.
 pub const OUTPUT_VARIABLE: Removed = Removed {
@@ -823,9 +836,28 @@ mod tests {
                     "c",
                     "--full-scan",
                     "--include",
-                    "unstamped,copies",
+                    "unattributed,copies",
                 ],
                 "K9205",
+            ),
+            (
+                &[
+                    "kix",
+                    "gc",
+                    "c",
+                    "--full-scan",
+                    "--include",
+                    "copies,unstamped",
+                ],
+                &[
+                    "kix",
+                    "gc",
+                    "c",
+                    "--full-scan",
+                    "--include",
+                    "copies,unattributed",
+                ],
+                "K5538",
             ),
             (
                 &["kix", "export", "c", "--for", "audit"],

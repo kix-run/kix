@@ -28,7 +28,7 @@ use super::super::field_manager::FieldManager;
 use super::super::migration_write::{self, WriteError};
 use super::super::prune_guard::{PruneGuard, Pruned};
 use super::super::readiness::{self, Deletion, ImportTarget, ReadinessError, ReadinessResult};
-use super::super::revision::RevisionObject;
+use super::super::revision::{AppliedKey, RevisionObject};
 use super::{
     DeleteError, Migrations, NotDiscovered, OnStatus, ReadError, RecreateError, ResourceIo,
 };
@@ -121,7 +121,7 @@ pub(crate) struct KubeResources {
     /// Each object the run applied, with the applied hash of the server's
     /// answer, until the record writes them to the revisions
     /// ([`KubeResources::take_applied`]).
-    applied: std::sync::Mutex<BTreeMap<RevisionObject, String>>,
+    applied: std::sync::Mutex<BTreeMap<AppliedKey, String>>,
 }
 
 impl KubeResources {
@@ -253,13 +253,13 @@ impl KubeResources {
             return;
         };
         if let Ok(mut applied) = self.applied.lock() {
-            applied.insert(object, hash);
+            applied.insert(object.applied_key(), hash);
         }
     }
 
     /// Return the objects the run applied since the last call, with their
     /// applied hashes, and forget them.
-    pub(super) fn take_applied(&self) -> BTreeMap<RevisionObject, String> {
+    pub(super) fn take_applied(&self) -> BTreeMap<AppliedKey, String> {
         self.applied
             .lock()
             .map(|mut applied| std::mem::take(&mut *applied))
@@ -269,7 +269,7 @@ impl KubeResources {
     /// Put back `applied`, which [`KubeResources::take_applied`] returned
     /// and a write did not store, so the next write stores it. An entry the
     /// run recorded since wins.
-    pub(super) fn give_back_applied(&self, applied: BTreeMap<RevisionObject, String>) {
+    pub(super) fn give_back_applied(&self, applied: BTreeMap<AppliedKey, String>) {
         if let Ok(mut now) = self.applied.lock() {
             for (object, hash) in applied {
                 now.entry(object).or_insert(hash);
