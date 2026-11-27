@@ -71,6 +71,16 @@ pub enum ApplyError {
     )]
     KeepsChanging { resource: String },
 
+    /// The read a forced apply judges the object by failed.
+    #[error(
+        "{resource} was not updated because Kix could not read it to check which fields it would take back from other field managers: {}. Check the connection to the cluster and that this account may read {resource}, then run the deploy again.", reported(.source)
+    )]
+    ReadFailed {
+        resource: String,
+        #[source]
+        source: kube::Error,
+    },
+
     #[error(
         "immutable field changed on {resource} (not updated). Kubernetes does not allow changing this field in place, and Kix did not recreate {resource} automatically; review the impact of deleting {resource}, delete it, and run the deploy again. Kubernetes reported: {}", reported(.source)
     )]
@@ -289,11 +299,12 @@ pub(crate) enum Takeover {
     No,
     /// Yes, whatever the object holds (`--force-conflicts`).
     Always,
-    /// Yes, while the forced apply takes back exactly these fields, at these
-    /// live values: what the plan showed ([`drift::taken_back`]). The apply
-    /// reads the object, judges it, and sends the write with the
-    /// `resourceVersion` it read, so the judgement and the write are one
-    /// step. Otherwise it fails with [`ApplyError::ChangedSincePlan`].
+    /// Yes, while the forced apply takes exactly these fields, from these
+    /// managers, at these live values: what the plan's answer from the API
+    /// server was ([`takes_back`]). The apply reads the object, asks the API
+    /// server again, and sends the write with the `resourceVersion` it read,
+    /// so the answer and the write are about one object. Otherwise it fails
+    /// with [`ApplyError::ChangedSincePlan`].
     IfTakesBack(Vec<TakenField>),
 }
 
@@ -301,6 +312,200 @@ pub(crate) enum Takeover {
 /// judges, and writes an object that changes between its read and its
 /// write before it gives up with [`ApplyError::KeepsChanging`].
 pub(crate) const TAKEOVER_ATTEMPTS: usize = 5;
+
+/// What a forced apply would take from other field managers, from the API
+/// server's answer to the same apply sent without force ([`takes_back`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Takes {
+    /// These fields, with their values on the object read, sorted. An empty
+    /// list means the apply takes nothing.
+    Fields(Vec<TakenField>),
+    /// The object is no longer at the `resourceVersion` read.
+    Moved,
+    /// The answer names a field that Kix could not find on the object read,
+    /// so Kix cannot say what the forced apply would overwrite.
+    Unknown,
+}
+
+/// Return what a forced apply sends to the object `live` for `manifest`:
+/// without each field the manifest cedes that another manager holds on
+/// `live` ([`drift::without_ceded_taken`]), with a Secret's `stringData` as
+/// `data`.
+pub(crate) fn forced_manifest(
+    manifest: &Value,
+    live: &DynamicObject,
+    manager: &FieldManager,
+) -> Value {
+    string_data_as_data(&drift::without_ceded_taken(manifest, live, manager)).into_owned()
+}
+
+/// Return `sent` bound to the `resourceVersion` of `live`. The API server
+/// refuses an apply of it with 409 once the object has another version.
+pub(crate) fn bound_to(mut sent: Value, live: &DynamicObject) -> Value {
+    let version = live.metadata.resource_version.clone().unwrap_or_default();
+    if let Some(meta) = sent.get_mut("metadata").and_then(Value::as_object_mut) {
+        meta.insert("resourceVersion".into(), Value::String(version));
+    }
+    sent
+}
+
+/// Ask the API server what a forced apply of `sent` under `manager` would
+/// take from other field managers, by sending `sent` without force as a dry
+/// run. Pass `sent` bound to the `resourceVersion` of `live`, the object just
+/// read ([`bound_to`]), so the answer is about that object.
+///
+/// A forced apply takes exactly the fields that the unforced apply is
+/// refused on, so the answer covers list keys the server defaults, values
+/// spelled differently from the stored form, and a Secret's `data`. Each
+/// field's value is read from `live`. A refusal that names a field `live`
+/// does not hold, or names no field, gives [`Takes::Unknown`]. Any other
+/// failure is returned as it is.
+pub(crate) async fn takes_back(
+    api: &Api<DynamicObject>,
+    name: &str,
+    manager: &FieldManager,
+    sent: &Value,
+    live: &DynamicObject,
+) -> Result<Takes, kube::Error> {
+    let pp = PatchParams::apply(manager.name()).dry_run();
+    match api.patch(name, &pp, &Patch::Apply(sent)).await {
+        Ok(_) => Ok(Takes::Fields(Vec::new())),
+        Err(kube::Error::Api(status)) if status.code == 409 => Ok(taken_in(&status, live)),
+        Err(e) => Err(e),
+    }
+}
+
+/// Read what a forced apply takes from the 409 answer `status` to an
+/// unforced apply of the object `live`. A 409 that names no field manager
+/// is a `resourceVersion` that no longer matches.
+pub(super) fn taken_in(status: &kube::core::Status, live: &DynamicObject) -> Takes {
+    let owners = conflict_causes(status);
+    let owners = if owners.is_empty() {
+        crate::cluster::preview::conflict_owners(&status.message)
+    } else {
+        owners
+    };
+    if owners.is_empty() {
+        return Takes::Moved;
+    }
+    let live = serde_json::to_value(live).unwrap_or(Value::Null);
+    let mut out = Vec::new();
+    for owner in owners {
+        if owner.fields.is_empty() {
+            return Takes::Unknown;
+        }
+        for path in owner.fields {
+            let Some(value) = value_at(&live, &path) else {
+                return Takes::Unknown;
+            };
+            out.push(TakenField {
+                manager: owner.manager.clone(),
+                path,
+                live: value.to_string(),
+            });
+        }
+    }
+    out.sort();
+    out.dedup();
+    Takes::Fields(out)
+}
+
+/// Return the field managers and fields that the causes of a conflict
+/// answer name, one cause per field. The message of each cause names the
+/// manager (`conflict with "kubectl-edit" using apps/v1`).
+fn conflict_causes(status: &kube::core::Status) -> Vec<ConflictOwner> {
+    let mut owners: Vec<ConflictOwner> = Vec::new();
+    let causes = status.details.iter().flat_map(|d| &d.causes);
+    for cause in causes.filter(|c| c.reason == "FieldManagerConflict") {
+        let Some(manager) = crate::cluster::preview::conflict_owners(&cause.message)
+            .into_iter()
+            .next()
+            .map(|o| o.manager)
+        else {
+            continue;
+        };
+        match owners.iter_mut().find(|o| o.manager == manager) {
+            Some(o) => o.fields.push(cause.field.clone()),
+            None => owners.push(ConflictOwner {
+                manager,
+                fields: vec![cause.field.clone()],
+            }),
+        }
+    }
+    owners
+}
+
+/// Return the value at the API server field path `path` in `obj`, or `None`
+/// when the path finds no value or more than one.
+///
+/// The server does not escape a field name that holds a dot, such as the
+/// label `app.kubernetes.io/name`, so each step tries every key of the map
+/// that the rest of the path starts with.
+pub(crate) fn value_at<'v>(obj: &'v Value, path: &str) -> Option<&'v Value> {
+    let mut found = Vec::new();
+    values_at(obj, path, &mut found);
+    let first = *found.first()?;
+    found.iter().all(|v| *v == first).then_some(first)
+}
+
+fn values_at<'v>(node: &'v Value, rest: &str, out: &mut Vec<&'v Value>) {
+    if rest.is_empty() {
+        out.push(node);
+    } else if let Some(after) = rest.strip_prefix('.') {
+        for (key, child) in node.as_object().into_iter().flatten() {
+            let Some(tail) = after.strip_prefix(key.as_str()) else {
+                continue;
+            };
+            if tail.is_empty() || tail.starts_with(['.', '[']) {
+                values_at(child, tail, out);
+            }
+        }
+    } else if let Some(after) = rest.strip_prefix('[') {
+        let Some(end) = closing_bracket(after) else {
+            return;
+        };
+        let (inner, tail) = (&after[..end], &after[end + 1..]);
+        let items = node.as_array().map(Vec::as_slice).unwrap_or_default();
+        let picked: Vec<&Value> = if let Ok(i) = inner.parse::<usize>() {
+            items.get(i).into_iter().collect()
+        } else if let Some(set_value) = inner.strip_prefix('=') {
+            // A set element: `[="value"]`.
+            match serde_json::from_str::<Value>(set_value) {
+                Ok(v) => items.iter().filter(|item| **item == v).collect(),
+                Err(_) => Vec::new(),
+            }
+        } else {
+            match key_values(inner) {
+                Some(keys) => items.iter().filter(|item| picks(&keys, item)).collect(),
+                None => Vec::new(),
+            }
+        };
+        for item in picked {
+            values_at(item, tail, out);
+        }
+    }
+}
+
+/// Return the position of the `]` that closes a list element's key, outside
+/// any double-quoted string.
+fn closing_bracket(text: &str) -> Option<usize> {
+    let (mut quoted, mut escaped) = (false, false);
+    for (i, c) in text.char_indices() {
+        if quoted {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => quoted = false,
+                _ => {}
+            }
+        } else if c == '"' {
+            quoted = true;
+        } else if c == ']' {
+            return Some(i);
+        }
+    }
+    None
+}
 
 /// Apply a single resource via server-side apply under `manager`.
 pub(crate) async fn apply_resource(
@@ -323,8 +528,6 @@ pub(crate) async fn apply_resource(
         });
     }
     let api: Api<DynamicObject> = super::super::discovery::api_for(client, ar, &scope, &rid);
-    let original = manifest;
-    let mut manifest = string_data_as_data(manifest);
 
     // Default to non-force SSA so ownership conflicts return their field paths
     // and current manager. --force-conflicts opts into taking ownership.
@@ -336,91 +539,60 @@ pub(crate) async fn apply_resource(
         pp = pp.dry_run();
     }
 
-    let mut attempts = 0;
-    let (live, echo, stripped) = loop {
-        // Check if resource exists to determine Created vs Configured. A dry
-        // run keeps the live object for its preview.
-        let live = api.get_opt(&name).await.ok().flatten();
-        if let Some(reason) = live
-            .as_ref()
-            .and_then(super::super::readiness::deletion_reason)
-        {
-            return Err(ApplyError::BeingDeleted {
-                resource: rid.display_id(),
-                reason,
-                uid: live.as_ref().and_then(|o| o.metadata.uid.clone()),
-            });
+    let (live, echo, sent) = match &takeover {
+        Takeover::IfTakesBack(shown) => {
+            take_back(&api, &rid, manager, manifest, &pp, shown).await?
         }
-        // A `resourceVersion` in the applied object makes the API server
-        // refuse the apply with 409 when the object changed since that
-        // version. A forced apply never conflicts on fields, so a 409 then
-        // means only that, and the apply reads and judges the object again.
-        if let Takeover::IfTakesBack(shown) = &takeover {
-            let unchanged = live
-                .as_ref()
-                .is_some_and(|obj| drift::taken_back(obj, original, manager) == *shown);
-            if !unchanged {
-                return Err(ApplyError::ChangedSincePlan {
-                    resource: rid.display_id(),
-                });
+        Takeover::No | Takeover::Always => {
+            // Check if resource exists to determine Created vs Configured. A
+            // dry run keeps the live object for its preview.
+            let live = api.get_opt(&name).await.ok().flatten();
+            if let Some(refused) = live.as_ref().and_then(|obj| being_deleted(&rid, obj)) {
+                return Err(refused);
             }
-            let version = live
-                .as_ref()
-                .and_then(|o| o.metadata.resource_version.clone())
-                .unwrap_or_default();
-            if let Some(meta) = manifest
-                .to_mut()
-                .get_mut("metadata")
-                .and_then(Value::as_object_mut)
-            {
-                meta.insert("resourceVersion".into(), Value::String(version));
-            }
-        }
-        let sent = &*manifest;
-
-        // Transient errors (429, 5xx, connection loss) are retried by the
-        // client transport (cluster::client), not here. 409 conflicts are
-        // permanent and surface immediately as ApplyError::Conflict so the
-        // user sees an actionable error pointing at --force-conflicts.
-        match apply_patch(&api, &name, &pp, sent, &rid).await {
-            Ok(echo) => break (live, echo, None),
-            Err(ApplyError::Conflict { resource, .. })
-                if matches!(takeover, Takeover::IfTakesBack(_)) =>
-            {
-                attempts += 1;
-                if attempts == TAKEOVER_ATTEMPTS {
-                    return Err(ApplyError::KeepsChanging { resource });
-                }
-            }
-            Err(ApplyError::Conflict { resource, source }) => {
-                // A conflict confined to fields the resource ceded is not a
-                // failure: the other manager has taken what it was meant to
-                // take. Apply again without those fields and it keeps them.
-                let message = match &source {
-                    kube::Error::Api(resp) => resp.message.clone(),
-                    _ => String::new(),
-                };
-                match without_ceded_conflicts(sent, &message) {
-                    Some(stripped) => {
-                        tracing::info!(
-                            resource = %rid.display_id(),
-                            fields = %conflict_paths(&message).join(", "),
-                            "another manager owns ceded fields; applying without them"
-                        );
-                        let echo = apply_patch(&api, &name, &pp, &stripped, &rid).await?;
-                        break (live, echo, Some(stripped));
+            // A forced apply leaves each ceded field another manager holds to
+            // that manager. An unforced one is refused on such a field and
+            // sent again without it below.
+            let sent = match (&takeover, &live) {
+                (Takeover::Always, Some(obj)) => forced_manifest(manifest, obj, manager),
+                _ => string_data_as_data(manifest).into_owned(),
+            };
+            // Transient errors (429, 5xx, connection loss) are retried by the
+            // client transport (cluster::client), not here. 409 conflicts are
+            // permanent and surface immediately as ApplyError::Conflict so the
+            // user sees an actionable error pointing at --force-conflicts.
+            match apply_patch(&api, &name, &pp, &sent, &rid).await {
+                Ok(echo) => (live, echo, sent),
+                Err(ApplyError::Conflict { resource, source }) => {
+                    // A conflict confined to fields the resource ceded is not
+                    // a failure: the other manager has taken what it was
+                    // meant to take. Apply again without those fields and it
+                    // keeps them.
+                    let message = match &source {
+                        kube::Error::Api(resp) => resp.message.clone(),
+                        _ => String::new(),
+                    };
+                    match without_ceded_conflicts(&sent, &message) {
+                        Some(stripped) => {
+                            tracing::info!(
+                                resource = %rid.display_id(),
+                                fields = %conflict_paths(&message).join(", "),
+                                "another manager owns ceded fields; applying without them"
+                            );
+                            let echo = apply_patch(&api, &name, &pp, &stripped, &rid).await?;
+                            (live, echo, stripped)
+                        }
+                        None => return Err(conflict_error(&rid, manager, resource, source)),
                     }
-                    None => return Err(conflict_error(&rid, manager, resource, source)),
                 }
+                Err(e) => return Err(e),
             }
-            Err(e) => return Err(e),
         }
     };
     let existed = live.is_some();
-    let manifest = &*manifest;
 
     let result = serde_json::to_value(&echo).unwrap_or(Value::Null);
-    let not_kept = kept::not_kept(stripped.as_ref().unwrap_or(manifest), &result);
+    let not_kept = kept::not_kept(&sent, &result);
 
     // Compute the applied-content hash from the SSA response. Because the
     // response is the canonicalized server representation, the hash of its
@@ -460,6 +632,66 @@ pub(crate) async fn apply_resource(
         preview,
         not_kept,
         applied_hash,
+    })
+}
+
+/// Return the refusal to apply to `obj` while Kubernetes deletes it.
+fn being_deleted(rid: &ResourceId, obj: &DynamicObject) -> Option<ApplyError> {
+    super::super::readiness::deletion_reason(obj).map(|reason| ApplyError::BeingDeleted {
+        resource: rid.display_id(),
+        reason,
+        uid: obj.metadata.uid.clone(),
+    })
+}
+
+/// Apply `manifest` with force while the forced apply takes what the plan's
+/// answer `shown` names, and return the object read, the server's answer,
+/// and what was sent.
+///
+/// Each round reads the object, asks the API server what the forced apply
+/// would take ([`takes_back`]), and sends the forced apply bound to the
+/// `resourceVersion` it read. A forced apply is never refused on a field, so
+/// a 409 means the object moved after the read, and the round starts again.
+async fn take_back(
+    api: &Api<DynamicObject>,
+    rid: &ResourceId,
+    manager: &FieldManager,
+    manifest: &Value,
+    pp: &PatchParams,
+    shown: &[TakenField],
+) -> Result<(Option<DynamicObject>, DynamicObject, Value), ApplyError> {
+    let changed = || ApplyError::ChangedSincePlan {
+        resource: rid.display_id(),
+    };
+    for _ in 0..TAKEOVER_ATTEMPTS {
+        let live = api
+            .get_opt(&rid.name)
+            .await
+            .map_err(|source| ApplyError::ReadFailed {
+                resource: rid.display_id(),
+                source,
+            })?
+            .ok_or_else(changed)?;
+        if let Some(refused) = being_deleted(rid, &live) {
+            return Err(refused);
+        }
+        let sent = bound_to(forced_manifest(manifest, &live, manager), &live);
+        match takes_back(api, &rid.name, manager, &sent, &live)
+            .await
+            .map_err(|e| classify_apply_error(rid, e))?
+        {
+            Takes::Moved => continue,
+            Takes::Fields(taken) if taken == shown => {}
+            Takes::Fields(_) | Takes::Unknown => return Err(changed()),
+        }
+        match apply_patch(api, &rid.name, pp, &sent, rid).await {
+            Ok(echo) => return Ok((Some(live), echo, sent)),
+            Err(ApplyError::Conflict { .. }) => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(ApplyError::KeepsChanging {
+        resource: rid.display_id(),
     })
 }
 

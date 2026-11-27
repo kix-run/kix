@@ -48,8 +48,13 @@
 //! entry, so the first apply of the same content by a second manager adds
 //! an entry and changes `resourceVersion`, and an apply that changes
 //! nothing, entries included, keeps `resourceVersion`. Lists count as one
-//! field. [`FakeApi::update_as`] changes an object as
-//! another manager's update does, taking the fields it changes.
+//! field, except that an entry may name a field inside a list element by
+//! the element's keys (`k:{"port":80,"protocol":"TCP"}`), as Kubernetes
+//! records it. An apply that sends the list then conflicts on that field
+//! when its value differs. An apply gives each port of a Service without a
+//! `protocol` the protocol `TCP`, as Kubernetes defaults it.
+//! [`FakeApi::update_as`] changes an object as another manager's update
+//! does, taking the fields it changes.
 
 use std::sync::{Arc, Mutex};
 
@@ -697,6 +702,7 @@ impl FakeApi {
                 let Ok(mut obj) = serde_json::from_slice::<Value>(body) else {
                     return status(400, "BadRequest", "the fake serves JSON bodies only");
                 };
+                default_service_ports(&mut obj);
                 let existing = st.objects.iter().position(&matches);
                 let sent_version = obj["metadata"]["resourceVersion"].take();
                 if !sent_version.is_null()
@@ -836,6 +842,20 @@ impl Target {
     }
 }
 
+/// Give each port of a Service that names no `protocol` the protocol `TCP`,
+/// as the API server defaults it.
+fn default_service_ports(obj: &mut Value) {
+    if obj["kind"] != "Service" {
+        return;
+    }
+    let ports = obj.pointer_mut("/spec/ports").and_then(Value::as_array_mut);
+    for port in ports.into_iter().flatten() {
+        if let Some(port) = port.as_object_mut() {
+            port.entry("protocol").or_insert_with(|| json!("TCP"));
+        }
+    }
+}
+
 /// Return the fields whose value differs between `before` and `after`.
 fn changed_fields(before: &Value, after: &Value) -> Vec<Vec<String>> {
     let mut fields = owners::fields_of(before);
@@ -898,9 +918,25 @@ mod owners {
     }
 
     pub(super) fn value_at<'v>(obj: &'v Value, field: &[String]) -> Option<&'v Value> {
-        field
-            .iter()
-            .try_fold(obj, |node, key| node.get(key.strip_prefix("f:")?))
+        field.iter().try_fold(obj, |node, key| {
+            if let Some(name) = key.strip_prefix("f:") {
+                return node.get(name);
+            }
+            let Value::Object(keys) = serde_json::from_str(key.strip_prefix("k:")?).ok()? else {
+                return None;
+            };
+            node.as_array()?
+                .iter()
+                .find(|e| keys.iter().all(|(k, v)| e.get(k) == Some(v)))
+        })
+    }
+
+    /// Return whether an apply that sends the fields `sent` sets `field`:
+    /// `sent` holds it, or holds the list that `field` names an element of.
+    fn sets(sent: &[Field], field: &[String]) -> bool {
+        sent.iter().any(|s| {
+            field.starts_with(s) && field.get(s.len()).is_none_or(|next| next.starts_with("k:"))
+        })
     }
 
     fn set_at(obj: &mut Value, field: &[String], value: Value) {
@@ -997,10 +1033,22 @@ mod owners {
         e["manager"] == manager && e["operation"] == "Apply" && e["subresource"].is_null()
     }
 
+    /// Return `field` as the API server writes a path in a conflict:
+    /// `.spec.ports[port=80,protocol="TCP"].targetPort`.
     fn path(field: &[String]) -> String {
         field
             .iter()
-            .map(|k| format!(".{}", k.trim_start_matches("f:")))
+            .map(|k| match k.strip_prefix("k:") {
+                Some(json) => match serde_json::from_str::<Value>(json) {
+                    Ok(Value::Object(keys)) => {
+                        let pairs: Vec<String> =
+                            keys.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                        format!("[{}]", pairs.join(","))
+                    }
+                    _ => format!("[{json}]"),
+                },
+                None => format!(".{}", k.trim_start_matches("f:")),
+            })
             .collect()
     }
 
@@ -1027,7 +1075,7 @@ mod owners {
                 .flat_map(|e| {
                     fields_of_entry(e)
                         .into_iter()
-                        .filter(|f| sent_fields.contains(f) && differs(f))
+                        .filter(|f| sets(&sent_fields, f) && differs(f))
                         .map(move |f| format!("conflict with {}: {}", e["manager"], path(&f)))
                 })
                 .collect();
@@ -1064,7 +1112,7 @@ mod owners {
         for mut e in others {
             let fields: Vec<Field> = fields_of_entry(&e)
                 .into_iter()
-                .filter(|f| !(sent_fields.contains(f) && differs(f)))
+                .filter(|f| !(sets(&sent_fields, f) && differs(f)))
                 .collect();
             if !fields.is_empty() {
                 e["fieldsV1"] = tree_of(&fields);

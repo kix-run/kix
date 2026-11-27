@@ -83,7 +83,11 @@ impl ResourceIo for DryRun {
                 .record(rid, DryRunOutcome::Refused(Refusal::of_apply(&e)));
             return Err(e);
         };
-        let applied = self.resources.apply_as(&ar, scope.clone(), manifest).await;
+        let takeover = self.resources.takeover_of(&rid);
+        let applied = self
+            .resources
+            .apply_as(&ar, scope.clone(), manifest, takeover)
+            .await;
         if let Err(ApplyError::BeingDeleted { .. }) = &applied {
             // The whole object, metadata included, which says what the
             // delete waits for.
@@ -149,7 +153,11 @@ impl ResourceIo for DryRun {
             .ok()
             .flatten()
             .and_then(|o| serde_json::to_value(o).ok());
-        let applied = self.resources.apply_as(&ar, scope, manifest).await;
+        let takeover = self.resources.takeover_of(&rid);
+        let applied = self
+            .resources
+            .apply_as(&ar, scope, manifest, takeover)
+            .await;
         let outcome = match &applied {
             Ok(result) => DryRunOutcome::Recreated {
                 live: existing,

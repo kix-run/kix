@@ -565,11 +565,12 @@ fn an_autoscaled_ceded_field_is_not_drift() {
     }
 }
 
-/// A forced revert of drift leaves out each ceded field another manager
-/// owns, so it takes back the edited image and leaves the replicas to the
-/// autoscaler. It records what the forced apply takes back. The operator,
-/// which never forces, writes nothing and reports the drift, because
-/// another manager owns a field the build sets.
+/// A forced revert of drift hands the run the whole manifest: the forced
+/// apply leaves out each ceded field another manager holds on the object it
+/// reads right before it writes, so the autoscaler keeps the replicas count
+/// even when it took it after the plan. The operator, which never forces,
+/// writes nothing and reports the drift, because another manager owns a
+/// field the build sets.
 #[test]
 fn a_forced_revert_leaves_ceded_fields_to_their_manager_and_the_operator_reports_it() {
     let applied =
@@ -584,18 +585,16 @@ fn a_forced_revert_leaves_ceded_fields_to_their_manager_and_the_operator_reports
     let ChangeAction::Apply(sent) = &cli.decisions[0].action else {
         panic!("an apply");
     };
-    assert_eq!(sent.pointer("/spec/replicas"), None, "{sent}");
+    assert_eq!(sent, &new[0]);
+    let Live::Present(obj) = live.get(&ResourceId::from_value(&new[0])) else {
+        panic!("the live object");
+    };
+    let forced = crate::cluster::apply::forced_manifest(sent, obj, &FieldManager::of("a"));
+    assert_eq!(forced.pointer("/spec/replicas"), None, "{forced}");
     assert_eq!(
-        sent.pointer("/spec/template/spec/image"),
+        forced.pointer("/spec/template/spec/image"),
         Some(&json!("web:1"))
     );
-    // The forced apply takes back the image from `kubectl-edit`, at its
-    // live value, and leaves the ceded replicas count alone.
-    let taken = cli.decisions[0].takes_back.as_ref().unwrap();
-    assert_eq!(taken.len(), 1, "{taken:?}");
-    assert_eq!(taken[0].manager, "kubectl-edit");
-    assert!(taken[0].path.contains("image"), "{taken:?}");
-    assert!(taken[0].live.is_some(), "{taken:?}");
     let Label::RevertsDrift(report) = &cli.decisions[0].label else {
         panic!("reverts drift");
     };

@@ -90,6 +90,10 @@ pub enum PlanEvent<'a> {
         cluster: &'a str,
         taken: &'a crate::cluster::activation::features::TakenBack,
     },
+    /// `--operator-removed` found no record of Kix cluster `cluster` that a
+    /// Kix operator older than this Kix would deploy or repair, so it
+    /// changed nothing.
+    NothingToTakeBack { cluster: &'a str },
     /// `--offline` found no cached build, so this is a first deploy.
     NoCachedBuild,
     /// `--offline` is loading the cached build.
@@ -275,8 +279,8 @@ pub enum PlanError {
          operator reconciles {record} to match its build, so it would revert changes from `--only` \
          and delete any new resources it creates. Next: deploy the full build with \
          `kix deploy {cluster} --operator`, or take the cluster over from this machine with \
-         `kix deploy {cluster}`. If the operator is older than Kix {version}, upgrade it first; if it \
-         was uninstalled, run `kix deploy {cluster} --operator-removed` instead.",
+         `kix deploy {cluster}`. If the operator is older than Kix {version}, upgrade it first. If it \
+         was uninstalled, deploy the full build once with `kix deploy {cluster}`, then use `--only`.",
         version = crate::version::running()
     )]
     OnlyUnderOperator { cluster: String, record: String },

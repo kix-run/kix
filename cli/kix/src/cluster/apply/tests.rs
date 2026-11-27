@@ -94,6 +94,112 @@ fn conflict_paths_are_read_from_the_message() {
     assert!(super::parse_path("").is_none());
 }
 
+/// A path the API server writes resolves on the object it names: a label
+/// key that holds dots, a list element picked by keys or by a set value,
+/// and a position. A path that finds no value, or two that differ, does
+/// not resolve.
+#[test]
+fn a_server_field_path_is_read_from_the_live_object() {
+    let obj = json!({
+        "metadata": {
+            "labels": { "app.kubernetes.io/name": "web", "app": "x" },
+            "finalizers": ["a", "b"],
+        },
+        "spec": { "ports": [
+            { "port": 80, "protocol": "TCP", "targetPort": 8080 },
+            { "port": 80, "protocol": "UDP", "targetPort": 53 },
+        ] },
+    });
+    assert_eq!(
+        ssa::value_at(&obj, ".metadata.labels.app.kubernetes.io/name"),
+        Some(&json!("web"))
+    );
+    assert_eq!(
+        ssa::value_at(&obj, ".metadata.labels.app"),
+        Some(&json!("x"))
+    );
+    assert_eq!(
+        ssa::value_at(&obj, r#".spec.ports[port=80,protocol="UDP"].targetPort"#),
+        Some(&json!(53))
+    );
+    assert_eq!(
+        ssa::value_at(&obj, r#".metadata.finalizers[="b"]"#),
+        Some(&json!("b"))
+    );
+    assert_eq!(ssa::value_at(&obj, ".spec.ports[0].port"), Some(&json!(80)));
+    assert_eq!(ssa::value_at(&obj, ".spec.ports[port=80].targetPort"), None);
+    assert_eq!(ssa::value_at(&obj, ".spec.missing"), None);
+}
+
+/// The 409 answer to an unforced apply names what a forced apply takes,
+/// from its causes when it has them and from its message otherwise. A 409
+/// that names no manager is a `resourceVersion` that moved, and a field the
+/// object does not hold leaves the answer unknown.
+#[test]
+fn a_conflict_answer_gives_what_a_forced_apply_takes() {
+    let live: kube::api::DynamicObject = serde_json::from_value(json!({
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": { "name": "cm", "labels": { "app.kubernetes.io/part-of": "shop" } },
+        "data": { "k": "edited" },
+    }))
+    .unwrap();
+    let status = |message: &str, causes: Vec<kube::core::response::StatusCause>| {
+        let mut s = kube::core::Status::failure(message, "Conflict");
+        s.code = 409;
+        if !causes.is_empty() {
+            s.details = Some(serde_json::from_value(json!({ "causes": causes })).unwrap());
+        }
+        s
+    };
+    let cause = |manager: &str, field: &str| kube::core::response::StatusCause {
+        reason: "FieldManagerConflict".into(),
+        message: format!("conflict with \"{manager}\" using v1"),
+        field: field.into(),
+    };
+    let taken = |manager: &str, path: &str, live: &str| crate::cluster::drift::TakenField {
+        manager: manager.into(),
+        path: path.into(),
+        live: live.into(),
+    };
+    let from_causes = status(
+        "Apply failed with 2 conflicts: ...",
+        vec![
+            cause("kubectl-edit", ".data.k"),
+            cause("helm", ".metadata.labels.app.kubernetes.io/part-of"),
+        ],
+    );
+    assert_eq!(
+        ssa::taken_in(&from_causes, &live),
+        ssa::Takes::Fields(vec![
+            taken(
+                "helm",
+                ".metadata.labels.app.kubernetes.io/part-of",
+                "\"shop\""
+            ),
+            taken("kubectl-edit", ".data.k", "\"edited\""),
+        ])
+    );
+    let from_message = status(
+        "Apply failed with 1 conflict: conflict with \"kubectl-edit\" using v1: .data.k",
+        Vec::new(),
+    );
+    assert_eq!(
+        ssa::taken_in(&from_message, &live),
+        ssa::Takes::Fields(vec![taken("kubectl-edit", ".data.k", "\"edited\"")])
+    );
+    let moved = status(
+        "Operation cannot be fulfilled on configmaps \"cm\": the object has been modified",
+        Vec::new(),
+    );
+    assert_eq!(ssa::taken_in(&moved, &live), ssa::Takes::Moved);
+    let missing = status(
+        "Apply failed with 1 conflict: conflict with \"x\" using v1: .data.gone",
+        Vec::new(),
+    );
+    assert_eq!(ssa::taken_in(&missing, &live), ssa::Takes::Unknown);
+}
+
 #[test]
 fn stored_version_rejection_is_recognised() {
     // What the apiserver actually says when a CRD drops a version that

@@ -102,9 +102,8 @@ struct Changes {
     /// What the run's kept-orphans revision names besides the orphans the
     /// run leaves on the cluster.
     kept_orphans: KeptOrphans,
-    /// The objects the run applies with force, the ones that revert drift,
-    /// with what each forced apply takes back ([`crate::cluster::drift::taken_back`]).
-    force: HashMap<ResourceId, Vec<crate::cluster::drift::TakenField>>,
+    /// The objects the run applies with force, the ones that revert drift.
+    force: HashSet<ResourceId>,
     /// Why the run writes each object whose write the new build alone does
     /// not explain.
     reasons: HashMap<ResourceId, WriteReason>,
@@ -194,9 +193,13 @@ pub struct CheckedPlan {
     /// The instances that the instances `--only` names need, which a plan
     /// made with `--only` applies in full too. Empty otherwise.
     needed: Vec<String>,
-    /// The objects the plan labels as reverting drift, which the run applies
-    /// with force while each forced apply takes back what the plan showed.
-    force: HashMap<ResourceId, Vec<crate::cluster::drift::TakenField>>,
+    /// The objects the plan labels as reverting drift, each with what the
+    /// API server answered its forced apply would take
+    /// ([`CheckedPlan::ask_takes_back`]), or `None` until it was asked or
+    /// when the answer is not known. The run applies an object with force
+    /// only while the server gives that same answer, and an object without
+    /// one without force.
+    force: HashMap<ResourceId, Option<Vec<crate::cluster::drift::TakenField>>>,
     /// The migration writes the run makes.
     migrations: Migrations,
     /// A run of the plan first gives records an older Kix wrote revisions
@@ -368,14 +371,69 @@ impl CheckedPlan {
 
     /// Return which applies of a run take ownership of fields another field
     /// manager owns: every apply under `--force-conflicts`, else the applies
-    /// of the objects the plan labels as reverting drift.
+    /// of the objects the plan labels as reverting drift for which the API
+    /// server said what the forced apply takes ([`CheckedPlan::ask_takes_back`]).
     pub(crate) fn force(&self) -> Force {
+        let asked: HashMap<ResourceId, Vec<crate::cluster::drift::TakenField>> = self
+            .force
+            .iter()
+            .filter_map(|(rid, taken)| Some((rid.clone(), taken.clone()?)))
+            .collect();
         if self.flags.force_conflicts {
             Force::All
-        } else if self.force.is_empty() {
+        } else if asked.is_empty() {
             Force::None
         } else {
-            Force::Only(self.force.clone())
+            Force::Only(asked)
+        }
+    }
+
+    /// Ask the API server behind `target`, for each object the plan labels as
+    /// reverting drift, what its forced apply would take from other field
+    /// managers ([`crate::cluster::apply::takes_back`]), and keep the answer
+    /// for the run. The run applies an object with force only while the
+    /// server gives it the same answer.
+    ///
+    /// Each object is asked with the manifest the run sends: its SOPS values
+    /// decrypted from `target`'s sources, without each ceded field another
+    /// manager holds, and under the name that owns Kix's fields when the
+    /// run applies it. An object whose answer is not known keeps no answer,
+    /// so the run applies it without force and Kubernetes refuses a conflict.
+    /// [`CheckedPlan::dry_run`] calls this, and so must a caller that runs a
+    /// plan it did not dry-run.
+    pub async fn ask_takes_back(&mut self, target: &Target) {
+        use crate::cluster::ops::SecretHydrator as _;
+        let hydrator = crate::cluster::ops::SopsHydrator::new(target.sops.clone());
+        let manifests: HashMap<ResourceId, Value> = self
+            .plan
+            .nodes()
+            .iter()
+            .filter_map(|n| match &n.id {
+                NodeId::Resource(rid) if self.force.contains_key(rid) => {
+                    Some((rid.clone(), n.action.written()?.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        for (rid, taken) in &mut self.force {
+            *taken = None;
+            let Some(manifest) = manifests.get(rid) else {
+                continue;
+            };
+            let Ok((manifest, _)) = hydrator.hydrate(manifest.clone()).await else {
+                continue;
+            };
+            let Some((ar, scope)) = discovery::find(&target.discovery, &rid.group, &rid.kind)
+            else {
+                continue;
+            };
+            let manager = if self.migrations.renamed.contains(rid) {
+                crate::cluster::field_manager::FieldManager::legacy_for(&self.cluster)
+            } else {
+                crate::cluster::field_manager::FieldManager::of(&self.cluster)
+            };
+            let api = discovery::api_for(&target.client, ar, scope, rid);
+            *taken = ask(&api, rid, &manager, &manifest).await;
         }
     }
 
@@ -556,15 +614,17 @@ impl CheckedPlan {
     }
 
     /// Run the engine over the plan with every write sent as a dry run, and
-    /// return what the apiserver answered for each object. Nothing is
-    /// written to the Activation record. The prune follows the plan's
-    /// flags.
+    /// return what the apiserver answered for each object. First ask what
+    /// each forced apply takes ([`CheckedPlan::ask_takes_back`]), which the
+    /// dry run and a later run check against. Nothing is written to the
+    /// Activation record. The prune follows the plan's flags.
     pub async fn dry_run(
-        &self,
+        &mut self,
         target: Target,
         config: SchedulerConfig,
         observer: Arc<dyn DeployObserver>,
     ) -> (Result<DeployResult, DeployError>, Vec<DryRunAnswer>) {
+        self.ask_takes_back(&target).await;
         let dry = Arc::new(DryRun::new(
             target.client,
             target.discovery,
@@ -645,6 +705,41 @@ impl CheckedPlan {
         )
         .await
     }
+}
+
+/// Return the name of the Activation record of the build `graph`.
+fn record_name(graph: &StoreGraph) -> Option<String> {
+    graph
+        .resources
+        .values()
+        .map(|r| &r.manifest)
+        .find(|m| lifecycle::is_record(m))
+        .and_then(|m| m.pointer("/metadata/name"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// Return what a forced apply of `manifest` under `manager` would take from
+/// other field managers on the object `rid`, read now, or `None` when Kix
+/// cannot tell: the object is gone, the API server refused the question, the
+/// answer names a field the object does not hold, or the object kept moving.
+async fn ask(
+    api: &kube::Api<kube::api::DynamicObject>,
+    rid: &ResourceId,
+    manager: &crate::cluster::field_manager::FieldManager,
+    manifest: &Value,
+) -> Option<Vec<crate::cluster::drift::TakenField>> {
+    use crate::cluster::apply::{self, Takes};
+    for _ in 0..apply::TAKEOVER_ATTEMPTS {
+        let live = api.get_opt(&rid.name).await.ok()??;
+        let sent = apply::bound_to(apply::forced_manifest(manifest, &live, manager), &live);
+        match apply::takes_back(api, &rid.name, manager, &sent, &live).await {
+            Ok(Takes::Fields(taken)) => return Some(taken),
+            Ok(Takes::Moved) => continue,
+            Ok(Takes::Unknown) | Err(_) => return None,
+        }
+    }
+    None
 }
 
 /// Read the deploy lock of Kix cluster `cluster`, which a plan binds to, or
@@ -923,8 +1018,7 @@ impl<'a> Planner<'a> {
                     .run(&client, &connection)
                     .await?;
                 if let Some(settle) = &self.settle {
-                    self.take_back(&client, &new_graph.cluster_name, settle)
-                        .await?;
+                    self.take_back(&client, new_graph, settle).await?;
                     refuse_older_operator(&client, &new_graph.cluster_name).await?;
                     self.settle_lock(&client, new_graph, settle).await?;
                 }
@@ -963,7 +1057,7 @@ impl<'a> Planner<'a> {
         let graph = build.graph();
         let cluster = &graph.cluster_name;
         if let Some(settle) = &self.settle {
-            self.take_back(&client, cluster, settle).await?;
+            self.take_back(&client, graph, settle).await?;
             refuse_older_operator(&client, cluster).await?;
             self.settle_lock(&client, graph, settle).await?;
         }
@@ -1013,12 +1107,13 @@ impl<'a> Planner<'a> {
     pub(crate) async fn take_back(
         &self,
         client: &Client,
-        cluster: &str,
+        graph: &StoreGraph,
         settle: &Settle,
     ) -> Result<(), PlanError> {
         if !self.flags.operator_removed {
             return Ok(());
         }
+        let cluster = graph.cluster_name.as_str();
         let failed = |e: features::TakeBackError| PlanError::TakeBack {
             cluster: cluster.to_string(),
             source: Box::new(e),
@@ -1034,13 +1129,16 @@ impl<'a> Planner<'a> {
             .await
             .map_err(|e| failed(e.into()))?;
         if driven.is_empty() {
+            (self.report)(PlanEvent::NothingToTakeBack { cluster });
             return Ok(());
         }
+        // The same request as the lock the deploy settles next, so a dead run
+        // of this build is continued here too rather than marked `Failed`.
         let request = head::Request {
             cluster: cluster.to_string(),
             holder: head::Holder::cli(settle.command),
             purpose: settle.purpose,
-            activation: None,
+            activation: record_name(graph),
             expect: None,
         };
         let held = head::read(client, cluster)
@@ -1058,7 +1156,9 @@ impl<'a> Planner<'a> {
         let released = lock.release().await;
         let taken = taken.map_err(failed)?;
         released.map_err(|e| PlanError::Lock(Box::new(e.into())))?;
-        if !taken.is_empty() {
+        if taken.is_empty() {
+            (self.report)(PlanEvent::NothingToTakeBack { cluster });
+        } else {
             (self.report)(PlanEvent::TookBack {
                 cluster,
                 taken: &taken,
@@ -1082,19 +1182,11 @@ impl<'a> Planner<'a> {
             return Ok(());
         };
         (self.report)(PlanEvent::LockHeld(&held));
-        let activation = graph
-            .resources
-            .values()
-            .map(|r| &r.manifest)
-            .find(|m| lifecycle::is_record(m))
-            .and_then(|m| m.pointer("/metadata/name"))
-            .and_then(Value::as_str)
-            .map(str::to_string);
         let request = head::Request {
             cluster: cluster.clone(),
             holder: head::Holder::cli(settle.command),
             purpose: settle.purpose,
-            activation,
+            activation: record_name(graph),
             expect: None,
         };
         head::settle(client, request, head::system_clock(), &|_| {})
@@ -1272,7 +1364,7 @@ impl<'a> Planner<'a> {
                 carry_current: true,
                 ..KeptOrphans::default()
             },
-            force: HashMap::new(),
+            force: HashSet::new(),
             reasons: HashMap::new(),
             consumed: None,
             orphan_manifests: Vec::new(),
@@ -1303,12 +1395,12 @@ impl<'a> Planner<'a> {
         if !decided.lost.is_empty() {
             (self.report)(PlanEvent::NotHeld(&decided.lost));
         }
-        let mut force = HashMap::new();
+        let mut force = HashSet::new();
         let mut reasons = HashMap::new();
         let mut actions = Vec::with_capacity(decided.decisions.len() + decided.orphans.len());
         for decision in decided.decisions {
-            if let (Label::RevertsDrift(_), Some(shown)) = (&decision.label, &decision.takes_back) {
-                force.insert(decision.id.clone(), shown.clone());
+            if matches!(decision.label, Label::RevertsDrift(_)) {
+                force.insert(decision.id.clone());
             }
             if let Some(reason) = write_reason(&decision.label) {
                 reasons.insert(decision.id, reason);
@@ -1517,7 +1609,7 @@ impl<'a> Planner<'a> {
             target_checks: TargetChecks::of(new_graph),
             left_alone: selection.as_ref().map(|s| s.left_alone),
             needed: selection.map(|s| s.needed).unwrap_or_default(),
-            force,
+            force: force.into_iter().map(|rid| (rid, None)).collect(),
             migrations,
             converts: ledger.is_some_and(Ledger::converts),
         })
@@ -2127,7 +2219,7 @@ mod tests {
         use crate::plan::document::UncheckedReason;
 
         let build = crate::plan::fixtures::kix_enterprise_test();
-        let checked = crate::plan::fixtures::plan(
+        let mut checked = crate::plan::fixtures::plan(
             &Baseline::empty(),
             &build,
             crate::plan::fixtures::flags(&[]),

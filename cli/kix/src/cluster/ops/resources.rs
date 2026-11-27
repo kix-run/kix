@@ -78,8 +78,8 @@ pub(crate) enum Force {
     /// Every apply (`--force-conflicts`).
     All,
     /// The applies of these objects, the ones the plan labels as reverting
-    /// drift, each while its forced apply takes back what the plan showed
-    /// ([`crate::cluster::drift::taken_back`]).
+    /// drift, each while the API server's answer of what its forced apply
+    /// takes is the plan's ([`apply::takes_back`]).
     Only(HashMap<ResourceId, Vec<crate::cluster::drift::TakenField>>),
 }
 
@@ -385,16 +385,23 @@ impl KubeResources {
         discovery::api_for(&self.client, ar, scope, rid)
     }
 
+    /// Return whether and when the run's apply of `rid` takes ownership of
+    /// fields another field manager owns.
+    pub(super) fn takeover_of(&self, rid: &ResourceId) -> apply::Takeover {
+        self.force.of(rid)
+    }
+
     /// Server-side apply `manifest` as the kind `ar` under the cluster's
-    /// manager, after the migration write when the plan listed the object.
-    /// A dry run writes no migration write, so it applies an object whose
-    /// entry under `kix` the write would move under `kix` instead, which
-    /// owns the same fields until then.
+    /// manager, taking ownership as `takeover` says, after the migration
+    /// write when the plan listed the object. A dry run writes no migration
+    /// write, so it applies an object whose entry under `kix` the write would
+    /// move under `kix` instead, which owns the same fields until then.
     pub(super) async fn apply_as(
         &self,
         ar: &ApiResource,
         scope: Scope,
         manifest: &Value,
+        takeover: apply::Takeover,
     ) -> Result<ApplyResult, ApplyError> {
         let rid = ResourceId::from_value(manifest);
         let legacy;
@@ -408,7 +415,6 @@ impl KubeResources {
         } else {
             &self.manager
         };
-        let takeover = self.force.of(&rid);
         if !self.dry() && self.take_unmigrated(&rid) {
             // An object the plan forces is written only while its forced
             // apply takes back what the plan showed, so the migration write
@@ -606,7 +612,11 @@ impl ResourceIo for KubeResources {
                 detail,
             });
         }
-        let uid = match self.apply_as(&ar, scope.clone(), manifest).await {
+        let takeover = self.takeover_of(&ResourceId::from_value(manifest));
+        let uid = match self
+            .apply_as(&ar, scope.clone(), manifest, takeover.clone())
+            .await
+        {
             Err(ApplyError::BeingDeleted { uid, .. }) => uid,
             other => return other,
         };
@@ -615,7 +625,7 @@ impl ResourceIo for KubeResources {
         match readiness::wait_gone(&api, &rid.name, uid.as_deref(), timeout, cancel, on_status)
             .await
         {
-            Ok(Deletion::Gone) => self.apply_as(&ar, scope, manifest).await,
+            Ok(Deletion::Gone) => self.apply_as(&ar, scope, manifest, takeover).await,
             Ok(Deletion::Stuck(stuck)) => Err(ApplyError::StillBeingDeleted { rid, stuck }),
             Ok(Deletion::Cancelled) => Err(ApplyError::Interrupted {
                 resource: rid.display_id(),
@@ -665,7 +675,9 @@ impl ResourceIo for KubeResources {
             }
         }
 
-        self.apply_as(&ar, scope, manifest)
+        // Kix deleted the object, so the apply creates it and takes nothing
+        // from another field manager.
+        self.apply_as(&ar, scope, manifest, apply::Takeover::No)
             .await
             .map_err(RecreateError::Reapply)
     }
@@ -1129,17 +1141,62 @@ mod discovery_tests {
             Force::Only([(drifted, Vec::new())].into()),
         );
         for name in ["drifted", "other"] {
-            ops.apply_as(&ar, scope.clone(), &config_map(name))
+            let manifest = config_map(name);
+            let takeover = ops.force.of(&ResourceId::from_value(&manifest));
+            ops.apply_as(&ar, scope.clone(), &manifest, takeover)
                 .await
                 .unwrap();
         }
         let applies: Vec<String> = api
             .requests()
             .into_iter()
-            .filter(|r| r.starts_with("PATCH"))
+            .filter(|r| r.starts_with("PATCH") && !r.contains("dryRun=All"))
             .collect();
         assert_eq!(applies.len(), 2, "{applies:?}");
         assert!(applies[0].contains("/drifted?") && applies[0].contains("force=true"));
         assert!(applies[1].contains("/other?") && !applies[1].contains("force=true"));
+    }
+
+    /// A Job the plan forces as reverting drift is recreated when its last
+    /// run failed. Kix deletes it first, so the apply that follows creates
+    /// it without force and takes nothing from another manager.
+    #[tokio::test]
+    async fn a_forced_object_that_is_recreated_is_applied_without_force() {
+        let job = json!({
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": { "name": "migrate", "namespace": "app" },
+            "spec": { "backoffLimit": 1 },
+        });
+        let api = FakeApi::new([job.clone()]);
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let rid = ResourceId::from_value(&job);
+        let shown = vec![crate::cluster::drift::TakenField {
+            manager: "kubectl-edit".into(),
+            path: ".spec.backoffLimit".into(),
+            live: "3".into(),
+        }];
+        let ops = KubeResources::new(
+            client,
+            discovery,
+            "a".into(),
+            Force::Only([(rid.clone(), shown)].into()),
+        );
+        let before = api.requests().len();
+        let result = ops
+            .recreate_in_place(&job, Duration::from_secs(5), &CancelToken::new())
+            .await
+            .unwrap();
+        assert_eq!(result.action, apply::ApplyAction::Created);
+        let requests = &api.requests()[before..];
+        assert!(
+            requests.iter().any(|r| r.starts_with("DELETE")),
+            "{requests:?}"
+        );
+        let applies: Vec<&String> = requests.iter().filter(|r| r.starts_with("PATCH")).collect();
+        assert_eq!(applies.len(), 1, "{requests:?}");
+        assert!(!applies[0].contains("force=true"), "{requests:?}");
+        assert!(api.object("Job", "migrate").is_some());
     }
 }

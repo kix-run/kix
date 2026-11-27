@@ -186,10 +186,16 @@ async fn plan_with(
 ) -> CheckedPlan {
     let client = api.client();
     let baseline = baseline(&client, cluster).await;
-    Planner::new(flags, &|_| {})
+    let mut checked = Planner::new(flags, &|_| {})
         .plan(graph, cluster, &baseline, Some(&client))
         .await
-        .unwrap()
+        .unwrap();
+    // A deploy's dry run asks what each forced apply takes.
+    let target = crate::plan::Target::connect(client, crate::build_source::SopsSources::Local)
+        .await
+        .unwrap();
+    checked.ask_takes_back(&target).await;
+    checked
 }
 
 pub(crate) async fn deploy(
@@ -866,7 +872,7 @@ async fn a_deploy_with_operator_removed_takes_the_cluster_back_for_good() {
         "{text}"
     );
     Planner::new(crate::plan::fixtures::flags(&[]), &|_| {})
-        .take_back(&client, "a", &settle)
+        .take_back(&client, &new, &settle)
         .await
         .unwrap();
     assert_eq!(phase(&api, "a-queued"), "");
@@ -881,13 +887,16 @@ async fn a_deploy_with_operator_removed_takes_the_cluster_back_for_good() {
         ..crate::plan::fixtures::flags(&[])
     };
     let reported = std::sync::Mutex::new(Vec::new());
-    let report = |event: crate::plan::PlanEvent<'_>| {
-        if let crate::plan::PlanEvent::TookBack { taken, .. } = event {
+    let nothing = std::sync::Mutex::new(0);
+    let report = |event: crate::plan::PlanEvent<'_>| match event {
+        crate::plan::PlanEvent::TookBack { taken, .. } => {
             reported.lock().unwrap().push(taken.clone());
         }
+        crate::plan::PlanEvent::NothingToTakeBack { .. } => *nothing.lock().unwrap() += 1,
+        _ => {}
     };
     Planner::new(flags.clone(), &report)
-        .take_back(&client, "a", &settle)
+        .take_back(&client, &new, &settle)
         .await
         .unwrap();
     let taken = reported.lock().unwrap().clone();
@@ -900,17 +909,75 @@ async fn a_deploy_with_operator_removed_takes_the_cluster_back_for_good() {
     crate::plan::planner::refuse_older_operator(&client, "a")
         .await
         .unwrap();
-    // A second run finds nothing to take back.
+    // A second run finds nothing to take back, and says so.
+    assert_eq!(*nothing.lock().unwrap(), 0);
     Planner::new(flags, &report)
-        .take_back(&client, "a", &settle)
+        .take_back(&client, &new, &settle)
         .await
         .unwrap();
     assert_eq!(reported.lock().unwrap().len(), 1);
+    assert_eq!(*nothing.lock().unwrap(), 1);
 
     deploy(&api, "a", &new).await.unwrap();
     crate::plan::planner::refuse_older_operator(&client, "a")
         .await
         .unwrap();
+}
+
+/// `--operator-removed` takes the deploy lock for the deploy's own record,
+/// as the deploy's lock does next. A run of the same build that died while
+/// holding the lock is continued, so its record is not marked `Failed`.
+#[tokio::test(start_paused = true)]
+async fn operator_removed_continues_a_dead_run_of_the_same_build() {
+    let api = FakeApi::new([]);
+    api.track_owners();
+    let new = handed_to_an_older_operator(&api).await;
+    let name = record_of(&new)["metadata"]["name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    api.insert(json!({
+        "apiVersion": keys::API_VERSION,
+        "kind": lifecycle::RECORD_KIND,
+        "metadata": {
+            "name": name,
+            "labels": { "app.kubernetes.io/managed-by": "kix", (keys::CLUSTER_LABEL): "a" },
+        },
+        "spec": { "cluster": "a" },
+        "status": { "phase": "Deploying" },
+    }));
+    let renewed = (chrono::Utc::now() - chrono::Duration::hours(1))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    api.insert(json!({
+        "apiVersion": keys::API_VERSION,
+        "kind": crate::cluster::head::KIND,
+        "metadata": { "name": "a", "labels": { (keys::CLUSTER_LABEL): "a" } },
+        "status": {
+            "generation": 1,
+            "lock": {
+                "holder": "dead",
+                "hint": "kix deploy by dead",
+                "purpose": "deploy",
+                "activation": name,
+                "renewed": renewed,
+                "durationSeconds": 30,
+            },
+        },
+    }));
+    let flags = crate::plan::document::PlanFlags {
+        operator_removed: true,
+        ..crate::plan::fixtures::flags(&[])
+    };
+    let settle = crate::plan::planner::Settle {
+        command: "kix deploy",
+        purpose: crate::cluster::head::Purpose::Deploy,
+    };
+    Planner::new(flags, &|_| {})
+        .take_back(&api.client(), &new, &settle)
+        .await
+        .unwrap();
+    assert_eq!(phase(&api, &name), "Deploying");
+    assert_eq!(phase(&api, "a-deploying"), "Failed");
 }
 
 /// Insert a `Superseded` record of Kix cluster `cluster` with identity hash

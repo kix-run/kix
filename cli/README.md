@@ -1480,18 +1480,37 @@ The plan document carries the labels as `objects.writes[].reason`
 with force exactly the objects labelled `RevertsDrift` (`ops::Force::Only`;
 `--force-conflicts` still forces every apply), so a revert of drift takes back
 the fields others changed and any other conflict still stops the deploy. Each
-forced apply goes on only while it takes back what the plan showed
-(`apply::Takeover::IfTakesBack`): the plan records, for each object it
-forces, the fields other managers took from Kix that the sent manifest sets,
-with manager and live value (`drift::taken_back`, built on the same
-`drift::foreign_fields` the decision uses). The apply reads the object,
-computes the same list with the same function, and sends the forced apply
-with the `resourceVersion` of that read, so the check and the write are one
-step. A 409 means the object moved in between, and the apply reads and
-judges again, up to `TAKEOVER_ATTEMPTS` times (`ApplyError::KeepsChanging`).
-A list that differs fails with `ApplyError::ChangedSincePlan` and the deploy
-stops. A write to `status` or to any field the list does not hold does not
-stop it. The plan's
+forced apply goes on only while it takes what the plan's answer from the API
+server said it takes (`apply::Takeover::IfTakesBack`). The plan asks
+(`CheckedPlan::ask_takes_back`, called first by `CheckedPlan::dry_run`, and
+by `kix deploy` itself for a plan made `--offline` and planned again): for
+each forced object it reads the object and sends the manifest the run sends
+(SOPS values decrypted, each ceded field another manager holds left out,
+`stringData` as `data`, `apply::forced_manifest`) as an unforced dry-run
+apply bound to the `resourceVersion` it read (`apply::takes_back`). A forced
+apply takes exactly the fields that apply is refused on, so the 409 names
+each manager and field, including list elements keyed by a field the server
+defaults and a Secret's `data`. Each field's live value is read from the
+object (`apply::value_at`, which tries every map key a path with dots could
+mean). No refusal is an empty list. A 409 that names no manager means the
+object moved, and the question is asked again on a fresh read, up to
+`TAKEOVER_ATTEMPTS` times. A field that does not resolve on the object, a
+refused question, or an object that keeps moving leaves no answer, and the
+run applies that object without force, so Kubernetes refuses the conflict.
+An object renamed by the migration write in the same run is asked under
+`kix` (`FieldManager::legacy_for`), which owns its fields until the write,
+as the dry run applies it. The apply asks the same question with the same
+function on its own read, under its own manager, and sends the forced apply
+with that read's `resourceVersion`, so the check and the write are one step.
+A different answer fails with `ApplyError::ChangedSincePlan` and the deploy
+stops. A failed read fails with `ApplyError::ReadFailed`. A 409 on the
+forced write means the object moved, and the apply reads and asks again, up
+to `TAKEOVER_ATTEMPTS` rounds in all (`ApplyError::KeepsChanging`). A write
+to `status` or to any field the answer does not hold does not stop it. A
+forced apply (and `--force-conflicts`) leaves out each ceded field another
+manager holds on the object it reads, so a ceded field taken after the plan
+stays with its manager. The plan hands the run the whole manifest. A recreate
+applies without force, since Kix deleted the object first. The plan's
 drift line for a field another manager took names the manager and points at
 `ownership.cede`. The operator never forces: it writes no object labelled
 `DriftReported`, which does not count as a failure, so its dependents go on.
@@ -1589,9 +1608,10 @@ only where `takes_legacy` holds. Any other object it applies, which adds the
 cluster's own entry. The plan document counts the writes in
 `metadataRewrites`, and `Work::Changes` holds while any is left or a record
 needs converting. The run writes it in `KubeResources::apply_as` before an
-object's first apply (for an object the plan forces, judging the object it
-reads with `drift::taken_back` as the forced apply does, and testing that
-read's version), and
+object's first apply (for an object the plan forces, asking the API server
+what the forced apply takes from the object it reads, as the forced apply
+does, under `kix` while the write renames that entry
+(`migration_write::applies_as`), and testing that read's version), and
 after the nodes to each unchanged object and each kept orphan
 (`Run::migrate_unchanged`, best-effort). A dry run applies a renamed object
 under `kix`, which owns the fields `kix/<cluster>` will own.
@@ -1635,11 +1655,17 @@ the Activation CRD does not list `revisions`
 tell such an operator from an uninstalled one, so `kix deploy
 --operator-removed` (`PlanFlags::operator_removed`, recorded in a saved plan)
 states that none runs: before the deploy plans, `Planner::take_back` takes the
-deploy lock and `features::take_back` marks each queued record the operator
-drives `Superseded`, each one it was deploying `Failed`, and removes
-`spec.source` from those and from the current record, so no record is refused
-any more and later commands need no flag (`PlanEvent::TookBack`). `kix plan`
-records the flag and writes nothing. `--operator` commands keep
+deploy lock (with the build's record, as `settle_lock` does next, so a dead
+run of the same build is continued) and `features::take_back` marks each
+queued record the operator drives `Superseded`, each one it was deploying
+`Failed`, and removes `spec.source` from those and from the current record, so
+no record is refused any more and later commands need no flag
+(`PlanEvent::TookBack`, which also prints a `kubectl` command to look for
+operator pods, since Kix cannot tell whether one still runs). A flag that
+finds nothing to take back says so (`PlanEvent::NothingToTakeBack`). `kix
+plan` records the flag and writes nothing, and refuses `--out` with it,
+because the deploy of a saved plan would take the cluster back first and then
+refuse the plan for its lock generation. `--operator` commands keep
 `require_features`.
 
 `kix gc --full-scan` rebuilds a kept-orphans list whose revision is missing
@@ -1750,7 +1776,7 @@ a record line need regenerating.
 - `file.rs`: plan files (`.kixplan`): `write`, `graph_of`, `PlanFile` (`open`, `verify`, `file`, `old_manifest`, `new_manifest`, `header`), `Header`, `ShownObject`, `Rollout`, `FileEntry`, `PlanFileError`, and the caps; see "Plan files" above
 - `origin.rs`: three-way labels: `ThreeWay::label`, `label_live` (diff against live), `label_builds` (diff `--from <build>`), and `value_at`, which reads a diff-engine path (`$.spec.containers[web].image`) out of an object
 - `server.rs`: `Overlay`, which replaces each answered object's package-diff entry with the dry-run field changes and labels them, and `field_changes`/`comparable`
-- `saved.rs`: `kix deploy --plan`: `unusable` (no `objects` or `objects_digest` (a `kix diff` or `kix plan --read-only` plan), an `objects_digest` its `objects` do not give (an edit), `made_by: builds`, and sections that do not match `made_by`: a `dry_run` plan with no `flags` or with conflicts, admission, or prune not checked, a `live_read` plan with `flags`, which only an edit produces; and a `live_read` plan whose drift is not checked: a diff of a snapshot, or one made without the deployed build), `flags_for` (the saved plan's planning flags; a command-line flag the plan was made without is an error, a `flags.prune` policy given on the command line must be the plan's, and a `kix diff` or read-only plan refuses `--prune`, `--force-conflicts`, `--reconcile`, and `--accept-migrations`), and `compare(reviewed, fresh) -> Comparison` (cluster; new `identity_hash`; `objects_digest`, refused when either is missing or they differ, with the writes and deletes that differ named (`Rule::Objects`); deployed `identity_hash`, or the record name when a record has none; the deploy lock's generation (`head.generation`, `Rule::Generation`, skipped when the reviewed plan has no `head`); flags; new conflicts by resource and admission refusals by resource and reason; new `reverted` drift by resource and path; new `delete` prune fates; and, for a `dry_run` plan, objects newly in `not_checked`, whose refusals and drift a dry run could not see). A rule the reviewed plan did not check is `skipped`; a different `kix` is `kix_differs`, never a mismatch: the objects digest already holds the deploy to the reviewed objects and files, and the binary is chosen by whoever deploys. `commands/deploy/` (`saved_plan.rs`) exits `EXIT_STALE` (4) on a mismatch, loads the plan file (`load_saved_plan`, `PlanFile::verify`; its SHA-256 is printed and in the JSON as `plan_sha256`) before any build, compares after `plan::document`, passes the merged planning flags to `run_deploy_async` (the apply never reads `args.plan`), and `check_saved_plan` is `--plan` with `--dry-run`, which exits 4 when stale, 3 when it matches but the deploy would stop (`doc.stops()` or migrations not accepted), and 0 otherwise
+- `saved.rs`: `kix deploy --plan`: `unusable` (no `objects` or `objects_digest` (a `kix diff` or `kix plan --read-only` plan), an `objects_digest` its `objects` do not give (an edit), `made_by: builds`, and sections that do not match `made_by`: a `dry_run` plan with no `flags` or with conflicts, admission, or prune not checked, a `live_read` plan with `flags`, which only an edit produces; and a `live_read` plan whose drift is not checked: a diff of a snapshot, or one made without the deployed build), `flags_for` (the saved plan's planning flags; a command-line flag the plan was made without is an error, a `flags.prune` policy given on the command line must be the plan's, and a `kix diff` or read-only plan refuses `--prune`, `--force-conflicts`, `--reconcile`, and `--accept-migrations`), and `compare(reviewed, fresh) -> Comparison` (cluster; new `identity_hash`; `objects_digest`, refused when either is missing or they differ, with the writes and deletes that differ named (`Rule::Objects`); deployed `identity_hash`, or the record name when a record has none; the deploy lock's generation (`head.generation`, `Rule::Generation`, skipped when the reviewed plan has no `head`); flags; new conflicts by resource and admission refusals by resource and reason; new `reverted` drift by resource and path, or one whose managers or shown live value differ; new `delete` prune fates; and, for a `dry_run` plan, objects newly in `not_checked`, whose refusals and drift a dry run could not see). A rule the reviewed plan did not check is `skipped`; a different `kix` is `kix_differs`, never a mismatch: the objects digest already holds the deploy to the reviewed objects and files, and the binary is chosen by whoever deploys. `commands/deploy/` (`saved_plan.rs`) exits `EXIT_STALE` (4) on a mismatch, loads the plan file (`load_saved_plan`, `PlanFile::verify`; its SHA-256 is printed and in the JSON as `plan_sha256`) before any build, compares after `plan::document`, passes the merged planning flags to `run_deploy_async` (the apply never reads `args.plan`), and `check_saved_plan` is `--plan` with `--dry-run`, which exits 4 when stale, 3 when it matches but the deploy would stop (`doc.stops()` or migrations not accepted), and 0 otherwise
 
 #### eval (`kix-core/src/eval/`)
 

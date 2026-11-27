@@ -385,13 +385,26 @@ pub fn compare(reviewed: &Plan, fresh: &Plan) -> Comparison {
 
     match &reviewed.drift {
         Checked::Checked { items } => {
-            // A reverted field the reviewed plan showed, with the live value
-            // it showed. A plan saved before drift entries carried values
-            // compares fields only.
-            let known: BTreeMap<(&str, &str), Option<&Value>> = items
+            // A reverted field the reviewed plan showed, with the field
+            // managers that changed it and the live value it showed. A plan
+            // saved before drift entries carried values compares fields and
+            // managers only.
+            let sorted = |managers: &[String]| -> Vec<String> {
+                let mut m = managers.to_vec();
+                m.sort();
+                m.dedup();
+                m
+            };
+            type Shown<'a> = (Vec<String>, Option<&'a Value>);
+            let known: BTreeMap<(&str, &str), Shown> = items
                 .iter()
                 .filter(|d| d.reverted)
-                .map(|d| ((d.resource.as_str(), d.path.as_str()), d.live.as_ref()))
+                .map(|d| {
+                    (
+                        (d.resource.as_str(), d.path.as_str()),
+                        (sorted(&d.managers), d.live.as_ref()),
+                    )
+                })
                 .collect();
             let new = fresh
                 .drift
@@ -406,7 +419,18 @@ pub fn compare(reviewed: &Plan, fresh: &Plan) -> Comparison {
                     };
                     match known.get(&(d.resource.as_str(), d.path.as_str())) {
                         None => Some(format!("{} {}{by}", d.resource, d.path)),
-                        Some(Some(shown)) if d.live.as_ref() != Some(*shown) => Some(format!(
+                        Some((managers, _)) if *managers != sorted(&d.managers) => {
+                            let had = if managers.is_empty() {
+                                "no other field manager".to_string()
+                            } else {
+                                managers.join(", ")
+                            };
+                            Some(format!(
+                                "{} {}{by} (saved plan had {had})",
+                                d.resource, d.path
+                            ))
+                        }
+                        Some((_, Some(shown))) if d.live.as_ref() != Some(*shown) => Some(format!(
                             "{} {}{by}: live value is now {} (saved plan had {shown})",
                             d.resource,
                             d.path,
@@ -767,8 +791,23 @@ mod tests {
             ]
         );
         assert!(compare(&drifted, &drifted).matches);
+        // The same field and value changed by another manager is a new
+        // revert too.
+        let mut moved = plan();
+        moved.drift = Checked::found(vec![DriftChange {
+            managers: vec!["kubectl-edit".into()],
+            ..drift("$.spec.replicas", "5")
+        }]);
+        let differs = compare(&drifted, &moved);
+        assert_eq!(rules(&differs), vec![Rule::NewRevertedDrift]);
+        assert_eq!(
+            differs.mismatches[0].items,
+            [
+                "Deployment/a@app $.spec.replicas: changed by kubectl-edit (saved plan had kubectl-scale)"
+            ]
+        );
         // A plan saved before drift entries carried values compares fields
-        // only.
+        // and managers only.
         let mut older = plan();
         older.drift = Checked::found(vec![DriftChange {
             live: None,

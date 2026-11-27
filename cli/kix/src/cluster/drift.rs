@@ -404,42 +404,18 @@ pub fn foreign_fields(obj: &DynamicObject, manager: &FieldManager) -> Vec<Foreig
         .collect()
 }
 
-/// One field a forced apply takes back from another field manager: who
-/// holds it, and its value on the live object.
+/// One field a forced apply takes from another field manager, as the API
+/// server named it in its answer to the same apply sent without force
+/// ([`super::apply::takes_back`]): who holds it, and its value on the object
+/// Kix read.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TakenField {
     pub manager: String,
-    /// The field path in [`flatten_paths`] form.
+    /// The field path as the API server writes it, such as
+    /// `.spec.ports[port=80,protocol="TCP"].targetPort`.
     pub path: String,
-    /// The live value, as JSON text, or `None` when the object has no value
-    /// at the path.
-    pub live: Option<String>,
-}
-
-/// What a forced apply of `manifest` takes back on `obj`, judged with
-/// `manager`: each field that another manager took from Kix
-/// ([`foreign_fields`]) and `manifest` sets, with its live value, sorted.
-/// The plan computes it for each object it forces, and the run computes it
-/// again on the object it is about to write. The run forces only while the
-/// two agree, so a forced apply takes back only what the plan showed.
-pub fn taken_back(
-    obj: &DynamicObject,
-    manifest: &Value,
-    manager: &FieldManager,
-) -> Vec<TakenField> {
-    let live = serde_json::to_value(obj).unwrap_or(Value::Null);
-    let mut out: Vec<TakenField> = foreign_fields(obj, manager)
-        .into_iter()
-        .filter(|f| f.value_in(manifest).is_some())
-        .map(|f| TakenField {
-            live: f.value_in(&live).map(Value::to_string),
-            manager: f.manager,
-            path: f.path,
-        })
-        .collect();
-    out.sort();
-    out.dedup();
-    out
+    /// The live value, as JSON text.
+    pub live: String,
 }
 
 /// Return whether applying `manifest` without force would be refused with a

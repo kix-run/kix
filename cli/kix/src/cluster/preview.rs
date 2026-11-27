@@ -200,6 +200,7 @@ impl Refusal {
             | ApplyError::StillBeingDeleted { .. }
             | ApplyError::ChangedSincePlan { .. }
             | ApplyError::KeepsChanging { .. }
+            | ApplyError::ReadFailed { .. }
             | ApplyError::Interrupted { .. } => {
                 return Refusal::Other {
                     message: err.to_string(),

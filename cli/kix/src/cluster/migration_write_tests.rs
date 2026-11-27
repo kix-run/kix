@@ -411,6 +411,7 @@ async fn a_change_between_the_read_and_the_write_is_read_again() {
     ));
 
     let api = fake(notes, vec![entry("kix", "Apply")]);
+    api.track_owners();
     api.after_get("cm", |obj| {
         obj["data"]["k"] = json!("changed");
         // `kubectl` takes the field from Kix's entry.

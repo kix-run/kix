@@ -126,6 +126,26 @@ mod prune_flag_tests {
         assert!(crate::commands::plan::flags_of(&args.plan).operator_removed);
         assert!(Cli::try_parse_from(["kix", "plan", "x", "--operator-removed"]).is_ok());
     }
+
+    /// A deploy of a saved plan takes the cluster back before it plans
+    /// again, which makes the saved plan out of date, so `kix plan` does not
+    /// save a plan made with `--operator-removed`.
+    #[test]
+    fn a_plan_with_operator_removed_is_not_saved() {
+        let Command::Plan(args) =
+            Cli::try_parse_from(["kix", "plan", "x", "--operator-removed", "--out", "p.json"])
+                .expect("args parse")
+                .command
+        else {
+            panic!("not a plan");
+        };
+        let refused =
+            crate::commands::plan::refuse_saving_operator_removed(&args.plan, args.out.as_deref())
+                .unwrap_err()
+                .to_string();
+        assert!(refused.contains("out of date"), "{refused}");
+        assert!(crate::commands::plan::refuse_saving_operator_removed(&args.plan, None).is_ok());
+    }
 }
 
 mod cached_baseline_tests {

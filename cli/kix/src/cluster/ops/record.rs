@@ -139,6 +139,8 @@ impl ActivationRecord {
                 records.watch_resource(),
                 kube::discovery::Scope::Cluster,
                 manifest,
+                self.resources
+                    .takeover_of(&crate::manifest::types::ResourceId::from_value(manifest)),
             )
             .await
             .map(|_| ())

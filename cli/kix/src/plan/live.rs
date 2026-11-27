@@ -966,10 +966,17 @@ mod tests {
                 ..crate::plan::baseline::Baseline::empty()
             };
             let planner = crate::plan::Planner::new(crate::plan::fixtures::flags(&[]), &|_| {});
-            let cli = planner
+            let mut cli = planner
                 .plan(&graph, "a", &baseline, Some(&client))
                 .await
                 .unwrap();
+            let target = crate::plan::Target::connect(
+                client.clone(),
+                crate::build_source::SopsSources::Local,
+            )
+            .await
+            .unwrap();
+            cli.ask_takes_back(&target).await;
             assert_eq!(written(cli.plan()), ["web"]);
             let web = ResourceId::from_value(&config_map("web", "1"));
             let crate::cluster::ops::Force::Only(forced) = cli.force() else {
@@ -1163,14 +1170,21 @@ mod tests {
             }
         }
 
-        /// Plan `graph` as `kix plan` does.
+        /// Plan `graph` as `kix deploy` does, and ask what each forced apply
+        /// takes, as its dry run does.
         async fn cli_plan(api: &FakeApi, graph: &StoreGraph) -> crate::plan::CheckedPlan {
             let client = api.client();
             let baseline = current_baseline(&client).await;
-            crate::plan::Planner::new(crate::plan::fixtures::flags(&[]), &|_| {})
+            let mut checked = crate::plan::Planner::new(crate::plan::fixtures::flags(&[]), &|_| {})
                 .plan(graph, "a", &baseline, Some(&client))
                 .await
-                .unwrap()
+                .unwrap();
+            let target =
+                crate::plan::Target::connect(client, crate::build_source::SopsSources::Local)
+                    .await
+                    .unwrap();
+            checked.ask_takes_back(&target).await;
+            checked
         }
 
         /// Plan `graph` and run the plan as `kix deploy` does, and return
@@ -1631,9 +1645,10 @@ mod tests {
             );
         }
 
-        /// The object changes once between the forced apply's read and its
-        /// write: the apply reads it again, judges it again, and goes on.
-        /// An object that changes every time fails with a bounded error.
+        /// The object changes once right after the forced apply's read: the
+        /// API server answers that the object moved, so the apply reads it
+        /// again, asks again, and goes on with one forced write. An object
+        /// that changes every time fails with a bounded error.
         #[tokio::test]
         async fn a_forced_revert_reads_again_when_the_object_moves_under_it() {
             let api = FakeApi::new([]);
@@ -1644,15 +1659,22 @@ mod tests {
             let before = api.requests().len();
             let result = cli_run(&api, checked).await;
             assert_eq!(failures_of(&result), "[]");
-            let forced = api.requests()[before..]
-                .iter()
-                .filter(|r| {
-                    r.starts_with("PATCH")
-                        && r.contains("/deployments/web?")
-                        && r.contains("force=true")
-                })
-                .count();
-            assert_eq!(forced, 2, "{:?}", &api.requests()[before..]);
+            let patches = |dry: bool| {
+                api.requests()[before..]
+                    .iter()
+                    .filter(|r| {
+                        r.starts_with("PATCH")
+                            && r.contains("/deployments/web?")
+                            && r.contains("dryRun=All") == dry
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(patches(true).len(), 2, "{:?}", &api.requests()[before..]);
+            assert!(patches(true).iter().all(|r| !r.contains("force=true")));
+            let forced = patches(false);
+            assert_eq!(forced.len(), 1, "{:?}", &api.requests()[before..]);
+            assert!(forced[0].contains("force=true"));
             assert_eq!(
                 api.object("Deployment", "web").unwrap()["spec"]["template"]["spec"]["image"],
                 json!("web:1")
@@ -1675,6 +1697,191 @@ mod tests {
                 api.object("Deployment", "web").unwrap()["spec"]["template"]["spec"]["image"],
                 json!("web:edited")
             );
+        }
+
+        /// Return the lists the plan's forced applies take, by object name.
+        fn taken(
+            checked: &crate::plan::CheckedPlan,
+        ) -> Vec<(String, Vec<crate::cluster::drift::TakenField>)> {
+            let crate::cluster::ops::Force::Only(forced) = checked.force() else {
+                panic!("the plan forces an object");
+            };
+            let mut out: Vec<_> = forced.into_iter().map(|(r, t)| (r.name, t)).collect();
+            out.sort();
+            out
+        }
+
+        /// A Service whose port names no `protocol`, which Kubernetes keys
+        /// as `port=80,protocol="TCP"`. A field under that key is not found
+        /// by walking the manifest, so the plan asks the API server what the
+        /// forced apply takes. A second edit after the plan changes the
+        /// answer, and the forced apply stops instead of overwriting it.
+        #[tokio::test]
+        async fn a_forced_revert_sees_a_port_the_manifest_keys_without_its_protocol() {
+            let service = json!({
+                "apiVersion": "v1",
+                "kind": "Service",
+                "metadata": {
+                    "name": "web",
+                    "namespace": "app",
+                    "labels": { "app.kubernetes.io/managed-by": "kix" },
+                },
+                "spec": { "ports": [{ "port": 80, "targetPort": 8080 }] },
+            });
+            let edit = |api: &FakeApi, target: i64| {
+                api.patch_object("Service", "web", |o| {
+                    o["spec"]["ports"][0]["targetPort"] = json!(target);
+                    let entries = o["metadata"]["managedFields"].as_array_mut().unwrap();
+                    entries.retain(|e| e["manager"] != "kubectl-edit");
+                    entries.push(json!({
+                        "manager": "kubectl-edit",
+                        "operation": "Update",
+                        "apiVersion": "v1",
+                        "fieldsType": "FieldsV1",
+                        "fieldsV1": { "f:spec": { "f:ports": {
+                            "k:{\"port\":80,\"protocol\":\"TCP\"}": { "f:targetPort": {} },
+                        } } },
+                    }));
+                });
+            };
+            let drifted = |api: &FakeApi| {
+                let api = api.clone();
+                let service = service.clone();
+                async move {
+                    api.track_owners();
+                    let v1 = release("a-v1", &[service]);
+                    cli_deploy(&api, &v1).await.unwrap();
+                    edit(&api, 9090);
+                    cli_plan(&api, &v1).await
+                }
+            };
+
+            let api = FakeApi::new([]);
+            let checked = drifted(&api).await;
+            assert_eq!(
+                taken(&checked),
+                [(
+                    "web".to_string(),
+                    vec![crate::cluster::drift::TakenField {
+                        manager: "kubectl-edit".into(),
+                        path: r#".spec.ports[port=80,protocol="TCP"].targetPort"#.into(),
+                        live: "9090".into(),
+                    }]
+                )]
+            );
+            let result = cli_run(&api, checked).await;
+            assert_eq!(failures_of(&result), "[]");
+            assert_eq!(
+                api.object("Service", "web").unwrap()["spec"]["ports"][0]["targetPort"],
+                json!(8080)
+            );
+
+            let api = FakeApi::new([]);
+            let checked = drifted(&api).await;
+            edit(&api, 9443);
+            let result = cli_run(&api, checked).await;
+            assert!(
+                failures_of(&result).contains("changed after the plan was made"),
+                "{}",
+                failures_of(&result)
+            );
+            assert_eq!(
+                api.object("Service", "web").unwrap()["spec"]["ports"][0]["targetPort"],
+                json!(9443)
+            );
+        }
+
+        /// A Secret whose value the build gives in `stringData`, which Kix
+        /// sends as `data`. Another manager changed `data.password` and a
+        /// label. The plan's answer names both, so a second change to the
+        /// password after the plan stops the forced apply.
+        #[tokio::test]
+        async fn a_forced_revert_sees_a_secret_value_the_build_gives_in_string_data() {
+            use base64::Engine as _;
+            let encoded = |s: &str| base64::engine::general_purpose::STANDARD.encode(s);
+            let api = FakeApi::new([]);
+            api.track_owners();
+            let v1 = release(
+                "a-v1",
+                &[json!({
+                    "apiVersion": "v1",
+                    "kind": "Secret",
+                    "metadata": {
+                        "name": "db",
+                        "namespace": "app",
+                        "labels": { "app.kubernetes.io/managed-by": "kix", "tier": "db" },
+                    },
+                    "stringData": { "password": "one" },
+                })],
+            );
+            cli_deploy(&api, &v1).await.unwrap();
+            api.update_as("kubectl-edit", None, "Secret", "db", |o| {
+                o["data"]["password"] = json!(encoded("two"));
+                o["metadata"]["labels"]["tier"] = json!("cache");
+            });
+            let checked = cli_plan(&api, &v1).await;
+            let paths: Vec<(String, String)> = taken(&checked)
+                .into_iter()
+                .flat_map(|(_, t)| t)
+                .map(|t| (t.path, t.live))
+                .collect();
+            assert_eq!(
+                paths,
+                [
+                    (
+                        ".data.password".to_string(),
+                        json!(encoded("two")).to_string()
+                    ),
+                    (".metadata.labels.tier".to_string(), "\"cache\"".to_string()),
+                ]
+            );
+            api.update_as("kubectl-edit", None, "Secret", "db", |o| {
+                o["data"]["password"] = json!(encoded("three"));
+            });
+            let result = cli_run(&api, checked).await;
+            assert!(
+                failures_of(&result).contains("changed after the plan was made"),
+                "{}",
+                failures_of(&result)
+            );
+            assert_eq!(
+                api.object("Secret", "db").unwrap()["data"]["password"],
+                json!(encoded("three"))
+            );
+        }
+
+        /// The build cedes the replicas count, and Kix still owned it when
+        /// the plan was made. An autoscaler takes it after the plan. The
+        /// forced apply leaves out each ceded field another manager holds
+        /// on the object it reads, so it reverts the edited image and leaves
+        /// the autoscaler's count.
+        #[tokio::test]
+        async fn a_forced_revert_leaves_a_ceded_field_taken_after_the_plan() {
+            let api = FakeApi::new([]);
+            api.track_owners();
+            let v1 = release("a-v1", &[deployment("web", true)]);
+            cli_deploy(&api, &v1).await.unwrap();
+            api.update_as("kubectl-edit", None, "Deployment", "web", |o| {
+                o["spec"]["template"]["spec"]["image"] = json!("web:edited");
+            });
+            let checked = cli_plan(&api, &v1).await;
+            assert_eq!(writes(&checked), ["web"]);
+            api.update_as("hpa", Some("scale"), "Deployment", "web", |o| {
+                o["spec"]["replicas"] = json!(6);
+                for count in [
+                    "replicas",
+                    "updatedReplicas",
+                    "readyReplicas",
+                    "availableReplicas",
+                ] {
+                    o["status"][count] = json!(6);
+                }
+            });
+            let result = cli_run(&api, checked).await;
+            assert_eq!(failures_of(&result), "[]");
+            let web = api.object("Deployment", "web").unwrap();
+            assert_eq!(web["spec"]["replicas"], json!(6));
+            assert_eq!(web["spec"]["template"]["spec"]["image"], json!("web:1"));
         }
 
         fn test_config() -> SchedulerConfig {

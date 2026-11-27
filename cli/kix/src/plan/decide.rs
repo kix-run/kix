@@ -114,11 +114,6 @@ pub(crate) struct Decision {
     pub id: ResourceId,
     pub action: ChangeAction,
     pub label: Label,
-    /// For an object the plan forces ([`Label::RevertsDrift`]), what the
-    /// forced apply takes back, read from the live object the decision read
-    /// ([`drift::taken_back`]). The run forces it only while the object
-    /// still gives the same answer.
-    pub takes_back: Option<Vec<drift::TakenField>>,
 }
 
 /// What [`decide`] found.
@@ -434,7 +429,6 @@ pub(crate) fn decide(
     let mut forbidden: BTreeSet<String> = BTreeSet::new();
     for manifest in new {
         let id = ResourceId::from_value(manifest);
-        let mut takes_back = None;
         let (action, label) = match live.get(&id) {
             Live::Unread => {
                 forbidden.extend(live.forbidden_resource(&id).map(str::to_string));
@@ -448,12 +442,7 @@ pub(crate) fn decide(
                     }
                 }
                 match decide_present(manifest, &id, obj, ledger, forces) {
-                    Some((label, action)) => {
-                        if let (Label::RevertsDrift(_), Some(sent)) = (&label, action.written()) {
-                            takes_back = Some(drift::taken_back(obj, sent, &ledger.view_of(obj)));
-                        }
-                        (action, label)
-                    }
+                    Some((label, action)) => (action, label),
                     None if reconcile => (
                         apply::changed(manifest, Deployed::RerunHash(rerun_hash(obj)), false),
                         Label::Reconciled,
@@ -479,12 +468,7 @@ pub(crate) fn decide(
                 (apply::changed(manifest, deployed, false), label)
             }
         };
-        out.decisions.push(Decision {
-            id,
-            action,
-            label,
-            takes_back,
-        });
+        out.decisions.push(Decision { id, action, label });
     }
 
     let mut orphans: Vec<ResourceId> = Vec::new();
@@ -569,7 +553,15 @@ fn decide_present(
             if !drift::held_by_other_clusters(obj, manifest, &manager).is_empty() {
                 return Some((Label::HeldByOtherCluster(report), apply(manifest)));
             }
-            let sent = drift::without_ceded_taken(manifest, obj, &manager);
+            // A forced apply leaves out each ceded field another manager
+            // holds on the object it reads right before it writes, so a field
+            // taken after the plan is left too. A runner that never forces
+            // sends the manifest without the fields held now.
+            let sent = if forces {
+                manifest.clone()
+            } else {
+                drift::without_ceded_taken(manifest, obj, &manager)
+            };
             Some((Label::RevertsDrift(report), apply(&sent)))
         }
         DriftVerdict::InSync | DriftVerdict::Unstamped => None,

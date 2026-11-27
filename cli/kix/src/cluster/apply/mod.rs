@@ -24,8 +24,8 @@ use serde_json::Value;
 
 pub use ssa::{ApplyAction, ApplyError, ApplyPreview, namespaceless};
 pub(crate) use ssa::{
-    ApplyResult, Seg, Takeover, apply_resource, ceded_fields, conflict_paths, covers,
-    remove_covered, remove_path,
+    ApplyResult, Seg, TAKEOVER_ATTEMPTS, Takeover, Takes, apply_resource, bound_to, ceded_fields,
+    conflict_paths, covers, forced_manifest, remove_covered, remove_path, takes_back,
 };
 #[cfg(test)]
 use ssa::{

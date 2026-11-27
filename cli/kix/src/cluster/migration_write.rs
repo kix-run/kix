@@ -43,6 +43,7 @@ use kube::api::{Api, DynamicObject, Patch, PatchParams};
 use serde_json::{Value, json};
 use thiserror::Error;
 
+use super::apply;
 use super::drift;
 use super::field_manager::{self, FieldManager};
 use super::prune_guard::PruneGuard;
@@ -63,6 +64,14 @@ pub enum WriteError {
         applied = keys::APPLIED_HASH,
     )]
     Refused {
+        resource: String,
+        #[source]
+        source: kube::Error,
+    },
+    #[error(
+        "could not update Kix metadata on {resource} because Kubernetes refused the dry run that checks which fields Kix would take back from other field managers: {source}. Run the deploy again"
+    )]
+    CheckRefused {
         resource: String,
         #[source]
         source: kube::Error,
@@ -245,6 +254,19 @@ pub fn view_of(obj: &DynamicObject, manager: &FieldManager, tenancy: &Tenancy) -
     }
 }
 
+/// Return the field manager whose name the API server must see as its own
+/// for an apply to `obj` to judge ownership as `manager`'s apply after the
+/// migration write: the legacy manager `kix` when the write moves that entry
+/// to `manager` ([`renames`]), since until then the entry under `kix` holds
+/// the fields `manager` will own.
+pub fn applies_as(obj: &DynamicObject, manager: &FieldManager, tenancy: &Tenancy) -> FieldManager {
+    if renames(obj, manager, tenancy) {
+        FieldManager::legacy_for(manager.cluster())
+    } else {
+        manager.clone()
+    }
+}
+
 /// What [`write`] needs besides the object.
 pub struct Write<'a> {
     pub api: &'a Api<DynamicObject>,
@@ -257,10 +279,10 @@ pub struct Write<'a> {
     /// Reads which Kix clusters name the object, again when the object names
     /// a record the last read did not see ([`PruneGuard::tenancy_naming`]).
     pub judge: &'a PruneGuard,
-    /// For an object the run applies with force: the manifest it sends and
-    /// what the plan showed the forced apply takes back
-    /// ([`drift::taken_back`]). The write goes on only while the object
-    /// gives the same answer.
+    /// For an object the run applies with force: the manifest it applies
+    /// and what the plan's answer said the forced apply takes
+    /// ([`apply::takes_back`]). The write goes on only while the API server
+    /// gives the same answer for the object the write read.
     pub takes_back: Option<(&'a Value, &'a [drift::TakenField])>,
 }
 
@@ -270,9 +292,11 @@ pub struct Write<'a> {
 /// The write tests the `resourceVersion` it read. When the test fails,
 /// something wrote in between, so Kix reads the object again and builds the
 /// write again, up to [`ATTEMPTS`] times. Any other refusal is reported as
-/// it is. With `w.takes_back`, each round first judges the object it read,
-/// and an object whose forced apply would take back something else than
-/// the plan showed fails with [`WriteError::ChangedSincePlan`].
+/// it is. With `w.takes_back`, each round first asks the API server what the
+/// forced apply would take from the object it read, under the name the apply
+/// will own that object's fields by ([`applies_as`]). An answer other than
+/// the plan's fails with [`WriteError::ChangedSincePlan`], and an object that
+/// moved since the read is read again.
 pub async fn write(w: &Write<'_>) -> Result<Written, WriteError> {
     let read = |source| WriteError::Read {
         resource: w.resource.to_string(),
@@ -298,10 +322,23 @@ pub async fn write(w: &Write<'_>) -> Result<Written, WriteError> {
                     other => other.to_string(),
                 },
             })?;
-        if let Some((manifest, shown)) = w.takes_back
-            && drift::taken_back(found, manifest, &view_of(found, w.manager, &tenancy)) != shown
-        {
-            return Err(changed());
+        if let Some((manifest, shown)) = w.takes_back {
+            let owner = applies_as(found, w.manager, &tenancy);
+            let sent = apply::bound_to(apply::forced_manifest(manifest, found, &owner), found);
+            let answer = apply::takes_back(w.api, w.name, &owner, &sent, found)
+                .await
+                .map_err(|source| WriteError::CheckRefused {
+                    resource: w.resource.to_string(),
+                    source,
+                })?;
+            match answer {
+                apply::Takes::Fields(taken) if taken == shown => {}
+                apply::Takes::Moved => {
+                    obj = w.api.get_opt(w.name).await.map_err(read)?;
+                    continue;
+                }
+                apply::Takes::Fields(_) | apply::Takes::Unknown => return Err(changed()),
+            }
         }
         let Some(mut ops) = needed(found, w.manager, &tenancy, w.record) else {
             return Ok(Written::NothingToDo);

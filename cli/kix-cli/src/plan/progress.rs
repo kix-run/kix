@@ -153,6 +153,21 @@ pub fn print(event: PlanEvent<'_>) {
                     taken.failed.join(", "),
                 );
             }
+            crate::say!(
+                "    Kix cannot tell whether a Kix operator is still running. If one is, it and this deploy write the same objects, so stop it. To look for its pods:"
+            );
+            crate::say!(
+                "      kubectl get pods --all-namespaces -o jsonpath='{{range .items[*]}}{{.metadata.namespace}}/{{.metadata.name}} {{.spec.containers[*].image}}{{\"\\n\"}}{{end}}' | grep kix-operator"
+            );
+            crate::say!(
+                "    Kix does not install the operator, so its pods and image may have another name."
+            );
+        }
+        PlanEvent::NothingToTakeBack { cluster } => {
+            crate::say!(
+                "  {} `--operator-removed` found no deployment record of Kix cluster {cluster} for an older Kix operator to deploy, so it changed nothing.",
+                output::dim("="),
+            );
         }
         PlanEvent::FailedFolded(record) => match record.partly_deployed() {
             Some(partial) => crate::say!(
