@@ -69,6 +69,61 @@ const url = new URL(Astro.url.pathname, Astro.site);
     <slot />
     <p id="copy-status" class="sr-only" aria-live="polite"></p>
     <script>
+      // Plausible events, named in the markup:
+      //
+      //   data-event="Name"       a click sends "Name". Every data-event-*
+      //                           attribute on it is a property, as
+      //                           data-event-place="header" is `place`.
+      //   data-copy-event="Name"  on a block with a copy button: copying from
+      //                           it sends "Name" with `method` "button" or
+      //                           "selection", and its data-event-* properties.
+      //
+      // Each event needs a goal of the same name in Plausible to show there.
+      // Plausible's script queues calls made before it loads (window.plausible.q)
+      // and sends with keepalive, so a click that leaves the page still counts.
+      type Props = Record<string, string>;
+      type Plausible = ((name: string, options?: { props: Props }) => void) & { q?: unknown[] };
+      const w = window as unknown as { plausible?: Plausible };
+      w.plausible =
+        w.plausible ||
+        (function (...args: unknown[]) {
+          (w.plausible!.q = w.plausible!.q || []).push(args);
+        } as Plausible);
+
+      function eventProps(el: HTMLElement, extra: Props = {}): Props {
+        const props: Props = {};
+        for (const [key, value] of Object.entries(el.dataset)) {
+          if (key.startsWith('event') && key.length > 'event'.length && value !== undefined) {
+            props[key.charAt(5).toLowerCase() + key.slice(6)] = value;
+          }
+        }
+        return { ...props, ...extra };
+      }
+
+      document.addEventListener('click', (event) => {
+        const target = event.target as Element | null;
+        const clicked = target?.closest<HTMLElement>('[data-event]');
+        if (clicked?.dataset.event) {
+          w.plausible!(clicked.dataset.event, { props: eventProps(clicked) });
+        }
+        const block = target?.closest('[data-copy]')?.closest<HTMLElement>('[data-copy-event]');
+        if (block?.dataset.copyEvent) {
+          w.plausible!(block.dataset.copyEvent, { props: eventProps(block, { method: 'button' }) });
+        }
+      });
+
+      document.addEventListener('copy', () => {
+        const selection = document.getSelection();
+        if (!selection || selection.isCollapsed) return;
+        const inside = (node: Node | null) =>
+          (node instanceof Element ? node : node?.parentElement)?.closest<HTMLElement>('[data-copy-event]');
+        const block = inside(selection.anchorNode) ?? inside(selection.focusNode);
+        if (block?.dataset.copyEvent) {
+          w.plausible!(block.dataset.copyEvent, { props: eventProps(block, { method: 'selection' }) });
+        }
+      });
+    </script>
+    <script>
       // Copy buttons (components/CopyButton.astro).
       const status = document.getElementById('copy-status');
       document.addEventListener('click', async (event) => {

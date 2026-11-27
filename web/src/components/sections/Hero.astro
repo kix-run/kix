@@ -20,6 +20,8 @@ import { DOCS_URL } from '@/lib/links';
       <div class="mt-7 flex flex-wrap items-center justify-center gap-3">
         <div
           class="flex items-center gap-3.5 rounded-lg border border-night-line bg-night py-1.5 pr-1.5 pl-4 font-mono text-[13px] shadow-[0_8px_20px_rgba(11,19,43,0.10)]"
+          data-copy-event="Copy Install Command"
+          data-event-place="hero"
         >
           <span class="font-bold text-t-blue select-none" aria-hidden="true">$</span>
           <code class="text-on-night">curl -fsSL https://kix.run/install | sh</code>
@@ -32,7 +34,7 @@ import { DOCS_URL } from '@/lib/links';
             <span class="check-icon hidden">Copied</span>
           </button>
         </div>
-        <Button href={DOCS_URL} variant="outline">Read the Docs</Button>
+        <Button href={DOCS_URL} variant="outline" data-event="Read Docs" data-event-place="hero">Read the Docs</Button>
       </div>
       <p class="mt-4 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-[13.5px] text-ink-2">
         <span>Apache 2.0 open source</span>
@@ -68,19 +70,19 @@ import { DOCS_URL } from '@/lib/links';
     <div class="mx-auto w-full max-w-[1200px] px-5 sm:px-8">
       <!-- Single-Line 4-Tab Selector Bar -->
       <div class="beat-stepper" role="tablist" aria-label="Compiler capabilities">
-        <button type="button" class="beat-tab active" id="beat-tab-0" data-beat="0" role="tab" aria-selected="true">
+        <button type="button" class="beat-tab active" id="beat-tab-0" data-beat="0" data-event="Workbench Tab" data-event-tab="network-policy" role="tab" aria-selected="true">
           <div class="beat-tab-title">1. Derive NetworkPolicy &amp; deploy order</div>
           <div class="beat-progress-track"><div class="beat-progress-fill" id="beat-prog-0"></div></div>
         </button>
-        <button type="button" class="beat-tab" id="beat-tab-1" data-beat="1" role="tab" aria-selected="false">
+        <button type="button" class="beat-tab" id="beat-tab-1" data-beat="1" data-event="Workbench Tab" data-event-tab="selector-typos" role="tab" aria-selected="false">
           <div class="beat-tab-title">2. Catch selector typos offline</div>
           <div class="beat-progress-track"><div class="beat-progress-fill" id="beat-prog-1"></div></div>
         </button>
-        <button type="button" class="beat-tab" id="beat-tab-2" data-beat="2" role="tab" aria-selected="false">
+        <button type="button" class="beat-tab" id="beat-tab-2" data-beat="2" data-event="Workbench Tab" data-event-tab="live-drift" role="tab" aria-selected="false">
           <div class="beat-tab-title">3. Preview live cluster drift</div>
           <div class="beat-progress-track"><div class="beat-progress-fill" id="beat-prog-2"></div></div>
         </button>
-        <button type="button" class="beat-tab" id="beat-tab-3" data-beat="3" role="tab" aria-selected="false">
+        <button type="button" class="beat-tab" id="beat-tab-3" data-beat="3" data-event="Workbench Tab" data-event-tab="import-rds" role="tab" aria-selected="false">
           <div class="beat-tab-title">4. Import RDS or set PodSpec</div>
           <div class="beat-progress-track"><div class="beat-progress-fill" id="beat-prog-3"></div></div>
         </button>
