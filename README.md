@@ -43,22 +43,35 @@ The script verifies the release archive, unpacks Kix and the Kix runtime (Nix, H
 
 To try Kix on a local `kind` cluster with [kix-examples](https://github.com/kix-run/kix-examples), start with the [tutorials](https://kix.run/docs/tutorials/). To install from a release archive directly or see how projects pin their version of Kix, read [Install and run Kix](https://kix.run/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/).
 
-### Build and run from source
+### Build from source
 
-To run `kix` from [`cli/`](cli/) with Cargo, enter the Nix development shell so `KIX_RUNTIME_DIR` points at the Kix runtime and `CARGO_TARGET_DIR` stays outside the checkout:
-
-```sh
-nix develop
-cargo run --manifest-path cli/Cargo.toml --bin kix -- check example-hello
-```
-
-You can also build and run the packaged binary directly with Nix:
+Compiling `kix` only requires a Rust toolchain. Export `CARGO_TARGET_DIR` outside the repository first so Nix never copies Cargo's build directory into the store:
 
 ```sh
-nix run .#kix -- check example-hello
+export CARGO_TARGET_DIR=~/.cache/kix-target
 ```
 
-If you already installed a release archive and want to run a Cargo build without Nix on `PATH`, set `KIX_RUNTIME_DIR` to `~/.local/share/kix/<version>/libexec/kix` and set `CARGO_TARGET_DIR` outside the repository checkout.
+Then build with Cargo:
+
+```sh
+cargo build --manifest-path cli/Cargo.toml --bin kix
+```
+
+To run a cluster command (`kix check`, `kix build`, `kix deploy`), `kix` also needs the Kix runtime, which holds the pinned Nix, Helm, `kubectl`, and `sops` binaries it calls instead of reading `PATH`.
+
+- **Without installing Nix:** run the install script above once, export `KIX_RUNTIME_DIR` pointing at the unpacked runtime, and run `kix` with Cargo:
+
+  ```sh
+  export KIX_RUNTIME_DIR=~/.local/share/kix/<version>/libexec/kix
+  cargo run --manifest-path cli/Cargo.toml --bin kix -- check example-hello
+  ```
+
+- **With Nix installed:** `nix develop` builds the Kix runtime and exports both `CARGO_TARGET_DIR` and `KIX_RUNTIME_DIR` automatically:
+
+  ```sh
+  nix develop
+  cargo run --manifest-path cli/Cargo.toml --bin kix -- check example-hello
+  ```
 
 ## Documentation
 
