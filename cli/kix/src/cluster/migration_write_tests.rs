@@ -427,3 +427,34 @@ async fn a_gone_object_needs_nothing() {
     let api = FakeApi::new(records().into_iter().take(2));
     assert_eq!(write_cm(&api, None).await.unwrap(), Written::NothingToDo);
 }
+
+/// A `Superseded` record of another Kix cluster that an older Kix left in a
+/// note keeps nothing: only a record an older Kix still acts on, one that
+/// is not `Superseded` and has no map, keeps the note and the entries under
+/// `kix`. With only history in the note, the write takes the object.
+#[test]
+fn history_of_another_cluster_keeps_no_note() {
+    const HISTORY: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbhist";
+    let mut history = record("b-hist", "b", HISTORY, None);
+    history["status"]["phase"] = json!("Superseded");
+    let objects: Vec<DynamicObject> = [record("a-old", "a", OWN_OLD, None), history]
+        .iter()
+        .map(object)
+        .collect();
+    let tenancy = Tenancy::fixture_of_state("a", &BTreeMap::new(), &objects, &[]);
+    let noted = |hashes: &str| {
+        object(&config_map(
+            json!({ (keys::ACTIVATIONS): hashes, (keys::IDENTITY_HASH): "i1" }),
+            vec![entry(crate::cluster::field_manager::LEGACY, "Apply")],
+        ))
+    };
+    let only_history = noted(&format!("{OWN_OLD},{HISTORY}"));
+    assert!(tenancy.older_kix_hashes(&only_history).is_empty());
+    assert!(takes_legacy(&only_history, &tenancy));
+
+    let running: Vec<DynamicObject> = records().iter().map(object).collect();
+    let tenancy = Tenancy::fixture_of_state("a", &BTreeMap::new(), &running, &[]);
+    let shared = noted(&format!("{OWN_OLD},{OTHER}"));
+    assert_eq!(tenancy.older_kix_hashes(&shared), [OTHER]);
+    assert!(!takes_legacy(&shared, &tenancy));
+}

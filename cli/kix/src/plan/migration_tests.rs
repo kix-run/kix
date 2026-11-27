@@ -175,9 +175,18 @@ pub(crate) async fn baseline(client: &Client, cluster: &str) -> crate::plan::bas
 }
 
 pub(crate) async fn plan(api: &FakeApi, cluster: &str, graph: &StoreGraph) -> CheckedPlan {
+    plan_with(api, cluster, graph, crate::plan::fixtures::flags(&[])).await
+}
+
+async fn plan_with(
+    api: &FakeApi,
+    cluster: &str,
+    graph: &StoreGraph,
+    flags: crate::plan::document::PlanFlags,
+) -> CheckedPlan {
     let client = api.client();
     let baseline = baseline(&client, cluster).await;
-    Planner::new(crate::plan::fixtures::flags(&[]), &|_| {})
+    Planner::new(flags, &|_| {})
         .plan(graph, cluster, &baseline, Some(&client))
         .await
         .unwrap()
@@ -188,7 +197,16 @@ pub(crate) async fn deploy(
     cluster: &str,
     graph: &StoreGraph,
 ) -> Result<crate::cluster::stream::DeployResult, DeployError> {
-    let checked = plan(api, cluster, graph).await;
+    deploy_with(api, cluster, graph, crate::plan::fixtures::flags(&[])).await
+}
+
+async fn deploy_with(
+    api: &FakeApi,
+    cluster: &str,
+    graph: &StoreGraph,
+    flags: crate::plan::document::PlanFlags,
+) -> Result<crate::cluster::stream::DeployResult, DeployError> {
+    let checked = plan_with(api, cluster, graph, flags).await;
     let client = api.client();
     let lock = crate::cluster::head::take(
         &client,
@@ -604,8 +622,9 @@ async fn a_release_leaves_the_legacy_entry_of_another_cluster() {
     );
     deployed_by_an_older_kix(&api, "b", &b_old, PHASE_ACTIVE, &[]).await;
     deployed_by_an_older_kix(&api, "a", &a_old, PHASE_ACTIVE, &[("shared", &[&b_hash])]).await;
-    // `b` moves; the operator never forces, so its plan leaves the shared
-    // object as it is, with the fields under `kix`.
+    // `b` moves. The fields of the shared object sit under `kix` for `a`,
+    // which an older Kix still deploys, so the operator applies it without
+    // force, as the CLI does.
     let b_new = release("b", "b-r1", &[config_map("shared", "1")]);
     let b_record = record_of(&b_new);
     let mut b_record_live = b_record.clone();
@@ -627,7 +646,7 @@ async fn a_release_leaves_the_legacy_entry_of_another_cluster() {
     )
     .await
     .unwrap();
-    assert_eq!(operator.applies(), 0);
+    assert_eq!(operator.applies(), 1);
     deploy(&api, "b", &b_new).await.unwrap();
     api.patch_object("ConfigMap", "shared", |o| {
         let entries = o["metadata"]["managedFields"].as_array_mut().unwrap();
@@ -892,4 +911,253 @@ async fn a_deploy_with_operator_removed_takes_the_cluster_back_for_good() {
     crate::plan::planner::refuse_older_operator(&client, "a")
         .await
         .unwrap();
+}
+
+/// Insert a `Superseded` record of Kix cluster `cluster` with identity hash
+/// `hash` and no map, as an older Kix left one of its earlier deploys.
+fn superseded_by_an_older_kix(api: &FakeApi, cluster: &str, hash: &str) {
+    api.insert(json!({
+        "apiVersion": keys::API_VERSION,
+        "kind": lifecycle::RECORD_KIND,
+        "metadata": {
+            "name": format!("{cluster}-{hash}"),
+            "labels": { "app.kubernetes.io/managed-by": "kix", (keys::CLUSTER_LABEL): cluster },
+            "annotations": { (keys::IDENTITY_HASH): hash },
+        },
+        "spec": { "cluster": cluster },
+        "status": { "phase": lifecycle::PHASE_SUPERSEDED, "deployedAt": "2026-10-01T00:00:00Z" },
+    }));
+}
+
+/// An older Kix left the hashes of earlier, `Superseded` records of both
+/// clusters in a shared object's note. Those records keep nothing: once
+/// both clusters deploy with this Kix, the object holds one entry for each
+/// and no note.
+#[tokio::test]
+async fn superseded_records_an_older_kix_left_keep_no_note() {
+    let api = FakeApi::new([]);
+    api.track_owners();
+    superseded_by_an_older_kix(&api, "a", "a-history");
+    superseded_by_an_older_kix(&api, "b", "b-history");
+    let b_old = release("b", "b-r0", &[config_map("shared", "1")]);
+    let b_hash = hash_of(&record_of(&b_old));
+    let a_old = release("a", "a-r0", &[config_map("shared", "1")]);
+    deployed_by_an_older_kix(&api, "b", &b_old, PHASE_ACTIVE, &[]).await;
+    deployed_by_an_older_kix(
+        &api,
+        "a",
+        &a_old,
+        PHASE_ACTIVE,
+        &[("shared", &[&b_hash, "a-history", "b-history"])],
+    )
+    .await;
+
+    deploy(
+        &api,
+        "b",
+        &release("b", "b-r1", &[config_map("shared", "1")]),
+    )
+    .await
+    .unwrap();
+    deploy(
+        &api,
+        "a",
+        &release("a", "a-r1", &[config_map("shared", "1")]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(notes(&api, "ConfigMap", "shared"), (None, None));
+    let shared = managers(&api, "ConfigMap", "shared");
+    assert!(
+        shared.contains(&"kix/a:Apply".to_string()) && shared.contains(&"kix/b:Apply".to_string()),
+        "{shared:?}"
+    );
+    assert!(!shared.iter().any(|m| m.starts_with("kix:")), "{shared:?}");
+}
+
+/// Run the operator's repair of the record of `graph`, the current record
+/// of Kix cluster `cluster`, under the deploy lock.
+async fn repair(api: &FakeApi, cluster: &str, graph: &StoreGraph) {
+    let name = record_of(graph)["metadata"]["name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let record: DynamicObject =
+        serde_json::from_value(api.object(lifecycle::RECORD_KIND, &name).unwrap()).unwrap();
+    let desired: Vec<Value> = graph
+        .resources
+        .values()
+        .map(|r| r.manifest.clone())
+        .filter(|m| !lifecycle::is_record(m))
+        .collect();
+    let client = api.client();
+    let plan = crate::plan::live::LivePlan::sweep(
+        &client,
+        &record,
+        &desired,
+        Some(crate::cluster::revision::RevisionSet::of(cluster, graph)),
+        false,
+    )
+    .await
+    .unwrap();
+    let lock = crate::cluster::head::take(
+        &client,
+        crate::cluster::head::Request {
+            cluster: cluster.into(),
+            holder: crate::cluster::head::Holder::operator("kix-system", None),
+            purpose: crate::cluster::head::Purpose::Repair,
+            activation: Some(name),
+            expect: None,
+        },
+        crate::cluster::head::system_clock(),
+        &|_| {},
+    )
+    .await
+    .unwrap();
+    let lock = Arc::new(lock);
+    plan.run(
+        lock.clone(),
+        false,
+        test_config(),
+        Arc::new(crate::cluster::stream::NullObserver),
+    )
+    .await
+    .unwrap();
+    lock.release().await.unwrap();
+}
+
+/// Two Kix clusters the operator drives share an object an older Kix
+/// applied for both. Neither has an entry of its own on it, so neither
+/// repair reads a conflict from ownership: each applies without force, and
+/// the object ends with one entry for each Kix cluster.
+#[tokio::test]
+async fn two_operator_driven_clusters_sharing_an_object_both_get_their_own_entry() {
+    let api = FakeApi::new([]);
+    api.track_owners();
+    let b = release("b", "b-r0", &[config_map("shared", "1")]);
+    let b_hash = hash_of(&record_of(&b));
+    let a = release("a", "a-r0", &[config_map("shared", "1")]);
+    deployed_by_an_older_kix(&api, "b", &b, PHASE_ACTIVE, &[]).await;
+    deployed_by_an_older_kix(&api, "a", &a, PHASE_ACTIVE, &[("shared", &[&b_hash])]).await;
+
+    repair(&api, "a", &a).await;
+    let shared = managers(&api, "ConfigMap", "shared");
+    assert!(shared.contains(&"kix/a:Apply".to_string()), "{shared:?}");
+    repair(&api, "b", &b).await;
+    let shared = managers(&api, "ConfigMap", "shared");
+    assert!(
+        shared.contains(&"kix/a:Apply".to_string()) && shared.contains(&"kix/b:Apply".to_string()),
+        "{shared:?}"
+    );
+}
+
+/// A deploy with `--skip-orphan-check` writes nothing to orphans, so it
+/// does not release an orphan another Kix cluster still deploys. Its
+/// record lists the orphan, and the next deploy releases it.
+#[tokio::test]
+async fn a_skipped_orphan_check_lists_the_shared_orphans_for_the_next_deploy() {
+    let api = FakeApi::new([]);
+    api.track_owners();
+    let a = release(
+        "a",
+        "a-r1",
+        &[config_map("shared", "1"), config_map("only-a", "1")],
+    );
+    let b = release("b", "b-r1", &[config_map("shared", "1")]);
+    deploy(&api, "a", &a).await.unwrap();
+    deploy(&api, "b", &b).await.unwrap();
+    let a_without = release("a", "a-r2", &[config_map("only-a", "1")]);
+    let skip = crate::plan::document::PlanFlags {
+        prune: crate::cluster::scheduler::PrunePolicy::Skip,
+        ..crate::plan::fixtures::flags(&[])
+    };
+    deploy_with(&api, "a", &a_without, skip).await.unwrap();
+    assert_eq!(
+        managers(&api, "ConfigMap", "shared"),
+        ["kix/a:Apply", "kix/b:Apply"]
+    );
+    let (_, kept) = revisions_of(&api, "a", &a_without).await;
+    assert_eq!(named(&kept.into_iter().collect::<Vec<_>>()), ["shared"]);
+
+    let a_again = release(
+        "a",
+        "a-r3",
+        &[config_map("only-a", "1"), config_map("other", "1")],
+    );
+    deploy(&api, "a", &a_again).await.unwrap();
+    assert_eq!(managers(&api, "ConfigMap", "shared"), ["kix/b:Apply"]);
+}
+
+/// When the hashes of what a run applied cannot be written, the run stops
+/// before it finalizes: its record is `Failed`, the previous record stays
+/// current with its revisions, and the next deploy finishes the record.
+#[tokio::test]
+async fn a_run_that_cannot_record_its_applied_hashes_stops_before_it_finalizes() {
+    let api = FakeApi::new([]);
+    api.track_owners();
+    let r1 = release("a", "a-r1", &[config_map("web", "1")]);
+    deploy(&api, "a", &r1).await.unwrap();
+    let r2 = release("a", "a-r2", &[config_map("web", "2")]);
+    let revision = crate::cluster::revision::RevisionSet::of("a", &r2)
+        .cluster_level
+        .name;
+    let version = keys::API_VERSION.rsplit_once('/').unwrap().1;
+    api.fail_next(
+        &format!(
+            "/apis/{}/{version}/{}/{revision}/status",
+            keys::GROUP,
+            crate::cluster::revision::PLURAL
+        ),
+        1,
+        500,
+    );
+    let err = deploy(&api, "a", &r2).await.unwrap_err();
+    assert!(
+        matches!(err, DeployError::AppliedNotRecorded { .. }),
+        "{err}"
+    );
+    let phase = |graph: &StoreGraph| {
+        let name = record_of(graph)["metadata"]["name"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        api.object(lifecycle::RECORD_KIND, &name).unwrap()["status"]["phase"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(phase(&r2), PHASE_FAILED);
+    assert_eq!(phase(&r1), PHASE_ACTIVE);
+    let (old, _) = revisions_of(&api, "a", &r1).await;
+    assert!(!old.is_empty());
+
+    deploy(&api, "a", &r2).await.unwrap();
+    assert_eq!(phase(&r2), PHASE_ACTIVE);
+    let again = plan(&api, "a", &r2).await;
+    assert!(written(&again).is_empty(), "{:?}", written(&again));
+}
+
+/// A deploy of the build an older Kix deployed last, under the same record
+/// name, replaces the map the conversion gave the record with the build's.
+/// The converted revision names one more object, found through its note,
+/// so the two differ. The applied hashes are carried from the converted
+/// revisions, and the next plan finds every object in sync.
+#[tokio::test]
+async fn a_redeploy_of_the_converted_record_keeps_its_applied_hashes() {
+    let api = FakeApi::new([]);
+    api.track_owners();
+    let old = release("a", "a-r0", &[config_map("web", "1")]);
+    deployed_by_an_older_kix(&api, "a", &old, PHASE_ACTIVE, &[]).await;
+    let hash = hash_of(&record_of(&old));
+    let mut extra = config_map("extra", "1");
+    extra["metadata"]["labels"] = json!({ "app.kubernetes.io/managed-by": "kix" });
+    extra["metadata"]["annotations"] = json!({
+        (keys::IDENTITY_HASH): "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        (keys::ACTIVATIONS): hash,
+    });
+    api.insert(extra);
+
+    deploy(&api, "a", &old).await.unwrap();
+    let again = plan(&api, "a", &old).await;
+    assert!(written(&again).is_empty(), "{:?}", written(&again));
 }

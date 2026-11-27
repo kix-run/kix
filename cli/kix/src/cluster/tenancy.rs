@@ -178,6 +178,10 @@ struct Legacy {
     /// Hashes in `others` whose record is not Superseded (builds another
     /// cluster runs, is deploying, or left partially applied).
     others_current: HashSet<String>,
+    /// Hashes in `others_current`, and the builds those records list under
+    /// `status.orphansKeptFrom`: what an older Kix still deploys or keeps
+    /// for another cluster.
+    others_running: HashSet<String>,
     /// Map from identity hash to record name for each record of this
     /// cluster whose deploy has neither become current nor been superseded:
     /// one that is queued, deploying, failed, or partly deployed.
@@ -621,6 +625,10 @@ impl Tenancy {
             }
             if parsed.phase != PHASE_SUPERSEDED {
                 legacy.others_current.insert(hash.to_string());
+                legacy.others_running.insert(hash.to_string());
+                legacy
+                    .others_running
+                    .extend(kept.clone().map(str::to_string));
             }
             let owner = owner.unwrap_or("?").to_string();
             for kept in kept {
@@ -974,11 +982,13 @@ impl Tenancy {
     }
 
     /// Return the hashes `obj`'s `kix.run/activations` lists that name a
-    /// record of another Kix cluster without a map, or a build such a
-    /// record lists under `status.orphansKeptFrom`.
+    /// record of another Kix cluster that has no map and is not
+    /// `Superseded`, or a build such a record lists under
+    /// `status.orphansKeptFrom`. An older Kix acts only on those records,
+    /// so a `Superseded` record it left behind keeps nothing.
     pub(crate) fn older_kix_hashes<'a>(&self, obj: &'a DynamicObject) -> Vec<&'a str> {
         stamps(obj)
-            .filter(|h| self.legacy.others.contains_key(*h))
+            .filter(|h| self.legacy.others_running.contains(*h))
             .collect()
     }
 

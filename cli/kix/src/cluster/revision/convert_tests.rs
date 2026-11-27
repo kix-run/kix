@@ -65,12 +65,13 @@ fn index(objects: &[(&str, &str)], names: bool) -> Value {
         "clusterLevel": [],
     });
     if names {
-        value["names"] = objects
+        let mut named: serde_json::Map<String, Value> = objects
             .iter()
             .map(|(name, hash)| (hash.to_string(), json!(["ConfigMap", "app", name])))
-            .collect::<serde_json::Map<String, Value>>()
-            .into();
-        value["groups"] = json!({});
+            .collect();
+        named.insert(h("pi"), json!(["PackageInstance", "app", "web-instance"]));
+        value["names"] = named.into();
+        value["groups"] = json!({ (h("pi")): keys::DOMAIN });
     }
     value
 }
@@ -155,6 +156,7 @@ fn a_record_is_converted_from_its_index_and_the_notes() {
         &own,
         &[],
         &objects(&live_values),
+        &[],
     )
     .unwrap();
     let converted = &conversion.records()[0];
@@ -164,7 +166,7 @@ fn a_record_is_converted_from_its_index_and_the_notes() {
         .iter()
         .find(|r| r.name == converted.map.instances["app/web"])
         .unwrap();
-    assert_eq!(names(instance), ["gone", "web"]);
+    assert_eq!(names(instance), ["gone", "web", "web-instance"]);
     assert_eq!(
         instance.applied.get(&h("web")).map(String::as_str),
         Some("applied-web")
@@ -201,6 +203,7 @@ fn an_index_without_names_is_read_through_the_live_hashes() {
         &own,
         &[],
         &objects(&live_values),
+        &[],
     )
     .unwrap();
     let converted = &conversion.records()[0];
@@ -237,6 +240,7 @@ fn a_kept_build_with_revisions_is_read_from_them() {
         current_of(None, &own),
         &own,
         std::slice::from_ref(&earlier),
+        &[],
         &[],
     )
     .unwrap();
@@ -290,6 +294,7 @@ async fn the_conversion_is_safe_to_run_twice_and_to_stop() {
         &own,
         &[],
         &objects(&values[2..]),
+        &[],
     )
     .unwrap();
     let store = Revisions::new(&api.client());
@@ -321,5 +326,121 @@ async fn the_conversion_is_safe_to_run_twice_and_to_stop() {
     assert!(
         api.object("ConfigMap", "web").unwrap()["metadata"]["annotations"][keys::ACTIVATIONS]
             .is_string()
+    );
+}
+
+/// A record whose index does not name its objects, or that has no index,
+/// is read through the listing, so a listing that missed a kind refuses
+/// the conversion and names the kind. An index that names every object
+/// needs no listing. The plan and the run both call [`plan`] with the
+/// kinds their listing missed.
+#[test]
+fn a_listing_that_missed_a_kind_refuses_a_record_without_names() {
+    let forbidden = ["secrets".to_string()];
+    for own_values in [
+        record(
+            "cur",
+            PHASE_ACTIVE,
+            Some(index(&[("web", &h("web"))], false)),
+            &[],
+        ),
+        record("cur", PHASE_ACTIVE, None, &[]),
+        // A kept build without a map is read through the notes.
+        record(
+            "cur",
+            PHASE_ACTIVE,
+            Some(index(&[("web", &h("web"))], true)),
+            &[&h("old")],
+        ),
+    ] {
+        let own = parsed(&[own_values]);
+        let err = plan(CLUSTER, current_of(None, &own), &own, &[], &[], &forbidden).unwrap_err();
+        assert_eq!(
+            err,
+            Refusal::NotListed {
+                record: "cur".into(),
+                kinds: forbidden.to_vec(),
+            }
+        );
+        let text = err.to_string();
+        assert!(
+            text.starts_with("[K9558]")
+                && text.contains("`list` secrets")
+                && text.contains("Nothing was changed"),
+            "{text}"
+        );
+    }
+    let own = parsed(&[record(
+        "cur",
+        PHASE_ACTIVE,
+        Some(index(&[("web", &h("web"))], true)),
+        &[],
+    )]);
+    let conversion = plan(CLUSTER, current_of(None, &own), &own, &[], &[], &forbidden).unwrap();
+    assert_eq!(conversion.records().len(), 1);
+}
+
+/// The kept-orphans revision names only live objects whose note names the
+/// kept build, as an older Kix found them. An object the kept build's index
+/// names that carries no such note is not a kept orphan.
+#[test]
+fn a_kept_orphan_is_found_by_its_note() {
+    let older = record(
+        "old",
+        "Superseded",
+        Some(index(&[("stale", &h("stale")), ("kept", &h("kept"))], true)),
+        &[],
+    );
+    let mut older = older;
+    older["metadata"]["annotations"][keys::IDENTITY_HASH] = json!(h("old"));
+    let own = parsed(&[record("cur", PHASE_ACTIVE, None, &[&h("old")]), older]);
+    let live_values = [
+        live("kept", &h("kept"), &[&h("old")]),
+        // Made since by something else under the same name.
+        live("stale", &h("other"), &[]),
+    ];
+    let conversion = plan(
+        CLUSTER,
+        current_of(None, &own),
+        &own,
+        &[],
+        &objects(&live_values),
+        &[],
+    )
+    .unwrap();
+    let converted = &conversion.records()[0];
+    let kept = converted
+        .revisions
+        .iter()
+        .find(|r| Some(&r.name) == converted.map.kept_orphans.as_ref())
+        .unwrap();
+    assert_eq!(names(kept), ["kept"]);
+}
+
+/// A record without a package index puts every object it names into one
+/// revision. Past the size Kubernetes stores, the conversion refuses with
+/// advice for such a record, not for a build.
+#[test]
+fn a_record_without_an_index_too_large_for_one_revision_is_refused() {
+    let own = parsed(&[record("cur", PHASE_ACTIVE, None, &[])]);
+    let cur = h("cur");
+    let live_values: Vec<Value> = (0..7000)
+        .map(|i| live(&format!("object-{i:05}"), &h(&format!("o{i}")), &[&cur]))
+        .collect();
+    let err = plan(
+        CLUSTER,
+        current_of(None, &own),
+        &own,
+        &[],
+        &objects(&live_values),
+        &[],
+    )
+    .unwrap_err();
+    let text = err.to_string();
+    assert!(
+        matches!(err, Refusal::TooLarge(_))
+            && text.contains("without a package index")
+            && text.contains("Kix 0.9"),
+        "{text}"
     );
 }

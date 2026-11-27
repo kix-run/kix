@@ -83,6 +83,11 @@ pub(crate) struct ActivationRecord {
     /// Whether [`DeployRecord::write_applied`] has carried the old
     /// revisions' hashes into the run's revisions.
     carried: std::sync::atomic::AtomicBool,
+    /// The map of the current record as [`DeployRecord::begin`] found it,
+    /// after the conversion and before the run named its own revisions. A
+    /// run that deploys the current record again replaces its map, so the
+    /// hashes to carry are read from the revisions this map names.
+    before: std::sync::Mutex<Option<RevisionMap>>,
 }
 
 impl ActivationRecord {
@@ -92,6 +97,7 @@ impl ActivationRecord {
             config,
             earlier_only: std::sync::Mutex::new(Vec::new()),
             carried: std::sync::atomic::AtomicBool::new(false),
+            before: std::sync::Mutex::new(None),
         }
     }
 
@@ -252,23 +258,18 @@ impl ActivationRecord {
         Ok(Some(revision.name))
     }
 
-    /// Return each revision the record names that `current` does not name,
-    /// paired as `(old, new)` with each built revision `current` names. Read
-    /// both from `listed` when they are there, so the pairs carry the
-    /// hashes already written. An object of a new revision takes the
+    /// Return each revision the record names that the current record did
+    /// not name when the run began ([`ActivationRecord::before`]), paired as
+    /// `(old, new)` with each built revision that record named. Read both
+    /// from `listed` when they are there, so the pairs carry the hashes
+    /// already written. An object of a new revision takes the
     /// applied hash an old one records for it with the same build hash
     /// ([`applied::pending`]), whichever instance held it before: the
     /// revisions a conversion gives an older Kix's record can group objects
     /// otherwise than the build does.
-    fn replaced<'a>(
-        &'a self,
-        current: Option<&Record>,
-        listed: &'a [Revision],
-    ) -> Vec<(&'a Revision, &'a Revision)> {
-        let (Some(set), Some(Ok(old_map))) = (
-            self.config.revisions.as_ref(),
-            current.and_then(|c| c.revisions.as_ref()),
-        ) else {
+    fn replaced<'a>(&'a self, listed: &'a [Revision]) -> Vec<(&'a Revision, &'a Revision)> {
+        let before = self.before.lock().ok().and_then(|b| b.clone());
+        let (Some(set), Some(old_map)) = (self.config.revisions.as_ref(), before) else {
             return Vec::new();
         };
         let find = |name: &str| listed.iter().find(|r| r.name == name);
@@ -285,6 +286,29 @@ impl ActivationRecord {
                 olds.iter().map(move |old| (*old, new))
             })
             .collect()
+    }
+
+    /// Return the readable map of the record the deploy lock calls current
+    /// ([`revision::convert::current_of`]).
+    async fn current_map(
+        &self,
+        records: &Records,
+    ) -> Result<Option<RevisionMap>, RecordWriteError> {
+        let cluster = self.resources.cluster();
+        let own = records
+            .of_cluster(cluster)
+            .await
+            .map_err(RecordWriteError::Records)?;
+        let head = crate::cluster::head::read(self.resources.client(), cluster)
+            .await
+            .ok()
+            .flatten();
+        let head_current = head
+            .as_ref()
+            .and_then(|h| h.status.as_ref())
+            .and_then(|s| s.current.clone());
+        Ok(revision::convert::current_of(head_current.as_deref(), &own)
+            .and_then(|c| c.revisions.clone()?.ok()))
     }
 
     /// Delete the revisions no record needs any more, under the run's lock.
@@ -346,6 +370,10 @@ impl DeployRecord for ActivationRecord {
         // Create the revisions before the write that names them, so a record
         // names only revisions that exist. A failure stops the run before
         // anything is applied, and leaves the record as it was.
+        let before = self.current_map(&records).await?;
+        if let Ok(mut guard) = self.before.lock() {
+            *guard = before;
+        }
         self.create_record(name, &records).await?;
         self.create_revisions(&records).await?;
         let map = self.config.revisions.as_ref().map(RevisionMap::of);
@@ -414,7 +442,7 @@ impl DeployRecord for ActivationRecord {
             let needed = state.needed_readable();
             let listed = &state.revisions.readable;
             let kept: Vec<&Revision> = listed.iter().filter(|r| needed.contains(&r.name)).collect();
-            let replaced = self.replaced(state.current(), listed);
+            let replaced = self.replaced(listed);
             let writes = applied::pending(&applied, &kept, &replaced);
             let store = Revisions::new(client);
             futures::future::try_join_all(
@@ -425,10 +453,20 @@ impl DeployRecord for ActivationRecord {
             .await?;
             Ok::<_, keep::CleanError>(())
         };
-        match tokio::time::timeout(BEST_EFFORT_TIMEOUT, work).await {
+        let written = match tokio::time::timeout(BEST_EFFORT_TIMEOUT, work).await {
             Ok(result) => result.map_err(RecordWriteError::Applied),
             Err(_) => Err(RecordWriteError::NoAnswer(BEST_EFFORT_TIMEOUT)),
+        };
+        // A write that failed stored nothing it was given, so the next one
+        // tries all of it again.
+        if written.is_err() {
+            self.resources.give_back_applied(applied);
+            if carry {
+                self.carried
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+            }
         }
+        written
     }
 
     async fn abort(&self, reason: &str) -> Result<(), RecordWriteError> {

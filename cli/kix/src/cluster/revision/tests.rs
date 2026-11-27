@@ -815,6 +815,25 @@ mod applied_tests {
         );
     }
 
+    /// Two old revisions that record different hashes for one object carry
+    /// none, as a reader treats revisions that disagree. Old revisions that
+    /// agree, or where only one records a hash, carry it.
+    #[test]
+    fn old_revisions_that_disagree_carry_no_hash() {
+        let (x, w) = (object("x", "x"), object("w", "w"));
+        let first = web(vec![x.clone(), w.clone()], &[(&x, "hx1"), (&w, "hw")]);
+        let mut second = web(vec![x.clone(), w.clone()], &[(&x, "hx2"), (&w, "hw")]);
+        second.spec.slot = Slot::ClusterLevel;
+        second.name = "second".into();
+        let mut new = web(vec![x.clone(), w.clone()], &[]);
+        new.name = "new".into();
+        let writes = pending(&BTreeMap::new(), &[], &[(&first, &new), (&second, &new)]);
+        assert_eq!(
+            writes,
+            BTreeMap::from([("new".to_string(), entries(&[(&w, "hw")]))])
+        );
+    }
+
     /// An entry a revision already holds with the same value is not sent
     /// again.
     #[test]

@@ -161,12 +161,6 @@ impl State {
         })
     }
 
-    /// Return the record the head names as current.
-    pub(crate) fn current(&self) -> Option<&Record> {
-        let name = self.head.as_ref()?.current.as_deref()?;
-        self.records.iter().find(|r| r.name == name)
-    }
-
     /// Return the names of the revisions that must stay ([`needed`]).
     pub(crate) fn needed(&self) -> Result<BTreeSet<String>, CleanError> {
         needed(self.head.as_ref(), &self.records)

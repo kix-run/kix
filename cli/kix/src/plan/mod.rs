@@ -164,6 +164,9 @@ pub enum PlanError {
     /// A revision of the build would be too large to store on the cluster.
     #[error("{0}")]
     RevisionTooLarge(Box<crate::cluster::revision::TooLarge>),
+    /// The records an older Kix wrote cannot be given revisions.
+    #[error("{0}")]
+    Conversion(Box<crate::cluster::revision::convert::Refusal>),
     /// The build is bound to another Kubernetes cluster, names none while
     /// this one accepts only builds that name it, or would deploy a cluster
     /// that Kix 0.6 named `cluster` under a new name.
@@ -271,7 +274,9 @@ pub enum PlanError {
          is managed by the Kix operator. Nothing was planned or applied to the cluster. The \
          operator reconciles {record} to match its build, so it would revert changes from `--only` \
          and delete any new resources it creates. Next: deploy the full build with \
-         `kix deploy {cluster} --operator`, or take over from this machine with `kix deploy {cluster}`."
+         `kix deploy {cluster} --operator`, or take the cluster over from this machine with \
+         `kix deploy {cluster}`. If the operator is older than this Kix, upgrade it first; if it \
+         was uninstalled, run `kix deploy {cluster} --operator-removed` instead."
     )]
     OnlyUnderOperator { cluster: String, record: String },
     #[error("{0}")]

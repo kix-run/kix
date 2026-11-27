@@ -1559,8 +1559,9 @@ async fn ledger_for(
             own,
             &tenancy.own_listed_revisions(),
             &sweep.managed,
+            &sweep.forbidden,
         )
-        .map_err(PlanError::RevisionTooLarge)?
+        .map_err(|e| PlanError::Conversion(Box::new(e)))?
     };
     let converted = tenancy.with_conversion(&conversion);
     let mut ledger =

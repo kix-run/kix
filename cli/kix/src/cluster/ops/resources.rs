@@ -265,6 +265,17 @@ impl KubeResources {
             .unwrap_or_default()
     }
 
+    /// Put back `applied`, which [`KubeResources::take_applied`] returned
+    /// and a write did not store, so the next write stores it. An entry the
+    /// run recorded since wins.
+    pub(super) fn give_back_applied(&self, applied: BTreeMap<RevisionObject, String>) {
+        if let Ok(mut now) = self.applied.lock() {
+            for (object, hash) in applied {
+                now.entry(object).or_insert(hash);
+            }
+        }
+    }
+
     /// Open `Activation` records past the domain gate using the current
     /// discovery cache, since the record CRD can arrive mid-run.
     async fn opened(&self) -> Result<OpenedRecords, LegacyDomainError> {

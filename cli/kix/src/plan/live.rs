@@ -84,10 +84,9 @@ pub enum LivePlanError {
     /// This account may neither list nor get objects the plan must read.
     #[error("{0}. Nothing was applied or deleted")]
     ReadForbidden(Box<crate::cluster::inventory::ReadForbidden>),
-    /// A revision the conversion of the records an older Kix wrote would
-    /// create is too large to store.
+    /// The records an older Kix wrote cannot be given revisions.
     #[error("{0}. Nothing was applied or deleted")]
-    RevisionTooLarge(Box<crate::cluster::revision::TooLarge>),
+    Conversion(Box<crate::cluster::revision::convert::Refusal>),
 }
 
 /// A drifted object the operator leaves as it is, because another field
@@ -183,8 +182,9 @@ impl LivePlan {
                 own,
                 &tenancy.own_listed_revisions(),
                 &inventory::managed_of(listed.clone()).managed,
+                &listed.forbidden,
             )
-            .map_err(LivePlanError::RevisionTooLarge)?;
+            .map_err(|e| LivePlanError::Conversion(Box::new(e)))?;
             tenancy.with_conversion(&conversion)
         };
         // Only this Kix cluster's objects: every other Kix cluster's objects
@@ -543,6 +543,7 @@ mod tests {
             own,
             &[],
             objects,
+            &[],
         )
         .unwrap();
         let tenancy = &tenancy.with_conversion(&conversion);

@@ -1533,11 +1533,18 @@ head's, else the newest by phase) and each `Failed` or `Partial` record
 (`convert::targets`). What a record names comes from its package index with
 names, else from the live objects carrying the hashes the index lists, else
 from the live objects whose note lists it; revisions are split by package
-instance and refused past the size limit. Each object's
+instance and refused past the size limit (a record without an index, whose
+objects all go to the cluster level, gets its own advice). When a record
+needs the listing (no index, an index without names, or a kept build without
+a map) and the listing missed a kind (`inventory::Listed::forbidden`),
+`convert::plan` refuses with `Refusal::NotListed` (`[K9558]`), in the run
+and in the plan alike, because a conversion written from a partial listing
+would forget those objects for good. Each object's
 `kix.run/applied-hash` goes into the status of the revision that names it
 with that build hash. The current record also gets a kept-orphans revision
 from the builds its `status.orphansKeptFrom` lists (a build that is a record
-with a map is read from its revisions; `keep::needed` keeps those). Then one
+with a map is read from its revisions, which `keep::needed` keeps; any other
+from the live objects whose note names it, as the older Kix found them). Then one
 write per record names the map (`Records::name_revisions`), the current
 record last. The conversion runs in a deploy, a rollback, the operator's
 deploy, and its repair alike, and before the run's own revisions are created
@@ -1579,14 +1586,17 @@ after the nodes to each unchanged object and each kept orphan
 (`Run::migrate_unchanged`, best-effort). A dry run applies a renamed object
 under `kix`, which owns the fields `kix/<cluster>` will own.
 
-While an object's note names a record of another Kix cluster without a map
+While an object's note names a record of another Kix cluster that has no
+map and is not `Superseded`, or a build such a record kept
 (`Tenancy::older_kix_hashes`), the write keeps both notes, writes the
 deploying record's hash into the first beside that cluster's hashes, and
 leaves the entries under `kix`; the apply adds the cluster's own entry
 without force (`Label::HeldByOtherCluster`, `WriteReason::HeldByOtherCluster`,
 because `drift::held_by_other_clusters` counts `kix` as another Kix
-cluster). A changed value on such an object is refused with a conflict that
-names `kix`. The same test, evaluated each deploy, finishes the job once
+cluster). The operator applies such an object too, and any object on which
+the Kix cluster has no `Apply` entry of its own: it reports drift instead
+only when another manager took a field from that entry. A changed value on
+such an object is refused with a conflict that names `kix`. The same test, evaluated each deploy, finishes the job once
 that cluster has revisions.
 
 **Releases** happen in the prune step (`Run::release_shared`,
@@ -1594,7 +1604,18 @@ that cluster has revisions.
 an empty apply under the cluster's own manager when the object has an
 `Apply` entry under it; the entry under `kix` is never touched. A release
 that fails leaves the object in `left`, so the kept-orphans revision names
-it and the next deploy tries again.
+it and the next deploy tries again. Under `--skip-orphan-check` nothing is
+released, and the shared orphans go to `left` the same way.
+
+**Applied hashes before finalize.** After the nodes, `Run::record_applied`
+writes the hashes of what the run applied and carries the current record's
+hashes into the run's revisions (`ActivationRecord::replaced` pairs against
+the current record's map as `begin` found it, before `begin_deploy` replaced
+it; old revisions that disagree on an object carry no hash). A failure stops
+the run with `DeployError::AppliedNotRecorded` before it tidies notes or
+finalizes: the record is marked stopped, the previous record stays current
+with its revisions, and the objects without a hash are applied again by the
+next deploy.
 
 **An operator older than this Kix.** Before planning, and again in
 `kix-cli`'s `lock::take`, a command that changes a Kix cluster refuses when

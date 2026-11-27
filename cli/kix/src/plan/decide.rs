@@ -17,10 +17,12 @@
 //!    the object cedes are out of that hash. The apply leaves out each ceded
 //!    field another manager owns, so a forced apply does not take it back.
 //!    A runner that never forces (the operator) does not write an object
-//!    whose changed fields another manager owns, because the apply would be
-//!    refused. It reports the drift instead. A runner that forces does not
-//!    force the apply when another Kix cluster owns such a field, so the
-//!    apply is refused with an error that names that Kix cluster.
+//!    when another manager took a changed field from Kix's own `Apply`
+//!    entry, because the apply would be refused. It reports the drift
+//!    instead. Without an entry of its own Kix took nothing, so the
+//!    operator applies. When another Kix cluster owns such a field, every
+//!    runner applies without force, so Kubernetes refuses only a value
+//!    that differs, with an error that names that Kix cluster.
 //!
 //! Otherwise the object is unchanged and nothing is written to it.
 //!
@@ -85,11 +87,13 @@ pub(crate) enum Label {
     AppliedHashMissing,
     /// The live object's Kix-owned fields changed since Kix applied it.
     RevertsDrift(DriftReport),
-    /// The live object's Kix-owned fields changed because another Kix
-    /// cluster applied fields the build sets with other values. The apply
-    /// is sent without force, so Kubernetes refuses it and the error names
-    /// that Kix cluster. Taking the fields back by force would only move
-    /// the refusal to the other Kix cluster's next deploy.
+    /// Another Kix cluster, or the manager `kix` an older Kix applies
+    /// under, holds fields the build sets. The apply is sent without force:
+    /// it adds this Kix cluster's entry when the values agree, and
+    /// Kubernetes refuses it with an error that names that manager when
+    /// they differ. Taking the fields by force would only move the refusal
+    /// to the other Kix cluster's next deploy. The operator sends it too
+    /// when this Kix cluster has no `Apply` entry of its own on the object.
     HeldByOtherCluster(DriftReport),
     /// The live object's Kix-owned fields changed since Kix applied it, and
     /// another manager owns fields the build sets. A runner that never
@@ -551,7 +555,13 @@ fn decide_present(
         // Kix recorded what it applied, so an object that now has no Kix
         // field records lost every field Kix owned.
         DriftVerdict::Drifted { .. } | DriftVerdict::NoFieldset => {
-            if !forces && drift::conflicts(obj, manifest, &manager) {
+            // A field another manager took from Kix's own entry holds a
+            // value that differs, so a runner that never forces skips it.
+            // Without an entry of its own Kix took nothing, so ownership says
+            // nothing about values, and the apply goes on.
+            let entries = obj.metadata.managed_fields.as_deref().unwrap_or_default();
+            let own_entry = manager.apply_entry(entries).is_some();
+            if !forces && own_entry && drift::conflicts(obj, manifest, &manager) {
                 return Some((Label::DriftReported(report), ChangeAction::Skip(id.clone())));
             }
             if !drift::held_by_other_clusters(obj, manifest, &manager).is_empty() {
