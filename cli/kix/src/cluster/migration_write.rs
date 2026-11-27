@@ -58,7 +58,7 @@ const ATTEMPTS: usize = 5;
 #[derive(Debug, Error)]
 pub enum WriteError {
     #[error(
-        "could not update Kix metadata on {resource}. Kubernetes refused the patch that renames field manager `{legacy}` and removes retired annotations `{activations}` and `{applied}`: {source}. Run the deploy again",
+        "could not update Kix metadata on {resource} because Kubernetes refused the patch that renames field manager `{legacy}` and removes retired annotations `{activations}` and `{applied}`: {source}. Check permissions on {resource}, then run the deploy again",
         legacy = field_manager::LEGACY,
         activations = keys::ACTIVATIONS,
         applied = keys::APPLIED_HASH,
@@ -69,7 +69,7 @@ pub enum WriteError {
         source: kube::Error,
     },
     #[error(
-        "could not update Kix metadata on {resource} because Kubernetes refused the dry run that checks which fields Kix would take back from other field managers: {source}. Run the deploy again"
+        "could not update Kix metadata on {resource} because the dry-run conflict check failed: {source}. Check your cluster connection and permissions on {resource}, then run the deploy again"
     )]
     CheckRefused {
         resource: String,
@@ -77,14 +77,18 @@ pub enum WriteError {
         source: kube::Error,
     },
     #[error(
-        "could not update Kix metadata on {resource} because another writer modified it on each of the {ATTEMPTS} attempts. Stop what keeps updating {resource}, then run the deploy again"
+        "could not update Kix metadata on {resource} because another writer modified it on each of the {ATTEMPTS} attempts. Stop whatever keeps updating {resource}, then run the deploy again"
     )]
     KeepsChanging { resource: String },
     /// What the run's forced apply of the object would take back is not
     /// what the plan showed.
-    #[error("fields Kix would take back on {resource} changed after the plan was made")]
+    #[error(
+        "{resource} was not updated because the fields Kix would take back changed on the cluster after the plan was made. Run the command again to review a fresh plan"
+    )]
     ChangedSincePlan { resource: String },
-    #[error("could not read {resource}: {source}")]
+    #[error(
+        "could not read {resource} before updating its Kix metadata: {source}. Check your cluster connection and `get` permission on {resource}, then run the deploy again"
+    )]
     Read {
         resource: String,
         #[source]

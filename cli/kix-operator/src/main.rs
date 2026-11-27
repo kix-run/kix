@@ -116,7 +116,7 @@ async fn open_records(client: &kube::Client) -> anyhow::Result<Records> {
         .into_records()
         .with_context(|| {
             format!(
-                "CustomResourceDefinition `{}` is not served on this cluster yet; exiting so Kubernetes can restart the operator and check again",
+                "CustomResourceDefinition `{}` is not served on this cluster yet. Exiting so Kubernetes restarts the operator and checks again",
                 keys::ACTIVATIONS_CRD
             )
         })?;

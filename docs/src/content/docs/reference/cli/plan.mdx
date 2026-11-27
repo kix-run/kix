@@ -48,7 +48,7 @@ kix plan <CLUSTER> --read-only [--bundle <FILE>]
 | `--force-conflicts` | Plan the apply with forced field ownership. Fields another manager owns show as drift the deploy reverts instead of as conflicts. |
 | `--accept-migrations` | Accept the stateful migrations the plan lists, so they do not count as a reason the deploy would stop. |
 | `--only <NAMESPACE/INSTANCE>` | Preview deploying only this package instance and the instances and resources it depends on, matching [`kix deploy --only`](/docs/reference/cli/deploy/#deploy-one-instance-at-a-time). Repeatable. The plan shows only this step's changes, lists the selected and required instances, and counts the remaining changes in the build. Cannot be combined with `--prune` or `--read-only`. |
-| `--operator-removed` | Record in the plan that no Kix operator runs for this Kix cluster, for a later `kix deploy --plan`. `kix plan` changes nothing on the cluster. See [Take a cluster back from a removed operator](/docs/reference/cli/deploy/#take-a-cluster-back-from-a-removed-operator). |
+| `--operator-removed` | Preview a deploy that reclaims this Kix cluster from an uninstalled Kix operator. `kix plan` changes nothing on the cluster. Cannot be combined with `--out`, because `kix deploy --plan` reclaims the cluster before checking the saved plan and would reject it as out of date. Run `kix deploy <cluster> --operator-removed` without `--plan` instead. See [Take a cluster back from a removed operator](/docs/reference/cli/deploy/#take-a-cluster-back-from-a-removed-operator). |
 | `--offline` | Take the previous activation from the local cache and connect to nothing. The plan compares the cached build with the new one, and every write-path check reads `not_checked`. See [Offline plans](#offline-plans). |
 | `--read-only` | Read the live cluster instead of sending a dry run. See [Read-only plans](#read-only-plans). |
 | `--bundle <FILE>` | Read the build from a bundle written by `kix bundle` instead of building from the flake. Not with `--offline`. |
@@ -94,7 +94,8 @@ the missing permissions.
 
 `kix plan` also requires `list` permission on `activationheads.kix.run` and
 `packageinstancerevisions.kix.run` to see which objects each Kix cluster on the
-Kubernetes cluster deploys; without it, planning stops immediately.
+Kubernetes cluster deploys. Without those permissions, planning stops
+immediately.
 
 ## What it reports
 
@@ -329,7 +330,7 @@ to restore what the build defines.
 | `reason` | Meaning |
 | --- | --- |
 | `crd_created_by_this_deploy` | Its kind comes from a CRD this deploy creates. |
-| `crd_installed_by_kix` | Its kind is a Kix custom resource (such as `Activation` or `PackageInstance`) that the Kubernetes cluster does not serve yet. `kix deploy`, `kix rollback`, `kix gc`, `kix migrate domain`, and the Kix operator install Kix's CRDs automatically before modifying the cluster; `because` names the CRD. Appears on a Kubernetes cluster where Kix has not installed its CRDs yet. |
+| `crd_installed_by_kix` | Its kind is a Kix custom resource (such as `Activation` or `PackageInstance`) that the Kubernetes cluster does not serve yet. `kix deploy`, `kix rollback`, `kix gc`, `kix migrate domain`, and the Kix operator install Kix's CRDs automatically before modifying the cluster (`because` names the CRD). Appears on a Kubernetes cluster where Kix has not installed its CRDs yet. |
 | `crd_installed_outside_kix` | Its kind comes from a CRD that is not on the cluster yet and is referenced externally (`scope.mkCRDRef` or `kix.mkImport`). Kix does not create the CRD. During deploy, Kix waits for an operator in the build or an external tool to install it, and fails if it never appears. `because` names the CRD when the build references only one external CRD in that API group. Otherwise, `because` is left out. |
 | `crd_changed_by_this_deploy` | Its kind's CRD is changed by this deploy, and the cluster refused the object when checking it against the CRD it has now. The deploy applies the CRD first, so the refusal may not happen. |
 | `namespace_created_by_this_deploy` | Its namespace is created by this deploy. |

@@ -131,7 +131,7 @@ pub(crate) fn flags_of(args: &PlanArgs) -> PlanFlags {
 pub(crate) fn refuse_saving_operator_removed(args: &PlanArgs, save: Option<&Path>) -> Result<()> {
     if args.operator_removed && save.is_some() {
         return Err(miette!(
-            "cannot save a plan made with `--operator-removed`. Nothing was planned or written. `kix deploy --plan` would take Kix cluster {cluster} back from the operator first, which changes its deploy lock, so it would then refuse the saved plan as out of date. Run `kix deploy {cluster} --operator-removed` without `--plan` instead.",
+            "cannot combine `--operator-removed` with `--out`. Nothing was planned or written. `kix deploy --plan` reclaims Kix cluster {cluster} from the operator before checking the saved plan, which advances the deploy lock and makes the saved plan out of date. Run `kix plan {cluster} --operator-removed` without `--out` to preview, or `kix deploy {cluster} --operator-removed` to reclaim and deploy.",
             cluster = args.cluster,
         ));
     }

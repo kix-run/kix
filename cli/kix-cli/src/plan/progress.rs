@@ -66,7 +66,7 @@ pub fn print(event: PlanEvent<'_>) {
                 output::bold(activation)
             ));
             eprintln!(
-                "  The package diff cannot show the orphaned objects kept from {activation}."
+                "  The package diff omits the orphaned objects kept from {activation}, though Kix still finds and tracks them from the live objects on the cluster."
             );
         }
         PlanEvent::Connecting(connection) => crate::say!("{}", connection.connecting()),
@@ -154,7 +154,7 @@ pub fn print(event: PlanEvent<'_>) {
                 );
             }
             crate::say!(
-                "    Kix cannot tell whether a Kix operator is still running. If one is, it and this deploy write the same objects, so stop it. To look for its pods:"
+                "    Kix cannot check whether a Kix operator is still running. Stop any running operator so it does not overwrite this deploy's changes. To look for operator pods:"
             );
             crate::say!(
                 "      kubectl get pods --all-namespaces -o jsonpath='{{range .items[*]}}{{.metadata.namespace}}/{{.metadata.name}} {{.spec.containers[*].image}}{{\"\\n\"}}{{end}}' | grep kix-operator"
@@ -165,7 +165,7 @@ pub fn print(event: PlanEvent<'_>) {
         }
         PlanEvent::NothingToTakeBack { cluster } => {
             crate::say!(
-                "  {} `--operator-removed` found no deployment record of Kix cluster {cluster} for an older Kix operator to deploy, so it changed nothing.",
+                "  {} `--operator-removed`: Kix cluster {cluster} has no active, queued, or in-progress deployment records from an older operator, so nothing was changed.",
                 output::dim("="),
             );
         }
@@ -190,7 +190,7 @@ pub fn print(event: PlanEvent<'_>) {
             }
         },
         PlanEvent::FailedValuesUnknown(record) => crate::say!(
-            "    the build for {} is not in Kix's local store on this machine. Kix still includes the objects that deploy applied from its revisions, but the plan cannot distinguish the values it wrote from live cluster edits, so those fields appear under Drift.",
+            "    the build for {} is not in Kix's local store on this machine. Kix still includes the objects from that deploy's revisions, but the plan cannot tell its values apart from live cluster edits, so those fields appear under Drift.",
             record.name,
         ),
         PlanEvent::FailedUnresolved { records, cluster } => {

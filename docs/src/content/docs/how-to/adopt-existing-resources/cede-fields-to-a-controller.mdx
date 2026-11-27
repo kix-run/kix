@@ -62,9 +62,10 @@ are ceded, Kix retries once with those conflicting fields removed (and logs
 the retry at `info` level when you pass `-v` or set `KIX_LOG=info`). The
 controller's values remain in the live object.
 
-Do not use `--force-conflicts` for this transition. That flag tells the API
-server to give the fields to Kix, so there is no conflict for the ceding logic
-to handle.
+You do not need `--force-conflicts` for this. Forced applies (including
+`--force-conflicts`) still leave ceded fields with the manager that owns them,
+while taking ownership of every other conflicting field. Save
+`--force-conflicts` for one-time takeovers.
 
 ## Verify the resulting ownership
 

@@ -87,11 +87,11 @@ Run a plain deploy:
 The deploy reapplies the drifted Deployment with force, transferring
 `spec.replicas` back to the Kix cluster's field manager and restoring the
 replica count from your cluster definition. Unchanged resources are not touched.
-Kix forces only what the plan showed: the same field, owned by the same
-manager, with the same live value. Controller status updates do not block the
-apply, but if the field, its owning manager, or its live value changed after
-the plan, the deploy stops, names the object, and asks you to run `kix plan`
-again.
+Kix checks which fields the forced apply will take back during planning and
+again right before writing (using an unforced dry run). Updates to `status` do
+not block the apply. If the conflicting field, its owning manager, or its live
+value changed after the plan was made, the deploy stops, names the object, and
+tells you to run the command again.
 
 Plan again to confirm that nothing is left to do:
 
@@ -115,8 +115,10 @@ conflict:
   field, the deploy stops with `[K5636]`. Update the cluster definitions to
   match.
 
-`--force-conflicts` forces every apply in the run, so avoid passing it on
-routine deploys where it could mask a new ownership conflict.
+`--force-conflicts` forces every apply in the run, so do not pass it on
+routine deploys where it could hide a new ownership conflict. Even with
+`--force-conflicts`, Kix leaves fields listed in `ownership.cede` with the
+manager that owns them.
 
 :::note[Use it for a migration]
 See [Take ownership of kubectl-managed resources](/docs/how-to/adopt-existing-resources/take-ownership-of-kubectl-managed-resources/)

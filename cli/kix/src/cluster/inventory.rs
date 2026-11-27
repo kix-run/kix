@@ -801,7 +801,7 @@ fn is_labelled(obj: &DynamicObject) -> bool {
 /// Kix may neither list nor get objects that a deploy must read.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "[K9557] this Kubernetes account cannot `list` or `get` {}, so Kix cannot determine what the deploy must write or delete. Grant this account `list` on {} across the cluster, or `get` on {} in each namespace the build uses, then run the command again",
+    "[K9557] this Kubernetes account cannot `list` or `get` {}, so Kix cannot determine what to write or delete. Grant this account cluster-wide `list` on {}, or `get` on {} in every namespace this Kix cluster uses, then run the command again",
     and_list(.resources),
     and_list(.resources),
     if .resources.len() == 1 { "it" } else { "them" }
@@ -816,7 +816,8 @@ fn and_list(resources: &[String]) -> String {
     match quoted.as_slice() {
         [] => String::new(),
         [one] => one.clone(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+        [a, b] => format!("{a} and {b}"),
+        [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
     }
 }
 

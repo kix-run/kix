@@ -132,10 +132,9 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         .values()
         .map(|r| k8s_identity(&r.manifest))
         .collect();
-    let records = retirement
-        .records
-        .clone()
-        .ok_or_else(|| miette!("could not read deployment records for '{cluster}'"))?;
+    let records = retirement.records.clone().ok_or_else(|| {
+        miette!("could not read deployment records for '{cluster}'. Nothing was deleted.")
+    })?;
     let tenancy = ctx.runtime()?.block_on(read_tenancy(&records, &cluster))?;
     let kept_baseline = ctx.runtime()?.block_on(async {
         let discovery = match tenancy.own_source() {
@@ -601,7 +600,7 @@ async fn update_kept(
                     .map_err(|e| miette!("{e}"))?;
                 baseline::sync_kept_roots(cluster, &[]);
                 crate::say!(
-                    "  {} {}: no kept orphaned objects remain to record",
+                    "  {} {}: cleared kept-orphans list (no kept orphaned objects remain to track)",
                     output::dim("="),
                     active.name
                 );
@@ -628,7 +627,7 @@ async fn clear_kept(cluster: &str, records: &Records, active: &Record) {
         Ok(()) => {
             baseline::sync_kept_roots(cluster, &[]);
             crate::say!(
-                "  {} {}: no kept orphaned objects remain to record",
+                "  {} {}: cleared kept-orphans list (no kept orphaned objects remain to track)",
                 output::dim("="),
                 active.name
             );
@@ -657,7 +656,10 @@ async fn clear_kept_locked(
     let unneeded = match keep::unneeded(records.client(), records, cluster).await {
         Ok(names) => !names.is_empty(),
         Err(e) => {
-            tracing::warn!(error = %e, "could not list unused PackageInstanceRevision objects");
+            tracing::warn!(
+                error = %e,
+                "could not list unused PackageInstanceRevision objects; unless this run updates the kept-orphans list, revision cleanup will wait until the next deploy or `kix gc`"
+            );
             false
         }
     };
@@ -1041,7 +1043,7 @@ async fn rebuild_kept_list(
         .unwrap_or_default();
     let objects = kept_to_rebuild(sweep, in_build);
     crate::say!(
-        "{} {problem}. Rebuilding the kept-orphans list from the {} live object(s) that this Kix cluster applied, that no other deployment record of this cluster lists, and that are not in {compared}.",
+        "{} {problem}. Rebuilding the kept-orphans list from {} live object(s) applied by this Kix cluster that are absent from {compared} and from this cluster's other revisions.",
         output::yellow("Note:"),
         objects.len(),
     );
@@ -1137,7 +1139,7 @@ async fn write_rebuilt(
     .await;
     super::lock::release(&lock).await;
     written.map_err(|e| {
-        miette!("could not save the rebuilt kept-orphans list: {e}. Nothing was deleted.")
+        miette!("could not save the rebuilt kept-orphans list on deployment record `{record}`: {e}. Nothing was deleted.")
     })
 }
 

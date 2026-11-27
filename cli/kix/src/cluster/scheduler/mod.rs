@@ -453,7 +453,7 @@ impl<'a> Run<'a> {
             Ok(Ok(())) => return Ok(()),
             Ok(Err(e)) => e.to_string(),
             Err(_) => format!(
-                "the deployment record did not answer within {}s",
+                "updating the deployment record timed out after {}s",
                 INLINE_BEST_EFFORT_TIMEOUT.as_secs()
             ),
         };

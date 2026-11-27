@@ -73,8 +73,8 @@ impl OperatorFeatures {
     "[K9557] Kix cluster {cluster} is managed by a Kix operator older than Kix {version} (or an uninstalled operator)\n  \
      Nothing was changed on the cluster.\n\n  \
      Why:\n    \
-     Deployment record `{record}` for Kix cluster {cluster} was submitted to the Kix operator, which reconciles it continuously, \
-     and CustomResourceDefinition `{crd}` does not list `{feature}` in its `{key}` annotation. \
+     Deployment record `{record}` for Kix cluster {cluster} is managed by the Kix operator, \
+     but CustomResourceDefinition `{crd}` does not list `{feature}` in its `{key}` annotation. \
      Either the running operator is older than Kix {version}, or the operator was uninstalled. \
      An older operator writes the retired `{activations}` and `{applied}` annotations back onto every object after Kix {version} removes them.\n\n  \
      Next:\n    \

@@ -248,7 +248,7 @@ there. Kix names it from the first of these that has it:
 The line for a missing object names the objects that depend on it, such as
 `missing, needed by Deployment.apps vault/vaultwarden`.
 
-A record written before Kix stored a package index, and without revisions, lists no objects. Kix then
+A record with neither revisions nor a package index lists no objects. Kix then
 finds the deploy's objects through the `kix.run/depends-on` annotations of the
 deploy's live objects. When such a record's own object is also gone, Kix cannot
 tell which objects the deploy made, says so, and exits `1`.

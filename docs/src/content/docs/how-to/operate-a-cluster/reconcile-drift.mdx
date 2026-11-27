@@ -83,7 +83,7 @@ without `--check` to also confirm that the reapplied workloads are ready. See
 
 Fields listed in `ownership.cede` never count as changed, so `kix deploy`
 leaves them with the controller that owns them. Kix also never forces fields
-away from another Kix cluster; if two Kix clusters set different values for the
+away from another Kix cluster. If two Kix clusters set different values for the
 same field, the deploy stops with `[K5636]`. `--reconcile` reapplies every
 resource in the build, and `--force-conflicts` forces field ownership on every
-apply; neither flag is needed to heal drift.
+apply. Neither flag is needed to heal drift.

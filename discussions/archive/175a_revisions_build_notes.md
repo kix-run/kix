@@ -216,3 +216,33 @@ a record with no index that is too large gets its own advice. Left as
 housekeeping: an operator downgraded below the features annotation, the plan
 and run converting from two listings, and a redeploy that never finalizes a
 complete `Failed` record of the same build.
+
+**The late changes, third pass (2026-11-27).** This review read the forced
+revert rule, `--operator-removed`, the saved-plan value check, and the
+fixes for the second pass.
+
+- A1: the list of fields a forced apply takes was a guess on the client,
+  blind to fields the build spells differently from the server (a port
+  without `protocol`, a Secret's `stringData`), so a value changed after the
+  plan could be overwritten. Fixed: the plan and the run ask the API server
+  with an unforced dry-run apply, and force only when both answers match.
+  Without an answer the object is applied without force. The operator's
+  version of the same blind spot is left as housekeeping.
+- A2: a ceded field taken after the plan was forced back. Fixed: a forced
+  apply strips ceded fields another manager holds on each read. This now
+  covers `--force-conflicts` too, a change with no error, recorded in
+  `changes/deploy-reverts-drift.md`.
+- B1: `--operator-removed` cannot see a running older operator. Kix prints
+  a check to make. Refusing on a label waits for an operator package, so it
+  is housekeeping.
+- B2: the saved-plan check compared shown values and ignored managers.
+  Managers are now compared. Secrets and long values stay a documented gap
+  and a housekeeping entry.
+- C1, C2, C3, C4, C7 fixed: `kix plan --out` refuses `--operator-removed`,
+  the flag says when it found nothing and the `--only` advice was corrected,
+  the take-back continues a dead run of the same build, a recreate applies
+  without force, and a failed read is its own error. C5 (a value no manager
+  owns) and C6 (a killed redeploy of the current record) are housekeeping.
+- The fixes for N1 to N11 held. N3 and N5 have known costs. N9's second half
+  (`revisions` left on the CRD after an uninstall or downgrade) stays in
+  housekeeping.

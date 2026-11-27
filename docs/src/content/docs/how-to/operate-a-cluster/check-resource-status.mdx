@@ -87,12 +87,13 @@ The line names the objects that depend on the missing one. Those objects may
 keep running, but can fail when they next need it, for example when a Pod
 restarts and mounts the ConfigMap.
 
-Run the command the `Next:` line names to create the object again. `kix deploy`
-always recreates any object in the build that is missing from the cluster.
+Run `kix deploy` (shown on the `Next:` line) to recreate the missing object.
+`kix deploy` always recreates any object in the build that is missing from the
+cluster.
 
 When Kix cannot determine a missing object's kind and name, it shows
 `Unknown/(hash: ...)`. This happens on a machine that does not have the
-deployed build locally, when an earlier version of Kix wrote the deployment
+deployed build locally when an earlier version of Kix wrote the deployment
 record without object names and no deploy on this version has converted it yet.
 
 ## Find changed objects

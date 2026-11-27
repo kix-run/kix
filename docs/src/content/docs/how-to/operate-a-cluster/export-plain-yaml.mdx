@@ -28,9 +28,10 @@ under `_cluster`:
 Each filename contains the resource kind and name, such as
 `how-to-app/Deployment-production.yaml`.
 
-The export omits `Activation` and `PackageInstance` objects, and builds do not
-include Kix's CustomResourceDefinitions because Kix installs them directly on
-the cluster when it deploys.
+By default, `kix export` omits `Activation` and `PackageInstance` objects as
+well as Kix's annotations (pass `--with-kix-metadata` to keep them). Kix's own
+CustomResourceDefinitions are also absent from the export because builds do not
+include them (Kix installs them directly on the cluster during deploys).
 
 ## Review the export
 

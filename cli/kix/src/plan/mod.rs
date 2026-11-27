@@ -199,10 +199,12 @@ pub enum PlanError {
     /// cluster's records deploy, so it cannot tell which objects are
     /// orphans.
     #[error(
-        "{0}. Nothing was planned or applied to the cluster, because Kix cannot tell which objects earlier deploys left"
+        "{0}. Nothing was planned or applied to the cluster because Kix cannot determine which objects earlier deploys left behind."
     )]
     Tenancy(Box<crate::cluster::tenancy::Problem>),
-    #[error("cannot read which objects each Kix cluster deploys: {0}")]
+    #[error(
+        "cannot read deployment records to determine which objects each Kix cluster deploys: {0}. Nothing was planned or applied to the cluster."
+    )]
     ReadTenancy(Box<crate::cluster::activation::RecordsError>),
     #[error("cannot check whether another Kix cluster deploys an orphan: {0}")]
     SharedOrphans(Box<FetchError>),
@@ -220,7 +222,7 @@ pub enum PlanError {
     )]
     ReadLive(Box<FetchError>),
     /// This account may neither list nor get objects the plan must read.
-    #[error("{0}. Nothing was planned or applied to the cluster")]
+    #[error("{0}. Nothing was planned or applied to the cluster.")]
     ReadForbidden(Box<crate::cluster::inventory::ReadForbidden>),
     #[error(
         "cannot read the deploy lock (`ActivationHead`) for this Kix cluster: {}. \
@@ -267,7 +269,7 @@ pub enum PlanError {
     #[error(transparent)]
     OperatorFeatures(Box<crate::cluster::activation::features::FeaturesCheckError>),
     #[error(
-        "could not take Kix cluster '{cluster}' back from the Kix operator: {source}. Nothing else was changed on the cluster. Next: run the command again."
+        "could not reclaim Kix cluster '{cluster}' from the Kix operator: {source}. Run the command again."
     )]
     TakeBack {
         cluster: String,
@@ -280,7 +282,8 @@ pub enum PlanError {
          and delete any new resources it creates. Next: deploy the full build with \
          `kix deploy {cluster} --operator`, or take the cluster over from this machine with \
          `kix deploy {cluster}`. If the operator is older than Kix {version}, upgrade it first. If it \
-         was uninstalled, deploy the full build once with `kix deploy {cluster}`, then use `--only`.",
+         was uninstalled, deploy the full build once with `kix deploy {cluster} --operator-removed` \
+         (or `kix deploy {cluster}` if the operator was Kix {version} or newer), then use `--only`.",
         version = crate::version::running()
     )]
     OnlyUnderOperator { cluster: String, record: String },

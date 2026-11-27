@@ -243,7 +243,7 @@ impl ActivationRecord {
                     .map_err(|e| RecordWriteError::KeptOrphans(e.to_string()))?
                     .ok_or_else(|| {
                         RecordWriteError::KeptOrphans(format!(
-                            "current deployment record names kept-orphans revision `{earlier}`, which is missing from the cluster"
+                            "current deployment record names kept-orphans revision `{earlier}`, which is missing from the cluster. Run `kix gc --full-scan` to rebuild it, then deploy again"
                         ))
                     })?;
                 objects.extend(revision.spec.objects);

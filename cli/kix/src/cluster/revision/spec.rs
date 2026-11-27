@@ -316,13 +316,13 @@ impl RevisionSet {
         let instances = self.instances.iter().filter_map(|(key, revision)| {
             too_large(
                 format!("package instance {key}"),
-                "Split the instance into several instances, then plan again.",
+                "Split the instance into smaller package instances, then run the command again.",
                 revision,
             )
         });
         let cluster_level = too_large(
             "cluster-level resources (outside any package instance)".into(),
-            "Move some of these objects into package instances, then plan again.",
+            "Move some of these objects into package instances, then run the command again.",
             &self.cluster_level,
         );
         match instances.chain(cluster_level).next() {

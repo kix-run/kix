@@ -228,7 +228,7 @@ fn reason_lines(writes: &[&ObjectWrite]) -> Vec<String> {
     });
     if n > 0 {
         lines.push(format!(
-            "{} {n} object(s) were applied by stopped deployment record(s) {names}; this deploy reapplies them from the current build",
+            "{} {n} object(s) were applied by failed or `--only` deployment(s) {names}, so this deploy reapplies them from the current build",
             output::yellow("↻"),
         ));
     }
@@ -238,7 +238,7 @@ fn reason_lines(writes: &[&ObjectWrite]) -> Vec<String> {
     });
     if n > 0 {
         lines.push(format!(
-            "{} {n} object(s) were not reached by deployment record(s) {names}, which finished with failures; the deploy applies them",
+            "{} {n} object(s) were not reached during degraded deployment(s) {names}, so this deploy applies them",
             output::yellow("↻"),
         ));
     }
@@ -259,7 +259,7 @@ fn reason_lines(writes: &[&ObjectWrite]) -> Vec<String> {
     let n = count(|r| matches!(r, WriteReason::HeldByOtherCluster { .. }));
     if n > 0 {
         lines.push(format!(
-            "{} {n} object(s) share fields with another Kix cluster; this deploy applies them without force, sharing ownership when values match and stopping on a conflict when they differ",
+            "{} {n} object(s) share fields with another Kix cluster, so this deploy applies them without force (co-owning matching values and stopping if values conflict)",
             output::yellow("↻"),
         ));
     }
@@ -573,7 +573,7 @@ fn drift_unchecked_line(plan: &Plan) -> Option<String> {
     match plan.drift_unchecked {
         0 => None,
         n => Some(format!(
-            "{n} object(s) not checked for drift: Kix has no recorded applied hash for them, or Kubernetes records no Kix-owned fields. `kix deploy` reapplies objects without a recorded hash and records them."
+            "{n} object(s) not checked for drift: Kix has no recorded applied hash for them, or Kubernetes records no Kix-owned fields. `kix deploy` reapplies objects that have no recorded hash and saves their hashes."
         )),
     }
 }

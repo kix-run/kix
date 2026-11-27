@@ -317,7 +317,7 @@ fn next_step(c: &ClusterStatus) -> String {
     }
     if !kix.is_empty() {
         line.push_str(&format!(
-            " It will not overwrite fields owned by {} (applied by another Kix cluster); update the cluster definitions to match.",
+            " `kix deploy` will not overwrite fields owned by {} (another Kix cluster or an earlier version of Kix). Update the cluster definitions to match.",
             and_list(&kix),
         ));
     }

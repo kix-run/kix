@@ -95,8 +95,8 @@ pub enum Refusal {
     /// not list some kinds.
     #[error(
         "[K9558] cannot convert deployment record `{record}` to PackageInstanceRevision resources because this Kubernetes account cannot `list` {kinds} across the cluster. Nothing was changed on the cluster. \
-         An earlier version of Kix wrote `{record}` without full object names, so Kix must list all Kix-labeled objects on the cluster to avoid missing {kinds}. \
-         Next: grant this account cluster-wide `list` permission on {kinds}, then run the command again",
+         Earlier versions of Kix wrote `{record}` without full object names, so this one-time upgrade must list all Kix-labeled objects across the cluster. \
+         Next: grant this account cluster-wide `list` permission on {kinds} (or run this first deploy once with an account that has it), then run the command again. Later deploys do not need cluster-wide `list`",
         kinds = .kinds.join(", ")
     )]
     NotListed { record: String, kinds: Vec<String> },

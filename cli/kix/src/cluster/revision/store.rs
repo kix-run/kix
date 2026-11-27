@@ -50,7 +50,7 @@ pub enum RevisionError {
     #[error(transparent)]
     Read(#[from] ReadError),
     #[error(
-        "the Kubernetes API server stored {KIND} `{name}` with a different `spec` than Kix sent because CustomResourceDefinition `{crd}` dropped or modified fields. Check whether `{crd}` was edited outside Kix or installed by another version of Kix",
+        "the Kubernetes API server stored {KIND} `{name}` with a different `spec` than Kix sent because CustomResourceDefinition `{crd}` dropped or modified fields. Check whether `{crd}` was edited outside Kix or installed by another version of Kix. Kix does not rewrite an edited `{crd}`, so revert any out-of-band changes to it before trying again",
         crd = crd_name()
     )]
     StoredDifferently { name: String },
@@ -158,7 +158,7 @@ impl Revisions {
 
     /// Read every revision on the Kubernetes cluster, of every Kix cluster.
     pub async fn list_all(&self) -> Result<Listed, RevisionError> {
-        self.list_with(&ListParams::default(), "every Kix cluster".into())
+        self.list_with(&ListParams::default(), "all Kix clusters".into())
             .await
     }
 

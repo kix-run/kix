@@ -115,7 +115,7 @@ pub enum CleanError {
         source: kube::Error,
     },
     #[error(
-        "deployment record `{record}` cannot be read by this version of Kix ({source}); a newer version of Kix likely wrote it. Kix left all PackageInstanceRevision objects in place"
+        "deployment record `{record}` cannot be read by this version of Kix ({source}), likely because a newer version of Kix wrote it. Kix left all PackageInstanceRevision objects in place"
     )]
     UnreadableMap {
         record: String,

@@ -60,20 +60,20 @@ pub enum ApplyError {
 
     /// What a forced apply would take back is not what the plan showed.
     #[error(
-        "{resource} was not updated because the fields Kix would take back from other field managers changed after the plan was made. Kix overwrites only the fields and live values shown in the plan. Run the command again to build a fresh plan from the live cluster."
+        "{resource} was not updated because the fields Kix would take back changed on the cluster after the plan was made. Kix overwrites only the fields, field managers, and live values shown in the plan. Run the command again to review a fresh plan."
     )]
     ChangedSincePlan { resource: String },
 
     /// A forced apply found the object changed between its read and its
     /// write each time it tried.
     #[error(
-        "{resource} was not updated because another writer modified it on each of the {TAKEOVER_ATTEMPTS} times Kix read it to take fields back. Stop what keeps updating {resource} (or cede those fields with `ownership.cede`), then run the deploy again."
+        "{resource} was not updated because another writer modified it on each of the {TAKEOVER_ATTEMPTS} times Kix read it to take fields back. Stop whatever keeps updating {resource} (or list those fields in `ownership.cede`), then run the deploy again."
     )]
     KeepsChanging { resource: String },
 
     /// The read a forced apply judges the object by failed.
     #[error(
-        "{resource} was not updated because Kix could not read it to check which fields it would take back from other field managers: {}. Check the connection to the cluster and that this account may read {resource}, then run the deploy again.", reported(.source)
+        "{resource} was not updated because Kix could not read it before taking fields back: {}. Check your cluster connection and verify that this account has `get` permission on {resource}, then run the deploy again.", reported(.source)
     )]
     ReadFailed {
         resource: String,
@@ -191,7 +191,7 @@ fn kix_cluster_conflict(
         message.push_str(&line);
     }
     message.push_str(&format!(
-        " Each Kix cluster renders {resource} with different values, and Kubernetes rejects overwriting fields owned by another Kix cluster's field manager unless forced. Make the definitions agree, or deploy {resource} from only one Kix cluster. Running with `--force-conflicts` takes ownership for this Kix cluster, but {next} will be refused in the same way. Kubernetes reported: {}",
+        " Make the definitions agree, or deploy {resource} from only one Kix cluster. Passing `--force-conflicts` takes ownership for this Kix cluster, and {next} will be refused in the same way. Kubernetes reported: {}",
         reported(source)
     ));
     message

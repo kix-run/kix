@@ -345,8 +345,8 @@ A timeout ends the CLI only. The operator keeps working on the record.
   CustomResourceDefinitions (`activations.kix.run`, `packageinstances.kix.run`,
   `activationheads.kix.run`, and `packageinstancerevisions.kix.run`) and updates
   any CRD definition older than its own. Your Kubernetes account must be able
-  to list `Activation` records; `--operator` commands check this before making
-  changes.
+  to list `Activation` records, and `--operator` commands check this before
+  making changes.
 - The operator watches the `kix.run` API group.
 - The operator runs a matching or newer version of Kix, its Kubernetes account
   can patch CustomResourceDefinition `activations.kix.run`, and your account
@@ -355,7 +355,7 @@ A timeout ends the CLI only. The operator keeps working on the record.
   `kix deploy --operator` and `kix rollback --operator` check that annotation
   before changing anything and stop with `[K9557]` if any of the three
   features is missing.
-- Upgrade the operator before running an upgraded `kix` CLI against its
+- Upgrade the operator before running an upgraded Kix against its
   clusters. An older operator deploys without taking the deploy lock and writes
   the retired `kix.run/activations` and `kix.run/applied-hash` annotations back
   onto every resource it applies. Every command that modifies a Kix cluster
@@ -367,9 +367,11 @@ A timeout ends the CLI only. The operator keeps working on the record.
 - Because Kix cannot distinguish an older running operator from one that was
   uninstalled, uninstalling an older operator leaves its Kix clusters blocked
   with `[K9557]`. Run `kix deploy <cluster> --operator-removed` once per
-  cluster to reclaim it before planning; subsequent commands need no flag (see
+  cluster to reclaim it before planning, after which commands need no flag (see
   [Take a cluster back from a removed operator](/docs/reference/cli/deploy/#take-a-cluster-back-from-a-removed-operator)).
-  Never pass `--operator-removed` while the operator is still running.
+  Never pass `--operator-removed` while the operator is still running. Kix
+  cannot check this for you, so after taking a cluster back it prints a
+  `kubectl` command that looks for operator pods.
 - The operator's Kubernetes account must be able to `get`, `create`, `update`,
   and `patch` CustomResourceDefinitions (to install and update Kix's CRDs and
   set `kix.run/operator-features`); `get`, `list`, `create`, and `update`

@@ -152,7 +152,7 @@ fn why(write: &ObjectWrite) -> String {
             format!("applied by deployment record {record} before it stopped")
         }
         Some(WriteReason::LeftByDegraded { record }) => {
-            format!("not reached by deployment record {record}, which finished with failures")
+            format!("not reached during degraded deployment {record}")
         }
         Some(WriteReason::AppliedHashMissing) => {
             "Kix has no recorded applied hash for this object".to_string()
@@ -173,7 +173,7 @@ fn why(write: &ObjectWrite) -> String {
         Some(WriteReason::HeldByOtherCluster { changed_by }) => {
             let by: Vec<&str> = changed_by.iter().map(|o| o.manager.as_str()).collect();
             format!(
-                "shares fields with {}; the deploy applies it without force",
+                "shares fields with {} (applied without force)",
                 by.join(", ")
             )
         }

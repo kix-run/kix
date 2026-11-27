@@ -409,7 +409,7 @@ pub(crate) enum RecordWriteError {
     /// The applied hashes of the objects the run applied could not be
     /// written to the revisions.
     #[error(
-        "cannot record applied hashes on PackageInstanceRevision resources: {0}. The next deploy will treat those objects' applied hashes as unknown"
+        "could not write `status.applied` on PackageInstanceRevision resources: {0}. Objects without a recorded applied hash will be reapplied on the next deploy"
     )]
     Applied(super::revision::keep::CleanError),
     /// The list of objects a deploy left on the cluster could not be read

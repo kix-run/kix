@@ -1561,7 +1561,7 @@ mod tests {
                     .unwrap_or_else(|e| e.partial().failures.clone())
             );
             assert!(
-                failure.contains("changed after the plan was made"),
+                failure.contains("changed on the cluster after the plan was made"),
                 "{failure}"
             );
             assert_eq!(
@@ -1633,7 +1633,7 @@ mod tests {
             });
             let result = cli_run(&api, checked).await;
             assert!(
-                failures_of(&result).contains("changed after the plan was made"),
+                failures_of(&result).contains("changed on the cluster after the plan was made"),
                 "{}",
                 failures_of(&result)
             );
@@ -1781,7 +1781,7 @@ mod tests {
             edit(&api, 9443);
             let result = cli_run(&api, checked).await;
             assert!(
-                failures_of(&result).contains("changed after the plan was made"),
+                failures_of(&result).contains("changed on the cluster after the plan was made"),
                 "{}",
                 failures_of(&result)
             );
@@ -1840,7 +1840,7 @@ mod tests {
             });
             let result = cli_run(&api, checked).await;
             assert!(
-                failures_of(&result).contains("changed after the plan was made"),
+                failures_of(&result).contains("changed on the cluster after the plan was made"),
                 "{}",
                 failures_of(&result)
             );

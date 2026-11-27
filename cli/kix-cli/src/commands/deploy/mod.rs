@@ -864,7 +864,7 @@ async fn run_deploy_async(
                 plan::print_shared(checked.shared_orphans());
                 plan::print_reruns(checked.plan(), &[RerunReason::LastRunFailed]);
                 crate::say!(
-                    "{} Planned again against the live cluster: the plan writes and deletes the same objects you confirmed.",
+                    "{} Checked against the live cluster: the live plan writes and deletes the same objects you confirmed.",
                     output::dim("="),
                 );
                 let c = replanned.connected;

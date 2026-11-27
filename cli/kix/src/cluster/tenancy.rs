@@ -61,7 +61,7 @@ pub enum Problem {
     #[error(
         "deployment record `{record}` of Kix cluster '{cluster}' references {} `{revision}`, which is missing from the cluster. {}",
         revision::KIND,
-        remedy(*kept)
+        remedy(*kept, cluster)
     )]
     MissingRevision {
         cluster: String,
@@ -73,7 +73,7 @@ pub enum Problem {
     #[error(
         "deployment record `{record}` of Kix cluster '{cluster}' references {} `{revision}`, which Kix cannot read: {reason}. {}",
         revision::KIND,
-        remedy(*kept)
+        remedy(*kept, cluster)
     )]
     UnreadableRevision {
         cluster: String,
@@ -83,7 +83,7 @@ pub enum Problem {
         kept: bool,
     },
     #[error(
-        "deployment record `{record}` of Kix cluster '{cluster}' cannot be read by this version of Kix ({source}); a newer version of Kix likely wrote it, so Kix cannot determine which objects it deploys"
+        "deployment record `{record}` of Kix cluster '{cluster}' cannot be read by this version of Kix ({source}), likely because a newer version of Kix wrote it. Upgrade Kix so it can determine which objects `{record}` deploys"
     )]
     UnreadableMap {
         cluster: String,
@@ -91,24 +91,26 @@ pub enum Problem {
         source: revision::UnreadableMap,
     },
     #[error(
-        "cannot list {} objects: {reason}. Falling back to legacy tracking on deployed objects and deployment records; check that this account has `list` permission on `{}`",
+        "cannot list {} objects: {reason}. Check your cluster connection and verify that this account has `list` permission on `{}`",
         head::KIND,
         head::crd_name()
     )]
     Heads { reason: String },
     #[error(
-        "cannot list {} objects: {reason}. Check that this account has `list` permission on `{}`",
+        "cannot list {} objects: {reason}. Check your cluster connection and verify that this account has `list` permission on `{}`",
         revision::KIND,
         revision::crd_name()
     )]
     Revisions { reason: String },
 }
 
-fn remedy(kept: bool) -> &'static str {
+fn remedy(kept: bool, cluster: &str) -> String {
     if kept {
-        "That revision lists orphaned objects kept from earlier deploys, so Kix cannot determine which objects remain to clean up without a full scan"
+        format!(
+            "That revision lists orphaned objects kept from earlier deploys. Run `kix gc --full-scan {cluster}` to rebuild it"
+        )
     } else {
-        "Redeploying that record's build recreates it"
+        "Redeploying that record's build recreates it".to_string()
     }
 }
 

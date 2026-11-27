@@ -89,7 +89,7 @@ pub fn decide(mine: u32, live: Option<&Live>) -> Action {
 #[derive(Debug, thiserror::Error)]
 pub enum CrdError {
     #[error(
-        "[K9557] cannot read CustomResourceDefinition `{name}` ({holds}): {}. Nothing was changed on the cluster. Grant this account `get` permission on `{name}`, then try again",
+        "[K9557] cannot read CustomResourceDefinition `{name}` ({holds}): {}. Nothing was changed on the cluster. Check your cluster connection and verify that this account has `get` permission on `{name}`, then run the command again",
         describe(.source)
     )]
     Read {
@@ -99,7 +99,7 @@ pub enum CrdError {
         source: kube::Error,
     },
     #[error(
-        "[K9557] cannot {action} CustomResourceDefinition `{name}` ({holds}): {}. Grant this account `create` and `update` permissions on `customresourcedefinitions` (or have a cluster administrator run this command once, and grant this account `get` on `{name}` and {verbs} on its objects)",
+        "[K9557] cannot {action} CustomResourceDefinition `{name}` ({holds}): {}. No workloads or deployment records were changed. Grant this account `create` and `update` permissions on `customresourcedefinitions`, or ask a cluster administrator to run this command once (this account still needs `get` on `{name}` and {verbs} on its objects)",
         describe(.source)
     )]
     Write {
@@ -111,13 +111,13 @@ pub enum CrdError {
         source: kube::Error,
     },
     #[error(
-        "CustomResourceDefinition `{name}` on this cluster does not serve API version {}, which Kix {version} requires; a newer version of Kix installed it. Nothing was changed on the cluster. Upgrade Kix to match or exceed the version that last deployed this cluster",
+        "CustomResourceDefinition `{name}` on this cluster was installed by a newer version of Kix and does not serve API version {}, which Kix {version} requires. Nothing was changed on the cluster. Upgrade Kix to match or exceed the version that last deployed this cluster",
         .versions.join(", "),
         version = crate::version::running()
     )]
     NotServed { name: String, versions: Vec<String> },
     #[error(
-        "wrote CustomResourceDefinition `{name}`, but the Kubernetes API server did not start serving it within {} seconds. Wait a moment and run the command again",
+        "wrote CustomResourceDefinition `{name}`, but the Kubernetes API server did not start serving it within {} seconds. No workloads or deployment records were changed. Wait a moment and run the command again",
         ESTABLISH_WAIT.as_secs()
     )]
     NotEstablished { name: String },
