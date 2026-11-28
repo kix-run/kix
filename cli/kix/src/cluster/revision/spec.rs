@@ -458,6 +458,11 @@ pub enum ReadError {
         super::KIND
     )]
     Newer { name: String, format: u32 },
+    #[error(
+        "{} `{name}` has an invalid `status.applied` field: {reason}",
+        super::KIND
+    )]
+    UnreadableApplied { name: String, reason: String },
 }
 
 /// A revision too large for the API server to store.
@@ -481,7 +486,8 @@ impl ReadError {
         match self {
             ReadError::NameMismatch { name, .. }
             | ReadError::Malformed { name, .. }
-            | ReadError::Newer { name, .. } => name,
+            | ReadError::Newer { name, .. }
+            | ReadError::UnreadableApplied { name, .. } => name,
         }
     }
 }
@@ -521,16 +527,21 @@ impl Revision {
             .data
             .get("spec")
             .ok_or_else(|| malformed("missing `spec`".into()))?;
-        let spec: RevisionSpec = serde_json::from_value(spec_value.clone())
-            .map_err(|e| malformed(format!("`spec` could not be parsed: {e}")))?;
-        // A later format may hold fields this version drops when it parses
-        // the `spec`, which would change the name computed from it.
-        if spec.format > FORMAT {
+        // A later format may hold fields this version cannot parse, or drops
+        // when it parses the `spec`, which would change the name computed
+        // from it. So the format is read before the rest.
+        if let Some(format) = spec_value
+            .get("format")
+            .and_then(Value::as_u64)
+            .filter(|f| *f > u64::from(FORMAT))
+        {
             return Err(ReadError::Newer {
                 name,
-                format: spec.format,
+                format: u32::try_from(format).unwrap_or(u32::MAX),
             });
         }
+        let spec: RevisionSpec = serde_json::from_value(spec_value.clone())
+            .map_err(|e| malformed(format!("`spec` could not be parsed: {e}")))?;
         let expected = name_of(&spec);
         if expected != name {
             return Err(ReadError::NameMismatch { name, expected });
@@ -539,8 +550,12 @@ impl Revision {
         spec.objects.retain(|o| !o.is_kix_crd());
         let applied = match obj.data.pointer("/status/applied") {
             None | Some(Value::Null) => BTreeMap::new(),
-            Some(value) => serde_json::from_value(value.clone())
-                .map_err(|e| malformed(format!("`status.applied` could not be parsed: {e}")))?,
+            Some(value) => {
+                serde_json::from_value(value.clone()).map_err(|e| ReadError::UnreadableApplied {
+                    name: name.clone(),
+                    reason: e.to_string(),
+                })?
+            }
         };
         Ok(Revision {
             name,

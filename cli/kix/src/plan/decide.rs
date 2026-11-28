@@ -238,12 +238,14 @@ impl Ledger {
     /// Read the ledger of the Kix cluster `tenancy` is read for, from the
     /// revisions of its records. Pass a tenancy that holds the conversion a
     /// run writes first ([`Tenancy::with_conversion`]), so every record it
-    /// reads has a map.
+    /// reads has a map, and that reads each lost revision a build names
+    /// from that build ([`Tenancy::with_rebuilt`]).
     ///
     /// Refuse when `tenancy` could not read something about this Kix
     /// cluster or about every Kix cluster ([`Tenancy::complete_for_own`]),
-    /// such as the revision list or a record's map. Kix could not tell then
-    /// which objects its records name.
+    /// such as the revision list, a record's map, or a revision no build
+    /// at hand names. Kix could not tell then which objects its records
+    /// name.
     ///
     /// With `take_in_stopped`, the revisions of each `Failed` or `Partial`
     /// record name objects the deploy takes in. Without it, another deploy
