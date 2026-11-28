@@ -29,9 +29,9 @@ them:
 ```text
 ...
 how-to-app/production
-  Deployment how-to-app/production  changed since deploy (spec.replicas by kubectl)
+  Deployment.apps how-to-app/production  changed since deploy (spec.replicas by kubectl)
 
-16 resources: 15 ok, 1 changed.
+12 resources: 11 ok, 1 changed.
 Next: run `kix deploy how-to-application` to restore what is missing or changed, or `kix plan how-to-application` to preview the changes first. The deploy takes back the fields that kubectl owns.
 ```
 
@@ -74,7 +74,7 @@ Run the drift check again:
 
 ```text
 ...
-16 resources: 16 ok.
+12 resources: 12 ok.
 ```
 
 No object should be changed, and the command exits `0`. Run `kix status`

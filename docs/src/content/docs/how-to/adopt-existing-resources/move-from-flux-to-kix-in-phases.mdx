@@ -129,7 +129,7 @@ Start with `instances.web.web` enabled in `clusters/test.nix` and follow these s
      ]}
    />
 
-   `kix deploy test` prints `Deploy complete: 5 created, 6 configured, 0 unchanged, 0 failed` (the five created resources are Kix's two CRDs and its `PackageInstance` records). Both `kustomize-controller` and `kix` now co-own the shared fields on `web`, and Flux's `kustomize.toolkit.fluxcd.io/*` labels remain on the objects.
+   `kix deploy test` updates the existing `web` objects in place (`configured` on the `Deploy complete:` line) and creates `web`'s `PackageInstance` record (`created`). Both `kustomize-controller` and `kix` now co-own the shared fields on `web`, and Flux's `kustomize.toolkit.fluxcd.io/*` labels remain on the objects.
 
 4. Delete the `web` `Kustomization` from Git and push while `web` stays suspended. Flux deletes the suspended `Kustomization` object and leaves the `web` workloads running.
 
@@ -394,14 +394,12 @@ Once every workload layer runs under Kix and nothing reads `cluster-vars` in `fl
    `kix plan test --reconcile` prints `Plan: 5 unchanged`, and `kix status test` reports every resource healthy:
 
    ```text
-     api/api                         3 resources  ok
-     kube-system/platform-dns        1 resource   ok
-     kube-system/platform-storage    1 resource   ok
-     podinfo/podinfo                 3 resources  ok
-     web/web                         4 resources  ok
-     (cluster-level)                 6 resources  ok
+     api/api            3 resources  ok
+     podinfo/podinfo    3 resources  ok
+     web/web            4 resources  ok
+     (cluster-level)    4 resources  ok
 
-   18 resources: 18 ok.
+   14 resources: 14 ok.
    ```
 
 ## Optional: export YAML for Flux to apply

@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix plan how-to-adoption-takeover",
-      "stdout": "Building cluster '\u001b[1mhow-to-adoption-takeover\u001b[0m'...\nCluster \u001b[1mhow-to-adoption-takeover\u001b[0m: 9 manifests\nConnecting to context kind-kix-docs (https://127.0.0.1:42793)...\nCurrent deployment: \u001b[1mhow-to-adoption-takeover-1wv1i1x4fclp\u001b[0m (build 1wv1i1x4...)\n\n  Plan: \u001b[2m3 unchanged\u001b[0m\n\n\u001b[1mObjects:\u001b[0m 0 to write, 0 to delete \u001b[2m(sha256:187cec1a8007b0b561a0732a533677801153428153dd70ecfebce19c0ab6c563)\u001b[0m\n",
+      "stdout": "Building cluster '\u001b[1mhow-to-adoption-takeover\u001b[0m'...\nCluster \u001b[1mhow-to-adoption-takeover\u001b[0m: 9 manifests\nConnecting to context kind-kix-docs (https://127.0.0.1:39099)...\nCurrent deployment: \u001b[1mhow-to-adoption-takeover-1wv1i1x4fclp\u001b[0m (build 1wv1i1x4...)\n\n  Plan: \u001b[2m3 unchanged\u001b[0m\n\n\u001b[1mObjects:\u001b[0m 0 to write, 0 to delete \u001b[2m(sha256:187cec1a8007b0b561a0732a533677801153428153dd70ecfebce19c0ab6c563)\u001b[0m\n",
       "stderr": "",
-      "stdoutDrift": "\nBuilding cluster 'how-to-adoption-takeover'...\nCluster how-to-adoption-takeover: 9 manifests\nConnecting to context kind-kix-docs (https://127.0.0.1:42793)...\nCurrent deployment: how-to-adoption-takeover-<activation-id> (build 1wv1i1x4...)\nObjects: 0 to write, 0 to delete (sha256:187cec1a8007b0b561a0732a533677801153428153dd70ecfebce19c0ab6c563)\nPlan: 3 unchanged\n",
+      "stdoutDrift": "\nBuilding cluster 'how-to-adoption-takeover'...\nCluster how-to-adoption-takeover: 9 manifests\nConnecting to context kind-kix-docs (https://127.0.0.1:39099)...\nCurrent deployment: how-to-adoption-takeover-<activation-id> (build 1wv1i1x4...)\nObjects: 0 to write, 0 to delete (sha256:187cec1a8007b0b561a0732a533677801153428153dd70ecfebce19c0ab6c563)\nPlan: 3 unchanged\n",
       "stderrDrift": "",
       "exitCode": 0
     }

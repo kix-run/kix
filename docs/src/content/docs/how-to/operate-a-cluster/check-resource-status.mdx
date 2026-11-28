@@ -32,13 +32,11 @@ When everything is in order, the output looks like this:
 Cluster how-to-application on Kubernetes v1.35.0 (context kind-kix-demo)
 Last deploy: how-to-application-6rhi3wpk9iml  Active  2m ago
 
-  how-to-app/preview              4 resources  ok
-  how-to-app/production           6 resources  ok
-  kube-system/platform-dns        1 resource   ok
-  kube-system/platform-storage    1 resource   ok
-  (cluster-level)                 4 resources  ok
+  how-to-app/preview       4 resources  ok
+  how-to-app/production    6 resources  ok
+  (cluster-level)          2 resources  ok
 
-16 resources: 16 ok.
+12 resources: 12 ok.
 ```
 
 Kix reads the Kubernetes cluster of the current kubectl context. Pass
@@ -74,12 +72,12 @@ An object is missing when the last deploy made it and it is gone from the
 cluster, for example after someone ran `kubectl delete`:
 
 ```text
-  how-to-app/production           6 resources  1 missing
+  how-to-app/production    6 resources  1 missing
 
 how-to-app/production
   ConfigMap how-to-app/production  missing, needed by Deployment how-to-app/production
 
-16 resources: 15 ok, 1 missing.
+12 resources: 11 ok, 1 missing.
 Next: run `kix deploy how-to-application` to restore what is missing or changed, or `kix plan how-to-application` to preview the changes first.
 ```
 
@@ -111,16 +109,14 @@ to one with `kubectl scale`:
 Cluster how-to-application on Kubernetes v1.35.0 (context kind-kix-demo)
 Last deploy: how-to-application-6rhi3wpk9iml  Active  5m ago
 
-  how-to-app/preview              4 resources  ok
-  how-to-app/production           6 resources  1 changed
-  kube-system/platform-dns        1 resource   ok
-  kube-system/platform-storage    1 resource   ok
-  (cluster-level)                 4 resources  ok
+  how-to-app/preview       4 resources  ok
+  how-to-app/production    6 resources  1 changed
+  (cluster-level)          2 resources  ok
 
 how-to-app/production
-  Deployment how-to-app/production  changed since deploy (spec.replicas by kubectl)
+  Deployment.apps how-to-app/production  changed since deploy (spec.replicas by kubectl)
 
-16 resources: 15 ok, 1 changed.
+12 resources: 11 ok, 1 changed.
 Next: run `kix deploy how-to-application` to restore what is missing or changed, or `kix plan how-to-application` to preview the changes first. The deploy takes back the fields that kubectl owns.
 ```
 

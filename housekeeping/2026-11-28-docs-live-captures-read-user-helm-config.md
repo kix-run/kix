@@ -1,0 +1,3 @@
+# 2026-11-28 · `docs/nix/captures-live.nix` · The live captures run reads the maintainer's own Helm configuration.
+
+The `helm upgrade --install --repo ...` step of `how-to/adoption-helm-takeover` failed with `Error: no cached repo found. (try 'helm repo update'): open /scratch/cache/helm/repository/grafana-index.yaml`. Helm loaded the repositories listed in `~/.config/helm/repositories.yaml`, and one of them had no index in the cache. The whole run then stops with exit 7 and writes no sidecar, even for the groups captured before it. Setting `HELM_CONFIG_HOME`, `HELM_CACHE_HOME`, and `HELM_DATA_HOME` to empty folders made the run work. The `helm` invocation in `invocationFor` sets only `HELM_PLUGINS=`.
