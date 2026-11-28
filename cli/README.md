@@ -1300,9 +1300,13 @@ deploy` both refuse, naming the objects, a build whose plan leaves one out:
 - Not in the plan at all: the Activation and PackageInstance CRDs, which
   builds of earlier releases carry. The program installs them
   (`own_crds`), and every loaded build (`eval::stamp`), live sweep
-  (`inventory::sweep_managed`), snapshot (`serialize::load_manifests_from_dir`)
-  and upgrade comparison (`upgrade::compare::load_dir`) leaves them out
-  (`lifecycle::is_kix_crd`).
+  (`inventory::sweep_managed`), snapshot (`serialize::load_manifests_from_dir`),
+  upgrade comparison (`upgrade::compare::load_dir`), revision read
+  (`Revision::from_object`), conversion of an older record
+  (`revision::convert`), and status view (`observe::view`) leaves them out
+  (`lifecycle::is_kix_crd`). An earlier release recorded them as objects of
+  a deploy, so without the last three, plans and `kix gc` would list them as
+  kept orphans and `kix status` would report them missing.
 
 The result is `CheckedPlan::objects`, which the document carries as
 `objects` (`writes[]`: `kind`, `namespace`, `name`, `store_hash`,

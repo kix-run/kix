@@ -13,11 +13,12 @@ use crate::cluster::discovery;
 use crate::cluster::fake_api::FakeApi;
 use crate::cluster::field_manager::{FieldManager, LEGACY};
 use crate::cluster::fieldsv1;
-use crate::cluster::revision::{Revision, Revisions};
+use crate::cluster::revision::{REBUILT, Revision, RevisionObject, RevisionSpec, Revisions, Slot};
 use crate::cluster::scheduler::{self, DeployError, SchedulerConfig};
 use crate::eval::store_graph::StoreGraph;
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{self, PHASE_ACTIVE, PHASE_FAILED};
+use crate::manifest::types::ResourceId;
 use crate::plan::{CheckedPlan, Planner};
 
 fn config_map(name: &str, value: &str) -> Value {
@@ -1339,4 +1340,142 @@ async fn a_redeploy_of_the_converted_record_keeps_its_applied_hashes() {
     deploy(&api, "a", &old).await.unwrap();
     let again = plan(&api, "a", &old).await;
     assert!(written(&again).is_empty(), "{:?}", written(&again));
+}
+
+/// Put on `api` the Activation and PackageInstance definitions as an earlier
+/// release left them: applied from a build under the field manager `kix`,
+/// with the notes that name the records `hashes`.
+fn own_crds_an_earlier_kix_applied(api: &FakeApi, hashes: &[&str]) -> Vec<ResourceId> {
+    [keys::ACTIVATIONS_CRD, keys::PACKAGE_INSTANCES_CRD]
+        .into_iter()
+        .map(|name| {
+            api.insert(json!({
+                "apiVersion": "apiextensions.k8s.io/v1",
+                "kind": "CustomResourceDefinition",
+                "metadata": {
+                    "name": name,
+                    "labels": { "app.kubernetes.io/managed-by": "kix" },
+                    "annotations": {
+                        (keys::ACTIVATIONS): hashes.join(","),
+                        (keys::IDENTITY_HASH): format!("crd-{name}"),
+                        (keys::PACKAGE): "kix",
+                    },
+                },
+                "spec": { "versions": [{ "name": "v1alpha1", "served": true, "storage": true }] },
+                "status": { "conditions": [{ "type": "Established", "status": "True" }] },
+            }));
+            ResourceId {
+                group: "apiextensions.k8s.io".into(),
+                kind: "CustomResourceDefinition".into(),
+                namespace: crate::manifest::types::CLUSTER_SCOPED.into(),
+                name: name.into(),
+            }
+        })
+        .collect()
+}
+
+/// A kept-orphans revision an earlier release wrote can name Kix's own
+/// definitions, which left the build when Kix began to install them itself.
+/// The plan does not list them as orphans, `kix gc` does not read them as
+/// kept orphans, and the deploy's kept-orphans revision no longer names
+/// them. The ordinary orphan beside them stays kept.
+#[tokio::test]
+async fn kixs_own_definitions_are_never_kept_orphans() {
+    let api = FakeApi::new([]);
+    api.track_owners();
+    let build = release("a", "a-r1", &[config_map("web", "1")]);
+    deploy(&api, "a", &build).await.unwrap();
+    let crds = own_crds_an_earlier_kix_applied(&api, &["older"]);
+    api.insert(config_map("gone", "1"));
+    let gone = ResourceId::from_value(&config_map("gone", "1"));
+    let objects = crds
+        .iter()
+        .chain([&gone])
+        .map(|rid| RevisionObject::of_id(REBUILT, rid))
+        .collect();
+    let kept = Revision::new(RevisionSpec::new("a", Slot::KeptOrphans, objects));
+    let client = api.client();
+    Revisions::new(&client).create(&kept).await.unwrap();
+    let record = record_of(&build)["metadata"]["name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    api.patch_object(lifecycle::RECORD_KIND, &record, |o| {
+        o["status"]["revisions"]["keptOrphans"] = json!(kept.name);
+    });
+
+    let checked = plan(&api, "a", &build).await;
+    assert_eq!(checked.orphans(), std::slice::from_ref(&gone));
+
+    let records = Records::open(
+        &client,
+        &discovery::discover_resources(&client).await.unwrap(),
+    )
+    .unwrap()
+    .into_records()
+    .unwrap();
+    let current = records.get(&record).await.unwrap().unwrap();
+    let baseline = crate::plan::baseline::Baseline::of_record(&records, "a", &current, &|_| {})
+        .await
+        .unwrap();
+    let listed: Vec<ResourceId> = baseline
+        .kept
+        .listed
+        .iter()
+        .flatten()
+        .map(RevisionObject::resource_id)
+        .collect();
+    assert_eq!(listed, std::slice::from_ref(&gone));
+
+    deploy(&api, "a", &build).await.unwrap();
+    let (_, kept) = revisions_of(&api, "a", &build).await;
+    assert_eq!(named(&kept.into_iter().collect::<Vec<_>>()), ["gone"]);
+}
+
+/// A record an older Kix wrote names Kix's own definitions in its package
+/// index. The deploy that gives it revisions leaves them out.
+#[tokio::test]
+async fn the_conversion_of_an_older_record_leaves_out_kixs_own_definitions() {
+    let api = FakeApi::new([]);
+    api.track_owners();
+    let old = release("a", "a-r0", &[config_map("web", "1")]);
+    deployed_by_an_older_kix(&api, "a", &old, PHASE_ACTIVE, &[]).await;
+    let hash = hash_of(&record_of(&old));
+    let crds = own_crds_an_earlier_kix_applied(&api, &[&hash]);
+    let mut index = crate::eval::package_index::RecordPackageIndex::of(&old);
+    for rid in &crds {
+        let crd_hash = format!("crd-{}", rid.name);
+        index.cluster_level.push(crd_hash.clone());
+        index.names.insert(
+            crd_hash.clone(),
+            crate::eval::package_index::ObjectName::of(rid),
+        );
+        if let Some(groups) = &mut index.groups {
+            groups.insert(crd_hash, rid.group.clone());
+        }
+    }
+    let record = record_of(&old)["metadata"]["name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    api.patch_object(lifecycle::RECORD_KIND, &record, |o| {
+        o["status"]["packageIndex"] = index.to_value();
+    });
+
+    let new = release("a", "a-r1", &[config_map("web", "2")]);
+    let checked = plan(&api, "a", &new).await;
+    assert!(checked.orphans().is_empty(), "{:?}", checked.orphans());
+
+    let client = api.client();
+    let discovery = discovery::discover_resources(&client).await.unwrap();
+    let records = Records::open(&client, &discovery)
+        .unwrap()
+        .into_records()
+        .unwrap();
+    crate::cluster::revision::convert::run(&client, &records, &discovery, "a", &Default::default())
+        .await
+        .unwrap();
+    let (built, kept) = revisions_of(&api, "a", &old).await;
+    assert_eq!(named(&built), ["web"]);
+    assert!(kept.is_none(), "{kept:?}");
 }

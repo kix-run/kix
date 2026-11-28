@@ -369,7 +369,9 @@ fn named_by(record: &Record, live: &Live<'_>) -> BTreeMap<Option<String>, Vec<Re
         out.entry(None).or_default().extend(noted);
     }
     for objects in out.values_mut() {
-        objects.retain(|o| !lifecycle::is_record_kind(o.resource_id().group_kind()));
+        objects.retain(|o| {
+            !lifecycle::is_record_kind(o.resource_id().group_kind()) && !o.is_kix_crd()
+        });
         *objects = std::mem::take(objects)
             .into_iter()
             .map(|o| live.with_noted_needs(o))

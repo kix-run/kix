@@ -33,7 +33,7 @@ use super::tenancy::Problem;
 use crate::eval::package_index::{IndexedName, ObjectName, RecordPackageIndex};
 use crate::eval::store_graph::{self, StoreEntry};
 use crate::manifest::keys;
-use crate::manifest::lifecycle::{Lifecycle, lifecycle_of_live};
+use crate::manifest::lifecycle::{self, Lifecycle, lifecycle_of_live};
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 /// Which Kix clusters [`observe`] reads.
@@ -586,6 +586,19 @@ fn view(
             }
         })
         .collect();
+
+    // A record of an earlier release can name the definitions Kix installs
+    // itself, and the local store names them for a record whose index has no
+    // names. No record owns them now, and the sweep leaves them out.
+    let own_crds: HashSet<String> = objects
+        .iter()
+        .filter(|o| o.named && lifecycle::is_kix_crd_named(o.rid.group_kind(), Some(&o.rid.name)))
+        .map(|o| o.hash.clone())
+        .collect();
+    objects.retain(|o| !own_crds.contains(&o.hash));
+    for object in &mut objects {
+        object.depends_on.retain(|d| !own_crds.contains(d));
+    }
 
     // An object on the cluster depends on each object of the deploy that
     // `edges` names for it.
