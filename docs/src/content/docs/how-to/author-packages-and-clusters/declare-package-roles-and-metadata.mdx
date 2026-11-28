@@ -22,7 +22,9 @@ Use these fields to describe the package:
 - `owner` identifies the team responsible for it and supports governance
   scorecard rules.
 - `lifecycle` classifies its state as `stateless`, `stateful`, `durable`, or
-  `ephemeral`. Kix records the value in the `kix.run/lifecycle` annotation.
+  `ephemeral`. Kix records the value as `spec.lifecycle` on the instance's
+  `PackageInstance` and `spec.slot.lifecycle` on its
+  [`PackageInstanceRevision`](/docs/reference/annotations-crds-and-receipts/#packageinstancerevision).
   Only `"stateful"` changes evaluation and deployment behavior: custom
   resources in a `"stateful"` package must declare `holdsData`, and replacing a
   data-holding resource in a `"stateful"` package triggers the deployment

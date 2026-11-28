@@ -32,9 +32,7 @@ pub struct GcArgs {
     pub timeout: Option<String>,
 
     /// Also judge objects that `--full-scan` only reports, as a
-    /// comma-separated list. `unstamped`: objects Kix wrote that carry the
-    /// Kix label but no `kix.run/identity-hash`, so no build lists them.
-    /// `unattributed`: Kix objects that name no deployment record on the
+    /// comma-separated list. `unattributed`: Kix objects that name no deployment record on the
     /// cluster, so Kix cannot tell which Kix cluster owns them. `copies`: objects Kix never wrote that
     /// carry Kix's labels, which another program, usually an operator, copied
     /// from an object Kix made.
@@ -67,6 +65,9 @@ pub struct GcArgs {
 /// Objects that `kix gc --full-scan` judges only when `--include` names them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Include {
+    /// Removed. Kix refuses it before `kix gc` runs
+    /// ([`crate::removed::GC_INCLUDE_UNSTAMPED`]).
+    #[value(hide = true)]
     Unstamped,
     Unattributed,
     Copies,

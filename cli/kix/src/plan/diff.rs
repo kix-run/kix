@@ -14,6 +14,7 @@ use crate::manifest::diff::engine::structural_diff;
 use crate::manifest::diff::{DiffConfig, Difference};
 use crate::manifest::keys;
 use crate::manifest::lifecycle;
+use crate::manifest::sent;
 use crate::manifest::types::ResourceId;
 
 /// Return true when a structural-diff path points at a `kix.run` stamped
@@ -43,6 +44,22 @@ pub(super) fn is_propagation_path(path: &str) -> bool {
         .any(|ann| path == format!("$.metadata.annotations.{ann}"))
 }
 
+/// Return true when a structural-diff path points at a retired note in the
+/// top-level annotations ([`sent::is_retired_note`]). Kix sends none of
+/// them, so a difference in one says nothing about what a deploy writes.
+fn is_retired_note_path(path: &str) -> bool {
+    path.strip_prefix("$.metadata.annotations.")
+        .is_some_and(sent::is_retired_note)
+}
+
+/// Partition the differences between a live object and the dry-run answer to
+/// the apply Kix sends for it into (real, retired notes only).
+pub(crate) fn partition_retired(diffs: Vec<Difference>) -> (Vec<Difference>, Vec<Difference>) {
+    diffs
+        .into_iter()
+        .partition(|d| !is_retired_note_path(&d.path))
+}
+
 /// Partition a set of differences into (real, propagation-only).
 pub(crate) fn partition_propagation(diffs: Vec<Difference>) -> (Vec<Difference>, Vec<Difference>) {
     let mut real = Vec::new();
@@ -57,7 +74,35 @@ pub(crate) fn partition_propagation(diffs: Vec<Difference>) -> (Vec<Difference>,
     (real, propagation)
 }
 
+/// What [`diff_graphs`] and [`diff_sent`] compare.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Compare {
+    /// Two builds as they are. A resource whose only differences are the
+    /// annotations that carry hash propagation is dependency-affected.
+    Builds,
+    /// What Kix sends for each side ([`sent::of`]). A resource whose only
+    /// differences are notes Kix does not send is unchanged.
+    Sent,
+}
+
+/// Compare two builds package by package. A resource whose manifest changed
+/// only in the annotations a changed dependency moves is listed as
+/// dependency-affected, so `kix diff` between two builds still says that
+/// only its dependencies changed.
 pub fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
+    diff_graphs_as(old, new, Compare::Builds)
+}
+
+/// Compare `old`, the deployed side of a plan, with the new build `new`, as
+/// a deploy compares them: what Kix sends for each object. A resource whose
+/// dependencies changed and whose own manifest did not is unchanged, because
+/// the deploy does not write it, so the diff lists no dependency-affected
+/// resource.
+pub fn diff_sent(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
+    diff_graphs_as(old, new, Compare::Sent)
+}
+
+fn diff_graphs_as(old: &StoreGraph, new: &StoreGraph, compare: Compare) -> PackageDiff {
     let config = DiffConfig::new("old", "new").in_order();
 
     let old_pkgs: BTreeMap<String, &PackageNode> = old
@@ -87,7 +132,7 @@ pub fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
             }
             // A PackageInstance that changed alone is a change: the deploy
             // applies it.
-            let change = diff_package_resources(key, old_pkg, new_pkg, old, new, &config);
+            let change = diff_package_resources(key, old_pkg, new_pkg, old, new, &config, compare);
             if same_resources && !change.any() {
                 unchanged += 1;
                 continue;
@@ -134,6 +179,7 @@ pub fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
             &values_of(&old_res),
             &values_of(&new_res),
             &config,
+            compare,
         );
         d.any().then(|| {
             shown.change(&d, &new_res);
@@ -148,9 +194,7 @@ pub fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
     {
         for (path, node) in &new.resources {
             let m = &node.manifest;
-            if m.get("kind")
-                .and_then(Value::as_str)
-                .is_some_and(lifecycle::is_record_kind)
+            if lifecycle::is_record(m)
                 && m.pointer("/metadata/name").and_then(Value::as_str) == Some(name)
             {
                 let id = ResourceId::from_value(m);
@@ -191,7 +235,7 @@ fn unowned_resources(graph: &StoreGraph) -> BTreeMap<ResourceId, (&PathBuf, &Val
                 (path, &node.manifest),
             )
         })
-        .filter(|(id, _)| !lifecycle::is_record_kind(&id.kind))
+        .filter(|(id, _)| !lifecycle::is_record_kind(id.group_kind()))
         .collect()
 }
 
@@ -211,11 +255,7 @@ fn record_name(graph: &StoreGraph) -> Option<String> {
         .resources
         .values()
         .map(|node| &node.manifest)
-        .find(|m| {
-            m.get("kind")
-                .and_then(Value::as_str)
-                .is_some_and(lifecycle::is_record_kind)
-        })
+        .find(|m| lifecycle::is_record(m))
         .and_then(|m| m.pointer("/metadata/name").and_then(Value::as_str))
         .map(str::to_string)
 }
@@ -228,6 +268,7 @@ fn diff_package_resources(
     old_graph: &StoreGraph,
     new_graph: &StoreGraph,
     config: &DiffConfig,
+    compare: Compare,
 ) -> PackageChangeDiff {
     diff_resource_maps(
         key,
@@ -236,6 +277,7 @@ fn diff_package_resources(
         &resource_map_for_package(old_pkg, old_graph),
         &resource_map_for_package(new_pkg, new_graph),
         config,
+        compare,
     )
 }
 
@@ -248,6 +290,7 @@ fn diff_resource_maps(
     old_res: &BTreeMap<ResourceId, &Value>,
     new_res: &BTreeMap<ResourceId, &Value>,
     config: &DiffConfig,
+    compare: Compare,
 ) -> PackageChangeDiff {
     let mut resource_diffs = Vec::new();
     let mut dep_affected_resources = Vec::new();
@@ -258,11 +301,22 @@ fn diff_resource_maps(
         if let Some(old_val) = old_res.get(id) {
             // Pass `old_val` first because `config` labels side a "old" and
             // side b "new".
-            let diffs = structural_diff(old_val, new_val, "$", config);
+            let diffs = match compare {
+                Compare::Builds => structural_diff(old_val, new_val, "$", config),
+                Compare::Sent => {
+                    let (old_sent, new_sent) = (sent::of(old_val), sent::of(new_val));
+                    let (real, _) =
+                        partition_retired(structural_diff(&old_sent, &new_sent, "$", config));
+                    real
+                }
+            };
             if diffs.is_empty() {
                 continue;
             }
             let (real, _propagation) = partition_propagation(diffs);
+            if real.is_empty() && compare == Compare::Sent {
+                continue;
+            }
             if real.is_empty() {
                 // Only kix.run propagation annotations changed. The identity hash
                 // bumped because a dependency changed, but content is the same.

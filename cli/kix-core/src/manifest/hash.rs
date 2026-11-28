@@ -125,6 +125,32 @@ pub fn hash_value(v: &Value) -> String {
     blake3::hash(canonical.as_bytes()).to_hex().to_string()
 }
 
+/// Hex digits of an object hash. It is as long as the Nix store hash an
+/// older Kix stored in a revision's place, so the revision size estimate
+/// holds for both.
+pub const OBJECT_HASH_LEN: usize = 32;
+
+/// Return the object hash of the built manifest `manifest`: the first
+/// [`OBJECT_HASH_LEN`] hex digits of the SHA-256 of the manifest Kix sends
+/// for it ([`super::sent::of`]), with every retired note removed, nulls
+/// removed, and keys sorted.
+///
+/// Take it from the manifest as the build holds it, before secret values
+/// are filled in. It covers every other `kix.run/*` annotation, such as
+/// `kix.run/sops-digest`, so a changed SOPS file changes it. Revisions store
+/// it and plans compare it for equality, so a change to what it covers
+/// makes the next deploy apply every object once.
+pub fn object_hash(manifest: &Value) -> String {
+    use sha2::{Digest, Sha256};
+    let mut v = super::sent::of(manifest).into_owned();
+    super::sent::strip_retired_notes(&mut v);
+    strip_null_values(&mut v);
+    let canonical = serde_json::to_vec(&sort_keys(&v)).unwrap_or_default();
+    let mut hex = format!("{:x}", Sha256::digest(canonical));
+    hex.truncate(OBJECT_HASH_LEN);
+    hex
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,6 +242,80 @@ mod tests {
                 .and_then(|v| v.as_i64()),
             Some(1)
         );
+    }
+
+    fn fixture() -> Value {
+        json!({
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "name": "creds",
+                "namespace": "app",
+                "labels": { "app": "web" },
+                "annotations": {
+                    keys::SOPS_SOURCE: "secrets/creds.yaml",
+                    keys::SOPS_DIGEST: "ab12",
+                    keys::IDENTITY_HASH: "0123456789abcdfghijklmnpqrsvwxyz",
+                    keys::DEPENDS_ON: "requires:h2",
+                    keys::PACKAGE: "web",
+                    keys::PACKAGE_NAMESPACE: "app",
+                    keys::LIFECYCLE: "stateful",
+                },
+            },
+            "type": "Opaque",
+            "stringData": { "user": "admin" },
+        })
+    }
+
+    /// The object hash is stored in revisions, so a change to it makes every
+    /// deploy after an upgrade apply every object once. Change this value
+    /// only on purpose, with an upgrade note.
+    #[test]
+    fn the_object_hash_of_a_fixed_manifest_is_pinned() {
+        assert_eq!(object_hash(&fixture()), "dc62fbf782b8161a192e97c66cc45b58");
+    }
+
+    #[test]
+    fn the_object_hash_ignores_key_order_nulls_and_retired_notes() {
+        let base = object_hash(&fixture());
+        assert_eq!(base.len(), OBJECT_HASH_LEN);
+        let reordered: Value =
+            serde_json::from_str(&serde_json::to_string(&sort_keys(&fixture())).unwrap()).unwrap();
+        assert_eq!(object_hash(&reordered), base);
+        let mut with_null = fixture();
+        with_null["metadata"]["annotations"]["x.example/y"] = Value::Null;
+        with_null["data"] = Value::Null;
+        assert_eq!(object_hash(&with_null), base);
+        let mut without_notes = fixture();
+        let annotations = without_notes["metadata"]["annotations"]
+            .as_object_mut()
+            .unwrap();
+        for note in crate::manifest::sent::GRAPH_NOTES {
+            annotations.remove(*note);
+        }
+        assert_eq!(object_hash(&without_notes), base);
+        let mut with_old_notes = fixture();
+        with_old_notes["metadata"]["annotations"][keys::APPLIED_HASH] = json!("a");
+        with_old_notes["metadata"]["annotations"][keys::ACTIVATIONS] = json!("h1");
+        assert_eq!(object_hash(&with_old_notes), base);
+    }
+
+    #[test]
+    fn the_object_hash_covers_every_other_kix_annotation() {
+        let base = object_hash(&fixture());
+        for key in [
+            keys::SOPS_DIGEST,
+            keys::SOPS_SOURCE,
+            keys::READINESS,
+            keys::CEDE_FIELDS,
+        ] {
+            let mut changed = fixture();
+            changed["metadata"]["annotations"][key] = json!("other");
+            assert_ne!(object_hash(&changed), base, "{key}");
+        }
+        let mut data = fixture();
+        data["stringData"]["user"] = json!("root");
+        assert_ne!(object_hash(&data), base);
     }
 
     #[test]

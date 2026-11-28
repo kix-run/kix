@@ -28,7 +28,7 @@ use super::super::field_manager::FieldManager;
 use super::super::migration_write::{self, WriteError};
 use super::super::prune_guard::{PruneGuard, Pruned};
 use super::super::readiness::{self, Deletion, ImportTarget, ReadinessError, ReadinessResult};
-use super::super::revision::RevisionObject;
+use super::super::revision::{AppliedKey, RevisionObject};
 use super::{
     DeleteError, Migrations, NotDiscovered, OnStatus, ReadError, RecreateError, ResourceIo,
 };
@@ -121,7 +121,10 @@ pub(crate) struct KubeResources {
     /// Each object the run applied, with the applied hash of the server's
     /// answer, until the record writes them to the revisions
     /// ([`KubeResources::take_applied`]).
-    applied: std::sync::Mutex<BTreeMap<RevisionObject, String>>,
+    applied: std::sync::Mutex<BTreeMap<AppliedKey, String>>,
+    /// Which object hash an applied hash is recorded under, and which
+    /// objects get none.
+    recording: super::Recording,
 }
 
 impl KubeResources {
@@ -163,7 +166,14 @@ impl KubeResources {
             unmigrated: std::sync::Mutex::new(HashSet::new()),
             prune_guard: tokio::sync::OnceCell::new(),
             applied: std::sync::Mutex::new(BTreeMap::new()),
+            recording: super::Recording::default(),
         }
+    }
+
+    /// Record applied hashes as `recording` says.
+    pub(crate) fn with_recording(mut self, recording: super::Recording) -> Self {
+        self.recording = recording;
+        self
     }
 
     /// Make the migration writes the plan listed ([`Migrations`]).
@@ -246,20 +256,27 @@ impl KubeResources {
     }
 
     /// Remember that the run applied `manifest` and the server's answer
-    /// hashed to `hash`. A manifest with no build hash is not remembered,
-    /// because no revision names it.
+    /// hashed to `hash`, under the object hash of the build's manifest for
+    /// the object. An object of no build of the run is not remembered,
+    /// because no revision names it, and neither is one the run applied
+    /// without the fields another manager holds.
     pub(super) fn note_applied(&self, manifest: &Value, hash: String) {
-        let Some(object) = RevisionObject::of_manifest(manifest) else {
+        let rid = ResourceId::from_value(manifest);
+        if self.recording.unrecorded.contains(&rid) {
+            return;
+        }
+        let Some(object_hash) = self.recording.object_hashes.get(&rid) else {
             return;
         };
+        let key = RevisionObject::of_id(object_hash, &rid).applied_key();
         if let Ok(mut applied) = self.applied.lock() {
-            applied.insert(object, hash);
+            applied.insert(key, hash);
         }
     }
 
     /// Return the objects the run applied since the last call, with their
     /// applied hashes, and forget them.
-    pub(super) fn take_applied(&self) -> BTreeMap<RevisionObject, String> {
+    pub(super) fn take_applied(&self) -> BTreeMap<AppliedKey, String> {
         self.applied
             .lock()
             .map(|mut applied| std::mem::take(&mut *applied))
@@ -269,7 +286,7 @@ impl KubeResources {
     /// Put back `applied`, which [`KubeResources::take_applied`] returned
     /// and a write did not store, so the next write stores it. An entry the
     /// run recorded since wins.
-    pub(super) fn give_back_applied(&self, applied: BTreeMap<RevisionObject, String>) {
+    pub(super) fn give_back_applied(&self, applied: BTreeMap<AppliedKey, String>) {
         if let Ok(mut now) = self.applied.lock() {
             for (object, hash) in applied {
                 now.entry(object).or_insert(hash);
@@ -508,7 +525,10 @@ impl ResourceIo for KubeResources {
 
     async fn release(&self, rid: &ResourceId) -> Result<bool, String> {
         let Some((ar, scope)) = self.cached(rid).await else {
-            return Ok(false);
+            return Err(format!(
+                "could not release field ownership on {}: the Kubernetes API server does not serve its resource kind",
+                rid.display_id()
+            ));
         };
         let api = self.api_for(&ar, &scope, rid);
         let Some(live) = api
@@ -518,12 +538,11 @@ impl ResourceIo for KubeResources {
         else {
             return Ok(false);
         };
-        let applies = live.metadata.managed_fields.iter().flatten().any(|e| {
-            e.manager.as_deref() == Some(self.manager.name())
-                && e.operation.as_deref() == Some("Apply")
-                && e.subresource.is_none()
-        });
-        if !applies {
+        let applies = |obj: &DynamicObject| {
+            self.manager
+                .holds_entry(obj.metadata.managed_fields.as_deref().unwrap_or_default())
+        };
+        if !applies(&live) {
             return Ok(false);
         }
         let mut metadata = serde_json::json!({ "name": rid.name });
@@ -535,18 +554,28 @@ impl ResourceIo for KubeResources {
             "kind": ar.kind,
             "metadata": metadata,
         });
-        api.patch(
-            &rid.name,
-            &kube::api::PatchParams::apply(self.manager.name()),
-            &kube::api::Patch::Apply(&nothing),
-        )
-        .await
-        .map_err(|e| {
-            format!(
-                "could not release this Kix cluster's field ownership on {}, which another Kix cluster still deploys: {e}",
-                rid.display_id()
+        let after = api
+            .patch(
+                &rid.name,
+                &kube::api::PatchParams::apply(self.manager.name()),
+                &kube::api::Patch::Apply(&nothing),
             )
-        })?;
+            .await
+            .map_err(|e| {
+                format!(
+                    "could not release this Kix cluster's field ownership on {}, which another Kix cluster still deploys: {e}",
+                    rid.display_id()
+                )
+            })?;
+        // The record stops naming the object only once its entry is gone, so
+        // judge the object Kubernetes returns rather than the answer's status.
+        if applies(&after) {
+            return Err(format!(
+                "could not release field ownership on {}: Kubernetes kept field manager `{}` in `metadata.managedFields`",
+                rid.display_id(),
+                self.manager.name()
+            ));
+        }
         Ok(true)
     }
 

@@ -1,0 +1,3 @@
+# 2026-11-28 · `cli/kix/src/cluster/revision/convert.rs` · The conversion drops edges to dependencies that a later failed deploy rewrote.
+
+`Live::with_noted_needs` turns each live `kix.run/depends-on` hash into a name by finding a live object that carries that hash. An edge to a dependency that a later failed deploy rewrote with another build hash finds no object and is dropped. Once the conversion is written the loss is permanent, because the revision is then the only record of edges, and the delete order of those objects has fewer edges. The converted records' package indexes name each hash a build gave an object and could resolve most of these.

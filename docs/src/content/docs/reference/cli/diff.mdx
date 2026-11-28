@@ -81,7 +81,7 @@ Within a changed package, each resource is reported as one of:
 | --- | --- |
 | `+` added or `-` removed | The resource exists on one side only |
 | `~` modified | The content differs. Text output shows each differing path with a unified diff of the values. |
-| `~` tracking annotation only | Only the identity hash changed, because a dependency of this resource changed. The content is the same, so pods do not restart. Text and Markdown output mark these "tracking annotation only"; JSON calls them `dep_affected_resources`. |
+| `~` tracking annotation only | Only `kix.run/identity-hash` changed because a dependency of this resource changed. Its own manifest is unchanged, so `kix deploy` leaves it untouched. Text and Markdown output mark these "tracking annotation only", and JSON lists them under `dep_affected_resources`. Appears only in `kix diff` between two builds; in `kix plan` and `kix plan --read-only`, the resource is unchanged. |
 
 Two more sections follow the packages:
 
@@ -107,17 +107,16 @@ Kix sets the label `app.kubernetes.io/managed-by=kix` on every object it applies
 | `kix plan --read-only` | Shown as removed (`-`) in the package report when the live object carries the Kix label and one of this cluster's deployment records references it (via revisions, or via `kix.run/activations` on clusters not yet upgraded to revisions). Prune fates are not checked. | Never listed or compared. |
 | [`kix status`](/docs/reference/cli/status/) `--check presence` / `--check drift` | Never reported. Checks only the objects listed in the current deploy record, reporting missing or changed objects. | Never listed, compared, or counted. |
 | [`kix gc`](/docs/reference/cli/gc/) | Deletes orphans found by comparing the deployed builds against a fresh build. | Never listed or deleted. |
-| `kix gc --full-scan` | Scans every labelled object of the named cluster and deletes those whose `kix.run/identity-hash` is absent from the fresh build. | Never listed or deleted. |
+| `kix gc --full-scan` | Scans every labelled object belonging to the named cluster and deletes those whose kind, namespace, and name are absent from the resources deployed by the fresh build. | Never listed or deleted. |
 
 Even when an object carries `app.kubernetes.io/managed-by=kix`, Kix separates what it wrote from objects created by other tools or controllers:
 
-- **Managed objects** carry `kix.run/identity-hash` and a `managedFields` entry for a Kix field manager (`kix/<cluster>`, or `kix` from an earlier version of Kix).
-- **Unstamped objects** carry the label and a `managedFields` entry for a Kix field manager, but no `kix.run/identity-hash` (excluding controller-owned child objects and Service `Endpoints`, which Kix ignores). Kix wrote them, but cannot match them to a build.
-- **Copies** carry the label without a `managedFields` entry for a Kix field manager (excluding, for objects without `kix.run/identity-hash`, the ignored child objects and `Endpoints` above). Another controller or tool copied Kix's labels, and sometimes its annotations, onto a new object, such as a database operator's volume claim or an Event posted for a custom resource.
+- **Managed objects** have a `managedFields` entry for a Kix field manager (`kix/<cluster>`, or `kix` from an earlier version of Kix). Kix's `Activation` records also count as managed.
+- **Copies** carry the label without a `managedFields` entry for a Kix field manager, excluding objects with an `ownerReference` (controller-owned children) and `Endpoints` named after a labelled Service in the same namespace, which Kix ignores. Another controller or tool copied Kix's labels, and sometimes its annotations, onto a new object, such as a database operator's volume claim or an Event posted for a custom resource. If a cluster backup restore stripped `metadata.managedFields` from an object, Kix also treats it as a copy until the next apply restores its field-manager entry.
 
 If Kubernetes serves the same object under multiple API groups (such as `Event` under `v1` and `events.k8s.io/v1`), Kix includes it once, preferring the API group Kix applied it with.
 
-[`kix gc --full-scan`](/docs/reference/cli/gc/) lists unstamped objects, copies, and unattributed objects (objects with no matching Activation record on the cluster) and keeps them unless you include them with `--include` (for example, `--include unstamped,copies,unattributed`).
+[`kix gc --full-scan`](/docs/reference/cli/gc/) lists copies and unattributed objects (objects with no matching Activation record on the cluster) and keeps them unless you include them with `--include` (for example, `--include copies,unattributed`).
 
 The one exception for unlabelled objects is a name collision: if an unlabelled live object has the same kind, namespace, and name as a resource in the build, `kix plan` and `kix deploy` target that object. `kix plan` reports field ownership conflicts and names each field's current manager, and `kix deploy` stops on those conflicts unless `--force-conflicts` is passed.
 
@@ -171,7 +170,7 @@ describes the top-level keys, the checked-section shape, and the
 | --- | --- |
 | `packages.summary` | Counts of `added`, `removed`, `changed`, and `unchanged` packages |
 | `packages.added`, `packages.removed` | Arrays of `{ key, version, resources, kept_resources, manifests }`. `resources` counts every resource in the package; `kept_resources` lists the resources that stay on the cluster: Namespaces, CustomResourceDefinitions, and objects another Kix cluster's current build contains (always empty on `added`). `manifests` is present at `--detail manifests`: the new manifest of each resource of an added package, or the old manifest of each resource a removed package deletes |
-| `packages.changed` | Array of package changes: `key`, `old_version`, `new_version`, `added_resources`, `removed_resources`, `kept_resources`, `modified_resources`, `dep_affected_resources`, and at `--detail manifests` `manifests`. A resource that left the build and stays on the cluster is listed in `kept_resources`, not `removed_resources` |
+| `packages.changed` | Array of package changes: `key`, `old_version`, `new_version`, `added_resources`, `removed_resources`, `kept_resources`, `modified_resources`, `dep_affected_resources` (always empty in `kix plan` and `kix plan --read-only`), and at `--detail manifests` `manifests`. A resource that left the build and stays on the cluster is listed in `kept_resources`, not `removed_resources` |
 | `packages.changed[].manifests` | Object keyed by resource, each `{ old, new }`, for every modified, added, and removed resource. A side is absent when the resource does not exist there |
 | `packages.changed[].modified_resources` | Array of `{ resource, diff_count, changes }`. `changes` is present at `--detail fields` and `--detail manifests`. Each entry of `changes` is `{ path, change, old, new, labels }`; `change` is `added`, `removed`, or `changed`, `old` or `new` is absent when that side has no value, and `labels` is absent when the deployed build is not on this machine |
 | `packages.cluster_level` | The same shape as one changed package, with key `_cluster`, or `null` |

@@ -7,6 +7,7 @@ use super::activation::OpenedRecords;
 use super::discovery::api_for;
 use super::errors::{FailureClass, FetchError, classify};
 use super::tenancy::{self, Tenancy};
+#[cfg(test)]
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{Lifecycle, lifecycle_of_live, never_pruned};
 use crate::manifest::types::ResourceId;
@@ -33,12 +34,9 @@ pub(crate) fn resource_fqn(ar: &ApiResource) -> String {
 
 /// Results of a cluster sweep of Kix-labeled objects.
 pub struct ManagedSweep {
-    /// Objects Kix applied, each carrying `kix.run/identity-hash`.
+    /// Objects Kix wrote: a `managedFields` entry names a Kix field manager.
+    /// Activation records are here too.
     pub managed: Vec<DynamicObject>,
-    /// Objects Kix wrote that carry the Kix label without an identity hash or
-    /// owner, so no build of Kix's lists them. `kix gc --full-scan` reports
-    /// them, and nothing deletes them unless requested.
-    pub unstamped: Vec<DynamicObject>,
     /// Objects that Kix never wrote: no `managedFields` entry names the `kix`
     /// field manager. Another program copied Kix's labels, and sometimes its
     /// annotations, onto them. They are excluded from every [`SweepScope`].
@@ -53,7 +51,7 @@ pub struct ManagedSweep {
     pub foreign: Foreign,
     /// Under [`SweepScope::Cluster`], objects that name no record of any Kix
     /// cluster, so Kix cannot tell which cluster they belong to. Omitted from
-    /// `managed` and `unstamped`.
+    /// `managed`.
     pub unattributed: Vec<DynamicObject>,
     /// Under [`SweepScope::Records`] or [`SweepScope::Revisions`], objects
     /// of the named cluster that none of the given records or revisions name (such as leftovers from superseded builds).
@@ -168,7 +166,9 @@ pub enum Attribution {
 }
 
 /// Attribute a swept object to the Kix clusters that deploy it
-/// ([`Tenancy::owners_of`]).
+/// ([`Tenancy::owners_of`]). An object no record names that carries an
+/// `Apply` entry of this Kix cluster is this cluster's: a deploy of it
+/// applied the object, and no record of any Kix cluster deploys it now.
 pub fn attribute(obj: &DynamicObject, tenancy: &Tenancy) -> Attribution {
     let mut owners = tenancy.owners_of(obj);
     let own = &tenancy.cluster;
@@ -178,6 +178,7 @@ pub fn attribute(obj: &DynamicObject, tenancy: &Tenancy) -> Attribution {
         (true, true) => Attribution::Ours,
         (true, false) => Attribution::Shared(owners),
         (false, false) => Attribution::Foreign(owners),
+        (false, true) if !own.is_empty() && tenancy.holds_own_entry(obj) => Attribution::Ours,
         (false, true) => Attribution::Unattributed,
     }
 }
@@ -208,10 +209,8 @@ pub fn scope_sweep(sweep: ManagedSweep, scope: SweepScope<'_>, tenancy: Tenancy)
                 kept
             };
             let managed = keep(sweep.managed);
-            let unstamped = keep(sweep.unstamped);
             ManagedSweep {
                 managed,
-                unstamped,
                 copies: sweep.copies,
                 forbidden: sweep.forbidden,
                 foreign,
@@ -232,11 +231,6 @@ fn narrow_to(
 ) -> ManagedSweep {
     let (managed, rest): (Vec<_>, Vec<_>) =
         sweep.managed.into_iter().partition(|o| named(&tenancy, o));
-    let unstamped = sweep
-        .unstamped
-        .into_iter()
-        .filter(|o| named(&tenancy, o))
-        .collect();
     let other_builds = rest
         .iter()
         .filter(|o| {
@@ -248,7 +242,6 @@ fn narrow_to(
         .count();
     ManagedSweep {
         managed,
-        unstamped,
         other_builds,
         tenancy,
         ..sweep
@@ -339,49 +332,45 @@ pub(crate) fn managed_of(listed: Listed) -> ManagedSweep {
     sweep
 }
 
-/// Partition `managed-by=kix` objects into Kix-managed resources, controller
-/// copies, and unstamped objects.
+/// Partition `managed-by=kix` objects into the objects Kix wrote and the
+/// copies.
 ///
 /// Controllers often copy labels and annotations onto derived objects (such as
 /// EndpointSlices, ReplicaSets, Pods, and Events), so the label alone does not
-/// prove Kix applied an object. Whether Kix wrote it decides that, whether or
-/// not it carries Kix's stamp:
+/// prove Kix applied an object. Whether Kix wrote it decides that:
 ///
-/// - Stamped and written by Kix (a `managedFields` entry for the `kix` field
-///   manager): placed in `managed`, even if a controller later adopted it.
-/// - Activation records: never copies. Kix writes some of them under other
-///   field managers, and records are never pruned.
-/// - Unstamped and owned by a controller: dropped as a controller child.
-/// - Unstamped `Endpoints` with the same namespace and name as a stamped
-///   `Service`: dropped as the endpoints controller's mirror.
-/// - Any other object Kix never wrote: placed in `copies`. Operators copy a
-///   custom resource's labels onto the objects they make, and some leave those
+/// - Written by Kix (a `managedFields` entry for a Kix field manager):
+///   placed in `managed`, even if a controller later adopted it.
+/// - Activation records: placed in `managed`. Kix writes some of them under
+///   other field managers, and records are never pruned.
+/// - Owned by a controller: dropped as a controller child.
+/// - `Endpoints` with the same namespace and name as a labelled `Service`:
+///   dropped as the endpoints controller's mirror.
+/// - Any other object: placed in `copies`. Operators copy a custom
+///   resource's labels onto the objects they make, and some leave those
 ///   objects unowned, such as data volumes and the Events they post.
-/// - Unstamped objects Kix wrote: placed in `unstamped`.
+///
+/// A revision that names an object does not make it Kix's. An object whose
+/// `managedFields` a restore dropped stays a copy until Kix applies it again.
 pub fn partition_sweep(objects: Vec<DynamicObject>) -> ManagedSweep {
-    let (stamped, rest): (Vec<DynamicObject>, Vec<DynamicObject>) =
-        objects.into_iter().partition(is_stamped);
-    let (mut copies, managed): (Vec<DynamicObject>, Vec<DynamicObject>) =
-        stamped.into_iter().partition(is_controller_copy);
-    let stamped_services: HashSet<(String, String)> = managed
+    let services: HashSet<(String, String)> = objects
         .iter()
-        .chain(&copies)
         .filter(|o| super::drift::resource_id(o).group_kind() == crate::manifest::kinds::SERVICE)
         .map(|o| (namespace_of(o), o.metadata.name.clone().unwrap_or_default()))
         .collect();
-    let (unstamped_copies, unstamped): (Vec<DynamicObject>, Vec<DynamicObject>) = rest
+    let (managed, rest): (Vec<DynamicObject>, Vec<DynamicObject>) =
+        objects.into_iter().partition(is_kix_object);
+    let copies = rest
         .into_iter()
         .filter(|o| !is_owned(o))
         .filter(|o| {
             !(object_kind(o) == "Endpoints"
-                && stamped_services
+                && services
                     .contains(&(namespace_of(o), o.metadata.name.clone().unwrap_or_default())))
         })
-        .partition(is_controller_copy);
-    copies.extend(unstamped_copies);
+        .collect();
     ManagedSweep {
         managed,
-        unstamped,
         copies,
         forbidden: Vec::new(),
         foreign: Foreign::default(),
@@ -391,19 +380,11 @@ pub fn partition_sweep(objects: Vec<DynamicObject>) -> ManagedSweep {
     }
 }
 
-/// Return whether Kix's apply step stamped `obj` with `kix.run/identity-hash`.
-pub(crate) fn is_stamped(obj: &DynamicObject) -> bool {
-    obj.metadata
-        .annotations
-        .as_ref()
-        .is_some_and(|a| keys::contains_meta(a, keys::IDENTITY_HASH))
-}
-
-/// Return whether `obj` is a controller-created copy rather than an object Kix
-/// applied (see [`partition_sweep`]).
-fn is_controller_copy(obj: &DynamicObject) -> bool {
-    lifecycle_of_live(obj) != Lifecycle::Record
-        && !super::fieldsv1::written_by_kix(obj.metadata.managed_fields.as_deref().unwrap_or(&[]))
+/// Return whether `obj` is Kix's: an Activation record, or an object a Kix
+/// field manager wrote (see [`partition_sweep`]).
+fn is_kix_object(obj: &DynamicObject) -> bool {
+    lifecycle_of_live(obj) == Lifecycle::Record
+        || super::fieldsv1::written_by_kix(obj.metadata.managed_fields.as_deref().unwrap_or(&[]))
 }
 
 /// Return whether `obj` has at least one `ownerReference`.
@@ -438,16 +419,18 @@ pub struct SharedOrphan {
 impl SharedOrphan {
     /// Format the line a plan prints for this shared orphan.
     pub fn describe(&self) -> String {
+        format!("kept {}, {}", self.rid, self.why())
+    }
+
+    /// Say why the orphan stays, without naming it, for a line that names
+    /// it already.
+    pub fn why(&self) -> String {
         let clusters = if self.clusters.len() == 1 {
             "Kix cluster"
         } else {
             "Kix clusters"
         };
-        format!(
-            "kept {}, still deployed by {clusters} {}",
-            self.rid,
-            self.clusters.join(", ")
-        )
+        format!("still deployed by {clusters} {}", self.clusters.join(", "))
     }
 }
 
@@ -490,6 +473,27 @@ pub(crate) fn split_shared_orphans_listed(
         Live::Absent | Live::Unserved | Live::Unread => None,
     };
     split_by_lookup(orphans, lookup, tenancy)
+}
+
+/// Return the objects of `shared` that carry an `Apply` entry under
+/// `manager` in `live`, which a run must release. Another shared orphan
+/// holds no field of the cluster, so its record stops naming it without a
+/// write.
+pub(crate) fn releases_of(
+    shared: &[SharedOrphan],
+    live: &LiveObjects,
+    manager: &super::field_manager::FieldManager,
+) -> Vec<ResourceId> {
+    shared
+        .iter()
+        .filter(|s| match live.get(&s.rid) {
+            Live::Present(obj) => {
+                manager.holds_entry(obj.metadata.managed_fields.as_deref().unwrap_or_default())
+            }
+            Live::Absent | Live::Unserved | Live::Unread => false,
+        })
+        .map(|s| s.rid.clone())
+        .collect()
 }
 
 fn split_by_lookup<'a>(
@@ -1085,7 +1089,7 @@ mod tests {
     }
 
     #[test]
-    fn sweep_keeps_stamped_objects_whoever_owns_them() {
+    fn sweep_keeps_objects_kix_wrote_whoever_owns_them() {
         let sweep = partition_sweep(vec![
             swept("Deployment", "ns", "web", true, false),
             swept("Job", "ns", "adopted", true, true),
@@ -1094,12 +1098,14 @@ mod tests {
             names(&sweep.managed),
             ["ns/Deployment/web", "ns/Job/adopted"]
         );
-        assert!(sweep.unstamped.is_empty());
         assert!(sweep.copies.is_empty());
     }
 
+    /// A controller copies a Kix object's labels and annotations onto the
+    /// objects it makes and owns. Kix never wrote them, so they are its
+    /// children, whatever annotations they carry.
     #[test]
-    fn sweep_sets_apart_owned_stamped_objects_kix_never_applied() {
+    fn sweep_drops_owned_objects_kix_never_wrote() {
         let sweep = partition_sweep(vec![
             written_by("syncer", swept("Service", "ns", "web-x-guest", true, true)),
             written_by(
@@ -1108,11 +1114,7 @@ mod tests {
             ),
         ]);
         assert!(sweep.managed.is_empty());
-        assert!(sweep.unstamped.is_empty());
-        assert_eq!(
-            names(&sweep.copies),
-            ["ns/Secret/synced-by-other", "ns/Service/web-x-guest"]
-        );
+        assert!(sweep.copies.is_empty());
     }
 
     /// An operator copies a custom resource's labels and annotations onto
@@ -1171,36 +1173,59 @@ mod tests {
     #[test]
     fn sweep_treats_endpoints_named_after_a_copied_service_as_its_mirror() {
         let sweep = partition_sweep(vec![
-            written_by("syncer", swept("Service", "ns", "web-x-guest", true, true)),
-            swept("Endpoints", "ns", "web-x-guest", false, false),
+            written_by("syncer", swept("Service", "ns", "web-x-guest", true, false)),
+            written_by(
+                "kube-controller-manager",
+                swept("Endpoints", "ns", "web-x-guest", false, false),
+            ),
         ]);
         assert_eq!(names(&sweep.copies), ["ns/Service/web-x-guest"]);
-        assert!(sweep.unstamped.is_empty());
+        assert!(sweep.managed.is_empty());
     }
 
     #[test]
-    fn sweep_drops_owned_unstamped_children() {
+    fn sweep_drops_owned_children() {
         let sweep = partition_sweep(vec![
             swept("Service", "ns", "web", true, false),
-            swept("EndpointSlice", "ns", "web-abc12", false, true),
-            swept("ReplicaSet", "ns", "web-7d9f", false, true),
+            written_by(
+                "endpointslice-controller",
+                swept("EndpointSlice", "ns", "web-abc12", false, true),
+            ),
+            written_by(
+                "kube-controller-manager",
+                swept("ReplicaSet", "ns", "web-7d9f", true, true),
+            ),
         ]);
         assert_eq!(names(&sweep.managed), ["ns/Service/web"]);
-        assert!(sweep.unstamped.is_empty());
+        assert!(sweep.copies.is_empty());
     }
 
+    /// Whether an object is Kix's comes from its field managers, not from
+    /// `kix.run/identity-hash`.
     #[test]
-    fn sweep_reports_unowned_unstamped_objects_kix_wrote() {
+    fn sweep_keeps_an_object_kix_wrote_without_its_annotation() {
         let sweep = partition_sweep(vec![swept("ConfigMap", "ns", "unannotated", false, false)]);
-        assert!(sweep.managed.is_empty() && sweep.copies.is_empty());
-        assert_eq!(names(&sweep.unstamped), ["ns/ConfigMap/unannotated"]);
+        assert_eq!(names(&sweep.managed), ["ns/ConfigMap/unannotated"]);
+        assert!(sweep.copies.is_empty());
+    }
+
+    /// A restore can bring back an object with Kix's label and annotations
+    /// and without its `managedFields`. Kix did not write that copy, so it
+    /// is not Kix's until Kix applies it again.
+    #[test]
+    fn sweep_sets_apart_a_labelled_object_with_no_kix_field_manager() {
+        let mut restored = swept("ConfigMap", "ns", "restored", true, false);
+        restored.metadata.managed_fields = None;
+        let sweep = partition_sweep(vec![restored]);
+        assert!(sweep.managed.is_empty());
+        assert_eq!(names(&sweep.copies), ["ns/ConfigMap/restored"]);
     }
 
     /// An operator copies a custom resource's labels, without Kix's
     /// annotations, onto the Events it posts about it. Kix never wrote them,
-    /// so they are copies, not unstamped objects of Kix's.
+    /// so they are copies.
     #[test]
-    fn sweep_sets_apart_unstamped_objects_kix_never_wrote() {
+    fn sweep_sets_apart_objects_kix_never_wrote() {
         let sweep = partition_sweep(vec![
             written_by(
                 "stackgres-operator",
@@ -1209,21 +1234,26 @@ mod tests {
             swept("ConfigMap", "ns", "unannotated", false, false),
         ]);
         assert_eq!(names(&sweep.copies), ["ns/Event/db.1a2b"]);
-        assert_eq!(names(&sweep.unstamped), ["ns/ConfigMap/unannotated"]);
-        assert!(sweep.managed.is_empty());
+        assert_eq!(names(&sweep.managed), ["ns/ConfigMap/unannotated"]);
     }
 
     #[test]
     fn sweep_treats_endpoints_named_after_a_managed_service_as_its_mirror() {
+        let mirror = |ns: &str, name: &str| {
+            written_by(
+                "kube-controller-manager",
+                swept("Endpoints", ns, name, false, false),
+            )
+        };
         let sweep = partition_sweep(vec![
             swept("Service", "ns", "web", true, false),
-            swept("Endpoints", "ns", "web", false, false),
-            swept("Endpoints", "ns", "stray", false, false),
-            swept("Endpoints", "other", "web", false, false),
+            mirror("ns", "web"),
+            mirror("ns", "stray"),
+            mirror("other", "web"),
         ]);
         assert_eq!(names(&sweep.managed), ["ns/Service/web"]);
         assert_eq!(
-            names(&sweep.unstamped),
+            names(&sweep.copies),
             ["ns/Endpoints/stray", "other/Endpoints/web"],
             "only the same-namespace mirror is dropped"
         );
@@ -1300,7 +1330,7 @@ mod tests {
                 "{acts:?}"
             );
         }
-        // An unstamped label carrier names nothing.
+        // An object that names no record is unattributed.
         assert_eq!(
             attribute(&swept("ConfigMap", "ns", "c", false, false), &t),
             Attribution::Unattributed
@@ -1364,7 +1394,7 @@ mod tests {
     fn copies_stay_in_a_single_cluster_scope() {
         let sweep = partition_sweep(vec![
             obj("Deployment", "a-web", "a2"),
-            written_by("syncer", swept("Service", "ns", "copied", true, true)),
+            written_by("syncer", swept("Service", "ns", "copied", true, false)),
         ]);
         let scoped = scope_sweep(sweep, SweepScope::Cluster("a"), two_clusters("a"));
         assert_eq!(sorted_names(&scoped.managed), vec!["a-web"]);
@@ -1383,7 +1413,6 @@ mod tests {
             sorted_names(&swept_a.unattributed),
             vec!["leftover", "unannotated"]
         );
-        assert!(swept_a.unstamped.is_empty());
 
         let swept_b = scope_sweep(mixed_sweep(), SweepScope::Cluster("b"), two_clusters("b"));
         assert_eq!(sorted_names(&swept_b.managed), vec!["b-web", "shared"]);
@@ -1408,7 +1437,7 @@ mod tests {
             sorted_names(&scoped.unattributed),
             vec!["leftover", "never-annotated", "unannotated"]
         );
-        assert!(scoped.foreign.objects == 0 && scoped.unstamped.is_empty());
+        assert_eq!(scoped.foreign.objects, 0);
 
         // A Kubernetes cluster with no Activation records attributes nothing.
         let none = Tenancy::from_records(&[], "a");
@@ -1449,7 +1478,6 @@ mod tests {
         };
         let scoped = scope_sweep(objects, scope, two_clusters("a"));
         assert_eq!(sorted_names(&scoped.managed), vec!["a-web", "shared"]);
-        assert!(scoped.unstamped.is_empty());
         // `a-older` names only a Superseded record of `a`.
         assert_eq!(scoped.other_builds, 1);
     }
@@ -1696,7 +1724,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(names(&sweep.copies), ["orders/Event/orders.1a2b"]);
-        assert!(sweep.unattributed.is_empty() && sweep.unstamped.is_empty());
+        assert!(sweep.unattributed.is_empty());
         assert!(sweep.managed.is_empty());
     }
 

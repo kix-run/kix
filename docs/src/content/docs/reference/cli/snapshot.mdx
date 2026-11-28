@@ -47,8 +47,11 @@ Included:
 
 - every namespaced and cluster-scoped resource Kix applied for the cluster,
   including `PackageInstance` records and the cluster's `Activation` records;
-- the Kix annotations that identify each resource's package, identity hash,
-  and dependencies.
+- the `kix.run/*` annotations that Kix applies to live objects, such as
+  `kix.run/holds-data` and `kix.run/readiness` (resources applied by earlier
+  versions of Kix also retain their retired package, identity-hash, and
+  dependency annotations until upgraded; see
+  [Retired annotations](/docs/reference/annotations-crds-and-receipts/#retired-annotations)).
 
 Excluded:
 

@@ -914,6 +914,7 @@ fn import_marker_names_target_in_another_namespace() {
     // GKE Autopilot refuses writes to kube-system, so the platform-dns marker
     // lives in gke-managed and names the Service's namespace.
     let manifest = json!({
+        "apiVersion": keys::API_VERSION,
         "kind": "PackageInstance",
         "metadata": {
             "name": "platform-dns",
@@ -937,6 +938,7 @@ fn import_marker_names_target_in_another_namespace() {
 #[test]
 fn secret_import_marker_no_keys_annotation() {
     let manifest = json!({
+        "apiVersion": keys::API_VERSION,
         "kind": "PackageInstance",
         "metadata": {
             "name": "secret-ref-myapp-bootstrap",
@@ -973,7 +975,10 @@ fn import_marker_without_kind_has_no_target() {
     });
     assert!(import_target_from_manifest(&manifest).unwrap().is_none());
     // The marker itself is ready as soon as it exists.
-    assert!(is_immediate_kind(gk("PackageInstance")));
+    assert!(is_immediate_kind(crate::manifest::kinds::GroupKind::new(
+        keys::GROUP,
+        "PackageInstance"
+    )));
 }
 
 #[test]
@@ -1026,6 +1031,7 @@ fn crd_import_that_is_not_a_crd_ref_has_no_served_versions() {
     // `kix.mkImport { kind = "CustomResourceDefinition"; }` writes no
     // `crd-kind`, so the deploy waits for the CRD without a version check.
     let manifest = json!({
+        "apiVersion": keys::API_VERSION,
         "kind": "PackageInstance",
         "metadata": {
             "name": "external-crds",
@@ -1046,6 +1052,7 @@ fn crd_import_that_is_not_a_crd_ref_has_no_served_versions() {
 #[test]
 fn non_crd_import_has_no_served_versions() {
     let manifest = json!({
+        "apiVersion": keys::API_VERSION,
         "kind": "PackageInstance",
         "metadata": {
             "name": "secret-ref-myapp-bootstrap",
@@ -1089,6 +1096,7 @@ fn crd_served_version_check() {
 #[test]
 fn import_marker_non_import_mode_ignored() {
     let manifest = json!({
+        "apiVersion": keys::API_VERSION,
         "kind": "PackageInstance",
         "metadata": {
             "annotations": { keys::MODE: "normal" }

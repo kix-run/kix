@@ -864,7 +864,7 @@ mod revision_map_tests {
         assert_eq!(read.revisions, Some(Ok(map(None))));
 
         let status = &records.api().get("c-new").await.unwrap().data["status"];
-        assert_eq!(status["revisions"]["format"], json!(1));
+        assert_eq!(status["revisions"]["format"], json!(2));
         assert_eq!(status["revisions"]["clusterLevel"], "c-3");
         assert_eq!(status["revisions"]["instances"]["app/web"], "c-1");
         assert!(status.get(keys::PACKAGE_INDEX_FIELD).is_none(), "{status}");
@@ -935,6 +935,24 @@ mod revision_map_tests {
         assert!(status.get("revisions").is_none(), "{status}");
     }
 
+    /// Naming a kept-orphans revision in a map that a release reading only
+    /// format 1 wrote sets the map's format to 2, because the map now names
+    /// a revision in this release's format. The rest of the map stays.
+    #[tokio::test]
+    async fn naming_kept_orphans_sets_the_format_of_the_map() {
+        let mut older = record("c-new");
+        let mut written = map(None).to_value();
+        written["format"] = json!(1);
+        older["status"] = json!({ "revisions": written });
+        let api = FakeApi::new([older]);
+        let records = records_with(&api).await;
+        records.name_kept_orphans("c-new", "c-4").await.unwrap();
+        let status = &records.api().get("c-new").await.unwrap().data["status"];
+        assert_eq!(status["revisions"]["format"], json!(2));
+        let read = records.get("c-new").await.unwrap().unwrap();
+        assert_eq!(read.revisions, Some(Ok(map(Some("c-4")))));
+    }
+
     /// Superseding a record clears its map, because a Superseded record
     /// keeps no revisions. A requeued record then has no map until a run
     /// deploys it.
@@ -995,18 +1013,19 @@ mod revision_map_tests {
             cluster_level: Vec::new(),
             names: BTreeMap::new(),
             groups: None,
+            imports: Default::default(),
         };
         let mut old = record("c-old");
         old["status"] = json!({
             (keys::PACKAGE_INDEX_FIELD): index.to_value(),
-            "revisions": { "format": 2, "instances": {}, "clusterLevel": "c-9" },
+            "revisions": { "format": 3, "instances": {}, "clusterLevel": "c-9" },
         });
         let api = FakeApi::new([old]);
         let records = records_with(&api).await;
         let read = records.get("c-old").await.unwrap().unwrap();
         assert_eq!(read.package_index, Some(index));
         let unreadable = read.revisions.unwrap().unwrap_err().to_string();
-        assert!(unreadable.contains("format 2"), "{unreadable}");
+        assert!(unreadable.contains("format 3"), "{unreadable}");
     }
 }
 

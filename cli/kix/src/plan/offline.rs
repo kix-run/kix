@@ -189,6 +189,9 @@ fn why(write: &ObjectWrite) -> String {
                 by.join("; ")
             )
         }
+        Some(WriteReason::UnfinishedDeploy { record }) => {
+            format!("may have been written by unfinished deployment {record}")
+        }
         Some(WriteReason::HeldByOtherCluster { changed_by }) => {
             let by: Vec<&str> = changed_by.iter().map(|o| o.manager.as_str()).collect();
             format!(
@@ -486,6 +489,89 @@ mod tests {
         }
     }
 
+    /// Return the build of Kix cluster `a` where `user` depends on `conf`,
+    /// which holds `v`, with each file at a store path named by the
+    /// object's content, so a change of `conf` moves the build hash of
+    /// `user` and leaves its manifest alone.
+    fn chained(v: &str, record: &str) -> InstallableBuild {
+        let conf = config_map("conf", v);
+        let conf_hash = crate::manifest::hash::object_hash(&conf);
+        let mut user = config_map("user", "1");
+        user["metadata"]["annotations"] =
+            json!({ (keys::DEPENDS_ON): format!("requires:{conf_hash}") });
+        let record = json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": RECORD_KIND,
+            "metadata": { "name": record, "labels": { (keys::CLUSTER_LABEL): "a" } },
+            "spec": { "cluster": "a" },
+        });
+        let mut graph = StoreGraph::empty("a");
+        for (hash, manifest) in [
+            (conf_hash.clone(), conf),
+            (format!("u{}", &conf_hash[1..]), user),
+            (format!("r{}", &conf_hash[1..]), record),
+        ] {
+            let path = std::path::PathBuf::from(format!("/nix/store/{hash}-x"));
+            if lifecycle::is_record(&manifest) {
+                graph.activation_path = path.clone();
+            }
+            graph.resources.insert(
+                path.clone(),
+                crate::eval::store_graph::ResourceNode {
+                    store_path: path,
+                    manifest,
+                },
+            );
+        }
+        Build::carried(b"build".to_vec(), "a", |_| Ok((Carried, graph)))
+            .unwrap()
+            .installable()
+            .unwrap()
+    }
+
+    /// An offline plan compares what a deploy sends, as the deploy does, so
+    /// it lists no write for an object whose dependencies changed and whose
+    /// own manifest did not.
+    #[tokio::test]
+    async fn an_offline_plan_lists_no_write_for_a_change_of_dependencies_alone() {
+        let (old, new) = (chained("1", "a-old"), chained("2", "a-new"));
+        let user = |b: &InstallableBuild| {
+            manifests(b.graph())
+                .into_iter()
+                .find(|m| m["metadata"]["name"] == "user")
+                .unwrap()
+        };
+        assert_ne!(
+            keys::get(&user(&old), keys::DEPENDS_ON),
+            keys::get(&user(&new), keys::DEPENDS_ON)
+        );
+        let planner = Planner::new(crate::plan::fixtures::flags(&[]), &|_| {});
+        let baseline = crate::plan::baseline::Baseline {
+            source: crate::plan::baseline::ActiveSource::Build(Box::new(old.graph().clone())),
+            active_manifests: manifests(old.graph()),
+            ..crate::plan::baseline::Baseline::empty()
+        };
+        let offline = planner
+            .plan(new.graph(), "a", &baseline, None)
+            .await
+            .unwrap();
+        let mut writes: Vec<String> = offline
+            .plan()
+            .nodes()
+            .iter()
+            .filter_map(|n| n.action.written())
+            .filter(|m| !lifecycle::is_record(m))
+            .map(|m| ResourceId::from_value(m).name)
+            .collect();
+        writes.sort();
+        assert_eq!(writes, ["conf"]);
+        let diff = offline.pkg_diff();
+        assert!(
+            diff.changed_with_cluster_level()
+                .all(|c| c.dep_affected_resources.is_empty())
+        );
+    }
+
     /// The live plan of a cluster that holds the confirmed build as Kix
     /// applied it matches the confirmed plan, and the run uses it. A Kix
     /// cluster read from records is planned again from its notes.
@@ -509,6 +595,56 @@ mod tests {
         let api = FakeApi::new([current].into_iter().chain(live));
         let differs = refusal(recheck(&api, &graph, &new).await);
         assert_eq!(differs.writes_added.len(), 2, "{differs:?}");
+    }
+
+    /// A plan made without the deployed build on this machine reads the
+    /// old side from the live objects. A live object this Kix wrote carries
+    /// no build hash, and with no applied hash recorded it stands in as the
+    /// fields Kix owns on it. Its object hash is the new file's, so the
+    /// plan lists the write as a re-apply instead of refusing it as one the
+    /// plan does not show.
+    #[tokio::test]
+    async fn a_plan_without_the_deployed_build_reapplies_an_object_with_no_applied_hash() {
+        let new = build(&[config_map("web", "1")], "a-cur");
+        let graph = new.graph().clone();
+        let live: Vec<Value> = live_of(&graph)
+            .into_iter()
+            .map(|mut m| {
+                if let Some(a) = m["metadata"]["annotations"].as_object_mut() {
+                    a.remove(keys::IDENTITY_HASH);
+                }
+                // Kix's entry owns every label and annotation it sent.
+                let mut metadata = serde_json::Map::new();
+                for part in ["labels", "annotations"] {
+                    if let Some(map) = m["metadata"][part].as_object() {
+                        let owned = map.keys().map(|k| (format!("f:{k}"), json!({})));
+                        metadata.insert(format!("f:{part}"), owned.collect());
+                    }
+                }
+                m["metadata"]["managedFields"][0]["fieldsV1"]["f:metadata"] = metadata.into();
+                m
+            })
+            .collect();
+        let api = cluster(&graph, None, &live, &[], &[]).await;
+        let client = api.client();
+        let baseline = crate::plan::baseline::Baseline::of_cluster(&client, &new, &|_| {})
+            .await
+            .unwrap();
+        let checked = Planner::new(crate::plan::fixtures::flags(&[]), &|_| {})
+            .plan(new.graph(), "a", &baseline, Some(&client))
+            .await
+            .map_err(|e| e.to_string())
+            .unwrap();
+        let changes: Vec<_> = checked
+            .objects()
+            .writes
+            .iter()
+            .map(|w| (w.name.as_str(), w.change))
+            .collect();
+        assert_eq!(
+            changes,
+            [("web", crate::plan::document::WriteChange::Reapplied)]
+        );
     }
 
     /// A drifted object, an object with no applied hash, and the leftover
@@ -574,8 +710,26 @@ mod tests {
             .find(|m| m["metadata"]["name"] == "web")
             .unwrap();
         live.retain(|m| m["metadata"]["name"] != "web");
-        live.push(applied(left));
-        let api = cluster(&graph, Some(&stopped), &live, &["web", "calm"], &[]).await;
+        let left = applied(left);
+        live.push(left.clone());
+        // The current record holds what it applied to `web`, and the failed
+        // record holds what it applied over it, which the live object holds.
+        let api = cluster(&graph, Some(&stopped), &live, &["calm"], &["web"]).await;
+        let left: DynamicObject = serde_json::from_value(left).unwrap();
+        let left_hash = applied_content_hash(&left, &FieldManager::of("a")).unwrap();
+        let store = Revisions::new(&api.client());
+        for revision in RevisionSet::of("a", &stopped).all() {
+            let entries: BTreeMap<String, String> = revision
+                .spec
+                .objects
+                .iter()
+                .filter(|o| o.name == "web")
+                .map(|o| (o.hash.clone(), left_hash.clone()))
+                .collect();
+            if !entries.is_empty() {
+                store.write_applied(&revision.name, &entries).await.unwrap();
+            }
+        }
         let differs = refusal(recheck(&api, &graph, &new).await);
         let record = &stopped.resources[&stopped.activation_path].manifest["metadata"]["name"];
         assert_eq!(

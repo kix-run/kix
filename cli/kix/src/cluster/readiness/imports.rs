@@ -65,6 +65,18 @@ impl ImportTarget {
             &self.kind,
         )
     }
+
+    /// Return the group, kind, namespace, and name of the imported object.
+    pub fn resource_id(&self) -> crate::manifest::types::ResourceId {
+        crate::manifest::types::ResourceId::new(
+            crate::manifest::types::api_group(&self.api_version),
+            &self.kind,
+            self.namespace
+                .as_deref()
+                .unwrap_or(crate::manifest::types::CLUSTER_SCOPED),
+            &self.name,
+        )
+    }
 }
 
 /// An import marker with missing or invalid annotations. Planning a deploy

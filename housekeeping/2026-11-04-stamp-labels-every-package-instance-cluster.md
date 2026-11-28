@@ -1,3 +1,0 @@
-# 2026-11-04 · `cli/kix/src/eval/stamp.rs` · The build stamps every PackageInstance `kix.run/package: _cluster`, import markers included.
-
-A package's own PackageInstance path is not in its `resource_paths`, so `stamp_annotations` files it with the unowned resources and stamps it `_cluster`. An import marker that no package lists is `_cluster` too. On the cluster, the stamp therefore does not say which package a marker belongs to. `StoreGraph::synthesize` now places objects the build knows by identity, but a reader of the live stamp alone (gc, health, migrate, a diff of a marker the new build dropped) still sees the wrong package. Changing the stamp changes what every deploy writes to the cluster.

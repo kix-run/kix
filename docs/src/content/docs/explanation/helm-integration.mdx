@@ -86,8 +86,10 @@ Real clusters rarely start empty. Cloud providers pre-install CoreDNS and defaul
 
 Kix models existing resources without taking ownership of their lifecycle through **import markers**:
 
-- **Cluster-level imports (`kix.mkImport`):** Used in `cluster.nix` or cluster flavors for existing Services, StorageClasses, or infrastructure roles. An import renders no Kubernetes Service or Deployment; instead, it emits a lightweight `PackageInstance` marker annotated with `kix.run/mode: import` and exposes the same `out` attributes (`name`, `fqdn`, `port`, or `crds`) that a managed package would.
+- **Cluster-level imports (`kix.mkImport`):** Used in `cluster.nix` or cluster flavors for existing Services, StorageClasses, or infrastructure roles. An import renders no Kubernetes Service or Deployment; instead, it emits a lightweight `PackageInstance` marker annotated with `kix.run/mode: import` into the build and exposes the same `out` attributes (`name`, `fqdn`, `port`, or `crds`) that a managed package would.
 - **Secret and CRD references (`scope.mkSecretRef` and `scope.mkCRDRef`):** Used inside packages when a Secret is populated out-of-band (by External Secrets Operator, Vault, or an administrator) or when an operator installs its own CRDs at runtime.
+
+Import markers exist only in the dependency graph; Kix never applies them to the cluster. Instead, each package instance's [revision](/docs/reference/annotations-crds-and-receipts/#packageinstancerevision) records its markers under `spec.imports`, so `kix status` and prune ordering work even without the build.
 
 Imports participate in both compile-time validation and deploy-time scheduling:
 

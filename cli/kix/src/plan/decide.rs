@@ -4,27 +4,42 @@
 //! [`decide`] reads three stored facts: the new build, the live objects, and
 //! the records and revisions of the Kix cluster ([`Ledger`]). `kix plan`,
 //! `kix deploy`, `kix rollback`, and the operator's deploy and repair all
-//! decide through it. For each object of the new build it applies three
-//! rules, in this order:
+//! decide through it. For each object of the new build it applies one rule:
 //!
-//! 1. The live object is missing, or its build hash (`kix.run/identity-hash`)
-//!    or owner stamps differ from the new build's: apply.
-//! 2. The build hashes match and Kix has no applied hash for the object:
-//!    apply, so the run records one. A missing applied hash never reads as
-//!    in sync.
-//! 3. The applied hash differs from the hash of the live object's Kix-owned
-//!    fields: apply, reverting drift ([`drift::check_object`]). The fields
-//!    the object cedes are out of that hash. The apply leaves out each ceded
-//!    field another manager owns, so a forced apply does not take it back.
-//!    A runner that never forces (the operator) does not write an object
-//!    when another manager took a changed field from Kix's own `Apply`
-//!    entry, because the apply would be refused. It reports the drift
-//!    instead. Without an entry of its own Kix took nothing, so the
-//!    operator applies. When another Kix cluster owns such a field, every
-//!    runner applies without force, so Kubernetes refuses only a value
-//!    that differs, with an error that names that Kix cluster.
+//! > Skip the object when a revision this Kix cluster needs holds an applied
+//! > hash for the object with the new build's object hash, the live object
+//! > still matches that applied hash, and each field the object cedes that
+//! > this Kix cluster's own entry still owns holds the value the build
+//! > sends. In every other case, apply it and record the applied hash.
 //!
-//! Otherwise the object is unchanged and nothing is written to it.
+//! The rule needs "the live object matches the applied hash" to mean "every
+//! field this Kix cluster owns holds what the build sends". The object hash
+//! ([`crate::manifest::hash::object_hash`]) covers every field Kix sends,
+//! every `kix.run/*` annotation among them, and none of the retired notes.
+//! The applied hash ([`crate::cluster::fieldsv1::applied_content_hash`])
+//! covers the same, except the fields named in `kix.run/cede-fields`, so
+//! that another manager can take them without the object reading as
+//! drifted. Two builds that differ only in a ceded value therefore share an
+//! applied hash, and the third clause compares those fields with the build
+//! while Kix still owns them ([`drift::owned_ceded_fields_match`]). Nothing
+//! on the live object says which build wrote it, so the revisions say it,
+//! by the object's name.
+//!
+//! When the revision holds an applied hash for the new build's object hash
+//! and the live object differs from it, the apply reverts drift
+//! ([`drift::check_object`]): the fields the object cedes are out of that
+//! hash, and the apply leaves out each ceded field another manager owns, so
+//! a forced apply does not take it back. A runner that never forces (the
+//! operator) applies the build without the fields another manager took from
+//! Kix's own `Apply` entry, because the apply would be refused on them. It
+//! reports those fields and records no applied hash, so the report stays
+//! until the drift is gone. When another Kix cluster owns such a field,
+//! every runner applies without force, so Kubernetes refuses only a value
+//! that differs, with an error that names that Kix cluster.
+//!
+//! The live object can also match an applied hash another revision holds,
+//! when a `Failed` or `Partial` deploy wrote it. Then the apply is no drift
+//! and is sent without force.
 //!
 //! The live objects give three answers for an object: present, absent, or
 //! not known (its kind is not served). An object of the new build whose kind
@@ -35,13 +50,13 @@
 //!
 //! An orphan is a live object that the new build does not make and that the
 //! current record's revisions, the kept-orphans revision, or a `Failed` or
-//! `Partial` record's revisions name. A `Failed` or `Partial` record left an
-//! object only when the live object carries the build hash that record's
-//! revision gives it, so a run that died before it wrote applied hashes
-//! still leaves objects the next deploy takes in. An object that a `Degraded`,
-//! `Failed`, or `Partial` record names is taken in only when it has an entry
-//! under this Kix cluster's field manager, because that deploy may never have
-//! reached it.
+//! `Partial` record's revisions name. An object that a `Degraded`, `Failed`,
+//! or `Partial` record names is taken in only when this Kix cluster wrote
+//! it, because that deploy may never have reached it: the record's revision
+//! holds an applied hash for it, or it has an `Apply` entry under this Kix
+//! cluster's own field manager. The manager `kix` an older Kix shared
+//! between Kix clusters does not count, so a deploy never takes in an
+//! object only another Kix cluster wrote before the upgrade.
 //!
 //! Every record a plan reads has a revision map: a run gives the records an
 //! older Kix wrote revisions before it writes anything
@@ -50,23 +65,34 @@
 //! could not read this Kix cluster's records or revisions gives an error, so
 //! the plan fails closed.
 //!
+//! An import marker stands for an object Kix does not make, such as a CRD
+//! another tool installs. It is a node of the build's graph, and Kix writes
+//! nothing for it: [`decide`] leaves it unchanged without reading the
+//! cluster, and it is not one of the objects a build makes ([`lifecycle::made_by`]). A
+//! marker an older Kix applied is therefore an object that left the build,
+//! like any other. The scheduler checks that the marker's target exists
+//! when something the deploy writes depends on it.
+//!
 //! [`decide`] also lists each object that needs the migration write
 //! ([`crate::cluster::migration_write`]). It judges drift on such an object
 //! as the write leaves it: the entry under `kix` that the write moves to
 //! this Kix cluster's manager counts as this cluster's own, and only on an
 //! object a record of this cluster names ([`migration_write::takes_legacy`]).
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde_json::Value;
 
 use crate::cluster::apply::{self, ChangeAction, Deployed};
-use crate::cluster::drift::{self, DriftReport, DriftVerdict};
+use crate::cluster::drift::{self, DriftReport};
+use crate::cluster::edges::{Edges, Prior};
 use crate::cluster::field_manager::FieldManager;
+use crate::cluster::fieldsv1;
 use crate::cluster::inventory::{Live, LiveObjects, ReadForbidden};
 use crate::cluster::migration_write;
-use crate::cluster::revision::{AppliedHashes, RevisionObject};
+use crate::cluster::revision::{AppliedHashes, Need, RevisionObject};
 use crate::cluster::tenancy::{Problem, Tenancy};
+use crate::manifest::hash;
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{self, PHASE_DEGRADED, PHASE_FAILED, PHASE_PARTIAL};
 use crate::manifest::types::ResourceId;
@@ -76,15 +102,25 @@ use crate::manifest::types::ResourceId;
 pub(crate) enum Label {
     /// The new build changes the object, or the cluster does not hold it.
     Intended,
-    /// The live object carries the build hash that this `Failed` or
-    /// `Partial` record's revision gives it: that deploy wrote it.
+    /// The live object matches the applied hash that a revision of this
+    /// `Failed` or `Partial` record holds for it: that deploy wrote it.
     AppliedByRecord(String),
-    /// This `Degraded` record names the object with a build hash the live
-    /// object does not carry: its deploy did not reach it.
+    /// This `Degraded` record names the object and holds no applied hash
+    /// for it: its deploy did not reach it.
     LeftByDegraded(String),
-    /// The live object carries the new build's hash, but Kix has no applied
-    /// hash for it.
+    /// A revision this Kix cluster needs names the object with the new
+    /// build's object hash, and holds no applied hash for it.
     AppliedHashMissing,
+    /// A revision of this `Failed` or `Partial` record names the object and
+    /// holds no applied hash for it, and the live object matches no applied
+    /// hash a revision holds. A deploy of this Kix cluster that did not
+    /// finish may have written it. With a drift report, a revision holds an
+    /// applied hash for the new build's object hash, and the apply takes
+    /// back what differs from it as [`Label::RevertsDrift`] does.
+    Unfinished {
+        record: String,
+        drift: Option<DriftReport>,
+    },
     /// The live object's Kix-owned fields changed since Kix applied it.
     RevertsDrift(DriftReport),
     /// Another Kix cluster, or the manager `kix` an older Kix applies
@@ -96,16 +132,26 @@ pub(crate) enum Label {
     /// when this Kix cluster has no `Apply` entry of its own on the object.
     HeldByOtherCluster(DriftReport),
     /// The live object's Kix-owned fields changed since Kix applied it, and
-    /// another manager owns fields the build sets. A runner that never
-    /// forces reports this and writes nothing, because Kubernetes would
-    /// refuse the apply. The live object carries the build's hash, so what
-    /// depends on it goes on.
+    /// another manager took fields the build sets. A runner that never
+    /// forces applies the build without those fields, reports them, and
+    /// records no applied hash.
     DriftReported(DriftReport),
     /// Unchanged, and written again because the deploy runs with
     /// `--reconcile`.
     Reconciled,
     /// Unchanged: nothing is written to it.
     Unchanged,
+}
+
+impl Label {
+    /// Return whether the CLI applies the object with force, taking back
+    /// the fields another manager changed.
+    pub(crate) fn reverts_drift(&self) -> bool {
+        matches!(
+            self,
+            Label::RevertsDrift(_) | Label::Unfinished { drift: Some(_), .. }
+        )
+    }
 }
 
 /// What a deploy does to one object of the new build.
@@ -136,6 +182,10 @@ pub(crate) struct Decided {
     /// The objects of `migrations` whose entry under `kix` the write moves
     /// to this Kix cluster's manager ([`migration_write::renames`]).
     pub renamed: Vec<ResourceId>,
+    /// The objects a runner that never forces applies without the fields
+    /// another manager holds ([`Label::DriftReported`]). The run records no
+    /// applied hash for them.
+    pub unrecorded: Vec<ResourceId>,
     /// The orphans that need the migration write, sorted. A run writes it
     /// to those it leaves on the cluster, once it has recorded them.
     pub orphan_migrations: Vec<ResourceId>,
@@ -159,10 +209,12 @@ struct Named {
     record: String,
     phase: String,
     role: Role,
-    /// The build hash the revision gives the object.
+    /// The hash the revision gives the object ([`RevisionObject::hash`]).
     hash: String,
-    /// The revision records an applied hash for the object.
-    applied: bool,
+    /// What the revision says the object depends on.
+    needs: Vec<Need>,
+    /// The applied hash the revision holds for the object.
+    applied: Option<String>,
 }
 
 /// What the records and revisions of one Kix cluster say about its objects.
@@ -265,7 +317,8 @@ impl Ledger {
                         phase: record.phase.clone(),
                         role: role.clone(),
                         hash: object.hash.clone(),
-                        applied: revision.applied.contains_key(&object.hash),
+                        needs: object.needs.clone(),
+                        applied: revision.applied.get(&object.hash).cloned(),
                     });
             }
         }
@@ -322,33 +375,46 @@ impl Ledger {
         self.named.keys().filter(move |rid| !made.contains(*rid))
     }
 
-    /// Return the `Failed` or `Partial` record whose revision gives the
-    /// object `rid` the build hash `live`.
+    /// Return the `Failed` or `Partial` record whose revision holds the
+    /// applied hash `live` for the object `rid`: that deploy wrote what the
+    /// live object holds.
     fn applied_by(&self, rid: &ResourceId, live: &str) -> Option<&str> {
         self.named(rid)
-            .find(|n| n.role == Role::Stopped && n.hash == live)
+            .find(|n| n.role == Role::Stopped && n.applied.as_deref() == Some(live))
             .map(|n| n.record.as_str())
     }
 
-    /// Return the current `Degraded` record when its deploy did not reach
-    /// `rid`: the live object carries another build hash than the one the
-    /// record gives it, or, when the object is gone (`live` is `None`), the
-    /// record has no applied hash for it.
-    fn left_by_degraded(&self, rid: &ResourceId, live: Option<&str>) -> Option<&str> {
+    /// Return the current `Degraded` record when its revision names `rid`
+    /// and holds no applied hash for it: its deploy did not reach it.
+    fn left_by_degraded(&self, rid: &ResourceId) -> Option<&str> {
         self.named(rid)
-            .find(|n| {
-                n.role == Role::Current
-                    && n.phase == PHASE_DEGRADED
-                    && match live {
-                        Some(live) => n.hash != live,
-                        None => !n.applied,
-                    }
-            })
+            .find(|n| n.role == Role::Current && n.phase == PHASE_DEGRADED && n.applied.is_none())
             .map(|n| n.record.as_str())
     }
 
-    /// Return whether the current record names `rid` with build hash
-    /// `hash`: the new build leaves the object unchanged.
+    /// Return a `Failed` or `Partial` record whose revision names `rid` and
+    /// holds no applied hash for it, when the live object, whose applied
+    /// hash is `live`, matches no applied hash a revision holds for it. A
+    /// deploy that was killed records no applied hashes, so such a record
+    /// may have written the object.
+    fn unfinished(&self, rid: &ResourceId, live: Option<&str>) -> Option<&str> {
+        if live.is_some_and(|l| self.applied.holds(rid, l)) {
+            return None;
+        }
+        self.named(rid)
+            .find(|n| n.role == Role::Stopped && n.applied.is_none())
+            .map(|n| n.record.as_str())
+    }
+
+    /// Return whether a revision this Kix cluster needs names `rid` with
+    /// hash `hash` and holds no applied hash for it.
+    fn names_unapplied(&self, rid: &ResourceId, hash: &str) -> bool {
+        self.named(rid)
+            .any(|n| n.hash == hash && n.applied.is_none())
+    }
+
+    /// Return whether the current record names `rid` with hash `hash`: the
+    /// new build leaves the object unchanged.
     fn deployed(&self, rid: &ResourceId, hash: &str) -> bool {
         self.named(rid)
             .any(|n| n.role == Role::Current && n.hash == hash)
@@ -358,45 +424,73 @@ impl Ledger {
         self.named.get(rid).into_iter().flatten()
     }
 
-    /// Return `rid` with each build hash a record gives it, once each.
+    /// Return `rid` with each hash a record gives it, once each, and the
+    /// edges the records give it with that hash.
     fn named_objects(&self, rid: &ResourceId) -> Vec<RevisionObject> {
-        let mut out: Vec<RevisionObject> = self
-            .named(rid)
-            .map(|n| RevisionObject::of_id(&n.hash, rid))
+        let mut by_hash: BTreeMap<&str, Vec<Need>> = BTreeMap::new();
+        for n in self.named(rid) {
+            by_hash
+                .entry(n.hash.as_str())
+                .or_default()
+                .extend(n.needs.iter().cloned());
+        }
+        by_hash
+            .into_iter()
+            .map(|(hash, needs)| RevisionObject::of_id(hash, rid).with_needs(needs))
+            .collect()
+    }
+
+    /// Return the dependency edges that the revisions of this Kix cluster's
+    /// records record. An object that only format 1 revisions name takes its
+    /// edges from its manifest in `in_hand`
+    /// ([`Edges::with_format_one_annotations`]).
+    pub(crate) fn edges(&self, in_hand: &[Value]) -> Edges {
+        Edges::of_own_revisions(&self.tenancy, in_hand)
+    }
+
+    /// Return the objects earlier deploys made, as `manifests` describe
+    /// them, with the edges and the hashes this Kix cluster's revisions
+    /// give them.
+    pub(crate) fn prior(&self, manifests: Vec<Value>) -> Prior {
+        let hashes = self
+            .named
+            .iter()
+            .map(|(rid, named)| (rid.clone(), named.iter().map(|n| n.hash.clone()).collect()))
             .collect();
-        out.sort();
-        out.dedup();
-        out
+        Prior {
+            edges: self.edges(&manifests),
+            manifests,
+            hashes,
+        }
     }
 
     /// Return whether the live object `obj` is an orphan the deploy takes
     /// in: an `Active` current record or its kept orphans name it, or a
     /// record whose deploy may not have reached it names it and this Kix
     /// cluster wrote it. Such a record is a `Degraded` current record, or a
-    /// `Failed` or `Partial` record that names it with the build hash it
-    /// carries. An object with no entry under this cluster's field manager
-    /// came from elsewhere, such as another Kix cluster that deploys an
-    /// object of the same name.
+    /// `Failed` or `Partial` record.
+    ///
+    /// This Kix cluster wrote the object when the record's revision holds
+    /// an applied hash for it, or the object has an `Apply` entry under
+    /// this Kix cluster's own field manager. A revision holds an applied
+    /// hash only for an object a deploy of its Kix cluster applied, and a
+    /// conversion only for one whose note lists the record. The entry is
+    /// for a run killed before it recorded what it applied. The manager
+    /// `kix` an older Kix shared between Kix clusters does not count, so an
+    /// object only another Kix cluster wrote before the upgrade stays.
     fn takes_in(&self, rid: &ResourceId, obj: &kube::api::DynamicObject) -> bool {
-        let live = build_hash(obj);
-        let view = self.view_of(obj);
-        let written_here = |_: &Named| {
-            obj.metadata
-                .managed_fields
-                .iter()
-                .flatten()
-                .any(|e| view.counts_as_own(e.manager.as_deref()))
-        };
+        let entries = obj.metadata.managed_fields.as_deref().unwrap_or_default();
+        let applied_here = || self.manager.apply_entry(entries).is_some();
         self.named(rid).any(|n| match n.role {
-            Role::Current if n.phase == PHASE_DEGRADED => written_here(n),
-            Role::Current | Role::Kept => true,
-            Role::Stopped => live == Some(n.hash.as_str()) && written_here(n),
+            Role::Current if n.phase != PHASE_DEGRADED => true,
+            Role::Kept => true,
+            Role::Current | Role::Stopped => n.applied.is_some() || applied_here(),
         })
     }
 }
 
-/// Return the build hash the live object `obj` carries.
-fn build_hash(obj: &kube::api::DynamicObject) -> Option<&str> {
+/// Return the build hash the live Activation record `obj` carries.
+fn record_hash(obj: &kube::api::DynamicObject) -> Option<&str> {
     obj.metadata
         .annotations
         .as_ref()
@@ -406,10 +500,11 @@ fn build_hash(obj: &kube::api::DynamicObject) -> Option<&str> {
 /// Decide what a deploy does to each object of `new` and which live objects
 /// it takes in as orphans.
 ///
-/// `new` holds the objects the runner applies. `made` holds every object of
-/// the new build, which can be more: the operator leaves CRDs and the
+/// `new` holds the objects the runner applies, and the import markers of
+/// the build, which [`decide`] leaves unchanged without reading them. `made`
+/// holds every object of the new build ([`lifecycle::made_by`]), which can be more: the operator leaves CRDs and the
 /// Activation record out of `new`, and they are still not orphans. `live`
-/// holds the live objects of `new` and of every object the ledger names
+/// holds the live objects of `made` and of every object the ledger names
 /// that `made` lacks ([`Ledger::candidates`]). With `reconcile`, an
 /// unchanged object is written again. `forces` says whether the runner
 /// applies the objects that revert drift with force, as the CLI does and
@@ -429,6 +524,14 @@ pub(crate) fn decide(
     let mut forbidden: BTreeSet<String> = BTreeSet::new();
     for manifest in new {
         let id = ResourceId::from_value(manifest);
+        if !lifecycle::makes(manifest) {
+            out.decisions.push(Decision {
+                action: ChangeAction::Skip(id.clone()),
+                id,
+                label: Label::Unchanged,
+            });
+            continue;
+        }
         let (action, label) = match live.get(&id) {
             Live::Unread => {
                 forbidden.extend(live.forbidden_resource(&id).map(str::to_string));
@@ -442,7 +545,12 @@ pub(crate) fn decide(
                     }
                 }
                 match decide_present(manifest, &id, obj, ledger, forces) {
-                    Some((label, action)) => (action, label),
+                    Some((label, action)) => {
+                        if matches!(label, Label::DriftReported(_)) {
+                            out.unrecorded.push(id.clone());
+                        }
+                        (action, label)
+                    }
                     None if reconcile => (
                         apply::changed(manifest, Deployed::RerunHash(rerun_hash(obj)), false),
                         Label::Reconciled,
@@ -453,15 +561,14 @@ pub(crate) fn decide(
             // Gone, being deleted, or of a kind not served yet: the apply
             // waits for it to go, or for its kind, then creates it.
             found => {
-                let hash = keys::get(manifest, keys::IDENTITY_HASH);
-                if hash.is_some_and(|h| ledger.deployed(&id, h)) {
+                if ledger.deployed(&id, &hash::object_hash(manifest)) {
                     out.lost.push(id.clone());
                 }
                 let deployed = match found {
                     Live::Present(obj) => Deployed::RerunHash(rerun_hash(obj)),
                     Live::Absent | Live::Unserved | Live::Unread => Deployed::Nothing,
                 };
-                let label = match ledger.left_by_degraded(&id, None) {
+                let label = match ledger.left_by_degraded(&id) {
                     Some(record) => Label::LeftByDegraded(record.to_string()),
                     None => Label::Intended,
                 };
@@ -499,12 +606,13 @@ pub(crate) fn decide(
     out.unknown.sort();
     out.migrations.sort();
     out.renamed.sort();
+    out.unrecorded.sort();
     out.orphan_migrations.sort();
     Ok(out)
 }
 
-/// Apply the three rules to `manifest`, whose live object `obj` the cluster
-/// holds. Return `None` when the object is unchanged.
+/// Apply the rule to `manifest`, whose live object `obj` the cluster holds.
+/// Return `None` when the object is unchanged.
 fn decide_present(
     manifest: &Value,
     id: &ResourceId,
@@ -513,59 +621,80 @@ fn decide_present(
     forces: bool,
 ) -> Option<(Label, ChangeAction)> {
     let apply = |m: &Value| apply::changed(m, Deployed::RerunHash(rerun_hash(obj)), false);
-    let live = build_hash(obj);
-    let record = lifecycle::is_record(manifest);
-    if live != keys::get(manifest, keys::IDENTITY_HASH)
-        || (!record && apply::owner_stamps_moved(manifest, obj))
-    {
-        let label = match live.and_then(|h| ledger.applied_by(id, h)) {
-            Some(by) => Label::AppliedByRecord(by.to_string()),
-            None => match ledger.left_by_degraded(id, live) {
-                Some(by) => Label::LeftByDegraded(by.to_string()),
-                None => Label::Intended,
-            },
-        };
-        return Some((label, apply(manifest)));
+    // No revision names the Activation record. Its name and its identity
+    // hash say which build it records.
+    if lifecycle::is_record(manifest) {
+        return (record_hash(obj) != keys::get(manifest, keys::IDENTITY_HASH))
+            .then(|| (Label::Intended, apply(manifest)));
     }
-    // No revision names the Activation record, so it has no applied hash
-    // to keep.
-    if record {
+    let hash = hash::object_hash(manifest);
+    let manager = ledger.view_of(obj);
+    let live = fieldsv1::applied_content_hash(obj, &manager);
+    let recorded = ledger.applied.entry(id, &hash);
+    if recorded.is_some()
+        && recorded == live.as_deref()
+        && drift::owned_ceded_fields_match(manifest, obj, &manager)
+    {
         return None;
     }
-    let Some(applied) = ledger.applied.applied(obj) else {
-        return Some((Label::AppliedHashMissing, apply(manifest)));
-    };
-    let manager = ledger.view_of(obj);
-    let report = drift::check_object(obj, Some(applied), &manager);
-    match report.verdict {
-        // Kix recorded what it applied, so an object that now has no Kix
-        // field records lost every field Kix owned.
-        DriftVerdict::Drifted { .. } | DriftVerdict::NoFieldset => {
-            // A field another manager took from Kix's own entry holds a
-            // value that differs, so a runner that never forces skips it.
-            // Without an entry of its own Kix took nothing, so ownership says
-            // nothing about values, and the apply goes on.
-            let entries = obj.metadata.managed_fields.as_deref().unwrap_or_default();
-            let own_entry = manager.apply_entry(entries).is_some();
-            if !forces && own_entry && drift::conflicts(obj, manifest, &manager) {
-                return Some((Label::DriftReported(report), ChangeAction::Skip(id.clone())));
-            }
-            if !drift::held_by_other_clusters(obj, manifest, &manager).is_empty() {
-                return Some((Label::HeldByOtherCluster(report), apply(manifest)));
-            }
-            // A forced apply leaves out each ceded field another manager
-            // holds on the object it reads right before it writes, so a field
-            // taken after the plan is left too. A runner that never forces
-            // sends the manifest without the fields held now.
-            let sent = if forces {
-                manifest.clone()
-            } else {
-                drift::without_ceded_taken(manifest, obj, &manager)
-            };
-            Some((Label::RevertsDrift(report), apply(&sent)))
-        }
-        DriftVerdict::InSync | DriftVerdict::Unstamped => None,
+    if let Some(by) = live.as_deref().and_then(|l| ledger.applied_by(id, l)) {
+        return Some((Label::AppliedByRecord(by.to_string()), apply(manifest)));
     }
+    if let Some(by) = ledger.left_by_degraded(id) {
+        return Some((Label::LeftByDegraded(by.to_string()), apply(manifest)));
+    }
+    let unfinished = ledger.unfinished(id, live.as_deref()).map(str::to_string);
+    let Some(applied) = recorded else {
+        let label = if ledger.names_unapplied(id, &hash) {
+            Label::AppliedHashMissing
+        } else if let Some(record) = unfinished {
+            Label::Unfinished {
+                record,
+                drift: None,
+            }
+        } else {
+            Label::Intended
+        };
+        return Some((label, apply(manifest)));
+    };
+    // The live object matches what a deploy of this Kix cluster applied,
+    // which is no drift.
+    if live.as_deref().is_some_and(|l| ledger.applied.holds(id, l)) {
+        return Some((Label::Intended, apply(manifest)));
+    }
+    // Kix recorded what it applied, so an object that now has no Kix field
+    // records lost every field Kix owned.
+    let report = drift::check_object(obj, Some(applied), &manager);
+    // A field another manager took from Kix's own entry holds a value that
+    // differs, so a runner that never forces sends the build without it.
+    // Without an entry of its own Kix took nothing, so ownership says
+    // nothing about values, and the apply goes on.
+    let entries = obj.metadata.managed_fields.as_deref().unwrap_or_default();
+    let own_entry = manager.apply_entry(entries).is_some();
+    if !forces && own_entry && drift::conflicts(obj, manifest, &manager) {
+        let sent = drift::without_taken(manifest, obj, &manager);
+        return Some((Label::DriftReported(report), apply(&sent)));
+    }
+    if !drift::held_by_other_clusters(obj, manifest, &manager).is_empty() {
+        return Some((Label::HeldByOtherCluster(report), apply(manifest)));
+    }
+    // A forced apply leaves out each ceded field another manager holds on
+    // the object it reads right before it writes, so a field taken after
+    // the plan is left too. A runner that never forces sends the manifest
+    // without the fields held now.
+    let sent = if forces {
+        manifest.clone()
+    } else {
+        drift::without_ceded_taken(manifest, obj, &manager)
+    };
+    let label = match unfinished {
+        Some(record) => Label::Unfinished {
+            record,
+            drift: Some(report),
+        },
+        None => Label::RevertsDrift(report),
+    };
+    Some((label, apply(&sent)))
 }
 
 fn rerun_hash(obj: &kube::api::DynamicObject) -> Option<&str> {

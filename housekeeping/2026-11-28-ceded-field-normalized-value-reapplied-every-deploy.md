@@ -1,0 +1,3 @@
+# 2026-11-28 · `cli/kix/src/cluster/drift.rs` · A ceded field Kix still owns whose value the API server rewrites is applied again on every deploy.
+
+The third clause of the planner's skip rule (`owned_ceded_fields_match`) compares the value the build sends with the live value, where the rest of the rule compares two server representations. A ceded field that Kix still owns and that holds a value the API server rewrites, such as a quantity `1000m` stored as `1`, fails the clause on every plan. The object is then applied each deploy (unforced, a no-op on the server), and the operator sends one apply per reconcile for it. `spec.replicas`, the common ceded field, is not affected.

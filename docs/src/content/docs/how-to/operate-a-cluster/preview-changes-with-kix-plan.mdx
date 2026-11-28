@@ -59,11 +59,9 @@ command:
 
 <Command {...diffChange} />
 
-The report names the ConfigMap you edited and shows the changed value. The
-resources marked "tracking annotation only" have no content change of their
-own. Their identity hash moves because they depend on the ConfigMap, so Kix
-writes them again on the next deploy to update the annotation. Their pods do
-not restart.
+The report names the ConfigMap you edited and shows the changed value.
+Resources that depend on the ConfigMap but whose own manifests did not change
+are not listed, because the next deploy leaves them unchanged.
 
 ## Read the report
 
@@ -72,8 +70,6 @@ The report is grouped by package, and each line tells you something different:
 - A package marked added or removed appears on only one side.
 - A resource marked `~` has a content change, shown as a diff of the fields
   that differ.
-- A resource marked "tracking annotation only" has no content change of its
-  own. Only its identity hash moved, because something it depends on changed.
 - A cluster-level group collects resources that belong to no package, such as
   namespaces and custom resource definitions.
 - A deployment record line names the deployment record this change would create.

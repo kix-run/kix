@@ -78,22 +78,6 @@ pub fn legacy_spellings(key: &str) -> Vec<String> {
     DOMAINS.iter().map(|d| format!("{d}/{name}")).collect()
 }
 
-/// Return whether a live object still carries only a pre-migration identity
-/// stamp, where `has` reports whether a specific annotation key is present.
-///
-/// Returns true during the window between `kix migrate domain` and the next
-/// deploy: the cluster records have moved so `check_discovery` (in `kix-lib`) passes, but
-/// live objects still carry the retired annotations until a deploy re-applies
-/// them. Because an identity hash covers the full manifest and the domain
-/// change altered every manifest, live hashes from before the migration do not
-/// match fresh build hashes and must not be treated as orphaned resources.
-pub fn stamped_before_move<F>(has: F) -> bool
-where
-    F: Fn(&str) -> bool,
-{
-    !has(keys::IDENTITY_HASH) && legacy_spellings(keys::IDENTITY_HASH).iter().any(|k| has(k))
-}
-
 /// Look up `key` under each retired domain in turn, using `lookup` to read a
 /// single key from the caller's map.
 pub(crate) fn fallback<'a, F>(key: &str, lookup: F) -> Option<&'a str>
@@ -572,26 +556,6 @@ mod tests {
         let before = crd.clone();
         upgrade_manifest_from(&mut crd, &[retired]);
         assert_eq!(crd, before, "only activations and packageinstances move");
-    }
-
-    /// The window between `kix migrate domain` and the first deploy after
-    /// it: the records have moved, so the discovery gate passes, but every
-    /// object still carries the annotations the pre-move build wrote.
-    #[test]
-    fn an_object_stamped_before_the_move_is_recognised() {
-        let Some(legacy) = DOMAINS.first() else {
-            return;
-        };
-        let old_key = format!("{legacy}/identity-hash");
-        assert!(stamped_before_move(|k| k == old_key));
-        // Once a deploy has re-stamped it, it is current even though the
-        // retired key may linger until the merge patch clears it.
-        assert!(!stamped_before_move(
-            |k| k == keys::IDENTITY_HASH || k == old_key
-        ));
-        assert!(!stamped_before_move(|k| k == keys::IDENTITY_HASH));
-        // An object Kix never stamped is not this case.
-        assert!(!stamped_before_move(|_| false));
     }
 
     #[test]

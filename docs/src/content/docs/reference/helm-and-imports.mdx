@@ -250,7 +250,7 @@ How `fetchHelmChart` and `importChart` run depends on the project's builder in [
 
 Clusters frequently rely on services or platform components that live outside the Kix cluster configuration, such as a cloud-managed PostgreSQL instance (RDS or Cloud SQL), an external OIDC provider, or a CNI / storage driver pre-installed by a managed Kubernetes control plane (EKS, GKE, or k3s).
 
-`kix.mkImport` creates an import definition that can be bound in `instances.<namespace>.<name>.package` (or inside a cluster flavor). Imports participate in dependency resolution, role binding, and contract checking without emitting workload manifests. At build time, Kix emits a `kix.run/v1alpha1` `PackageInstance` marker with `metadata.annotations."kix.run/mode" = "import"` (and `spec.mode = "import"`) so `kix deploy` can verify any expected in-cluster resources before deploying consumers.
+`kix.mkImport` creates an import definition that can be bound in `instances.<namespace>.<name>.package` (or inside a cluster flavor). Imports participate in dependency resolution, role binding, and contract checking without emitting workload manifests. At build time, Kix emits a `kix.run/v1alpha1` `PackageInstance` marker into the build with `metadata.annotations."kix.run/mode" = "import"` and `spec.mode = "import"`. Kix never writes the marker to the cluster; instead, it records the marker under `spec.imports` on the instance's [revision](/docs/reference/annotations-crds-and-receipts/#packageinstancerevision) and uses it during `kix deploy` to order rollout and verify that expected in-cluster resources exist before deploying consumers.
 
 ```nix
 # Importing an external RDS PostgreSQL database in cluster configuration

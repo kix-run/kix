@@ -181,7 +181,9 @@ pub fn merge_typed_metadata(obj: &DynamicObject) -> Value {
 /// 1. Merge typed metadata back into the data `Value`.
 /// 2. Project onto Kix's `fieldsV1` fieldset.
 /// 3. Remove the fields the object cedes in `kix.run/cede-fields`.
-/// 4. Strip `kix.run/*` annotations so the stamp does not change its own hash.
+/// 4. Remove the retired notes ([`crate::manifest::sent::is_retired_note`]).
+///    Every other `kix.run/*` annotation Kix owns stays, so the hash covers
+///    what the object hash of the build covers.
 /// 5. Compute Blake3 over canonical (sorted-keys) JSON.
 ///
 /// Kix computes this hash from the apply's answer and again from the live
@@ -206,11 +208,24 @@ pub(crate) fn hashed_projection(obj: &DynamicObject, manager: &FieldManager) -> 
     Some(projection)
 }
 
-/// Strip `kix.run/*` annotations from `projection` and return its canonical
+/// Remove the retired notes from `projection` and return its canonical
 /// Blake3 hash.
 pub(crate) fn projection_hash(mut projection: Value) -> String {
-    hash::strip_kix_annotations(&mut projection);
+    crate::manifest::sent::strip_retired_notes(&mut projection);
     hash::hash_value(&hash::sort_keys(&projection))
+}
+
+/// Return the applied hash an older Kix computed for `obj`, which left out
+/// every `kix.run/*` annotation. Kix reads it only to judge whether a live
+/// object still matches the `kix.run/applied-hash` note or the format 1
+/// revision an older Kix wrote, when it converts their records.
+pub(crate) fn older_kix_applied_hash(
+    obj: &DynamicObject,
+    manager: &FieldManager,
+) -> Option<String> {
+    let mut projection = hashed_projection(obj, manager)?;
+    hash::strip_kix_annotations(&mut projection);
+    Some(hash::hash_value(&hash::sort_keys(&projection)))
 }
 
 /// Project `obj` onto `manager`'s server-side apply fieldset after merging

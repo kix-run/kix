@@ -1,3 +1,0 @@
-# 2026-11-25 · `cli/kix/src/cluster/inventory.rs` · A cluster-scoped sweep never fills `ManagedSweep::unstamped`, so `kix gc --full-scan --include unstamped` needs `--include unattributed` too.
-
-An unstamped object names no record hash, so `scope_sweep` under `SweepScope::Cluster` always puts it in `unattributed`. gc's "Found N live Kix-managed object(s) (M without a Kix build annotation)" line then always prints M = 0, and an unstamped object appears under "No deployment record on this cluster" first and under "No Kix build annotation" only after `--include unattributed`. Decide whether unstamped objects keep their own bucket under a cluster scope.

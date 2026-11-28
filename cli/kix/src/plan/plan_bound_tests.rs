@@ -226,12 +226,28 @@ fn a_delete_the_plan_does_not_show_is_refused() {
     );
 }
 
-/// A first deploy writes every object, each listed as added.
+/// Return how many objects `graph` makes: every resource but the import
+/// markers, for which Kix writes nothing.
+fn made(graph: &StoreGraph) -> usize {
+    stamp(graph)
+        .0
+        .resources
+        .values()
+        .filter(|n| !crate::manifest::lifecycle::is_marker(&n.manifest))
+        .count()
+}
+
+/// A first deploy writes every object, each listed as added, and nothing
+/// for an import marker.
 #[test]
 fn a_first_deploy_writes_every_object_the_plan_shows() {
     let new = build();
+    assert!(
+        made(&new) < stamp(&new).0.resources.len(),
+        "the build has a marker"
+    );
     let objects = objects(None, &new, &[]).unwrap();
-    assert_eq!(objects.writes.len(), stamp(&new).0.resources.len());
+    assert_eq!(objects.writes.len(), made(&new));
     assert!(
         objects
             .writes
@@ -321,7 +337,7 @@ fn a_redeploy_lists_an_unchanged_rerun_job_as_a_write_only_if_it_failed() {
 fn reconcile_reapplies_the_deployed_build() {
     let build = build();
     let objects = objects(Some(&build), &build, &["--reconcile"]).unwrap();
-    assert_eq!(objects.writes.len(), stamp(&build).0.resources.len());
+    assert_eq!(objects.writes.len(), made(&build));
     assert!(
         objects
             .writes
@@ -460,30 +476,49 @@ fn an_object_without_a_namespace_and_one_in_default_are_both_shown() {
     );
 }
 
-/// The build's one-record rule counts every manifest of kind
-/// Activation, whatever its API group, so another group's Activation
-/// cannot sit beside Kix's record.
+/// Another group's `Activation`, such as Crossplane's, is not Kix's
+/// deployment record. It sits beside Kix's record in the build as an object
+/// like any other, and the plan writes it at the cluster level.
 #[test]
-fn another_groups_activation_is_refused_by_the_build() {
+fn another_groups_activation_is_an_object_like_any_other() {
     let mut new = build();
     let mut foreign = new.resources[&new.activation_path].manifest.clone();
     foreign["apiVersion"] = json!("example.com/v1");
     foreign["metadata"]["name"] = json!("foreign");
-    add(&mut new, &path("foreign", "Activation-foreign"), foreign);
-    let err = new.validate().unwrap_err().to_string();
-    assert!(err.contains("must hold 1 deployment record"), "{err}");
+    let at = path("foreign", "Activation-foreign");
+    add(&mut new, &at, foreign);
+    new.validate().unwrap();
+    let objects = objects(None, &new, &[]).unwrap();
+    let written: Vec<(&str, &str, &str)> = objects
+        .writes
+        .iter()
+        .filter(|w| w.name == "foreign")
+        .map(|w| (w.group.as_str(), w.package.as_str(), w.store_hash.as_str()))
+        .collect();
+    assert_eq!(
+        written,
+        [(
+            "example.com",
+            super::CLUSTER_LEVEL_KEY,
+            store_hash(&at).as_str()
+        )]
+    );
 }
 
-/// Another group's PackageInstance listed as a package is shown as that
-/// package's PackageInstance, and its store hash, which covers its
-/// `apiVersion`, is in the digest. Not listed, it is a cluster-level
-/// object like any other.
+/// A package's instance must be Kix's `PackageInstance`, so the build
+/// refuses another group's `PackageInstance` listed as a package. Not
+/// listed, it is a cluster-level object like any other, shown with its
+/// store hash, which covers its `apiVersion`.
 #[test]
-fn another_groups_package_instance_is_shown_with_its_store_hash() {
-    let mut new = build();
+fn another_groups_package_instance_is_no_package() {
+    let mut listed = build();
     let mut pi = package_instance("foreign", Some("foreign"));
     pi["apiVersion"] = json!("example.com/v1");
-    add_package(&mut new, "listed", pi.clone(), "foreign");
+    add_package(&mut listed, "listed", pi.clone(), "foreign");
+    let err = listed.validate().unwrap_err().to_string();
+    assert!(err.contains("is not a PackageInstance record"), "{err}");
+
+    let mut new = build();
     pi["metadata"]["name"] = json!("unlisted");
     let unlisted = path("unlisted", "PackageInstance-unlisted");
     add(&mut new, &unlisted, pi);
@@ -492,21 +527,13 @@ fn another_groups_package_instance_is_shown_with_its_store_hash() {
     let pis: Vec<(&str, &str, &str)> = objects
         .writes
         .iter()
-        .filter(|w| w.name == "foreign" || w.name == "unlisted")
+        .filter(|w| w.name == "unlisted")
         .map(|w| (w.name.as_str(), w.package.as_str(), w.store_hash.as_str()))
         .collect();
-    let listed_hash = store_hash(&path("listedp", "PackageInstance-pi"));
     let unlisted_hash = store_hash(&unlisted);
     assert_eq!(
         pis,
-        vec![
-            (
-                "foreign",
-                "kix-enterprise-test-data/foreign",
-                listed_hash.as_str()
-            ),
-            ("unlisted", super::CLUSTER_LEVEL_KEY, unlisted_hash.as_str()),
-        ]
+        vec![("unlisted", super::CLUSTER_LEVEL_KEY, unlisted_hash.as_str())]
     );
 }
 
@@ -711,4 +738,37 @@ fn moving_an_object_between_aliased_groups_is_refused() {
         Err(e) => panic!("refused for another reason: {e}"),
         Ok(_) => panic!("the plan was not refused"),
     }
+}
+
+/// A run writes the kept-orphans revision when it finalizes, after every
+/// apply and every delete, so a plan whose run would keep more orphans than
+/// one revision can hold is refused before the lock. With `--prune` the run
+/// deletes them and keeps none, so the same plan goes through.
+#[test]
+fn a_kept_orphans_list_too_large_to_store_is_refused_before_the_deploy() {
+    let new = build();
+    let mut old = new.clone();
+    for i in 0..4000 {
+        let name = format!("left-{i:04}-{}", "x".repeat(200));
+        let manifest = json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": { "name": name, "namespace": NS },
+            "data": { "k": "v" },
+        });
+        add(&mut old, &path(&format!("{i}"), &name), manifest);
+    }
+    match plan(&deployed(Some(&old)), &new, flags(&[])) {
+        Err(PlanError::RevisionTooLarge(too_large)) => {
+            assert_eq!(too_large.objects, 4000);
+            let message = too_large.to_string();
+            assert!(message.contains("kix gc"), "{message}");
+        }
+        Err(e) => panic!("refused for another reason: {e}"),
+        Ok(_) => panic!("not refused"),
+    }
+    let checked = plan(&deployed(Some(&old)), &new, flags(&["--prune"]))
+        .map_err(|e| e.to_string())
+        .unwrap();
+    assert_eq!(checked.objects().deletes.len(), 4000);
 }

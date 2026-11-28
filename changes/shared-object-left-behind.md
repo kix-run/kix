@@ -1,0 +1,6 @@
++++
+kind = "fixed"
++++
+If two Kix clusters previously shared an object and both removed it from their builds, check for any leftover copy by finding the Kix cluster whose `kix/<cluster>` field manager remains on the object, running `kix gc <cluster> --full-scan --dry-run` to review the list, and then running `kix gc <cluster> --full-scan`. Previously, when both sharing clusters removed an object, a leftover field-manager entry could make each cluster assume the other still deployed it and drop the object from its deployment records, hiding it from `kix plan`, `kix deploy --prune`, and default `kix gc`. Kix now treats another cluster as deploying an object only when that cluster's deployment records list it, keeps a shared object on its own kept-orphans list until its `kix/<cluster>` field-manager entry is removed (running `kix deploy` even when releasing a shared object is the only remaining change), and attributes unrecorded objects carrying `kix/<cluster>` to `<cluster>` during `kix gc --full-scan` without needing `--include unattributed`.
+
+A deploy that writes no object now still records the objects that left the build and stay on the cluster. Before, such a deploy could skip that step, and `kix plan` and `kix gc` then no longer listed those objects.

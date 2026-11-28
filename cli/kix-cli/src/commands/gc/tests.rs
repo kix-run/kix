@@ -28,14 +28,17 @@ mod kept_garbage_tests {
             vec![
                 m("Deployment", "web", "h0"),
                 m("ConfigMap", "old", "h1"),
-                json!({"kind": lifecycle::RECORD_KIND, "metadata": {"name": "c-v1", "annotations": { keys::IDENTITY_HASH: "h2" }}}),
+                json!({"apiVersion": keys::API_VERSION, "kind": lifecycle::RECORD_KIND, "metadata": {"name": "c-v1", "annotations": { keys::IDENTITY_HASH: "h2" }}}),
             ],
             vec![m("ConfigMap", "old", "h1"), m("Secret", "listed", "h3")],
         ];
-        let active_hashes: HashSet<String> = ["h3".to_string()].into();
-        let active_ids: HashSet<String> = ["Deployment/d/web".to_string()].into();
+        let active_ids: HashSet<String> = [
+            "Deployment/d/web".to_string(),
+            "Secret/d/listed".to_string(),
+        ]
+        .into();
 
-        let got: Vec<String> = kept_garbage(&kept, &active_hashes, &active_ids)
+        let got: Vec<String> = kept_garbage(&kept, &active_ids)
             .iter()
             .map(k8s_identity)
             .collect();
@@ -59,14 +62,9 @@ mod kept_garbage_tests {
             m("Service", "web2", "b-svc"),
         ];
         let kept = [build_b.to_vec()];
-        let hashes = |b: &[Value]| -> HashSet<String> {
-            b.iter()
-                .filter_map(|m| keys::get(m, keys::IDENTITY_HASH).map(str::to_string))
-                .collect()
-        };
         let ids = |b: &[Value]| -> HashSet<String> { b.iter().map(k8s_identity).collect() };
 
-        let got: Vec<String> = kept_garbage(&kept, &hashes(&build_a), &ids(&build_a))
+        let got: Vec<String> = kept_garbage(&kept, &ids(&build_a))
             .iter()
             .map(k8s_identity)
             .collect();
@@ -75,14 +73,14 @@ mod kept_garbage_tests {
         // The same kept build compared with the build from the files (B)
         // finds nothing, and the files build is refused below, so `web` is
         // never planned for deletion.
-        assert!(kept_garbage(&kept, &hashes(&build_b), &ids(&build_b)).is_empty());
+        assert!(kept_garbage(&kept, &ids(&build_b)).is_empty());
     }
 
     /// Verify that a full scan's reason names the build this run compared
     /// with, never a choice of two.
     #[test]
     fn the_reason_names_the_build_compared_with() {
-        let label = GarbageReason::HashNotExpected.label("the build of active deployment c-v2");
+        let label = GarbageReason::NotInBuild.label("the build of active deployment c-v2");
         assert_eq!(label, "not in the build of active deployment c-v2");
     }
 
@@ -471,7 +469,7 @@ mod delete_tests {
         let done = delete_resources(
             &api.client(),
             "a",
-            DeleteOrder::of_manifests(&[cm.clone(), secret.clone()]),
+            DeleteOrder::of_build(&[cm.clone(), secret.clone()]),
             readiness::DEFAULT_TIMEOUT,
         )
         .await
@@ -503,7 +501,7 @@ mod delete_tests {
         let done = delete_resources(
             &api.client(),
             "a",
-            DeleteOrder::of_manifests(&[cm, secret]),
+            DeleteOrder::of_build(&[cm, secret]),
             budget,
         )
         .await
@@ -591,8 +589,8 @@ mod hard_scope_tests {
             live("ConfigMap", "from-only", Some("h-p"), "part"),
             live("ConfigMap", "both", Some("h-b"), "fail,part"),
         ];
-        let expected: HashSet<String> = ["h-cur".to_string()].into();
-        let judged = judge_hard(&objects, &expected, &HashSet::new(), &tenancy);
+        let expected: HashSet<String> = ["ConfigMap/d/current".to_string()].into();
+        let judged = judge_hard(&objects, &expected, &tenancy);
         assert_eq!(names(&judged.garbage), vec!["stale"]);
         let held: Vec<(&str, Vec<&str>)> = judged
             .held
@@ -640,10 +638,10 @@ mod hard_scope_tests {
         assert_eq!(sweep.foreign.clusters, ["b".to_string()].into());
         assert_eq!(sweep.unattributed.len(), 1);
 
-        let expected: HashSet<String> = ["h-cur".to_string()].into();
+        let expected: HashSet<String> = ["ConfigMap/d/a-current".to_string()].into();
         let plan::Judged {
             garbage, shared, ..
-        } = judge_hard(&sweep.managed, &expected, &HashSet::new(), &tenancy);
+        } = judge_hard(&sweep.managed, &expected, &tenancy);
         assert_eq!(names(&garbage), vec!["a-stale"]);
         assert_eq!(shared.len(), 1);
         assert_eq!(shared[0].rid.name, "shared");
@@ -651,25 +649,79 @@ mod hard_scope_tests {
 
         let mut with_flag = sweep.managed.clone();
         with_flag.extend(sweep.unattributed);
-        let garbage = judge_hard(&with_flag, &expected, &HashSet::new(), &tenancy).garbage;
+        let garbage = judge_hard(&with_flag, &expected, &tenancy).garbage;
         assert_eq!(names(&garbage), vec!["a-stale", "leftover"]);
     }
 
-    /// Verify that controller-created copies of Kix objects are excluded unless
-    /// `--include copies` is set.
+    /// An object that no record of any Kix cluster names, and that carries
+    /// an `Apply` entry of Kix cluster `a`, is `a`'s: a full scan of `a`
+    /// deletes it without `--include unattributed`. One that carries only
+    /// `b`'s entry stays unattributed for `a`.
+    #[test]
+    fn a_full_scan_finds_an_object_only_its_entry_names() {
+        let tenancy = Tenancy::fixture(&[record("a", "a2"), record("b", "b1")], "a");
+        let entry_of = |cluster: &str, name: &str| {
+            let mut obj = live("ConfigMap", name, Some("h-left"), "");
+            obj.metadata.managed_fields = Some(vec![
+                k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry {
+                    manager: Some(format!("kix/{cluster}")),
+                    operation: Some("Apply".into()),
+                    ..Default::default()
+                },
+            ]);
+            obj
+        };
+        let sweep = inventory::partition_sweep(vec![
+            live("ConfigMap", "a-current", Some("h-cur"), "a2"),
+            entry_of("a", "applied-by-a"),
+            entry_of("b", "applied-by-b"),
+        ]);
+        let sweep =
+            inventory::scope_sweep(sweep, inventory::SweepScope::Cluster("a"), tenancy.clone());
+        let unattributed: Vec<&str> = sweep
+            .unattributed
+            .iter()
+            .filter_map(|o| o.metadata.name.as_deref())
+            .collect();
+        assert_eq!(unattributed, vec!["applied-by-b"]);
+        let expected: HashSet<String> = ["ConfigMap/d/a-current".to_string()].into();
+        let garbage = judge_hard(&sweep.managed, &expected, &tenancy).garbage;
+        assert_eq!(names(&garbage), vec!["applied-by-a"]);
+    }
+
+    /// A full scan judges by name. An object the build makes is kept,
+    /// whether or not it carries a build hash, such as an object of a record
+    /// an older Kix wrote whose note was edited away. One the build does
+    /// not make is garbage either way.
+    #[test]
+    fn hard_gc_keeps_what_the_build_makes_by_name() {
+        let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");
+        let objects = [
+            live("ConfigMap", "in-build", None, "a2"),
+            live("ConfigMap", "stamped", Some("h-other"), "a2"),
+            live("ConfigMap", "left", None, "a2"),
+        ];
+        let expected: HashSet<String> = [
+            "ConfigMap/d/in-build".to_string(),
+            "ConfigMap/d/stamped".to_string(),
+        ]
+        .into();
+        let judged = judge_hard(&objects, &expected, &tenancy);
+        assert_eq!(names(&judged.garbage), vec!["left"]);
+        assert!(
+            judged
+                .garbage
+                .iter()
+                .all(|g| g.reason == GarbageReason::NotInBuild)
+        );
+    }
+
+    /// Verify that copies another program made of Kix objects, and left
+    /// unowned, are excluded unless `--include copies` is set.
     #[test]
     fn hard_gc_judges_copies_only_with_the_flag() {
         let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");
         let mut copy = live("Service", "web-x-guest", Some("h-guest"), "g1");
-        copy.metadata.owner_references = Some(vec![
-            k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference {
-                api_version: "v1".into(),
-                kind: "Service".into(),
-                name: "syncer".into(),
-                uid: "u".into(),
-                ..Default::default()
-            },
-        ]);
         copy.metadata.managed_fields = Some(vec![
             k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry {
                 manager: Some("syncer".into()),
@@ -687,22 +739,23 @@ mod hard_scope_tests {
                 tenancy.clone(),
             )
         };
-        let expected: HashSet<String> = ["h-cur".to_string()].into();
+        let expected: HashSet<String> = ["ConfigMap/d/a-current".to_string()].into();
 
         let scoped = sweep();
         assert_eq!(scoped.copies.len(), 1);
         let judged = judged_objects(scoped, false, false);
-        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
+        let garbage = judge_hard(&judged, &expected, &tenancy).garbage;
         assert!(garbage.is_empty());
 
         let judged = judged_objects(sweep(), false, true);
-        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
+        let garbage = judge_hard(&judged, &expected, &tenancy).garbage;
         assert_eq!(names(&garbage), vec!["web-x-guest"]);
     }
 
     /// An operator's Event carries Kix's labels but no Kix annotation and no
-    /// `kix` field-manager entry. `--include copies` alone judges it, while an
-    /// object Kix wrote without a hash still waits for `--include unstamped`.
+    /// `kix` field-manager entry. `--include copies` alone judges it. An
+    /// object Kix wrote that names no record is unattributed, and
+    /// `--include unattributed` judges it whether or not it has a hash.
     #[test]
     fn include_copies_judges_a_copy_without_a_hash() {
         let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");
@@ -714,48 +767,34 @@ mod hard_scope_tests {
                 ..Default::default()
             },
         ]);
-        let sweep = inventory::scope_sweep(
-            inventory::partition_sweep(vec![
-                live("ConfigMap", "a-current", Some("h-cur"), "a2"),
-                event,
-                live("ConfigMap", "unannotated", None, ""),
-            ]),
-            inventory::SweepScope::Cluster("a"),
-            tenancy.clone(),
-        );
+        let sweep = || {
+            inventory::scope_sweep(
+                inventory::partition_sweep(vec![
+                    live("ConfigMap", "a-current", Some("h-cur"), "a2"),
+                    event.clone(),
+                    live("ConfigMap", "unannotated", None, ""),
+                ]),
+                inventory::SweepScope::Cluster("a"),
+                tenancy.clone(),
+            )
+        };
         let object_names = |objs: &[DynamicObject]| -> Vec<String> {
             objs.iter()
                 .filter_map(|o| o.metadata.name.clone())
                 .collect()
         };
-        assert_eq!(object_names(&sweep.copies), ["db.1a2b"]);
-        assert_eq!(object_names(&sweep.unattributed), ["unannotated"]);
-        let copies: HashSet<ResourceId> = sweep
-            .copies
-            .iter()
-            .map(kix::cluster::drift::resource_id)
-            .collect();
-        let expected: HashSet<String> = ["h-cur".to_string()].into();
-        let judged = judged_objects(sweep, true, true);
-        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
+        let scoped = sweep();
+        assert_eq!(object_names(&scoped.copies), ["db.1a2b"]);
+        assert_eq!(object_names(&scoped.unattributed), ["unannotated"]);
+        let expected: HashSet<String> = ["ConfigMap/d/a-current".to_string()].into();
 
-        let (held, rest) = hold_back_unstamped(garbage, &copies, false);
-        assert_eq!(names(&rest), vec!["db.1a2b"]);
-        assert_eq!(names(&held), vec!["unannotated"]);
+        let judged = judged_objects(scoped, false, true);
+        let garbage = judge_hard(&judged, &expected, &tenancy).garbage;
+        assert_eq!(names(&garbage), vec!["db.1a2b"]);
 
-        let judged = judged_objects(
-            inventory::scope_sweep(
-                inventory::partition_sweep(vec![live("ConfigMap", "unannotated", None, "")]),
-                inventory::SweepScope::Cluster("a"),
-                tenancy.clone(),
-            ),
-            true,
-            true,
-        );
-        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
-        let (held, rest) = hold_back_unstamped(garbage, &copies, true);
-        assert!(held.is_empty());
-        assert_eq!(names(&rest), vec!["unannotated"]);
+        let judged = judged_objects(sweep(), true, true);
+        let garbage = judge_hard(&judged, &expected, &tenancy).garbage;
+        assert_eq!(names(&garbage), vec!["db.1a2b", "unannotated"]);
     }
 
     /// Verify that hard GC does not delete another Kix cluster's objects
@@ -776,19 +815,19 @@ mod hard_scope_tests {
                 tenancy.clone(),
             )
         };
-        let expected: HashSet<String> = ["h-cur".to_string()].into();
+        let expected: HashSet<String> = ["ConfigMap/d/a-current".to_string()].into();
 
         let scoped = sweep();
         assert_eq!(scoped.unattributed.len(), 2);
         let judged = judged_objects(scoped, false, false);
         let plan::Judged {
             garbage, shared, ..
-        } = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
+        } = judge_hard(&judged, &expected, &tenancy);
         assert!(garbage.is_empty());
         assert!(shared.is_empty());
 
         let judged = judged_objects(sweep(), true, false);
-        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
+        let garbage = judge_hard(&judged, &expected, &tenancy).garbage;
         assert_eq!(names(&garbage), vec!["b-web", "leftover"]);
     }
 
@@ -805,17 +844,12 @@ mod hard_scope_tests {
             obj
         };
         let mut record = stamped("PackageInstance", "_cluster", "_cluster");
+        record.types.as_mut().unwrap().api_version = keys::API_VERSION.into();
         record.data["spec"] = json!({ "instanceName": "web2", "namespaceName": "baseline" });
         let deployment = stamped("Deployment", "web2", "baseline");
         let tenancy = kix::cluster::tenancy::Tenancy::fixture(&[], "a");
 
-        let garbage = judge_hard(
-            &[record, deployment],
-            &HashSet::new(),
-            &HashSet::new(),
-            &tenancy,
-        )
-        .garbage;
+        let garbage = judge_hard(&[record, deployment], &HashSet::new(), &tenancy).garbage;
         let packages: Vec<(Option<&str>, Option<&str>)> = garbage
             .iter()
             .map(|g| (g.package_namespace.as_deref(), g.package.as_deref()))
@@ -857,17 +891,17 @@ mod live_order_tests {
             identity_hash: None,
             package: None,
             package_namespace: None,
-            activations: None,
-            reason: GarbageReason::HashNotExpected,
+            reason: GarbageReason::NotInBuild,
             deleting: None,
         }
     }
 
-    /// A full scan orders its garbage by the live objects' dependencies, also
-    /// through an object it keeps: `cm` needs `kept`, which needs `secret`,
-    /// so a stuck `cm` holds `secret` back.
+    /// A full scan of a Kix cluster whose records an older Kix wrote orders
+    /// its garbage by the notes on the live objects, also through an object
+    /// it keeps: `cm` needs `kept`, which needs `secret`, so a stuck `cm`
+    /// holds `secret` back.
     #[test]
-    fn a_full_scan_orders_by_live_dependencies() {
+    fn a_full_scan_of_an_older_kixs_records_orders_by_the_notes() {
         let objects = [
             live("ConfigMap", "cm", "h_cm", "h_kept"),
             live("ConfigMap", "kept", "h_kept", "h_secret"),
@@ -876,6 +910,7 @@ mod live_order_tests {
         let mut order = live_order(
             &objects,
             &[entry("Secret", "secret"), entry("ConfigMap", "cm")],
+            &Tenancy::fixture(&[], "a"),
         );
         let names: Vec<&str> = order.ids().iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, vec!["cm", "secret"]);
@@ -1042,7 +1077,6 @@ mod revision_tests {
     /// record also names is held for that record.
     #[test]
     fn a_full_scan_judges_the_same_from_either_source() {
-        let expected: HashSet<String> = ["h-web".to_string()].into();
         for written in [Written::Records, Written::Revisions] {
             let state = state(&recs(), |_| written);
             let tenancy = state.tenancy("a");
@@ -1050,7 +1084,8 @@ mod revision_tests {
                 .iter()
                 .map(|n| state.object(n))
                 .collect();
-            let judged = judge_hard(&live, &expected, &HashSet::new(), &tenancy);
+            let expected: HashSet<String> = [plan::live_identity(&state.object("web"))].into();
+            let judged = judge_hard(&live, &expected, &tenancy);
             assert_eq!(names(&judged.garbage), ["left", "stuck"], "{written:?}");
             let held: Vec<(&str, &[String])> = judged
                 .held
@@ -1063,6 +1098,92 @@ mod revision_tests {
                 "{written:?}"
             );
         }
+    }
+
+    /// Return the state of Kix cluster `a` whose current record kept a
+    /// custom resource `a-widget` (written as a ConfigMap) and the operator
+    /// that removes its finalizer, with the kept-orphans revision recording
+    /// that `a-widget` needs `operator`, and with neither live object carrying
+    /// `kix.run/depends-on` or `kix.run/identity-hash`.
+    fn kept_widget_and_operator() -> State {
+        use kix::cluster::revision::{Need, Revision, RevisionObject, RevisionSpec, Slot};
+        let recs = [Rec {
+            name: "a-cur",
+            cluster: "a",
+            hash: "cur",
+            phase: PHASE_ACTIVE,
+            current: true,
+            objects: &["web"],
+            kept: &["a-widget", "operator"],
+            ..Rec::default()
+        }];
+        let mut state = state(&recs, |_| Written::Revisions);
+        let rid = |name: &str| ResourceId::new("", "ConfigMap", "d", name);
+        let entry = |name: &str| RevisionObject::of_id(&format!("h-{name}"), &rid(name));
+        let kept = Revision::new(RevisionSpec::new(
+            "a",
+            Slot::KeptOrphans,
+            vec![
+                entry("a-widget").with_needs([Need::of(&rid("operator"), Some("controller"))]),
+                entry("operator"),
+            ],
+        ));
+        let old = state.revision_named("a-cur", "keptOrphans");
+        state.remove_revision(&old);
+        state
+            .revisions
+            .push(kix::cluster::tenancy_fixture::revision_value(&kept));
+        state.records[0]["status"]["revisions"]["keptOrphans"] = json!(kept.name);
+        for object in &mut state.objects {
+            let annotations = object["metadata"]["annotations"].as_object_mut().unwrap();
+            annotations.remove(keys::IDENTITY_HASH);
+            annotations.remove(keys::DEPENDS_ON);
+        }
+        state
+    }
+
+    /// Without edges, the order of two unrelated ConfigMaps is the reverse
+    /// of their names, so `operator` would come before `a-widget`.
+    fn position(order: &DeleteOrder, name: &str) -> usize {
+        order.ids().iter().position(|r| r.name == name).unwrap()
+    }
+
+    /// The default mode takes the edges of kept orphans from the
+    /// kept-orphans revision, so it deletes the custom resource before the
+    /// operator that removes its finalizer.
+    #[test]
+    fn the_default_mode_orders_kept_orphans_by_the_revisions() {
+        let state = kept_widget_and_operator();
+        let garbage: Vec<Value> = ["operator", "a-widget"]
+            .iter()
+            .map(|n| kix::manifest::types::to_manifest_value(&state.object(n)))
+            .collect();
+        let order = soft_order(Vec::new(), &garbage, &state.tenancy("a"));
+        assert!(position(&order, "a-widget") < position(&order, "operator"));
+    }
+
+    /// A full scan takes the edges from the revisions too.
+    #[test]
+    fn a_full_scan_orders_kept_orphans_by_the_revisions() {
+        let state = kept_widget_and_operator();
+        let live: Vec<_> = ["operator", "a-widget"]
+            .iter()
+            .map(|n| state.object(n))
+            .collect();
+        let entry = |name: &str| GarbageEntry {
+            id: ResourceId::new("", "ConfigMap", "d", name),
+            identity_hash: None,
+            package: None,
+            package_namespace: None,
+            reason: GarbageReason::NotInBuild,
+            deleting: None,
+        };
+        let order = live_order(
+            &live,
+            &[entry("operator"), entry("a-widget")],
+            &state.tenancy("a"),
+        );
+        assert!(position(&order, "a-widget") < position(&order, "operator"));
     }
 
     async fn retirement_of(api: &FakeApi) -> RecordRetirement {
@@ -1091,6 +1212,7 @@ mod revision_tests {
         };
         KeptUpdate::Objects {
             listed: listed.into_iter().cloned().collect(),
+            imports: Vec::new(),
             live: ["left", "stuck", "added"]
                 .map(|n| ResourceId::new("", "ConfigMap", "d", n))
                 .into(),
@@ -1115,6 +1237,7 @@ mod revision_tests {
         let unread: HashSet<ResourceId> = listed.iter().map(|o| o.resource_id()).collect();
         let update = KeptUpdate::Objects {
             listed: listed.clone(),
+            imports: Vec::new(),
             live: HashSet::new(),
             unknown: unread,
             in_build,
@@ -1225,6 +1348,14 @@ mod revision_tests {
         // `added` is named by the `Partial` record, so it is not a kept
         // orphan.
         assert_eq!(rebuilt, ["left", "stuck"]);
+        // Nothing says which build wanted each object, and the live objects
+        // carry no build hash, so the list names them with a hash no object
+        // hash equals.
+        assert!(
+            objects
+                .iter()
+                .all(|o| o.hash == revision::REBUILT && o.needs.is_empty())
+        );
 
         let records = opened.into_records().unwrap();
         let generation = kix::cluster::head::generation_of(
@@ -1253,6 +1384,226 @@ mod revision_tests {
         assert_eq!(
             api.object("Activation", "a-cur").unwrap()["status"]["revisions"]["keptOrphans"],
             json!(name)
+        );
+    }
+
+    /// Return the state that `kix deploy a` without `--prune` leaves on a
+    /// Kubernetes cluster an older Kix deployed: the current record of `a`
+    /// keeps the import marker `platform-dns`, which left the build, in its
+    /// kept-orphans revision. With `older`, Kix cluster `b`, which an older
+    /// Kix deployed, still names the marker, so it keeps its notes.
+    fn leftover_marker(older: bool) -> State {
+        use kix::cluster::revision::{Revision, RevisionObject, RevisionSpec, Slot};
+        let mut recs = vec![Rec {
+            name: "a-cur",
+            cluster: "a",
+            hash: "cur",
+            phase: PHASE_ACTIVE,
+            current: true,
+            objects: &["web"],
+            kept: &["platform-dns"],
+            ..Rec::default()
+        }];
+        if older {
+            recs.push(Rec {
+                name: "b-cur",
+                cluster: "b",
+                hash: "bcur",
+                phase: PHASE_ACTIVE,
+                current: true,
+                objects: &["platform-dns"],
+                ..Rec::default()
+            });
+        }
+        let mut state = state(&recs, |c| {
+            if c == "a" {
+                Written::Revisions
+            } else {
+                Written::Records
+            }
+        });
+        let marker = state
+            .objects
+            .iter_mut()
+            .find(|o| o["metadata"]["name"] == "platform-dns")
+            .unwrap();
+        marker["apiVersion"] = json!(keys::API_VERSION);
+        marker["kind"] = json!("PackageInstance");
+        let notes = marker["metadata"]["annotations"].as_object_mut().unwrap();
+        notes.insert(keys::MODE.into(), json!("import"));
+        notes.insert(keys::IMPORT_API_VERSION.into(), json!("v1"));
+        notes.insert(keys::IMPORT_KIND.into(), json!("Service"));
+        notes.insert(keys::IMPORT_NAME.into(), json!("kube-dns"));
+        let mut managers = vec![json!({
+            "manager": "kix/a",
+            "operation": "Apply",
+            "apiVersion": keys::API_VERSION,
+        })];
+        if older {
+            managers.push(json!({
+                "manager": "kix",
+                "operation": "Apply",
+                "apiVersion": keys::API_VERSION,
+            }));
+        } else {
+            notes.remove(keys::IDENTITY_HASH);
+        }
+        marker["metadata"]["managedFields"] = json!(managers);
+        let kept = Revision::new(RevisionSpec::new(
+            "a",
+            Slot::KeptOrphans,
+            vec![RevisionObject::of_id(
+                "h-platform-dns",
+                &ResourceId::new(keys::GROUP, "PackageInstance", "d", "platform-dns"),
+            )],
+        ));
+        let old = state.revision_named("a-cur", "keptOrphans");
+        state.remove_revision(&old);
+        state
+            .revisions
+            .push(kix::cluster::tenancy_fixture::revision_value(&kept));
+        state.records[0]["status"]["revisions"]["keptOrphans"] = json!(kept.name);
+        state
+    }
+
+    /// Return the build of `a`: the ConfigMap `web` and the marker
+    /// `platform-dns` as an import, which Kix writes no object for.
+    fn build_with_marker(state: &State) -> StoreGraph {
+        let manifests: Vec<Value> = ["web", "platform-dns"]
+            .iter()
+            .map(|n| kix::manifest::types::to_manifest_value(&state.object(n)))
+            .collect();
+        StoreGraph::synthesize(&manifests, &StoreGraph::empty("a"))
+    }
+
+    /// Run a soft gc of `a` against `graph` as `kix gc a --yes` does: judge
+    /// the kept orphans, keep what another Kix cluster still deploys, delete
+    /// the rest, and rewrite the kept-orphans list. Return the garbage and
+    /// what was kept as shared.
+    async fn soft_gc(api: &FakeApi, graph: &StoreGraph) -> (Vec<String>, Vec<String>) {
+        let client = api.client();
+        let retirement = retirement_of(api).await;
+        let records = retirement.records.as_ref().unwrap();
+        let tenancy = read_tenancy(records, "a").await.unwrap();
+        let discovery = kix::cluster::discovery::discover_resources(&client)
+            .await
+            .unwrap();
+        let active = retirement.active.clone().unwrap();
+        let kept = baseline::kept_of(
+            &client,
+            &discovery,
+            &tenancy,
+            &active,
+            None,
+            &Default::default(),
+            &|_| {},
+            None,
+        )
+        .await
+        .unwrap();
+        let (garbage, update) = judge_soft(graph, &kept, active.identity_hash.as_deref());
+        let rids: Vec<ResourceId> = garbage.iter().map(ResourceId::from_value).collect();
+        let (rids, shared) = kix::plan::keep_shared(&client, "a", rids).await.unwrap();
+        let done = delete_resources(
+            &client,
+            "a",
+            DeleteOrder::unordered(rids),
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        update_kept("a", &retirement, &update, &done).await.unwrap();
+        (
+            garbage
+                .iter()
+                .map(|m| m["metadata"]["name"].as_str().unwrap().to_string())
+                .collect(),
+            shared.iter().map(|s| s.rid.name.clone()).collect(),
+        )
+    }
+
+    /// Return the names the current record's kept-orphans revision lists,
+    /// or none when it names no such revision.
+    fn kept_names(api: &FakeApi) -> Vec<String> {
+        let record = api.object("Activation", "a-cur").unwrap();
+        let Some(name) = record["status"]["revisions"]["keptOrphans"].as_str() else {
+            return Vec::new();
+        };
+        api.object(kix::cluster::revision::KIND, name).unwrap()["spec"]["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["name"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    /// The build still holds the marker `platform-dns`, but Kix writes no
+    /// object for it, so the marker an older Kix applied is a kept orphan
+    /// like any other. `kix gc` deletes it and then lists nothing kept.
+    #[tokio::test]
+    async fn gc_deletes_a_leftover_marker() {
+        let state = leftover_marker(false);
+        let api = FakeApi::new(state.all());
+        let graph = build_with_marker(&state);
+        assert_eq!(kept_names(&api), ["platform-dns"]);
+        let (garbage, shared) = soft_gc(&api, &graph).await;
+        assert_eq!(garbage, ["platform-dns"]);
+        assert!(shared.is_empty());
+        assert!(api.object("PackageInstance", "platform-dns").is_none());
+        assert!(kept_names(&api).is_empty());
+    }
+
+    /// A leftover marker that another Kix cluster, deployed by an older Kix,
+    /// still names is kept, and the kept-orphans list still names it, so a
+    /// later gc deletes it once that Kix cluster lets it go.
+    #[tokio::test]
+    async fn gc_keeps_a_leftover_marker_an_older_kix_cluster_still_names() {
+        let state = leftover_marker(true);
+        let api = FakeApi::new(state.all());
+        let graph = build_with_marker(&state);
+        let (garbage, shared) = soft_gc(&api, &graph).await;
+        assert_eq!(garbage, ["platform-dns"]);
+        assert_eq!(shared, ["platform-dns"]);
+        assert!(api.object("PackageInstance", "platform-dns").is_some());
+        assert_eq!(kept_names(&api), ["platform-dns"]);
+    }
+
+    /// A full scan judges a marker the build holds as an object that left
+    /// the build, so it finds a marker an older Kix left that no record names
+    /// any more, by its field manager.
+    #[test]
+    fn a_full_scan_judges_a_leftover_marker_as_not_in_the_build() {
+        let state = leftover_marker(false);
+        let graph = build_with_marker(&state);
+        let live = [state.object("web"), state.object("platform-dns")];
+        let judged = judge_hard(&live, &identities(&graph), &state.tenancy("a"));
+        assert_eq!(names(&judged.garbage), ["platform-dns"]);
+    }
+
+    /// A cluster that an earlier gc left with a marker no record names: the
+    /// marker is on the cluster under `kix/a`, and the current record names
+    /// no kept-orphans revision. A full scan finds it by its field manager
+    /// as this cluster's object that left the build, and deletes it without
+    /// `--include unattributed`.
+    #[test]
+    fn a_full_scan_finds_a_marker_no_record_names_by_its_entry() {
+        let mut state = leftover_marker(false);
+        let old = state.revision_named("a-cur", "keptOrphans");
+        state.remove_revision(&old);
+        state.records[0]["status"]["revisions"]["keptOrphans"] = Value::Null;
+        let graph = build_with_marker(&state);
+        let tenancy = state.tenancy("a");
+        let scoped = inventory::scope_sweep(
+            inventory::partition_sweep(vec![state.object("web"), state.object("platform-dns")]),
+            inventory::SweepScope::Cluster("a"),
+            tenancy.clone(),
+        );
+        assert!(scoped.unattributed.is_empty());
+        let expected = identities(&graph);
+        let without = judged_objects(scoped, false, false);
+        assert_eq!(
+            names(&judge_hard(&without, &expected, &tenancy).garbage),
+            ["platform-dns"]
         );
     }
 }

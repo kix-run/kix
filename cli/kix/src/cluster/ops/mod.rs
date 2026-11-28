@@ -59,7 +59,7 @@ pub mod scripted;
 mod sops;
 
 pub(crate) use dry_run::DryRun;
-pub(crate) use record::{ActivationRecord, RecordConfig};
+pub(crate) use record::{ActivationRecord, RecordConfig, kept_orphans_revision};
 pub(crate) use resources::{Force, KubeResources};
 pub(crate) use sops::SopsHydrator;
 
@@ -162,7 +162,8 @@ pub(crate) trait ResourceIo: Send + Sync + 'static {
     /// Give up this Kix cluster's fields on the orphan `rid`, which another
     /// Kix cluster still deploys, with an apply of nothing under its own
     /// manager. Return whether it wrote. An object with no `Apply` entry
-    /// under the manager needs nothing.
+    /// under the manager needs nothing. Return an error when the entry is
+    /// still on the object afterwards, so the run's record keeps naming it.
     async fn release(&self, _rid: &ResourceId) -> Result<bool, String> {
         Ok(false)
     }
@@ -277,6 +278,55 @@ impl Migrations {
     }
 }
 
+/// What a run records about the objects it applies.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Recording {
+    /// The object hash of each object of the build, by name
+    /// ([`crate::manifest::hash::object_hash`]). The run records an applied
+    /// hash under it, because the manifest it applies can differ from the
+    /// build's: secret values are filled in, and a ceded field another
+    /// manager holds is left out.
+    pub(crate) object_hashes: std::collections::HashMap<ResourceId, String>,
+    /// The objects a runner that never forces applies without the fields
+    /// another manager holds. What the cluster stores for them is not the
+    /// build, so the run records no applied hash for them.
+    pub(crate) unrecorded: std::collections::HashSet<ResourceId>,
+}
+
+impl Recording {
+    /// Return what a run of the build whose objects `manifests` holds
+    /// records, leaving out `unrecorded`.
+    pub(crate) fn of_build(
+        manifests: &[Value],
+        unrecorded: impl IntoIterator<Item = ResourceId>,
+    ) -> Recording {
+        Recording {
+            object_hashes: manifests
+                .iter()
+                .map(|m| {
+                    (
+                        ResourceId::from_value(m),
+                        crate::manifest::hash::object_hash(m),
+                    )
+                })
+                .collect(),
+            unrecorded: unrecorded.into_iter().collect(),
+        }
+    }
+
+    /// Return what a run of the build `revisions` records.
+    pub(crate) fn of_revisions(revisions: &crate::cluster::revision::RevisionSet) -> Recording {
+        Recording {
+            object_hashes: revisions
+                .all()
+                .flat_map(|r| &r.spec.objects)
+                .map(|o| (o.resource_id(), o.hash.clone()))
+                .collect(),
+            unrecorded: Default::default(),
+        }
+    }
+}
+
 /// The orphans a run left on the cluster.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Left<'a> {
@@ -286,9 +336,10 @@ pub(crate) struct Left<'a> {
     /// Each orphan of a kind Kix never prunes (`lifecycle::never_pruned`).
     /// The kept-orphans revision names them so reports can list them.
     pub(crate) never_pruned: &'a [ResourceId],
-    /// The manifests the run's orphans came from: the earlier builds for the
-    /// CLI, the live objects for the operator.
-    pub(crate) manifests: &'a [Value],
+    /// The objects earlier deploys made, with the manifests the run's
+    /// orphans came from (the earlier builds for the CLI, the live objects
+    /// for the operator) and the edges between them.
+    pub(crate) prior: &'a crate::cluster::edges::Prior,
 }
 
 /// Decrypts SOPS-backed data in a Secret manifest before it is applied.

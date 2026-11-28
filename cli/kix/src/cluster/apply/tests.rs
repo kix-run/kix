@@ -240,28 +240,6 @@ fn immutable_rejection_is_not_a_stored_version_one() {
 }
 
 #[test]
-fn unstamped_old_manifest_is_never_an_orphan() {
-    let mut inherited = manifest("EndpointSlice", "web-abc", "default", "unused", "");
-    inherited["metadata"]
-        .as_object_mut()
-        .unwrap()
-        .remove("annotations");
-    let old = vec![
-        inherited,
-        manifest("Deployment", "gone", "default", "id-gone", ""),
-    ];
-    let actions = detect_changes(&[], &old);
-    let orphans: Vec<_> = actions
-        .iter()
-        .filter_map(|a| match a {
-            ChangeAction::Orphan(rid) => Some(rid.name.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(orphans, vec!["gone"]);
-}
-
-#[test]
 fn detect_new_resource() {
     let new = vec![manifest("Deployment", "app", "default", "id1", "")];
     let old: Vec<Value> = vec![];
@@ -281,14 +259,48 @@ fn detect_unchanged_resource() {
     assert!(matches!(&actions[0], ChangeAction::Skip(_)));
 }
 
+fn labelled(mut manifest: Value) -> Value {
+    manifest["metadata"]["labels"] = json!({ "tier": "web" });
+    manifest
+}
+
 #[test]
 fn detect_changed_resource() {
-    let new = vec![manifest("Deployment", "app", "default", "new-hash", "")];
+    let new = vec![labelled(manifest(
+        "Deployment",
+        "app",
+        "default",
+        "new-hash",
+        "",
+    ))];
     let old = vec![manifest("Deployment", "app", "default", "old-hash", "")];
 
     let actions = detect_changes(&new, &old);
     assert_eq!(actions.len(), 1);
     assert!(matches!(&actions[0], ChangeAction::Apply(_)));
+}
+
+/// A resource whose build hash and dependency notes changed because a
+/// dependency changed, and whose own manifest did not, is skipped, as the
+/// deploy skips it.
+#[test]
+fn detect_skips_a_dependency_only_change() {
+    let new = vec![manifest(
+        "Deployment",
+        "app",
+        "default",
+        "new-hash",
+        "requires:dep-2",
+    )];
+    let old = vec![manifest(
+        "Deployment",
+        "app",
+        "default",
+        "old-hash",
+        "requires:dep-1",
+    )];
+    let actions = detect_changes(&new, &old);
+    assert!(matches!(&actions[..], [ChangeAction::Skip(_)]));
 }
 
 fn with_package(mut manifest: Value, package: &str) -> Value {
@@ -297,15 +309,11 @@ fn with_package(mut manifest: Value, package: &str) -> Value {
     manifest
 }
 
-/// A build that names another owner for an object whose content is
-/// unchanged applies it, so the live `kix.run/package` follows the build.
+/// Kix sends no owner stamp, so a build that names another owner for an
+/// object whose content is unchanged leaves it alone.
 #[test]
-fn detect_changed_owner_stamp() {
+fn detect_skips_a_moved_owner_stamp() {
     let new = vec![with_package(
-        manifest("Deployment", "app", "default", "id1", ""),
-        "postgres",
-    )];
-    let same = vec![with_package(
         manifest("Deployment", "app", "default", "id1", ""),
         "postgres",
     )];
@@ -313,12 +321,8 @@ fn detect_changed_owner_stamp() {
         manifest("Deployment", "app", "default", "id1", ""),
         "app-db",
     )];
-
-    let actions = detect_changes(&new, &same);
-    assert!(matches!(&actions[0], ChangeAction::Skip(_)));
     let actions = detect_changes(&new, &other);
-    assert_eq!(actions.len(), 1);
-    assert!(matches!(&actions[0], ChangeAction::Apply(_)));
+    assert!(matches!(&actions[..], [ChangeAction::Skip(_)]));
 }
 
 #[test]
@@ -344,7 +348,7 @@ fn detect_orphan() {
 fn detect_mixed_actions() {
     let new = vec![
         manifest("Deployment", "unchanged", "default", "id1", ""),
-        manifest("Deployment", "changed", "default", "new-hash", ""),
+        labelled(manifest("Deployment", "changed", "default", "new-hash", "")),
         manifest("Deployment", "new-app", "default", "id3", ""),
     ];
     let old = vec![
@@ -460,7 +464,7 @@ fn baseline_keeps_active_and_adds_only_what_is_missing() {
 
     let merged = baseline_manifests(&active, &[failed]);
     assert_eq!(merged.len(), 2);
-    assert_eq!(manifest_identity_hash(&merged[0]), Some("h1"));
+    assert_eq!(keys::get(&merged[0], keys::IDENTITY_HASH), Some("h1"));
     assert_eq!(
         ResourceId::from_value(&merged[1]).display_id(),
         "ConfigMap/leftover@app"
@@ -518,11 +522,12 @@ fn unchanged_record_is_skip_not_apply() {
     );
 }
 
-/// Markers and plain PackageInstances are ordinary desired state for
-/// orphan detection: one that left the build is an orphan. Pins
+/// A plain PackageInstance is ordinary desired state for orphan detection:
+/// one that left the build is an orphan. A build does not make its import
+/// markers, so a marker of the old build is no orphan. Pins
 /// `Lifecycle::prunable()` against a mutant that only prunes `Desired`.
 #[test]
-fn markers_and_plain_package_instances_can_be_orphans() {
+fn plain_package_instances_can_be_orphans_and_markers_cannot() {
     let mut marker = manifest("PackageInstance", "pi-import", "ns", "m1", "");
     marker["metadata"]["annotations"][keys::MODE] = serde_json::json!("import");
     let plain = manifest("PackageInstance", "pi-plain", "ns", "p1", "");
@@ -533,10 +538,7 @@ fn markers_and_plain_package_instances_can_be_orphans() {
     orphans.sort();
     assert_eq!(
         orphans,
-        vec![
-            format!("PackageInstance.{}/pi-import@ns", keys::GROUP),
-            format!("PackageInstance.{}/pi-plain@ns", keys::GROUP)
-        ]
+        vec![format!("PackageInstance.{}/pi-plain@ns", keys::GROUP)]
     );
 }
 
@@ -586,12 +588,16 @@ fn rerun_job(identity_hash: &str, rerun_hash: Option<&str>) -> Value {
 }
 
 /// A change below the Job in the graph, such as a namespace label, moves its
-/// identity hash and leaves its rerun hash alone. The Job is applied in
-/// place and does not run again.
+/// identity hash and leaves its manifest alone. The Job is left alone and
+/// does not run again. A change to the Job that leaves its rerun hash alone
+/// applies it in place.
 #[test]
 fn rerun_job_with_the_same_content_is_applied_in_place() {
     let old = vec![rerun_job("id1", Some("c1"))];
     let new = vec![rerun_job("id2", Some("c1"))];
+    let actions = detect_changes(&new, &old);
+    assert!(matches!(&actions[..], [ChangeAction::Skip(_)]));
+    let new = vec![labelled(rerun_job("id2", Some("c1")))];
     let actions = detect_changes(&new, &old);
     assert!(matches!(&actions[..], [ChangeAction::Apply(_)]));
 }

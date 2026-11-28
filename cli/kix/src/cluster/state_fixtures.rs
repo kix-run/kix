@@ -187,6 +187,8 @@ fn read_back(folder: &Path) -> Value {
         .collect();
     let applied = AppliedHashes::of(&parsed, &revisions);
     let current = activation::current_record(&records);
+    let current_name = current.and_then(|c| c.metadata.name.clone());
+    let manager = tenancy.manager_of(&cluster);
 
     let others: Vec<Value> = all
         .iter()
@@ -199,7 +201,7 @@ fn read_back(folder: &Path) -> Value {
                 "name": o.metadata.name,
                 "lifecycle": format!("{:?}", lifecycle::lifecycle_of(&manifest)),
                 "owners": tenancy.owners_of(o),
-                "drift": verdict_name(&drift::check_object(o, applied.applied(o), &tenancy.manager_of(&cluster)).verdict),
+                "drift": verdict_name(&drift::check_object(o, applied.for_live(o, &manager, current_name.as_deref()), &manager).verdict),
             })
         })
         .collect();
@@ -329,10 +331,10 @@ fn manifest_of(obj: &DynamicObject) -> Value {
 
 /// Each fixture cluster, as the release that wrote it left it, moves to
 /// revisions on its first deploy by this Kix. The deploy builds the same
-/// managed objects again. Afterwards every object has one `Apply` entry
-/// under the cluster's own field manager and neither note, the revisions
-/// name every object and carry the applied hash from its note, and a
-/// second plan has nothing to do. The PackageInstance is left out, because
+/// managed objects again and writes none of them. Afterwards every object
+/// has one `Apply` entry under the cluster's own field manager and neither
+/// note, the revisions name every object with its object hash and this
+/// Kix's applied hash of it, and a second plan has nothing to do. The PackageInstance is left out, because
 /// the fake API server does not serve its kind.
 #[tokio::test]
 async fn each_fixture_cluster_moves_to_revisions_on_its_first_deploy() {
@@ -418,28 +420,26 @@ async fn each_fixture_cluster_moves_to_revisions_on_its_first_deploy() {
             .await
             .unwrap()
             .readable;
-        for obj in &managed {
-            let hash = obj
-                .metadata
-                .annotations
-                .as_ref()
-                .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH))
-                .unwrap();
-            let applied = obj
-                .metadata
-                .annotations
-                .as_ref()
-                .and_then(|a| keys::get_meta(a, keys::APPLIED_HASH))
-                .unwrap();
+        // The revisions name each object with the object hash of its
+        // manifest, because the build makes the file the record named, and
+        // hold this Kix's applied hash of the object as the deploy left it.
+        for (obj, manifest) in managed.iter().zip(&manifests) {
+            let name = obj.metadata.name.as_deref().unwrap();
+            let hash = crate::manifest::hash::object_hash(manifest);
+            let after: DynamicObject =
+                serde_json::from_value(api.object(kind(obj), name).unwrap()).unwrap();
+            let applied = crate::cluster::fieldsv1::applied_content_hash(
+                &after,
+                &crate::cluster::field_manager::FieldManager::of(&cluster),
+            )
+            .unwrap();
             let named: Vec<&Revision> = listed
                 .iter()
                 .filter(|r| r.spec.objects.iter().any(|o| o.hash == hash))
                 .collect();
-            assert!(!named.is_empty(), "{version}: no revision names {hash}");
+            assert!(!named.is_empty(), "{version}: no revision names {name}");
             assert!(
-                named
-                    .iter()
-                    .all(|r| r.applied.get(hash).map(String::as_str) == Some(applied)),
+                named.iter().all(|r| r.applied.get(&hash) == Some(&applied)),
                 "{version}: {named:?}"
             );
         }

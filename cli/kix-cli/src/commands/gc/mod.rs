@@ -17,15 +17,15 @@
 //!   revision of what remains on the record.
 //! - **Full scan (`--full-scan`):** Scan all live Kix-managed resources
 //!   that belong to this cluster ([`Tenancy`],
-//!   `inventory::SweepScope::Cluster`). Resources whose `kix.run/identity-hash`
-//!   is absent from the Active build are garbage (or, for resources stamped
-//!   before the domain move, resources whose Kubernetes identity is absent).
-//!   For a Kix cluster read from revisions, only the objects the
-//!   kept-orphans revision alone names are garbage.
+//!   `inventory::SweepScope::Cluster`). Resources whose kind, namespace, and
+//!   name the Active build does not make are garbage, unless a record of the
+//!   Kix cluster that may still be deploying names them or another Kix
+//!   cluster deploys them. For a Kix cluster read from revisions, only the
+//!   objects the kept-orphans revision alone names are garbage.
 //!   With no Active record, the build from the current files takes its place.
-//!   Unstamped label carriers, resources that name no Activation record,
-//!   and copies other programs made of Kix objects are reported and only
-//!   deleted when `--include` names them.
+//!   Resources that name no Activation record, and copies other programs
+//!   made of Kix objects, are reported and only deleted when `--include`
+//!   names them.
 //! - **Operator (`--operator`):** Delete retired Superseded Activation records
 //!   and wait for the operator's finalizer.
 //!
@@ -60,11 +60,14 @@ use kix::build_source::Build;
 use kix::cluster::activation::{OpenedRecords, Record, Records};
 use kix::cluster::binding;
 use kix::cluster::discovery;
+use kix::cluster::edges::Edges;
 use kix::cluster::graph::DeleteOrder;
 use kix::cluster::inventory;
 use kix::cluster::prune_guard::{self, Pruned, Removal, Step};
 use kix::cluster::readiness::{self, DeletePath};
-use kix::cluster::revision::{Revision, RevisionObject, RevisionSpec, Revisions, Slot, keep};
+use kix::cluster::revision::{
+    self, Revision, RevisionImport, RevisionObject, RevisionSpec, Revisions, Slot, keep,
+};
 use kix::cluster::tenancy::{self, Kept, Source, Tenancy};
 use kix::eval::store;
 use kix::eval::store_graph::{StoreGraph, store_hash};
@@ -126,11 +129,11 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     };
     let graph = active_build(args, ctx, &cluster, active, &stopped)?;
 
-    let hashes: HashSet<String> = graph.resources.keys().map(|p| store_hash(p)).collect();
-    let ids: HashSet<String> = graph
+    let hashes: HashSet<String> = graph
         .resources
-        .values()
-        .map(|r| k8s_identity(&r.manifest))
+        .iter()
+        .filter(|(_, r)| lifecycle::makes(&r.manifest))
+        .map(|(p, _)| store_hash(p))
         .collect();
     let records = retirement.records.clone().ok_or_else(|| {
         miette!("could not read deployment records for '{cluster}'. Nothing was deleted.")
@@ -156,13 +159,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         .await
         .map_err(|e| miette!("{e}"))
     })?;
-    let garbage = kept_garbage(&kept_baseline.closures, &hashes, &ids);
-    let update = KeptUpdate::of(
-        &kept_baseline,
-        &graph,
-        active.identity_hash.as_deref(),
-        kept_baseline.unresolved.is_empty(),
-    );
+    let (garbage, update) = judge_soft(&graph, &kept_baseline, active.identity_hash.as_deref());
 
     if garbage.is_empty() && retirement.plan.retire.is_empty() {
         if !args.dry_run {
@@ -180,22 +177,13 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
-    // Order deletions in reverse topological order (dependents before
-    // dependencies) and exclude resources still deployed by another Kix cluster.
-    // The dependencies come from the Active build too, so one that passes
-    // through an object still in use orders the deletes.
-    let known: Vec<Value> = graph
+    // Exclude resources still deployed by another Kix cluster below.
+    let built: Vec<Value> = graph
         .resources
         .values()
         .map(|r| r.manifest.clone())
-        .chain(garbage.iter().cloned())
         .collect();
-    let mut order = DeleteOrder::of_manifests(&known);
-    let garbage_ids: HashSet<ResourceId> = garbage.iter().map(ResourceId::from_value).collect();
-    order.retain(|rid| garbage_ids.contains(rid));
-    for rid in &garbage_ids {
-        order.push(rid.clone());
-    }
+    let mut order = soft_order(built, &garbage, &tenancy);
     let (ordered_rids, kept) = split_never_pruned(order.ids().to_vec());
     let client = ctx
         .runtime()?
@@ -394,13 +382,45 @@ pub(super) fn check_files_build(
     ))
 }
 
-/// Order the garbage `entries` of a full scan by the `kix.run/depends-on`
-/// annotations of every `live` object, dependents first, so a stuck delete
-/// holds back what it depends on as in the default mode.
-fn live_order(live: &[kube::api::DynamicObject], entries: &[GarbageEntry]) -> DeleteOrder {
+/// Order the kept orphans `garbage` of the default mode in reverse
+/// topological order, dependents before dependencies. The dependencies come
+/// from the Active build `built` too, so one that passes through an object
+/// still in use orders the deletes. For a Kix cluster read from revisions the
+/// garbage manifests are live objects, so their edges come from the
+/// revisions. Otherwise they come from the builds that kept them.
+fn soft_order(built: Vec<Value>, garbage: &[Value], tenancy: &Tenancy) -> DeleteOrder {
+    let edges = match tenancy.own_source() {
+        Source::Revisions => Edges::of_build(&built).or(Edges::of_own_revisions(tenancy, garbage)),
+        Source::Records => Edges::of_build(&[built.as_slice(), garbage].concat()),
+    };
+    let known: Vec<Value> = built.into_iter().chain(garbage.iter().cloned()).collect();
+    let mut order = DeleteOrder::of(&known, &edges);
+    let garbage_ids: HashSet<ResourceId> = garbage.iter().map(ResourceId::from_value).collect();
+    order.retain(|rid| garbage_ids.contains(rid));
+    for rid in garbage.iter().map(ResourceId::from_value) {
+        order.push(rid);
+    }
+    order
+}
+
+/// Order the garbage `entries` of a full scan by the edges between the
+/// `live` objects, dependents first, so a stuck delete holds back what it
+/// depends on as in the default mode. The edges come from the revisions of
+/// the Kix cluster `tenancy` is read for. An object no revision names has
+/// none. For a Kix cluster whose records an older Kix wrote, which have no
+/// revisions, they come from the notes on the live objects.
+fn live_order(
+    live: &[kube::api::DynamicObject],
+    entries: &[GarbageEntry],
+    tenancy: &Tenancy,
+) -> DeleteOrder {
     let ids: HashSet<&ResourceId> = entries.iter().map(|g| &g.id).collect();
     let manifests: Vec<Value> = live.iter().map(ordering_stub).collect();
-    let mut order = DeleteOrder::of_manifests(&manifests);
+    let edges = match tenancy.own_source() {
+        Source::Revisions => Edges::of_own_revisions(tenancy, &manifests),
+        Source::Records => Edges::of_older_kix_notes(&manifests),
+    };
+    let mut order = DeleteOrder::of(&manifests, &edges);
     order.retain(|rid| ids.contains(rid));
     for entry in entries {
         order.push(entry.id.clone());
@@ -409,8 +429,10 @@ fn live_order(live: &[kube::api::DynamicObject], entries: &[GarbageEntry]) -> De
 }
 
 /// Return the parts of a live object that ordering reads: its identity and
-/// its `kix.run/identity-hash` and `kix.run/depends-on` annotations. Leaving
-/// out the rest keeps Secret data and managed fields out of memory.
+/// its `kix.run/identity-hash` and `kix.run/depends-on` annotations, which
+/// order only the objects of records without revisions or with format 1
+/// ones. Leaving out the rest keeps Secret data and managed fields out of
+/// memory.
 fn ordering_stub(obj: &kube::api::DynamicObject) -> Value {
     let rid = kix::cluster::drift::resource_id(obj);
     let mut annotations = serde_json::Map::new();
@@ -471,6 +493,9 @@ pub(super) enum KeptUpdate {
     /// Active build does not hold (`in_build`).
     Objects {
         listed: Vec<RevisionObject>,
+        /// The import markers the revision lists. The new one lists those
+        /// the remaining objects depend on.
+        imports: Vec<RevisionImport>,
         live: HashSet<ResourceId>,
         unknown: HashSet<ResourceId>,
         in_build: HashSet<ResourceId>,
@@ -490,6 +515,7 @@ impl KeptUpdate {
         match &kept.listed {
             Some(listed) => KeptUpdate::Objects {
                 listed: listed.clone(),
+                imports: kept.imports.clone(),
                 live: kept
                     .closures
                     .iter()
@@ -515,6 +541,7 @@ impl KeptUpdate {
             live,
             unknown,
             in_build,
+            ..
         } = self
         else {
             return None;
@@ -546,12 +573,36 @@ impl KeptUpdate {
     }
 }
 
-/// Return the group, kind, namespace, and name of every object of `graph`.
+/// Return the kept orphans a soft gc of the Active build `graph`, whose
+/// Activation record has identity hash `build_hash`, deletes from `kept`, and
+/// how it rewrites the kept-orphans list once the deletes are done. An
+/// object the build makes again is neither garbage nor kept. An import
+/// marker is not one ([`StoreGraph::made`]), so a marker an older Kix left
+/// is garbage.
+pub(super) fn judge_soft(
+    graph: &StoreGraph,
+    kept: &baseline::KeptBaseline,
+    build_hash: Option<&str>,
+) -> (Vec<Value>, KeptUpdate) {
+    let garbage = kept_garbage(&kept.closures, &identities(graph));
+    let update = KeptUpdate::of(kept, graph, build_hash, kept.unresolved.is_empty());
+    (garbage, update)
+}
+
+/// Return the group, kind, namespace, and name of every object `graph`
+/// makes on the cluster ([`StoreGraph::made`]). An import marker is not one,
+/// so a marker an older Kix applied is a leftover gc may delete.
 fn ids_of(graph: &StoreGraph) -> HashSet<ResourceId> {
+    graph.made()
+}
+
+/// Return the kind, namespace, and name, as [`k8s_identity`] writes them, of
+/// every object `graph` makes on the cluster ([`StoreGraph::made`]).
+fn identities(graph: &StoreGraph) -> HashSet<String> {
     graph
-        .resources
-        .values()
-        .map(|r| ResourceId::from_value(&r.manifest))
+        .made()
+        .iter()
+        .map(|rid| format!("{}/{}/{}", rid.kind, rid.namespace, rid.name))
         .collect()
 }
 
@@ -589,7 +640,7 @@ async fn update_kept(
             }
             Ok(())
         }
-        KeptUpdate::Objects { .. } => {
+        KeptUpdate::Objects { imports, .. } => {
             let Some(remaining) = update.remaining(&done.gone) else {
                 return Ok(());
             };
@@ -606,7 +657,10 @@ async fn update_kept(
                 );
                 return Ok(());
             }
-            let revision = Revision::new(RevisionSpec::new(cluster, Slot::KeptOrphans, remaining));
+            let revision = Revision::new(
+                RevisionSpec::new(cluster, Slot::KeptOrphans, remaining)
+                    .with_imports_reached(imports.iter().cloned()),
+            );
             Revisions::new(records.client())
                 .create(&revision)
                 .await
@@ -721,16 +775,7 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         None => files_build(args, ctx, &cluster)?,
     };
 
-    let expected_hashes: HashSet<String> = graph
-        .resources
-        .values()
-        .filter_map(|r| keys::get(&r.manifest, keys::IDENTITY_HASH).map(|s| s.to_string()))
-        .collect();
-    let expected_ids: HashSet<String> = graph
-        .resources
-        .values()
-        .map(|r| k8s_identity(&r.manifest))
-        .collect();
+    let expected_ids = identities(&graph);
 
     let compared = match &active {
         Some(active) => format!("the build of active deployment {}", active.name),
@@ -741,7 +786,7 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     crate::say!(
         "Cluster {}: {} resources in {compared}",
         output::bold(&graph.cluster_name),
-        expected_hashes.len(),
+        expected_ids.len(),
     );
 
     let build_hash = build_hash(&graph);
@@ -750,7 +795,6 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     ctx.runtime()?.block_on(run_hard_async(
         args,
         &global,
-        &expected_hashes,
         &expected_ids,
         &in_build,
         &cluster_name,
@@ -764,7 +808,6 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
 async fn run_hard_async(
     args: &GcArgs,
     global: &crate::cli::GlobalArgs,
-    expected_hashes: &HashSet<String>,
     expected_ids: &HashSet<String>,
     in_build: &HashSet<ResourceId>,
     cluster_name: &str,
@@ -823,7 +866,7 @@ async fn run_hard_async(
             &client,
             &records,
             &sweep,
-            (expected_hashes, expected_ids, in_build),
+            (expected_ids, in_build),
             (cluster_name, generation),
             kubernetes_uid,
             build_hash,
@@ -837,9 +880,8 @@ async fn run_hard_async(
 
     if !output::quiet() {
         println!(
-            "Found {} live Kix-managed object(s) ({} without a Kix build annotation){}",
+            "Found {} live Kix-managed object(s){}",
             sweep.managed.len(),
-            sweep.unstamped.len(),
             crate::output::forbidden_note(&sweep.forbidden),
         );
         if let Some(note) = sweep.foreign_note() {
@@ -866,40 +908,17 @@ async fn run_hard_async(
         Some((ar, _)) => unread.contains(&format!("{}.{}", ar.plural, ar.group)),
     };
     let unattributed_judged = sweep.unattributed.is_empty() || args.includes(Include::Unattributed);
-    let copies: HashSet<ResourceId> = sweep
-        .copies
-        .iter()
-        .map(kix::cluster::drift::resource_id)
-        .collect();
     let live = judged_objects(
         sweep,
         args.includes(Include::Unattributed),
         args.includes(Include::Copies),
     );
 
-    // Resources stamped before the domain migration have store hashes under the
-    // retired domain that cannot match a current build, so `judge_hard`
-    // compares them by Kubernetes identity instead.
-    let stale = live
-        .iter()
-        .filter(|obj| kix::legacy_domain::stamped_before_move(|key| has_key(obj, key)))
-        .count();
-    if stale > 0 {
-        crate::say!(
-            "{} {stale} object(s) still carry tracking annotations from before the `{}` \
-             move. Their build hashes cannot match a current build, so Kix checks them by \
-             Kubernetes kind, namespace, and name instead, the rule `kix gc` without \
-             `--full-scan` already uses. One deploy updates their annotations.",
-            crate::output::yellow("Note:"),
-            keys::DOMAIN,
-        );
-    }
-
     let plan::Judged {
         mut garbage,
         shared,
         held,
-    } = judge_hard(&live, expected_hashes, expected_ids, &tenancy);
+    } = judge_hard(&live, expected_ids, &tenancy);
 
     // Plan Superseded Activation record retirement. Any listing failure is
     // returned as an error rather than treated as an empty list.
@@ -909,12 +928,6 @@ async fn run_hard_async(
         retirement.check_writer(cluster_name)?;
     }
     garbage.extend(record_garbage(&retirement.plan));
-
-    let (unstamped, garbage) =
-        hold_back_unstamped(garbage, &copies, args.includes(Include::Unstamped));
-    if !unstamped.is_empty() && !output::quiet() {
-        print_unstamped(&unstamped);
-    }
 
     if !shared.is_empty() {
         crate::say!();
@@ -935,6 +948,11 @@ async fn run_hard_async(
                 .filter(|rid| not_known(rid))
                 .collect(),
             listed: objects.into_iter().cloned().collect(),
+            imports: retirement
+                .active
+                .as_ref()
+                .map(|a| tenancy.kept_imports(a).to_vec())
+                .unwrap_or_default(),
             live: live.iter().map(kix::cluster::drift::resource_id).collect(),
             in_build: in_build.clone(),
         },
@@ -992,7 +1010,7 @@ async fn run_hard_async(
         let done = delete_resources(
             &lock.guarded(&client),
             cluster_name,
-            live_order(&live, &resource_entries),
+            live_order(&live, &resource_entries, &tenancy),
             budget,
         )
         .await?;
@@ -1028,13 +1046,13 @@ async fn rebuild_kept_list(
     client: &kube::Client,
     records: &OpenedRecords,
     sweep: &inventory::ManagedSweep,
-    build: (&HashSet<String>, &HashSet<String>, &HashSet<ResourceId>),
+    build: (&HashSet<String>, &HashSet<ResourceId>),
     (cluster_name, generation): (&str, u64),
     kubernetes_uid: Option<&str>,
     build_hash: Option<&str>,
     compared: &str,
 ) -> Result<()> {
-    let (expected_hashes, expected_ids, in_build) = build;
+    let (expected_ids, in_build) = build;
     let tenancy = &sweep.tenancy;
     let problem = tenancy
         .problems()
@@ -1066,7 +1084,6 @@ async fn rebuild_kept_list(
     Box::pin(run_hard_async(
         args,
         global,
-        expected_hashes,
         expected_ids,
         in_build,
         cluster_name,
@@ -1080,7 +1097,9 @@ async fn rebuild_kept_list(
 /// Return what a rebuilt kept-orphans list names: each labelled, prunable
 /// live object of `sweep` that the Kix cluster applied, that no other
 /// revision of it names, and that the build compared with, whose objects
-/// are `in_build`, lacks.
+/// are `in_build`, lacks. Nothing says which build wanted each object, so
+/// each gets the hash [`revision::REBUILT`], which no object hash equals,
+/// and no edges.
 fn kept_to_rebuild(
     sweep: &inventory::ManagedSweep,
     in_build: &HashSet<ResourceId>,
@@ -1092,15 +1111,9 @@ fn kept_to_rebuild(
         .chain(&sweep.unattributed)
         .filter(|obj| lifecycle::lifecycle_of_live(obj).prunable())
         .filter(|obj| tenancy.unlisted_own(obj))
-        .filter_map(|obj| {
-            let rid = kix::cluster::drift::resource_id(obj);
-            let hash = obj
-                .metadata
-                .annotations
-                .as_ref()
-                .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH))?;
-            (!in_build.contains(&rid)).then(|| RevisionObject::of_id(hash, &rid))
-        })
+        .map(kix::cluster::drift::resource_id)
+        .filter(|rid| !in_build.contains(rid))
+        .map(|rid| RevisionObject::of_id(revision::REBUILT, &rid))
         .collect();
     objects.sort();
     objects.dedup();

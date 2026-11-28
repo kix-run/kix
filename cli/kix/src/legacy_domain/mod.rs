@@ -18,7 +18,8 @@ pub use kube_ops::KubeMigrationOps;
 pub fn check_discovery(discovery: &[(ApiResource, Scope)]) -> Result<(), LegacyDomainError> {
     let groups: Vec<&str> = discovery
         .iter()
-        .filter(|(ar, _)| crate::manifest::lifecycle::is_record_kind(&ar.kind))
+        // Records under any group, so that one under a retired group is found.
+        .filter(|(ar, _)| ar.kind == crate::manifest::lifecycle::RECORD_KIND)
         .map(|(ar, _)| ar.group.as_str())
         .collect();
     check_cluster(&groups)

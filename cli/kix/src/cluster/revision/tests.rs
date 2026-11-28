@@ -10,6 +10,7 @@ use super::*;
 use crate::cluster::fake_api::FakeApi;
 use crate::eval::store_graph::{PackageNode, ResourceNode, StoreGraph};
 use crate::manifest::keys;
+use crate::manifest::types::ResourceId;
 
 const CLUSTER: &str = "c1";
 
@@ -88,12 +89,16 @@ fn graph(packages: &[Package], cluster_level: &[(&str, Value)], activation: &str
     g
 }
 
+/// The package `web`, whose ConfigMap `b` has store hash `config` and holds
+/// `config` as its data.
 fn web(config: &'static str) -> Package {
+    let mut b = cm("apps", "b");
+    b["data"] = json!({ "v": config });
     Package {
         namespace: "apps",
         name: "web",
         instance: "1",
-        resources: vec![("2", cm("apps", "a")), (config, cm("apps", "b"))],
+        resources: vec![("2", cm("apps", "a")), (config, b)],
     }
 }
 
@@ -153,18 +158,27 @@ fn the_same_build_gives_the_same_names_in_any_order() {
         web_rev.spec.slot,
         Slot::Instance {
             namespace: "apps".into(),
-            name: "web".into()
+            name: "web".into(),
+            lifecycle: None,
         }
     );
-    let kinds: Vec<&str> = web_rev
+    let mut kinds: Vec<&str> = web_rev
         .spec
         .objects
         .iter()
         .map(|o| o.kind.as_str())
         .collect();
-    assert_eq!(kinds, ["PackageInstance", "ConfigMap", "ConfigMap"]);
-    assert_eq!(web_rev.spec.objects[0].group, keys::GROUP);
-    assert_eq!(web_rev.spec.objects[1].hash, format!("{:a>32}", "2"));
+    kinds.sort();
+    assert_eq!(kinds, ["ConfigMap", "ConfigMap", "PackageInstance"]);
+    let a = web_rev.spec.objects.iter().find(|o| o.name == "a").unwrap();
+    assert_eq!(a.hash, crate::manifest::hash::object_hash(&cm("apps", "a")));
+    let instance = web_rev
+        .spec
+        .objects
+        .iter()
+        .find(|o| o.kind == "PackageInstance")
+        .unwrap();
+    assert_eq!(instance.group, keys::GROUP);
 }
 
 #[test]
@@ -183,6 +197,18 @@ fn changing_one_object_changes_only_its_instance() {
         before.cluster_level.name, after.cluster_level.name,
         "a new Activation record leaves the cluster level as it was"
     );
+}
+
+/// A build whose store hashes changed and whose manifests did not, as when
+/// only a dependency changed, gives the same revisions.
+#[test]
+fn a_change_of_store_hashes_alone_keeps_every_revision() {
+    let before = RevisionSet::of(CLUSTER, &graph(&[web("3"), db()], &namespaces(), "8"));
+    let mut moved = web("3");
+    moved.instance = "c";
+    moved.resources[0].0 = "d";
+    let after = RevisionSet::of(CLUSTER, &graph(&[moved, db()], &namespaces(), "e"));
+    assert_eq!(names(&before), names(&after));
 }
 
 #[test]
@@ -252,6 +278,29 @@ async fn a_read_refuses_a_revision_whose_spec_does_not_match_its_name() {
     assert_eq!(listed.names().collect::<Vec<_>>(), [rev.name.as_str()]);
     let message = listed.all_readable().unwrap_err().to_string();
     assert!(message.contains(&rev.name), "{message}");
+}
+
+/// A revision in a later format may hold fields this version drops, so its
+/// name would not match. The read says a newer Kix wrote it instead of
+/// saying someone changed it.
+#[tokio::test]
+async fn a_read_refuses_a_revision_a_newer_kix_wrote() {
+    let api = FakeApi::new([]);
+    let store = Revisions::new(&api.client());
+    let rev = revision(CLUSTER, "apps/web");
+    store.create(&rev).await.unwrap();
+    api.patch_object(KIND, &rev.name, |o| {
+        o["spec"]["format"] = json!(FORMAT + 1);
+        o["spec"]["later"] = json!("a field this version does not know");
+    });
+    match store.get(&rev.name).await {
+        Err(RevisionError::Read(e @ ReadError::Newer { .. })) => {
+            let message = e.to_string();
+            assert!(message.contains("a newer version of Kix"), "{message}");
+            assert!(message.contains("Upgrade Kix"), "{message}");
+        }
+        other => panic!("{other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -334,33 +383,39 @@ fn a_map_round_trips_and_names_every_revision() {
     expected.sort();
     assert_eq!(names, expected);
 
-    let mut other = map.to_value();
-    other["format"] = json!(2);
-    let later = RevisionMap::read(&other).unwrap_err().to_string();
-    assert!(later.contains("format 2"), "{later}");
+    // A map names format 2 revisions, so it is written in format 2, which
+    // a release that reads only format 1 refuses as written by a newer Kix.
+    assert_eq!(map.to_value()["format"], json!(2));
+    let mut older = map.to_value();
+    older["format"] = json!(1);
+    assert_eq!(RevisionMap::read(&older), Ok(map.clone()));
+    let mut later = map.to_value();
+    later["format"] = json!(3);
+    let later = RevisionMap::read(&later).unwrap_err().to_string();
+    assert!(later.contains("format 3"), "{later}");
     assert!(RevisionMap::read(&json!({})).is_err());
 }
 
 #[test]
-fn a_manifest_names_its_object_by_its_identity_hash() {
+fn a_manifest_names_its_object_by_its_object_hash() {
     let mut manifest = cm("apps", "a");
-    assert_eq!(RevisionObject::of_manifest(&manifest), None);
     manifest["metadata"]["annotations"] = json!({ (keys::IDENTITY_HASH): "h1" });
     assert_eq!(
         RevisionObject::of_manifest(&manifest),
-        Some(RevisionObject {
-            hash: "h1".into(),
+        RevisionObject {
+            hash: crate::manifest::hash::object_hash(&manifest),
             group: String::new(),
             kind: "ConfigMap".into(),
             namespace: Some("apps".into()),
             name: "a".into(),
-        })
+            needs: Vec::new(),
+        }
     );
 }
 
 /// A create whose stored `spec` differs from the one sent, as when the
 /// installed definition prunes a field this version writes, is refused
-/// with a message that names the definition.
+/// with a message that names the definition, and leaves no object.
 #[tokio::test]
 async fn create_refuses_a_spec_the_server_stored_differently() {
     let api = FakeApi::new([]);
@@ -375,6 +430,9 @@ async fn create_refuses_a_spec_the_server_stored_differently() {
         "{err}"
     );
     assert!(err.to_string().contains(&crd_name()), "{err}");
+    // The object is gone, so a later create does not find it and count the
+    // revision as created.
+    assert_eq!(api.object(KIND, &rev.name), None);
 }
 
 /// A build with an instance too large to store as one revision is refused,
@@ -390,6 +448,7 @@ fn a_revision_too_large_to_store_names_its_instance() {
             kind: "ConfigMap".into(),
             namespace: Some("data".into()),
             name: format!("config-{i}"),
+            needs: Vec::new(),
         })
         .collect();
     let slot = set.instances["data/db"].spec.slot.clone();
@@ -401,6 +460,193 @@ fn a_revision_too_large_to_store_names_its_instance() {
     let message = err.to_string();
     assert!(message.contains("package instance data/db"), "{message}");
     assert!(message.contains("Split the instance"), "{message}");
+}
+
+/// A graph whose ConfigMap `b` depends on `a`, on the ClusterRole
+/// `system:auth-delegator` as `requires`, and on a hash no manifest of the
+/// build carries, in a package whose lifecycle is `stateful`.
+fn graph_with_edges() -> StoreGraph {
+    let role = json!({
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "ClusterRole",
+        "metadata": { "name": "system:auth-delegator" },
+    });
+    let mut b = cm("apps", "b");
+    b["metadata"]["annotations"] = json!({
+        (keys::DEPENDS_ON): format!("{:a>32},requires:{:a>32},{:a>32}", "2", "6", "f"),
+    });
+    let package = Package {
+        namespace: "apps",
+        name: "web",
+        instance: "1",
+        resources: vec![("2", cm("apps", "a")), ("3", b)],
+    };
+    let mut g = graph(&[package], &[("6", role)], "8");
+    for node in g.packages.values_mut() {
+        node.lifecycle = Some("stateful".into());
+    }
+    g
+}
+
+/// A revision records each object's dependencies by name, with the
+/// relation `kix.run/depends-on` gives them, and the lifecycle of its
+/// instance. A hash that names no manifest of the build is left out.
+#[test]
+fn a_revision_records_needs_by_name_and_the_lifecycle() {
+    let set = RevisionSet::of(CLUSTER, &graph_with_edges());
+    let web = &set.instances["apps/web"];
+    assert_eq!(web.spec.format, FORMAT);
+    assert!(matches!(
+        &web.spec.slot,
+        Slot::Instance { lifecycle: Some(l), .. } if l == "stateful"
+    ));
+    let b = web.spec.objects.iter().find(|o| o.name == "b").unwrap();
+    let needs: Vec<(&str, &str, Option<&str>)> = b
+        .needs
+        .iter()
+        .map(|n| (n.kind.as_str(), n.name.as_str(), n.role.as_deref()))
+        .collect();
+    assert_eq!(
+        needs,
+        [
+            ("ConfigMap", "a", None),
+            ("ClusterRole", "system:auth-delegator", Some("requires")),
+        ]
+    );
+    let stored = serde_json::to_value(&web.spec).unwrap();
+    let entry = stored["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["name"] == "b")
+        .unwrap();
+    assert_eq!(
+        entry["needs"],
+        json!([
+            { "kind": "ConfigMap", "namespace": "apps", "name": "a" },
+            {
+                "group": "rbac.authorization.k8s.io",
+                "kind": "ClusterRole",
+                "name": "system:auth-delegator",
+                "as": "requires",
+            },
+        ])
+    );
+}
+
+/// Two machines that build the same graph write the same bytes, so they
+/// name its revisions the same.
+#[test]
+fn a_spec_built_twice_from_one_build_is_the_same_bytes() {
+    let first = RevisionSet::of(CLUSTER, &graph_with_edges());
+    let again = RevisionSet::of(CLUSTER, &graph_with_edges());
+    for (a, b) in first.all().zip(again.all()) {
+        assert_eq!(
+            serde_json::to_vec(&a.spec).unwrap(),
+            serde_json::to_vec(&b.spec).unwrap()
+        );
+        assert_eq!(a.name, b.name);
+    }
+}
+
+/// A dependency whose name holds a colon is stored as fields of its own,
+/// so it reads back whole.
+#[tokio::test]
+async fn a_need_with_a_colon_in_its_name_reads_back() {
+    let api = FakeApi::new([]);
+    let store = Revisions::new(&api.client());
+    let set = RevisionSet::of(CLUSTER, &graph_with_edges());
+    let web = set.instances["apps/web"].clone();
+    store.create(&web).await.unwrap();
+    let read = store.get(&web.name).await.unwrap().unwrap();
+    assert_eq!(read, web);
+    let b = read.spec.objects.iter().find(|o| o.name == "b").unwrap();
+    assert!(b.needs.iter().any(|n| n.name == "system:auth-delegator"));
+}
+
+/// A revision an earlier build of Kix wrote has no `format`, no `needs`,
+/// and no lifecycle. It reads as format 1, records no edges, and keeps its
+/// name.
+#[test]
+fn a_format_one_revision_reads() {
+    // The bytes an earlier build of Kix hashed for the name, in its field
+    // order.
+    let written = format!(
+        r#"{{"cluster":"{CLUSTER}","slot":{{"kind":"instance","namespace":"apps","name":"web"}},"objects":[{{"hash":"{:a>32}","group":"","kind":"ConfigMap","namespace":"apps","name":"a"}}]}}"#,
+        "2"
+    );
+    let spec: Value = serde_json::from_str(&written).unwrap();
+    let hash = &format!(
+        "{:x}",
+        <sha2::Sha256 as sha2::Digest>::digest(written.as_bytes())
+    )[..32];
+    let name = format!("{CLUSTER}-{hash}");
+    let obj: kube::api::DynamicObject = serde_json::from_value(json!({
+        "apiVersion": keys::API_VERSION,
+        "kind": KIND,
+        "metadata": { "name": name },
+        "spec": spec,
+    }))
+    .unwrap();
+    let read = Revision::from_object(&obj).unwrap();
+    assert_eq!(read.spec.format, 1);
+    assert!(!read.spec.records_edges());
+    assert!(read.spec.objects[0].needs.is_empty());
+    assert!(matches!(
+        read.spec.slot,
+        Slot::Instance {
+            lifecycle: None,
+            ..
+        }
+    ));
+    let edges = crate::cluster::edges::Edges::of_revisions([&read]);
+    assert!(!edges.records(&read.spec.objects[0].resource_id()));
+}
+
+/// The size estimate counts each object's `needs`.
+#[test]
+fn the_size_estimate_counts_needs() {
+    let slot = Slot::ClusterLevel;
+    let dep = crate::manifest::types::ResourceId::new("", "ConfigMap", "data", "dep");
+    let object = |needs: usize| RevisionObject {
+        hash: format!("{:a>32}", "1"),
+        group: String::new(),
+        kind: "ConfigMap".into(),
+        namespace: Some("data".into()),
+        name: "config".into(),
+        needs: (0..needs)
+            .map(|i| Need::of(&dep, Some(&format!("role{i}"))))
+            .collect(),
+    };
+    let bare = Revision::new(RevisionSpec::new(CLUSTER, slot.clone(), vec![object(0)]));
+    let with = Revision::new(RevisionSpec::new(CLUSTER, slot, vec![object(3)]));
+    let added = serde_json::to_vec(&with.spec.objects[0].needs)
+        .unwrap()
+        .len();
+    assert!(with.stored_bytes() >= bare.stored_bytes() + added);
+}
+
+/// Entries for one object and build hash merge into one, with the edges of
+/// both.
+#[test]
+fn entries_for_one_object_and_hash_merge_their_needs() {
+    let rid = crate::manifest::types::ResourceId::new("", "ConfigMap", "data", "x");
+    let need = |name: &str| {
+        Need::of(
+            &crate::manifest::types::ResourceId::new("", "ConfigMap", "data", name),
+            None,
+        )
+    };
+    let spec = RevisionSpec::new(
+        CLUSTER,
+        Slot::KeptOrphans,
+        vec![
+            RevisionObject::of_id("h", &rid).with_needs([need("a")]),
+            RevisionObject::of_id("h", &rid).with_needs([need("b")]),
+        ],
+    );
+    assert_eq!(spec.objects.len(), 1);
+    assert_eq!(spec.objects[0].needs, [need("a"), need("b")]);
 }
 
 #[test]
@@ -666,7 +912,7 @@ mod keep_tests {
         let api = FakeApi::new([]);
         let (_, old) = one_needed_one_not(&api).await;
         let mut later = RevisionMap::of(&old).to_value();
-        later["format"] = json!(2);
+        later["format"] = json!(3);
         let mut record = activation("later", PHASE_FAILED, &RevisionMap::of(&old));
         record["status"]["revisions"] = later;
         api.insert(record);
@@ -721,6 +967,7 @@ mod applied_tests {
             kind: "ConfigMap".into(),
             namespace: Some("app".into()),
             name: name.into(),
+            needs: Vec::new(),
         }
     }
 
@@ -730,6 +977,7 @@ mod applied_tests {
             Slot::Instance {
                 namespace: "app".into(),
                 name: "web".into(),
+                lifecycle: None,
             },
             objects,
         ));
@@ -740,10 +988,10 @@ mod applied_tests {
         revision
     }
 
-    fn applied(entries: &[(&RevisionObject, &str)]) -> BTreeMap<RevisionObject, String> {
+    fn applied(entries: &[(&RevisionObject, &str)]) -> BTreeMap<AppliedKey, String> {
         entries
             .iter()
-            .map(|(o, h)| ((*o).clone(), h.to_string()))
+            .map(|(o, h)| (o.applied_key(), h.to_string()))
             .collect()
     }
 
@@ -834,6 +1082,58 @@ mod applied_tests {
         );
     }
 
+    /// The run notes what it applied by resource id and build hash. Each
+    /// revision entry with that id and hash takes the applied hash, and so
+    /// does a carry between two revisions that list the object.
+    #[test]
+    fn applied_hashes_key_on_the_resource_id_and_the_build_hash() {
+        let namespace = crate::manifest::types::ResourceId {
+            group: String::new(),
+            kind: "Namespace".into(),
+            namespace: crate::manifest::types::CLUSTER_SCOPED.into(),
+            name: "app".into(),
+        };
+        let hash = format!("{:a>32}", "n");
+        let entry = RevisionObject::of_id(&hash, &namespace);
+        assert_eq!(entry.namespace, None);
+        let x = object("x", "x");
+        let old = web(vec![entry.clone(), x.clone()], &[(&x, "hx")]);
+        let mut new = web(vec![entry.clone(), x.clone()], &[]);
+        new.name = "new".into();
+        let noted = BTreeMap::from([(
+            AppliedKey {
+                rid: namespace,
+                hash: hash.clone(),
+            },
+            "hn".to_string(),
+        )]);
+        let writes = pending(&noted, &[&new], &[(&old, &new)]);
+        assert_eq!(
+            writes,
+            BTreeMap::from([(
+                "new".to_string(),
+                BTreeMap::from([(hash, "hn".to_string()), (x.hash.clone(), "hx".to_string())])
+            )])
+        );
+    }
+
+    /// An object whose edges changed and whose build hash did not keeps
+    /// its applied hash when the run carries hashes into the new revision.
+    #[test]
+    fn an_applied_hash_is_carried_when_only_the_needs_differ() {
+        let x = object("x", "x");
+        let dep = crate::manifest::types::ResourceId::new("", "ConfigMap", "app", "dep");
+        let x_with_needs = x.clone().with_needs([Need::of(&dep, None)]);
+        let old = web(vec![x.clone()], &[(&x, "hx")]);
+        let mut new = web(vec![x_with_needs], &[]);
+        new.name = "new".into();
+        let writes = pending(&BTreeMap::new(), &[], &[(&old, &new)]);
+        assert_eq!(
+            writes,
+            BTreeMap::from([("new".to_string(), entries(&[(&x, "hx")]))])
+        );
+    }
+
     /// An entry a revision already holds with the same value is not sent
     /// again.
     #[test]
@@ -891,13 +1191,16 @@ mod applied_tests {
         .unwrap()
     }
 
+    fn manager() -> crate::cluster::field_manager::FieldManager {
+        crate::cluster::field_manager::FieldManager::of("a")
+    }
+
+    fn applied_of<'a>(source: &'a AppliedHashes, obj: &'a DynamicObject) -> Option<&'a str> {
+        source.for_live(obj, &manager(), Some("r"))
+    }
+
     fn verdict(obj: &DynamicObject, source: &AppliedHashes) -> DriftVerdict {
-        drift::check_object(
-            obj,
-            source.applied(obj),
-            &crate::cluster::field_manager::FieldManager::of("a"),
-        )
-        .verdict
+        drift::check_object(obj, applied_of(source, obj), &manager()).verdict
     }
 
     /// The drift check gives the same verdict whether the applied hash comes
@@ -956,28 +1259,28 @@ mod applied_tests {
         let empty = web(vec![x.clone()], &[]);
         let revisions = std::slice::from_ref(&empty);
         let with_map = AppliedHashes::of(&[record(PHASE_ACTIVE, Some(&empty))], revisions);
-        assert_eq!(with_map.applied(&obj), None);
+        assert_eq!(applied_of(&with_map, &obj), None);
         let recorded = web(vec![x.clone()], &[(&x, "from-revision")]);
         let from_revision = AppliedHashes::of(
             &[record(PHASE_ACTIVE, Some(&recorded))],
             std::slice::from_ref(&recorded),
         );
-        assert_eq!(from_revision.applied(&obj), Some("from-revision"));
+        assert_eq!(applied_of(&from_revision, &obj), Some("from-revision"));
         let without_map = Record {
             identity_hash: Some("rec-r".into()),
             ..record(PHASE_ACTIVE, None)
         };
         let from_notes = AppliedHashes::of(std::slice::from_ref(&without_map), revisions);
-        assert_eq!(from_notes.applied(&noted), Some("from-annotation"));
-        assert_eq!(from_notes.applied(&obj), None);
+        assert_eq!(applied_of(&from_notes, &noted), Some("from-annotation"));
+        assert_eq!(applied_of(&from_notes, &obj), None);
         let superseded = Record {
             phase: PHASE_SUPERSEDED.into(),
             ..without_map
         };
         let superseded = AppliedHashes::of(std::slice::from_ref(&superseded), revisions);
-        assert_eq!(superseded.applied(&noted), None);
+        assert_eq!(applied_of(&superseded, &noted), None);
         assert_eq!(
-            AppliedHashes::from_annotations().applied(&obj),
+            applied_of(&AppliedHashes::from_annotations(), &obj),
             Some("from-annotation")
         );
     }
@@ -996,11 +1299,11 @@ mod applied_tests {
         let source = AppliedHashes::of(&[map_record], std::slice::from_ref(&recorded));
         assert_eq!(source.missing(), ["a-missing"]);
         assert_eq!(
-            source.applied(&live(&x, Some("from-annotation"))),
+            applied_of(&source, &live(&x, Some("from-annotation"))),
             Some("from-revision")
         );
         let other = live(&object("y", "y"), Some("from-annotation"));
-        assert_eq!(source.applied(&other), None);
+        assert_eq!(applied_of(&source, &other), None);
     }
 
     /// Two revisions that record different applied hashes for one object,
@@ -1018,6 +1321,193 @@ mod applied_tests {
             map.kept_orphans = Some(two.name.clone());
         }
         let source = AppliedHashes::of(&[recorded], [&one, &two]);
-        assert_eq!(source.applied(&live(&x, Some("from-annotation"))), None);
+        assert_eq!(
+            applied_of(&source, &live(&x, Some("from-annotation"))),
+            None
+        );
     }
+}
+
+/// Return an import marker `name` in `ns` that stands for the object
+/// `target` of kind `kind`, as the library writes one.
+fn marker(ns: &str, name: &str, api_version: &str, kind: &str, target: &str) -> Value {
+    json!({
+        "apiVersion": keys::API_VERSION,
+        "kind": "PackageInstance",
+        "metadata": {
+            "name": name,
+            "namespace": ns,
+            "annotations": {
+                (keys::MODE): "import",
+                (keys::IMPORT_API_VERSION): api_version,
+                (keys::IMPORT_KIND): kind,
+                (keys::IMPORT_NAME): target,
+            },
+        },
+        "spec": { "instanceName": name },
+    })
+}
+
+/// A build with the package `web`, whose custom resource `cr` (written as a
+/// ConfigMap) needs a CRD marker that requires the ConfigMap `a`, and the
+/// import instance `kube-system/platform-dns`, whose own PackageInstance is
+/// a marker for the DNS Service.
+fn graph_with_imports() -> StoreGraph {
+    let mut crd_ref = marker(
+        "apps",
+        "crd-ref-web-widgets-example-com",
+        "apiextensions.k8s.io/v1",
+        "CustomResourceDefinition",
+        "widgets.example.com",
+    );
+    let annotations = &mut crd_ref["metadata"]["annotations"];
+    annotations[keys::CRD_KIND] = json!("Widget");
+    annotations[keys::CRD_SERVED_VERSIONS] = json!("v1");
+    annotations[keys::DEPENDS_ON] = json!(format!("requires:{:a>32}", "2"));
+    let mut cr = cm("apps", "cr");
+    cr["metadata"]["annotations"] = json!({ (keys::DEPENDS_ON): format!("{:a>32}", "9") });
+    let web = Package {
+        namespace: "apps",
+        name: "web",
+        instance: "1",
+        resources: vec![("2", cm("apps", "a")), ("9", crd_ref), ("3", cr)],
+    };
+    let dns = Package {
+        namespace: "kube-system",
+        name: "platform-dns",
+        instance: "4",
+        resources: Vec::new(),
+    };
+    let mut g = graph(&[web, dns], &[], "8");
+    for node in g.resources.values_mut() {
+        if node.manifest["metadata"]["name"] == "platform-dns" {
+            node.manifest = marker("kube-system", "platform-dns", "v1", "Service", "kube-dns");
+        }
+    }
+    g
+}
+
+/// A revision lists an instance's import markers under `imports`, with what
+/// each stands for and its own needs, and not among its objects. An object
+/// that needs a marker names it. An import instance's revision has no
+/// objects.
+#[test]
+fn a_revision_lists_import_markers_apart_from_its_objects() {
+    let set = RevisionSet::of(CLUSTER, &graph_with_imports());
+    let web = &set.instances["apps/web"];
+    let objects: Vec<&str> = web.spec.objects.iter().map(|o| o.name.as_str()).collect();
+    let mut sorted = objects.clone();
+    sorted.sort();
+    assert_eq!(sorted, ["a", "cr", "web"]);
+    assert_eq!(web.spec.imports.len(), 1);
+    let import = &web.spec.imports[0];
+    assert_eq!(import.name, "crd-ref-web-widgets-example-com");
+    assert_eq!(import.namespace.as_deref(), Some("apps"));
+    assert_eq!(
+        import.target,
+        Some(ImportedObject {
+            api_version: "apiextensions.k8s.io/v1".into(),
+            kind: "CustomResourceDefinition".into(),
+            namespace: None,
+            name: "widgets.example.com".into(),
+        })
+    );
+    assert_eq!(
+        import.needs,
+        [Need::of(
+            &ResourceId::new("", "ConfigMap", "apps", "a"),
+            Some("requires")
+        )]
+    );
+    let cr = web.spec.objects.iter().find(|o| o.name == "cr").unwrap();
+    assert_eq!(cr.needs, [Need::of(&import.resource_id(), None)]);
+
+    let dns = &set.instances["kube-system/platform-dns"];
+    assert!(dns.spec.objects.is_empty());
+    assert_eq!(dns.spec.imports.len(), 1);
+    assert_eq!(
+        dns.spec.imports[0].target.as_ref().map(|t| t.resource_id()),
+        Some(ResourceId::new("", "Service", "kube-system", "kube-dns"))
+    );
+    let stored = serde_json::to_value(&web.spec).unwrap();
+    assert_eq!(
+        stored["imports"][0]["target"]["apiVersion"],
+        "apiextensions.k8s.io/v1"
+    );
+}
+
+/// A revision with imports reads back whole and keeps its name.
+#[tokio::test]
+async fn a_revision_with_imports_reads_back() {
+    let api = FakeApi::new([]);
+    let store = Revisions::new(&api.client());
+    for revision in RevisionSet::of(CLUSTER, &graph_with_imports()).all() {
+        store.create(revision).await.unwrap();
+        assert_eq!(
+            store.get(&revision.name).await.unwrap().as_ref(),
+            Some(revision)
+        );
+    }
+}
+
+/// The package index read from revisions lists each marker in its instance,
+/// names it, and says it is an import, so readers place it as the build did
+/// and do not look for it on the cluster.
+#[test]
+fn the_package_index_lists_imports() {
+    let set = RevisionSet::of(CLUSTER, &graph_with_imports());
+    let index = RevisionMap::of(&set).package_index(|name| set.all().find(|r| r.name == name));
+    let dns_hash = &set.instances["kube-system/platform-dns"].spec.imports[0].hash;
+    let crd_ref_hash = &set.instances["apps/web"].spec.imports[0].hash;
+    assert_eq!(
+        &index.packages["kube-system/platform-dns"].instance,
+        dns_hash
+    );
+    assert!(index.packages["apps/web"].resources.contains(crd_ref_hash));
+    assert_eq!(
+        index.imports,
+        [dns_hash.clone(), crd_ref_hash.clone()]
+            .into_iter()
+            .collect()
+    );
+    assert!(matches!(
+        index.name_of(dns_hash),
+        Some(crate::eval::package_index::IndexedName::Named(rid))
+            if rid == ResourceId::new(keys::GROUP, "PackageInstance", "kube-system", "platform-dns")
+    ));
+}
+
+/// The edges of revisions with imports name what each marker stands for,
+/// and an edge to a marker no manifest stands for passes on to what the
+/// marker needs.
+#[test]
+fn edges_pass_through_a_marker_no_manifest_stands_for() {
+    let set = RevisionSet::of(CLUSTER, &graph_with_imports());
+    let edges = crate::cluster::edges::Edges::of_revisions(set.all());
+    let crd_ref = set.instances["apps/web"].spec.imports[0].resource_id();
+    assert_eq!(
+        edges.import(&crd_ref),
+        Some(ResourceId::new(
+            "apiextensions.k8s.io",
+            "CustomResourceDefinition",
+            crate::manifest::types::CLUSTER_SCOPED,
+            "widgets.example.com"
+        ))
+    );
+    let cr = ResourceId::new("", "ConfigMap", "apps", "cr");
+    let a = ResourceId::new("", "ConfigMap", "apps", "a");
+    let through: Vec<ResourceId> = edges
+        .needs_through_imports(&cr, |rid| *rid == a)
+        .into_iter()
+        .map(Need::resource_id)
+        .collect();
+    assert_eq!(through, std::slice::from_ref(&a));
+    let direct: Vec<ResourceId> = edges
+        .needs_through_imports(&cr, |rid| *rid == a || *rid == crd_ref)
+        .into_iter()
+        .map(Need::resource_id)
+        .collect();
+    assert_eq!(direct, std::slice::from_ref(&crd_ref));
+    assert_eq!(edges.imports_reached([&cr]).len(), 1);
+    assert!(edges.imports_reached([&a]).is_empty());
 }

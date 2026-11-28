@@ -88,8 +88,8 @@ fn each_definition_has_the_number_of_its_content() {
         ),
         (
             crate::cluster::revision::crd_name(),
-            1,
-            "f80506d533b3d72e5c9e4a479e53a729731158d4fb787241df9f72bb8b83aaa8",
+            2,
+            "6086e6e86d95a9d44801c588992dde97a7f158250e779acfc4f56919111d616e",
         ),
     ];
     let found: Vec<(String, u32, String)> = all()
@@ -176,7 +176,8 @@ async fn a_fresh_cluster_gets_all_four_stamped() {
             .object("CustomResourceDefinition", &crd.name)
             .unwrap_or_else(|| panic!("{} was created", crd.name));
         assert_eq!(object["spec"], crd.definition["spec"]);
-        assert_eq!(stamp_of(&object), Some("1/1"), "{}", crd.name);
+        let stamp = format!("{}/1", crd.number);
+        assert_eq!(stamp_of(&object), Some(stamp.as_str()), "{}", crd.name);
     }
     let writes = |api: &FakeApi| {
         api.requests()

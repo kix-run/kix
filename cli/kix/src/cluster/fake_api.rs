@@ -33,6 +33,9 @@
 //! [`FakeApi::on_create`] does the same for the next create of an object.
 //! [`FakeApi::fail_next`] answers the next requests for one path with a
 //! plain-text error, as the apiserver does for a path it has not registered.
+//! [`FakeApi::cut_after`] lets a number of requests through and then answers
+//! every later one with 503 without looking at it, as a cluster sees a
+//! client that was killed: nothing after that point reaches it.
 //! [`FakeApi::serve_retired_records`] adds the Activation kind under a
 //! retired domain to discovery, as on a cluster that has not migrated.
 //! [`FakeApi::serve_no_kix_kinds`] leaves Kix's own kinds out of
@@ -101,6 +104,13 @@ const KINDS: &[(&str, &str, &str, &str, bool)] = &[
     (
         keys::DOMAIN,
         "v1alpha1",
+        crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND,
+        "packageinstances",
+        true,
+    ),
+    (
+        keys::DOMAIN,
+        "v1alpha1",
         super::head::KIND,
         super::head::PLURAL,
         false,
@@ -146,6 +156,9 @@ struct State {
     next_rv: u64,
     /// `METHOD path` of every request, in order, with `?query` when it has one.
     requests: Vec<String>,
+    /// The body of every request that has one, beside its `METHOD path`
+    /// line, in order.
+    bodies: Vec<(String, String)>,
     after_get: Vec<(String, Hook)>,
     on_apply: Vec<(String, Hook)>,
     on_create: Vec<(String, Hook)>,
@@ -160,6 +173,9 @@ struct State {
     version: Option<Value>,
     /// Applies keep `metadata.managedFields` ([`FakeApi::track_owners`]).
     owners: bool,
+    /// How many more requests reach the state before every later one is
+    /// refused ([`FakeApi::cut_after`]).
+    cut: Option<usize>,
 }
 
 impl State {
@@ -357,6 +373,18 @@ impl FakeApi {
             .push((path.to_string(), times, status));
     }
 
+    /// Let the next `requests` requests through, then answer every later
+    /// one with 503 and leave the state alone, until [`FakeApi::restore`].
+    /// A refused request is not listed in [`FakeApi::requests`].
+    pub fn cut_after(&self, requests: usize) {
+        self.state.lock().unwrap().cut = Some(requests);
+    }
+
+    /// Let every request through again after [`FakeApi::cut_after`].
+    pub fn restore(&self) {
+        self.state.lock().unwrap().cut = None;
+    }
+
     /// Model server-side apply's field ownership on every later apply (see
     /// the module docs).
     pub fn track_owners(&self) {
@@ -479,6 +507,12 @@ impl FakeApi {
         self.state.lock().unwrap().requests.clone()
     }
 
+    /// Return every request body sent so far, each with its `METHOD path`
+    /// line, in order.
+    pub fn bodies(&self) -> Vec<(String, String)> {
+        self.state.lock().unwrap().bodies.clone()
+    }
+
     pub fn client(&self) -> Client {
         let api = self.clone();
         let service = tower::service_fn(move |req: http::Request<kube::client::Body>| {
@@ -521,11 +555,20 @@ impl FakeApi {
     ) -> (u16, &'static str, String) {
         {
             let mut st = self.state.lock().unwrap();
+            match st.cut {
+                Some(0) => return (503, "text/plain", "503 cut off\n".into()),
+                Some(left) => st.cut = Some(left - 1),
+                None => {}
+            }
             let line = if query.is_empty() {
                 format!("{method} {path}")
             } else {
                 format!("{method} {path}?{query}")
             };
+            if !body.is_empty() {
+                st.bodies
+                    .push((line.clone(), String::from_utf8_lossy(body).into_owned()));
+            }
             st.requests.push(line);
             if let Some(f) = st
                 .failures

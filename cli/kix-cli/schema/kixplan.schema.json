@@ -116,7 +116,7 @@
         },
         {
           "const": "drift_kept",
-          "description": "The live object differs from the deployed build here, and the deploy\nleaves this object alone because its identity hash did not change, so\nthe difference stays. `kix deploy --reconcile` applies it.",
+          "description": "The live object differs from the deployed build here, and the deploy\nleaves this object alone because the fields Kix owns on it still\nmatch what Kix last applied, so the difference stays. `kix deploy\n--reconcile` applies it.",
           "type": "string"
         },
         {
@@ -537,7 +537,7 @@
           "type": "string"
         },
         "reverted": {
-          "description": "The deploy applies this object and puts the deployed value back.\nFalse when it leaves the object alone (its identity hash did not\nchange).",
+          "description": "The deploy applies this object and puts the deployed value back.\nFalse when it leaves the object alone, because the fields Kix owns on\nit still match what Kix last applied.",
           "type": "boolean"
         }
       },
@@ -2127,6 +2127,23 @@
           "required": [
             "kind",
             "changed_by"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A deploy of this Kix cluster that did not finish may have written the\nobject: the stopped deploy `record` lists it, and Kix has no record\nof what that deploy applied. The deploy applies the build again.",
+          "properties": {
+            "kind": {
+              "const": "unfinished_deploy",
+              "type": "string"
+            },
+            "record": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "record"
           ],
           "type": "object"
         }

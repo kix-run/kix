@@ -1,0 +1,3 @@
+# 2026-11-28 · `cli/kix/src/cluster/scheduler/plan.rs` · An import added to an object whose own manifest does not change is never checked.
+
+The scheduler checks an import marker's target only when a node with a task depends on it (`checked_unchanged`). Adding `scope.mkSecretRef` to a workload changes its `kix.run/depends-on`, not its object hash, so the deploy skips the workload and never looks for the Secret. The missing Secret shows up only when a later deploy writes the workload. Design 182 section 4.5 accepts this. Checking every marker whose edges changed since the current record (revisions record `needs`) would close it.

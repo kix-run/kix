@@ -744,6 +744,60 @@ async fn an_object_whose_apply_failed_after_its_tidy_is_still_named() {
     assert_eq!(orphans, ["edited"]);
 }
 
+/// A `Failed` deploy of an older Kix applied `new` and stopped. The user
+/// drops `new` from the definition and upgrades Kix. The conversion gives
+/// the `Failed` record an applied hash for `new`, because the note on `new`
+/// lists that record, so the first deploy takes `new` in as an orphan,
+/// although only the shared manager `kix` wrote it. `--prune` deletes it,
+/// and a deploy without `--prune` lists it in the kept-orphans revision.
+#[tokio::test]
+async fn an_object_a_failed_deploy_of_an_older_kix_left_is_taken_in() {
+    for prune in [true, false] {
+        let api = FakeApi::new([]);
+        api.track_owners();
+        let old = release("a", "a-r0", &[config_map("keep", "1")]);
+        deployed_by_an_older_kix(&api, "a", &old, PHASE_ACTIVE, &[]).await;
+        let r0 = hash_of(&record_of(&old));
+        let failing = release(
+            "a",
+            "a-r1",
+            &[config_map("keep", "1"), config_map("new", "1")],
+        );
+        deployed_by_an_older_kix(
+            &api,
+            "a",
+            &failing,
+            PHASE_FAILED,
+            &[("keep", &[r0.as_str()])],
+        )
+        .await;
+        assert_eq!(
+            managers(&api, "ConfigMap", "new"),
+            ["kix:Apply", "kix:Update"]
+        );
+
+        let dropping = release("a", "a-r2", &[config_map("keep", "1")]);
+        let flags = if prune {
+            crate::plan::fixtures::flags(&["--prune"])
+        } else {
+            crate::plan::fixtures::flags(&[])
+        };
+        let checked = plan_with(&api, "a", &dropping, flags.clone()).await;
+        let orphans: Vec<&str> = checked.orphans().iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(orphans, ["new"], "prune {prune}");
+        deploy_with(&api, "a", &dropping, flags).await.unwrap();
+        let (_, kept) = revisions_of(&api, "a", &dropping).await;
+        let kept = named(&kept.into_iter().collect::<Vec<_>>());
+        if prune {
+            assert!(api.object("ConfigMap", "new").is_none());
+            assert!(kept.is_empty(), "{kept:?}");
+        } else {
+            assert!(api.object("ConfigMap", "new").is_some());
+            assert_eq!(kept, ["new"]);
+        }
+    }
+}
+
 /// On the first deploy, an object drifted by hand is reverted: its
 /// migration write and then the forced apply each judge what the forced
 /// apply takes back on the object they read, so the apply does not read the
@@ -762,6 +816,64 @@ async fn a_drifted_object_is_reverted_on_the_first_deploy() {
     let web = api.object("ConfigMap", "web").unwrap();
     assert_eq!(web["data"]["k"], json!("1"));
     assert_eq!(managers(&api, "ConfigMap", "web"), ["kix/a:Apply"]);
+}
+
+/// A hand edit made before the upgrade is still reported as drift by a
+/// second migration deploy, after the first one stopped once it had given
+/// the older Kix's records revisions and before it wrote the object. The
+/// conversion stored what it read from the notes, so the second deploy does
+/// not need the notes the first one may have removed. An object that still
+/// matches what the older Kix applied is left alone.
+#[tokio::test]
+async fn a_migration_that_stops_after_its_conversion_still_reports_drift() {
+    use crate::plan::document::WriteReason;
+    let api = FakeApi::new([]);
+    api.track_owners();
+    let build = |record: &str| {
+        release(
+            "a",
+            record,
+            &[config_map("web", "1"), config_map("calm", "1")],
+        )
+    };
+    deployed_by_an_older_kix(&api, "a", &build("a-r0"), PHASE_ACTIVE, &[]).await;
+    api.update_as("kubectl", None, "ConfigMap", "web", |o| {
+        o["data"]["k"] = json!("by-hand");
+    });
+    // The read and the write of `web` fail, so the run stops after the
+    // conversion and before it writes `web`.
+    api.fail_next("/api/v1/namespaces/app/configmaps/web", 2, 500);
+    assert!(deploy(&api, "a", &build("a-r1")).await.is_err());
+    assert_eq!(
+        api.object("ConfigMap", "web").unwrap()["data"]["k"],
+        json!("by-hand")
+    );
+    let converted = record_of(&build("a-r0"))["metadata"]["name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let current = api.object(lifecycle::RECORD_KIND, &converted).unwrap();
+    assert!(current["status"]["revisions"].is_object(), "{current}");
+    let checked = plan(&api, "a", &build("a-r2")).await;
+    let reason = |name: &str| {
+        checked
+            .objects()
+            .writes
+            .iter()
+            .find(|w| w.name == name)
+            .map(|w| w.reason.clone())
+    };
+    assert!(
+        matches!(reason("web"), Some(Some(WriteReason::RevertsDrift { .. }))),
+        "{:?}",
+        checked.objects().writes
+    );
+    assert_eq!(reason("calm"), None, "{:?}", checked.objects().writes);
+    deploy(&api, "a", &build("a-r2")).await.unwrap();
+    assert_eq!(
+        api.object("ConfigMap", "web").unwrap()["data"]["k"],
+        json!("1")
+    );
 }
 
 /// A build that adds an object another Kix cluster applied under `kix`

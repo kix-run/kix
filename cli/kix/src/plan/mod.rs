@@ -36,8 +36,8 @@ mod tests;
 pub use crate::cluster::scheduler::LastRuns;
 #[cfg(test)]
 use diff::is_propagation_path;
-pub(crate) use diff::partition_propagation;
-pub use diff::{diff_garbage, diff_graphs};
+pub(crate) use diff::partition_retired;
+pub use diff::{diff_garbage, diff_graphs, diff_sent};
 pub use planner::{
     CheckedPlan, Connected, Differences, OldSide, Planned, Planner, Replanned, Settle, Start,
     Target, TargetChecks, Work, keep_held, keep_shared, kinds_leaving,

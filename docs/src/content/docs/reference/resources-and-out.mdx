@@ -197,7 +197,7 @@ rwService = scope.mkServiceRef {
 | `labels` | attrset | `{ }` | Additional metadata labels on the runtime Service (`out.labels`). |
 | `requires` | list of resources | `[ ]` | Resources (typically the operator custom resource) that must be applied before the runtime Service will exist. |
 
-`scope.mkServiceRef` emits a synthetic `PackageInstance` import marker (`service-ref-<instance>-<name>`), registers endpoint facts for network-policy derivation, and returns an object with the same `.out` fields as a standard Service (`name`, `fqdn`, `port`, `ports`, `selector`, and `labels`).
+`scope.mkServiceRef` emits a synthetic `PackageInstance` import marker (`service-ref-<instance>-<name>`) in the build without writing it to the cluster, registers endpoint facts for network-policy derivation, and returns an object with the same `.out` fields as a standard Service (`name`, `fqdn`, `port`, `ports`, `selector`, and `labels`).
 
 ### `scope.mkWebhookService`
 

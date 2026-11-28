@@ -48,7 +48,7 @@ use super::document::{DriftChange, LeftAlone, Objects, PlanFlags, WriteChange, W
 use super::objects;
 use super::origin::FoldedBy;
 use super::server::Overlay;
-use super::{PackageDiff, PlanError, PlanEvent, UnknownInstances, diff_graphs};
+use super::{PackageDiff, PlanError, PlanEvent, UnknownInstances, diff_sent};
 use crate::build_source::InstallableBuild;
 use crate::build_source::SopsSources;
 use crate::cluster::activation::{KeptOrphans, OpenedRecords, Record, Records, features};
@@ -56,6 +56,7 @@ use crate::cluster::apply::ChangeAction;
 use crate::cluster::binding;
 use crate::cluster::client::{self, ResiliencePolicy};
 use crate::cluster::discovery;
+use crate::cluster::edges::Prior;
 use crate::cluster::errors;
 use crate::cluster::errors::FetchError;
 use crate::cluster::graph::DeleteOrder;
@@ -67,7 +68,9 @@ use crate::cluster::inventory::{Live, LiveObjects};
 use crate::cluster::kubernetes_version;
 use crate::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use crate::cluster::ops::ResourceIo;
-use crate::cluster::ops::{Cluster, DryRun, Force, KubeResources, RecordConfig};
+use crate::cluster::ops::{
+    Cluster, DryRun, Force, KubeResources, RecordConfig, kept_orphans_revision,
+};
 use crate::cluster::preview::{DryRunAnswer, DryRunOutcome, PruneAnswer};
 use crate::cluster::revision::RevisionSet;
 use crate::cluster::scheduler::{
@@ -162,6 +165,9 @@ impl Target {
 pub struct CheckedPlan {
     flags: PlanFlags,
     plan: DeployPlan,
+    /// The hashes of the new build's objects, which the run's conversion of
+    /// an older Kix's records reads.
+    build_hashes: crate::cluster::revision::convert::BuildHashes,
     orphans: Vec<ResourceId>,
     shared_orphans: Vec<SharedOrphan>,
     kept_orphans: KeptOrphans,
@@ -178,9 +184,13 @@ pub struct CheckedPlan {
     /// The Kix cluster the check found its records and shared orphans by.
     /// The run finalizes its record and prunes under it.
     cluster: String,
-    /// The baseline's manifests ([`Baseline::manifests`]), which order the
-    /// prune.
-    old_manifests: Vec<Value>,
+    /// The baseline's manifests ([`Baseline::manifests`]) and the edges
+    /// between them, which order the prune and fill the run's kept-orphans
+    /// revision. A plan that read the cluster takes the edges from this Kix
+    /// cluster's revisions ([`Ledger::edges`]), because some manifests may
+    /// be live objects. A plan made with `--offline` read only builds, and
+    /// takes them from their annotations.
+    prior: Prior,
     /// The new build's revisions, which the run's record names. A plan
     /// made with `--only` names every instance of the build too.
     revisions: RevisionSet,
@@ -454,7 +464,7 @@ impl CheckedPlan {
     /// still declares is not listed.
     pub fn kinds_leaving(&self) -> Vec<(ResourceId, String)> {
         let added = self.plan.nodes().iter().filter_map(|n| n.action.written());
-        kinds_leaving(&self.old_manifests, &self.orphans, added)
+        kinds_leaving(&self.prior.manifests, &self.orphans, added)
     }
 
     /// Return the package-grouped comparison of the old side with the new build.
@@ -520,7 +530,12 @@ impl CheckedPlan {
             .nodes()
             .iter()
             .any(|n| n.action.written().is_some());
-        if writes || !self.orphans.is_empty() || self.migrations.count() > 0 || self.converts {
+        if writes
+            || !self.orphans.is_empty()
+            || self.migrations.count() > 0
+            || !self.migrations.releases.is_empty()
+            || self.converts
+        {
             return Work::Changes;
         }
         match last_runs {
@@ -611,6 +626,15 @@ impl CheckedPlan {
             .retain(|rid| !shared.iter().any(|s| &s.rid == rid));
         self.pkg_diff.keep_shared(shared);
         self.shared_orphans.extend(shared.iter().cloned());
+        // The run releases each one, or its record keeps naming it.
+        self.migrations
+            .releases
+            .extend(shared.iter().map(|s| s.rid.clone()));
+    }
+
+    /// Return the order in which the prune deletes the plan's orphans.
+    pub(crate) fn prune_order(&self) -> DeleteOrder {
+        scheduler::prune_order(&self.orphans, &self.prior)
     }
 
     /// Run the engine over the plan with every write sent as a dry run, and
@@ -637,19 +661,14 @@ impl CheckedPlan {
             Cluster::dry_run(dry.clone()),
             self.plan.clone(),
             &self.orphans,
-            &self.old_manifests,
+            &self.prior,
             self.ending(),
             &config,
             observer,
         )
         .await;
         let mut answers = dry.take_answers();
-        read_prune_controllers(
-            &mut answers,
-            &scheduler::prune_order(&self.orphans, &self.old_manifests),
-            &*dry,
-        )
-        .await;
+        read_prune_controllers(&mut answers, &self.prune_order(), &*dry).await;
         (result, answers)
     }
 
@@ -676,7 +695,10 @@ impl CheckedPlan {
                 self.cluster,
                 force,
             )
-            .with_migrations(self.migrations),
+            .with_migrations(self.migrations)
+            .with_recording(crate::cluster::ops::Recording::of_revisions(
+                &self.revisions,
+            )),
             RecordConfig {
                 name: self.activation_name,
                 // Created before the first node so a run that stops partway
@@ -688,6 +710,7 @@ impl CheckedPlan {
                 consumed_failed: self.consumed_failed,
                 kept_orphans: self.kept_orphans,
                 revisions: Some(self.revisions),
+                build_hashes: self.build_hashes,
                 only,
                 mark_failed_on_abort: true,
                 lock: Some(lock),
@@ -698,7 +721,7 @@ impl CheckedPlan {
             cluster,
             self.plan,
             &self.orphans,
-            &self.old_manifests,
+            &self.prior,
             ending,
             &config,
             observer,
@@ -1264,8 +1287,11 @@ impl<'a> Planner<'a> {
         };
         // A half-applied closure is not a previous intended state, so
         // pairing against it would invent migrations nobody declared.
-        let mut migration_pairs =
-            detect_migration_pairs(&new_manifests, &baseline.active_manifests);
+        let mut migration_pairs = detect_migration_pairs(
+            &new_manifests,
+            &baseline.active_manifests,
+            &baseline.instances(),
+        );
         let read = match client {
             Some((client, connection)) => {
                 let head = read_head(&client, &new_graph.cluster_name).await?;
@@ -1392,7 +1418,7 @@ impl<'a> Planner<'a> {
         ledger: &Ledger,
         live: &LiveObjects,
     ) -> Result<Changes, PlanError> {
-        let made: HashSet<ResourceId> = new_manifests.iter().map(ResourceId::from_value).collect();
+        let made: HashSet<ResourceId> = lifecycle::made_by(new_manifests).collect();
         let decided = decide::decide(
             new_manifests,
             &made,
@@ -1409,7 +1435,7 @@ impl<'a> Planner<'a> {
         let mut reasons = HashMap::new();
         let mut actions = Vec::with_capacity(decided.decisions.len() + decided.orphans.len());
         for decision in decided.decisions {
-            if matches!(decision.label, Label::RevertsDrift(_)) {
+            if decision.label.reverts_drift() {
                 force.insert(decision.id.clone());
             }
             if let Some(reason) = write_reason(&decision.label) {
@@ -1509,7 +1535,14 @@ impl<'a> Planner<'a> {
             (Some((client, _)), None) => keep_shared(client, cluster, orphans).await?,
             (None, _) => (orphans, Vec::new()),
         };
-        migrations.releases = shared_orphans.iter().map(|s| s.rid.clone()).collect();
+        migrations.releases = match read {
+            Some((_, live)) => inventory::releases_of(
+                &shared_orphans,
+                live,
+                &crate::cluster::field_manager::FieldManager::of(cluster),
+            ),
+            None => shared_orphans.iter().map(|s| s.rid.clone()).collect(),
+        };
         let resource_graph =
             ResourceGraph::from_manifests(new_manifests).map_err(PlanError::Graph)?;
         let mut plan = DeployPlan::from_graph_and_changes(&resource_graph, &actions)
@@ -1524,7 +1557,7 @@ impl<'a> Planner<'a> {
         let activation_identity_hash =
             record.and_then(|m| keys::get(m, keys::IDENTITY_HASH).map(str::to_string));
 
-        let mut pkg_diff = diff_graphs(&baseline.diff_side(new_graph), new_graph);
+        let mut pkg_diff = diff_sent(&baseline.diff_side(new_graph), new_graph);
         pkg_diff.keep_shared(&shared_orphans);
         let aliased = pkg_diff.aliased_moves();
         if !aliased.is_empty() {
@@ -1597,9 +1630,29 @@ impl<'a> Planner<'a> {
                 .into_iter()
                 .filter(|rid| orphans.contains(rid) && !deleted.contains(rid)),
         );
+        let prior = {
+            let manifests = crate::cluster::apply::baseline_manifests(
+                &baseline.manifests(),
+                &[orphan_manifests],
+            );
+            match ledger {
+                Some(ledger) => ledger.prior(manifests),
+                None => Prior::of_build(manifests),
+            }
+        };
+        check_kept_orphans_size(
+            cluster,
+            self.flags.prune,
+            &orphans,
+            &deleted,
+            &shared_orphans,
+            &prior,
+            &kept_orphans,
+        )?;
 
         Ok(CheckedPlan {
             flags: self.flags.clone(),
+            build_hashes: crate::cluster::revision::convert::BuildHashes::of(new_manifests),
             plan,
             orphans,
             shared_orphans,
@@ -1611,10 +1664,7 @@ impl<'a> Planner<'a> {
             record: record.cloned(),
             consumed_failed,
             cluster: cluster.to_string(),
-            old_manifests: crate::cluster::apply::baseline_manifests(
-                &baseline.manifests(),
-                &[orphan_manifests],
-            ),
+            prior,
             revisions,
             target_checks: TargetChecks::of(new_graph),
             left_alone: selection.as_ref().map(|s| s.left_alone),
@@ -1644,7 +1694,8 @@ async fn ledger_for(
     let tenancy = &baseline.tenancy;
     let own = tenancy.own_records();
     let current = convert::current_of(tenancy.own_current(), own);
-    let conversion = if convert::targets(current, own).is_empty() {
+    let listed = tenancy.own_listed_revisions();
+    let conversion = if convert::targets(current, own, &listed).is_empty() {
         crate::cluster::revision::Conversion::default()
     } else {
         let discovery = discovery::discover_resources(client)
@@ -1657,9 +1708,10 @@ async fn ledger_for(
             &tenancy.cluster,
             current,
             own,
-            &tenancy.own_listed_revisions(),
+            &listed,
             &sweep.managed,
             &sweep.forbidden,
+            &convert::BuildHashes::of(new_manifests),
         )
         .map_err(|e| PlanError::Conversion(Box::new(e)))?
     };
@@ -1693,10 +1745,10 @@ pub(crate) async fn refuse_older_operator(client: &Client, cluster: &str) -> Res
     }
 }
 
-/// Return the objects a plan lists on the cluster: those of
-/// `new_manifests`, and those `ledger` names that the build does not make.
+/// Return the objects a plan lists on the cluster: those `new_manifests`
+/// make, and those `ledger` names that the build does not make.
 fn listed_ids(new_manifests: &[Value], ledger: Option<&Ledger>) -> Vec<ResourceId> {
-    let made: HashSet<ResourceId> = new_manifests.iter().map(ResourceId::from_value).collect();
+    let made: HashSet<ResourceId> = lifecycle::made_by(new_manifests).collect();
     let candidates: Vec<ResourceId> = ledger
         .map(|l| l.candidates(&made).cloned().collect())
         .unwrap_or_default();
@@ -1714,11 +1766,21 @@ fn write_reason(label: &Label) -> Option<WriteReason> {
             record: record.clone(),
         }),
         Label::AppliedHashMissing => Some(WriteReason::AppliedHashMissing),
-        Label::RevertsDrift(report) => Some(WriteReason::RevertsDrift {
+        Label::RevertsDrift(report)
+        | Label::Unfinished {
+            drift: Some(report),
+            ..
+        } => Some(WriteReason::RevertsDrift {
             changed_by: super::document::DriftOwner::of_report(report),
         }),
         Label::HeldByOtherCluster(report) => Some(WriteReason::HeldByOtherCluster {
             changed_by: super::document::DriftOwner::of_report(report),
+        }),
+        Label::Unfinished {
+            record,
+            drift: None,
+        } => Some(WriteReason::UnfinishedDeploy {
+            record: record.clone(),
         }),
         Label::Intended | Label::Reconciled | Label::Unchanged | Label::DriftReported(_) => None,
     }
@@ -1852,6 +1914,47 @@ fn manifests_of(graph: &StoreGraph) -> Vec<Value> {
 
 /// Return the orphans that a run's prune deletes under `PrunePolicy::Delete`,
 /// excluding kinds protected by `lifecycle::never_pruned`.
+/// Refuse a plan whose run would write a kept-orphans revision too large
+/// to store, as the run finalizes after every apply and every delete. The
+/// revision names what the run keeps when it goes as planned: each orphan
+/// the prune does not delete, and with `--skip-orphan-check` the orphans
+/// another Kix cluster shares, which the run does not release. It is built
+/// as the run builds it ([`kept_orphans_revision`]), without the current
+/// record's kept orphans that an offline plan carries forward unread.
+fn check_kept_orphans_size(
+    cluster: &str,
+    prune: PrunePolicy,
+    orphans: &[ResourceId],
+    deleted: &HashSet<ResourceId>,
+    shared: &[SharedOrphan],
+    prior: &Prior,
+    kept: &KeptOrphans,
+) -> Result<(), PlanError> {
+    let unshared = if prune == PrunePolicy::Skip {
+        shared
+    } else {
+        &[]
+    };
+    let wanted = orphans
+        .iter()
+        .filter(|rid| !deleted.contains(*rid))
+        .chain(unshared.iter().map(|s| &s.rid));
+    let Some(revision) = kept_orphans_revision(cluster, wanted, prior, &kept.unknown, None) else {
+        return Ok(());
+    };
+    if revision.stored_bytes() <= crate::cluster::revision::MAX_BYTES {
+        return Ok(());
+    }
+    Err(PlanError::RevisionTooLarge(Box::new(
+        crate::cluster::revision::TooLarge {
+            what: "the list of orphaned objects this deploy keeps".to_string(),
+            objects: revision.spec.objects.len(),
+            bytes: revision.stored_bytes(),
+            next: "Pass `--prune` to delete orphaned objects during this deploy, or run `kix gc` first to delete orphaned objects kept from earlier deploys.",
+        },
+    )))
+}
+
 pub(crate) fn deletes_of(prune: PrunePolicy, orphans: &[ResourceId]) -> Vec<ResourceId> {
     if prune != PrunePolicy::Delete {
         return Vec::new();
@@ -2013,7 +2116,7 @@ mod tests {
                 },
             })
         };
-        let order = DeleteOrder::of_manifests(&[
+        let order = DeleteOrder::of_build(&[
             manifest("ConfigMap", "held", "h1", "controller:op"),
             manifest("ConfigMap", "free", "h2", "controller:op"),
             manifest("ConfigMap", "plain", "h3", ""),

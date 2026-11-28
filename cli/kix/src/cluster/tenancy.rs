@@ -71,15 +71,15 @@ pub enum Problem {
         kept: bool,
     },
     #[error(
-        "deployment record `{record}` of Kix cluster '{cluster}' references {} `{revision}`, which Kix cannot read: {reason}. {}",
+        "deployment record `{record}` of Kix cluster '{cluster}' references {} `{revision}`, which Kix cannot read: {source}.{}",
         revision::KIND,
-        remedy(*kept, cluster)
+        unreadable_remedy(source, *kept, cluster)
     )]
     UnreadableRevision {
         cluster: String,
         record: String,
         revision: String,
-        reason: String,
+        source: Box<revision::ReadError>,
         kept: bool,
     },
     #[error(
@@ -102,6 +102,15 @@ pub enum Problem {
         revision::crd_name()
     )]
     Revisions { reason: String },
+}
+
+/// Return what to do about a revision Kix cannot read because of `source`,
+/// with a leading space, or nothing when `source` already says it.
+fn unreadable_remedy(source: &revision::ReadError, kept: bool, cluster: &str) -> String {
+    match source {
+        revision::ReadError::Newer { .. } => String::new(),
+        _ => format!(" {}", remedy(kept, cluster)),
+    }
 }
 
 fn remedy(kept: bool, cluster: &str) -> String {
@@ -532,12 +541,12 @@ impl Tenancy {
                 .map(|n| (n, false))
                 .chain(map.kept_orphans.iter().map(|n| (n, true)));
             for (name, kept) in named {
-                let problem = |reason: Option<String>| match reason {
-                    Some(reason) => Problem::UnreadableRevision {
+                let problem = |source: Option<Box<revision::ReadError>>| match source {
+                    Some(source) => Problem::UnreadableRevision {
                         cluster: cluster.to_string(),
                         record: record.name.clone(),
                         revision: name.clone(),
-                        reason,
+                        source,
                         kept,
                     },
                     None => Problem::MissingRevision {
@@ -548,8 +557,10 @@ impl Tenancy {
                     },
                 };
                 let Some(revision) = readable.get(name.as_str()) else {
-                    let reason = unreadable.get(name.as_str()).map(|e| e.to_string());
-                    self.problems.push(problem(reason));
+                    let source = unreadable
+                        .get(name.as_str())
+                        .map(|e| Box::new((*e).clone()));
+                    self.problems.push(problem(source));
                     continue;
                 };
                 for object in &revision.spec.objects {
@@ -772,21 +783,25 @@ impl Tenancy {
     /// manager, or when its `kix.run/activations` names a record of this
     /// cluster an older Kix wrote and its fields are still under `kix`.
     pub fn unlisted_own(&self, obj: &DynamicObject) -> bool {
-        let entries = obj.metadata.managed_fields.iter().flatten();
-        let mut own = false;
-        let mut legacy = false;
-        for e in entries {
-            if e.operation.as_deref() == Some("Apply") && e.subresource.is_none() {
-                own |= e.manager.as_deref() == Some(self.manager.name());
-                legacy |= e.manager.as_deref() == Some(field_manager::LEGACY);
-            }
-        }
-        let applied = own || (legacy && stamps(obj).any(|h| self.legacy.own.contains(h)));
+        let legacy = obj.metadata.managed_fields.iter().flatten().any(|e| {
+            e.operation.as_deref() == Some("Apply")
+                && e.subresource.is_none()
+                && e.manager.as_deref() == Some(field_manager::LEGACY)
+        });
+        let applied = self.holds_own_entry(obj)
+            || (legacy && stamps(obj).any(|h| self.legacy.own.contains(h)));
         applied
             && !self
                 .claims_of(obj)
                 .iter()
                 .any(|c| !c.kept && self.is_own(&c.cluster))
+    }
+
+    /// Return whether `obj` has an `Apply` entry under this Kix cluster's
+    /// own field manager.
+    pub fn holds_own_entry(&self, obj: &DynamicObject) -> bool {
+        self.manager
+            .holds_entry(obj.metadata.managed_fields.as_deref().unwrap_or_default())
     }
 
     /// Return the first problem about this Kix cluster, or about every Kix
@@ -843,33 +858,55 @@ impl Tenancy {
 
     /// Return other Kix clusters whose current build contains `obj`, or
     /// whose deploy that is under way, queued, failed, or partly deployed
-    /// does, or that have an `Apply` entry under their own field manager on
-    /// `obj`. Prune leaves such objects in place. Another cluster's kept
-    /// orphans do not count.
+    /// does, or that keep it as an orphan and still have an `Apply` entry
+    /// under their own field manager on it. Prune leaves such objects in
+    /// place.
     ///
-    /// An `Apply` entry counts whatever the other cluster's records say. A
-    /// Kix cluster that adds back an object it applied before may find it
-    /// unchanged and write nothing to it, so its entry is the one sign on
-    /// the object that it deploys it again ([`super::prune_guard`]).
+    /// A Kix cluster that adds back an object it keeps as an orphan may find
+    /// it unchanged and write nothing to it, so its entry and its
+    /// kept-orphans list together say that it may deploy the object again
+    /// ([`super::prune_guard`]). An entry that no record of its Kix cluster
+    /// names the object in does not count: that cluster stopped naming the
+    /// object, and the entry must not keep it for ever. A Kix cluster creates
+    /// the record that names an object before it writes the object, so a
+    /// read of the records made after the object was read finds the record
+    /// of a deploy that wrote it ([`settles`]).
     pub fn still_deployed_by_others(&self, obj: &DynamicObject) -> Vec<String> {
         let legacy = named_hashes(obj)
             .filter(|h| self.legacy.others_current.contains(*h))
             .filter_map(|h| self.legacy.others.get(h).cloned());
-        let claimed = self
-            .claims_of(obj)
+        let claims = self.claims_of(obj);
+        let claimed = claims
             .iter()
             .filter(|c| !c.kept && !self.is_own(&c.cluster))
             .map(|c| c.cluster.clone());
-        let applying = field_manager::other_clusters_applying(
-            &self.manager,
-            obj.metadata.managed_fields.as_deref().unwrap_or_default(),
-        )
-        .into_iter()
-        .map(str::to_string);
-        let mut clusters: Vec<String> = legacy.chain(claimed).chain(applying).collect();
+        let keeping = self
+            .applying_others(obj)
+            .into_iter()
+            .filter(|cluster| claims.iter().any(|c| c.cluster == *cluster))
+            .map(str::to_string);
+        let mut clusters: Vec<String> = legacy.chain(claimed).chain(keeping).collect();
         clusters.sort();
         clusters.dedup();
         clusters
+    }
+
+    /// Return the other Kix clusters with an `Apply` entry on `obj` whose
+    /// records in this read do not name it, sorted.
+    pub fn unexplained_entries(&self, obj: &DynamicObject) -> Vec<String> {
+        let claims = self.claims_of(obj);
+        self.applying_others(obj)
+            .into_iter()
+            .filter(|cluster| !claims.iter().any(|c| c.cluster == *cluster))
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn applying_others<'a>(&self, obj: &'a DynamicObject) -> Vec<&'a str> {
+        field_manager::other_clusters_applying(
+            &self.manager,
+            obj.metadata.managed_fields.as_deref().unwrap_or_default(),
+        )
     }
 
     /// Return the sorted names of this cluster's pending records that deploy
@@ -1017,6 +1054,20 @@ impl Tenancy {
         }
     }
 
+    /// Return the import markers the kept-orphans revision of `active`
+    /// lists, or none when it names no such revision or this read did not
+    /// find it.
+    pub fn kept_imports(&self, active: &Record) -> &[crate::cluster::revision::RevisionImport] {
+        match &active.revisions {
+            Some(Ok(map)) => map
+                .kept_orphans
+                .as_deref()
+                .and_then(|name| self.claims.revisions.get(name))
+                .map_or(&[], |r| r.spec.imports.as_slice()),
+            _ => &[],
+        }
+    }
+
     /// Return every revision that a needed record of a Kix cluster read
     /// from revisions names and that this read found.
     pub fn revisions(&self) -> impl Iterator<Item = &Revision> {
@@ -1068,10 +1119,13 @@ fn named_hashes(obj: &DynamicObject) -> impl Iterator<Item = &str> {
 }
 
 /// Return whether `tenancy` settles every record hash `obj` names
-/// ([`Tenancy::knows`]), so a tenancy read before `obj` still judges it.
-/// Those are the entries of `kix.run/activations`, and the object's own
-/// identity hash when it is an Activation record. On any other object the
-/// identity hash is the hash of its manifest, which names no record.
+/// ([`Tenancy::knows`]), and explains every `Apply` entry of another Kix
+/// cluster on it ([`Tenancy::unexplained_entries`]), so a tenancy read
+/// before `obj` still judges it. The hashes are the entries of
+/// `kix.run/activations`, and the object's own identity hash when it is an
+/// Activation record. On any other object the identity hash is the hash of
+/// its manifest, which names no record. An entry no record explains may
+/// come from a deploy that began after the read, so a fresh read judges it.
 pub(crate) fn settles(tenancy: &Tenancy, obj: &DynamicObject) -> bool {
     let record = lifecycle_of_live(obj) == Lifecycle::Record;
     let named = if record {
@@ -1079,7 +1133,7 @@ pub(crate) fn settles(tenancy: &Tenancy, obj: &DynamicObject) -> bool {
     } else {
         stamps(obj).collect()
     };
-    named.into_iter().all(|h| tenancy.knows(h))
+    named.into_iter().all(|h| tenancy.knows(h)) && tenancy.unexplained_entries(obj).is_empty()
 }
 
 /// Read the [`Tenancy`] for `cluster`: the heads of every Kix cluster, then

@@ -85,15 +85,11 @@ even when only one Kix cluster has records there. The resource may come from an
 earlier deploy whose records
 `kix gc` has retired, or from another Kix cluster whose records were deleted.
 Review the listed resources, then pass `--include unattributed` to check them
-against the active deployment's build and delete any not in it.
-
-Resources written by Kix that carry a Kix label without a `kix.run/identity-hash`
-annotation are listed under "No Kix build annotation" and kept by default,
-because Kix cannot match them to a build. Include them only after checking each reported resource. `--include`
-takes a comma-separated list, such as `--include unstamped,unattributed`:
+against the active deployment's build and delete any not in it. `--include`
+takes a comma-separated list, such as `--include unattributed,copies`:
 
 <Command
-  commands={["kix gc how-to-application --full-scan --include unstamped"]}
+  commands={["kix gc how-to-application --full-scan --include unattributed"]}
   cwd="kix-examples/"
 />
 

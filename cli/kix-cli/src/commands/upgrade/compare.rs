@@ -47,7 +47,7 @@ pub fn load_dir(dir: &Path) -> Result<BTreeMap<String, Object>, String> {
             let mut manifest: Value = kix::yaml::from_str(&text)
                 .map_err(|e| format!("{} is not a manifest: {e}", path.display()))?;
             let id = ResourceId::from_value(&manifest);
-            if is_kix_internal_kind(&id.kind) || is_kix_crd(&manifest) {
+            if is_kix_internal_kind(id.group_kind()) || is_kix_crd(&manifest) {
                 continue;
             }
             let package = manifest
@@ -293,7 +293,10 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.path().join("shop/PackageInstance-web.yaml"),
-            "kind: PackageInstance\nmetadata:\n  name: web\n  namespace: shop\n",
+            format!(
+                "apiVersion: {}\nkind: PackageInstance\nmetadata:\n  name: web\n  namespace: shop\n",
+                keys::API_VERSION
+            ),
         )
         .unwrap();
         std::fs::write(dir.path().join("README.md"), "not a manifest").unwrap();

@@ -49,10 +49,8 @@ message in the example cluster gives a report like this:
 
 <Command {...diffFromSnapshot} />
 
-The ConfigMap is the resource you edited. The four resources marked "via
-dependency" have no content change of their own; their identity hash moves
-because they depend on the ConfigMap, and Kix will re-stamp them on the next
-deploy. The command exits with status 2 whenever it finds a difference.
+The ConfigMap is the resource you edited. The command exits with status 2
+whenever it finds a difference.
 
 ## Keep the snapshot current
 

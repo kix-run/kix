@@ -15,9 +15,11 @@
 //! the object's `resourceVersion`, moves the `Apply` entry under `kix` to the
 //! Kix cluster's manager when the entry holds that cluster's fields
 //! ([`takes_legacy`]), removes the `Update` entry under `kix`, and removes
-//! the two notes and every annotation key of a retired Kix domain. It runs
-//! before the object's first apply under the cluster's manager, because that
-//! apply is refused while `kix` still owns a field it changes.
+//! every retired note ([`sent::is_retired_note`]) and every annotation key
+//! of a retired Kix domain. It runs before the object's first apply under
+//! the cluster's manager, because that apply is refused while `kix` still
+//! owns a field it changes. An object the run leaves unchanged gets the write
+//! too, so its retired notes go although Kix does not apply it.
 //!
 //! The entry under `kix` is shared by every Kix cluster that applied the
 //! object under it. A Kix cluster takes it only for an object one of its
@@ -30,9 +32,10 @@
 //! cluster names in `kix.run/activations`, and reads drift from
 //! `kix.run/applied-hash`. So while an object's note names a record of
 //! another Kix cluster that has no revision map
-//! ([`Tenancy::older_kix_hashes`]), the write keeps both notes, writes the
-//! deploying record's hash into the first beside that cluster's hashes, and
-//! leaves the entries under `kix` in place. Every deploy evaluates [`needed`]
+//! ([`Tenancy::older_kix_hashes`]), the write keeps every retired note,
+//! which that older Kix reads, writes the deploying record's hash into
+//! `kix.run/activations` beside that cluster's hashes, and leaves the
+//! entries under `kix` in place. Every deploy evaluates [`needed`]
 //! again, so the write finishes the job on such an object once that other
 //! cluster has revisions.
 
@@ -49,6 +52,7 @@ use super::field_manager::{self, FieldManager};
 use super::prune_guard::PruneGuard;
 use super::tenancy::Tenancy;
 use crate::manifest::keys;
+use crate::manifest::sent;
 
 /// How many times [`write`] reads an object again because it changed
 /// between the read and the write.
@@ -58,10 +62,9 @@ const ATTEMPTS: usize = 5;
 #[derive(Debug, Error)]
 pub enum WriteError {
     #[error(
-        "could not update Kix metadata on {resource} because Kubernetes refused the patch that renames field manager `{legacy}` and removes retired annotations `{activations}` and `{applied}`: {source}. Check permissions on {resource}, then run the deploy again",
+        "could not update Kix metadata on {resource}: Kubernetes rejected the patch that renames field manager `{legacy}` and removes retired `{domain}/*` annotations ({source}). Check permissions on {resource}, then run the deploy again",
         legacy = field_manager::LEGACY,
-        activations = keys::ACTIVATIONS,
-        applied = keys::APPLIED_HASH,
+        domain = keys::DOMAIN,
     )]
     Refused {
         resource: String,
@@ -180,11 +183,12 @@ fn pointer_segment(key: &str) -> String {
 /// kept note names. Index positions in `managedFields` are those of `obj`,
 /// so build the patch from the object as just read.
 ///
-/// An object needs the write when it carries either note that is not kept
-/// for an older Kix, a key of a retired Kix domain, an `Update` entry under
-/// `kix` that is not kept, or an `Apply` entry under `kix` that the cluster
-/// takes ([`takes_legacy`]). A kept note needs the write when it does not
-/// name exactly that older cluster's hashes and the deploying record's.
+/// An object needs the write when it carries a retired note
+/// ([`sent::is_retired_note`]) that is not kept for an older Kix, a key of a
+/// retired Kix domain, an `Update` entry under `kix` that is not kept, or an
+/// `Apply` entry under `kix` that the cluster takes ([`takes_legacy`]). A
+/// kept note needs the write when it does not name exactly that older
+/// cluster's hashes and the deploying record's.
 pub fn needed(
     obj: &DynamicObject,
     manager: &FieldManager,
@@ -218,7 +222,6 @@ pub fn needed(
         .flatten()
         .map(|(k, _)| k)
         .collect();
-    let has = |key: &str| present.iter().any(|k| k.as_str() == key);
     let remove = |key: &str, ops: &mut Vec<Value>| {
         ops.push(json!({ "op": "remove", "path": format!("/metadata/annotations/{}", pointer_segment(key)) }));
     };
@@ -231,17 +234,10 @@ pub fn needed(
                 ops.push(json!({ "op": "replace", "path": format!("/metadata/annotations/{}", pointer_segment(keys::ACTIVATIONS)), "value": value }));
             }
         }
-    } else {
-        for key in [keys::ACTIVATIONS, keys::APPLIED_HASH] {
-            if has(key) {
-                remove(key, &mut ops);
-            }
-        }
     }
-    for key in present
-        .iter()
-        .filter(|k| crate::legacy_domain::is_legacy_key(k))
-    {
+    for key in present.iter().filter(|k| {
+        crate::legacy_domain::is_legacy_key(k) || (!kept_for_older && sent::is_retired_note(k))
+    }) {
         remove(key, &mut ops);
     }
     (!ops.is_empty()).then_some(ops)

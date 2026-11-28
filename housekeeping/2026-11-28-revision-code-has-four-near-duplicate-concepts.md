@@ -1,0 +1,3 @@
+# 2026-11-28 · `cli/kix/src/cluster/revision/`, `cli/kix/src/plan/decide.rs` · Four concepts in the revision code each have more than one definition or meaning.
+
+Three functions hash an object (the identity hash from the build, the object hash of the sent manifest, the applied hash of the live projection), and a reader has to know which one a field holds. `Label::Unfinished` means both "an unfinished deploy may have written it" and "no applied hash is recorded". The hash value `rebuilt` stands for "nothing records what a build wanted", which a typed field would say better. Whether a record's revision is still needed is decided in three places (`tenancy.rs`, `decide.rs`, the gc command). The adversarial review of 2026-11-28 listed these; none causes a wrong result today.

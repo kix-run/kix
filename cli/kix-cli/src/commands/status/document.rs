@@ -159,7 +159,10 @@ pub struct ResourceStatus {
     /// `null` for a cluster-scoped object.
     pub namespace: Option<String>,
     pub name: String,
-    pub identity_hash: String,
+    /// The hash the deploy record gives the object. For a deploy by this
+    /// version of Kix it is a hash of the manifest Kix sends for it. For a
+    /// deploy by an older Kix it is the object's identity hash annotation.
+    pub hash: String,
     /// `false` when Kix could not name a missing object. The deploy record
     /// names its objects from Kix 0.10, and Kix's local store names them
     /// when it holds the build.
@@ -620,7 +623,7 @@ fn resource_status(
     } else {
         objects
             .iter()
-            .filter(|o| o.depends_on.contains(&obj.identity_hash))
+            .filter(|o| o.depends_on.contains(&obj.hash))
             .map(|o| label(&o.rid))
             .collect()
     };
@@ -629,7 +632,7 @@ fn resource_status(
         group: obj.rid.group.clone(),
         namespace: (obj.rid.namespace != CLUSTER_SCOPED).then(|| obj.rid.namespace.clone()),
         name: obj.rid.name.clone(),
-        identity_hash: obj.identity_hash.clone(),
+        hash: obj.hash.clone(),
         named: obj.named,
         present,
         drift,

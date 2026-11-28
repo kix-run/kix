@@ -24,7 +24,7 @@ Most `kix.run/*` metadata is stamped automatically by resource builders (`scope.
 
 | Label | Placed on | Meaning |
 | --- | --- | --- |
-| `app.kubernetes.io/managed-by: kix` | Every Kix-rendered resource and CRD record | Identifies objects managed by Kix (required by [validation check 8](/docs/reference/validation-checks/)). Pruning and garbage collection determine which Kix cluster deploys an object from its `kix.run/identity-hash` and each Kix cluster's [`PackageInstanceRevision`](#packageinstancerevision) objects. |
+| `app.kubernetes.io/managed-by: kix` | Every Kix-rendered resource and CRD record | Identifies objects managed by Kix (required by [validation check 8](/docs/reference/validation-checks/)). Pruning and garbage collection determine which Kix cluster owns an object from its [field manager](#field-manager) entries and each Kix cluster's [`PackageInstanceRevision`](#packageinstancerevision) objects. |
 | `kix.run/cluster` | `Activation` and `PackageInstanceRevision` resources | Names the Kix cluster that owns the record or revision so multiple Kix clusters can share a single Kubernetes cluster. |
 | `kix.run/kubernetes-uid` | `Activation` resources of a definition that sets `cluster.kubernetes.uid` | The UID of the Kubernetes cluster's `kube-system` Namespace the build was bound to. While any record carries it, the Kubernetes cluster refuses definitions that do not set the UID. See [Bind a cluster definition to its Kubernetes cluster](/docs/how-to/operate-a-cluster/bind-a-cluster-definition-to-its-kubernetes-cluster/). |
 | `kix.run/consumer` | `Namespace` resources in consumer clusters | Names the consumer cluster (built with `kix.interface`) that owns the namespace, allowing platform network policies to select consumer pods. |
@@ -35,12 +35,14 @@ Most `kix.run/*` metadata is stamped automatically by resource builders (`scope.
 
 ### Build identity and live ownership annotations
 
+Five build-only annotations describe a Kix cluster's dependency graph and package membership: `kix.run/identity-hash`, `kix.run/package`, `kix.run/package-namespace`, `kix.run/lifecycle`, and `kix.run/depends-on`. Kix reads them from built manifests to plan and order a deploy, then strips them (along with the [retired](#retired-annotations) `kix.run/activations` and `kix.run/applied-hash` annotations, under `kix.run` or any retired Kix domain) before sending manifests to the Kubernetes API server. Live objects never carry these annotations; instead, each Kix cluster records the same metadata by object name in its [`PackageInstanceRevision`](#packageinstancerevision) resources. `Activation` records are the sole exception and keep their own annotations on the cluster.
+
 | Annotation | Written by | Meaning |
 | --- | --- | --- |
-| `kix.run/identity-hash` | CLI on load | 32-character store hash of the sealed manifest. Changes whenever the manifest content or any dependency in its store context changes. |
-| `kix.run/package` | CLI on load | Name of the owning package instance. |
-| `kix.run/package-namespace` | CLI on load | Namespace of the owning package instance. |
-| `kix.run/lifecycle` | CLI on load | Lifecycle classification from `meta.lifecycle` (`"stateful"`, `"stateless"`, or `"ephemeral"`). Only `"stateful"` changes Kix behavior (requiring `holdsData` on custom resources in the instance and marking resources as stateful during migration checks); other values are informational. |
+| `kix.run/identity-hash` | CLI on load (built manifests only) | 32-character store hash of the sealed manifest. Changes whenever the manifest content or any dependency in its store context changes. |
+| `kix.run/package` | CLI on load (built manifests only) | Name of the owning package instance (recorded on the cluster in `spec.slot` on the object's revision). |
+| `kix.run/package-namespace` | CLI on load (built manifests only) | Namespace of the owning package instance. |
+| `kix.run/lifecycle` | CLI on load (built manifests only) | Lifecycle classification from `meta.lifecycle` (`"stateful"`, `"stateless"`, or `"ephemeral"`). Only `"stateful"` changes Kix behavior (requiring `holdsData` on custom resources in the instance and marking resources as stateful during migration checks); other values are informational. |
 | `kix.run/holds-data` | `scope.mkResource` / `scope.mkCR` | `"true"` or `"false"`. Indicates whether deleting the resource loses persistent data. Derived automatically for `PersistentVolumeClaim`, `PersistentVolume`, and `StatefulSet` resources with `volumeClaimTemplates`, and required via CRD `holdsData` for custom resources in stateful packages. |
 | `kix.run/built-via` | CLI on `Activation` | Store path of the cluster activation index (`kix-activation-<cluster>.json`), a JSON file that names the store paths of `kix-packages.json`, `kix-image-sources.json`, and related build metadata. Records written by Kix 0.6 and earlier name the activation output directory (`k8s-activation-<cluster>`) instead, and Kix still reads them. |
 | `kix.run/withdrawn-kix` | CLI on `Activation` | Withdrawn Kix version that deployed or rolled back to this record when `KIX_ALLOW_WITHDRAWN` was set to that version. See [Withdrawn releases](/docs/reference/cli/deploy/#withdrawn-releases). |
@@ -50,7 +52,7 @@ Most `kix.run/*` metadata is stamped automatically by resource builders (`scope.
 
 | Annotation | Set via | Meaning |
 | --- | --- | --- |
-| `kix.run/depends-on` | Nix string context, `requires`, `controller`, `extraDeps` | Comma-separated dependency entries (`<hash>`, `requires:<hash>`, `controller:<hash>`, `extra:<hash>`) that define the deployment dependency graph. All prefixes affect deploy and delete order the same way. A `controller:<hash>` entry comes from `controller` on `scope.mkCRD` or `scope.mkCRDRef`, and Kix uses it to report the controller's status when deleting a custom resource times out (`[K2794]`). |
+| `kix.run/depends-on` | Nix string context, `requires`, `controller`, `extraDeps` (built manifests only) | Comma-separated dependency entries (`<hash>`, `requires:<hash>`, `controller:<hash>`, `extra:<hash>`) that define the deployment dependency graph. All prefixes affect deploy and delete order the same way. A `controller:<hash>` entry comes from `controller` on `scope.mkCRD` or `scope.mkCRDRef`, and Kix uses it to report the controller's status when deleting a custom resource times out (`[K2794]`). Revisions record these dependencies by object name in `spec.objects[].needs`, so pruning and `kix gc` can order deletes without the build. |
 | `kix.run/readiness` | `readiness` on `scope.mkCRD` / `scope.mkCRDRef`, or on `scope.mkCR` for one resource | JSON readiness rule evaluated by `kix deploy` for custom resources. See [`kix.run/readiness`](#kixrunreadiness). |
 | `kix.run/rerun` | `scope.mkJob`, on every `Job` it builds | `"on-change"` on a `Job` resource. Instructs `kix deploy`, `kix rollback`, and the operator to delete and recreate the Job when its `kix.run/rerun-hash` changes. `kix deploy` and `kix rollback` also recreate it when its previous run failed. A change that leaves the Job's own manifest alone, such as a new label on its namespace, updates the Job in place without running it again. |
 | `kix.run/rerun-hash` | `scope.mkResource`, on every resource that carries `kix.run/rerun` | Hash of the content that triggers a rerun. Combines the resource's `out.contentHash` with the `out.contentHash` of each Kix-built Secret and ConfigMap that its pod reads through a volume, `env`, or `envFrom` (or equals `out.contentHash` when the pod reads none). Excludes `kix.run/*` metadata and other dependencies. Pod template `checksum/*` annotations are part of the Job's own manifest, so changing one (such as an annotation set to another resource's `out.contentHash`) also reruns the Job. Jobs deployed before Kix added this annotation run once more on the first deploy after upgrading. |
@@ -59,20 +61,27 @@ Most `kix.run/*` metadata is stamped automatically by resource builders (`scope.
 
 ### Retired annotations
 
-Earlier versions of Kix wrote two additional annotations onto every object
-after applying it. Kix no longer writes them, and the first deploy after
-upgrading removes them (see
+Earlier versions of Kix wrote seven annotations onto deployed objects. Kix no
+longer writes any of them, and the first deploy after upgrading removes them
+from each object (see
 [The first deploy after upgrading](/docs/explanation/server-side-apply-and-drift/#the-first-deploy-after-upgrading)).
+Built manifests still carry the five graph annotations described in
+[Build identity and live ownership annotations](#build-identity-and-live-ownership-annotations).
 
 | Annotation | What it held | Where Kix keeps it now |
 | --- | --- | --- |
 | `kix.run/activations` | Comma-separated identity hashes of the `Activation` records that included the object. | [`status.revisions`](#activation-spec-and-status-fields) on the `Activation` record, which links to `PackageInstanceRevision` objects listing the objects. |
 | `kix.run/applied-hash` | Hash of the fields Kix owned after its last apply. | [`status.applied`](#packageinstancerevision) on the revision that lists the object. |
+| `kix.run/identity-hash` | Store hash of the built manifest and its dependencies. | `spec.objects[].hash` on the revision (a hash of the manifest Kix sends). Kix identifies its own live objects from their `kix/<cluster>` [field manager](#field-manager) entry. |
+| `kix.run/depends-on` | Identity hashes of the object's dependencies. | `spec.objects[].needs` on the revision, recorded by object name. |
+| `kix.run/package`, `kix.run/package-namespace` | The owning package instance. | `spec.slot` on the revision that lists the object. |
+| `kix.run/lifecycle` | The package's `meta.lifecycle`. | `spec.slot.lifecycle` on the instance's revision. |
 
 If another Kix cluster on an earlier version also deploys a shared object, Kix
-keeps both annotations on that object until the other cluster upgrades, because
-the earlier version checks `kix.run/activations` before deleting orphans.
-Meanwhile, Kix appends its own deployment record hash to `kix.run/activations`.
+keeps every retired annotation on that object until the other cluster upgrades,
+because the earlier version reads `kix.run/activations` before deleting orphans
+and `kix.run/applied-hash` to find drift. Meanwhile, Kix appends its own
+deployment record hash to `kix.run/activations`.
 
 ### Field manager
 
@@ -201,7 +210,7 @@ unpruned orphans remain) one kept-orphans revision.
 
 | Path | Type | Meaning |
 | --- | --- | --- |
-| `format` | `integer` | Schema version of the revision map. Kix reads and writes `1`, and refuses to prune or garbage-collect when a deployment record has a `format` it cannot read. |
+| `format` | `integer` | Schema version of the revision map. Kix writes `2` and reads `1` and `2` (if `kix gc` adds a kept-orphans revision to a format `1` map, it upgrades `format` to `2`). Cluster-modifying commands stop with an error when a deployment record uses a `format` higher than the running version of Kix supports. |
 | `instances` | `object` | Map from `namespace/instance` to the `PackageInstanceRevision` name for that package instance. |
 | `clusterLevel` | `string` | Name of the `PackageInstanceRevision` for cluster-level objects outside any package instance, such as Namespaces. |
 | `keptOrphans` | `string` (optional) | Name of the `PackageInstanceRevision` listing orphans kept by this deploy or earlier deploys that ran without `--prune`. `kix deploy --prune` and `kix gc` delete the objects it lists. |
@@ -209,7 +218,7 @@ unpruned orphans remain) one kept-orphans revision.
 ```yaml
 status:
   revisions:
-    format: 1
+    format: 2
     instances:
       apps/web: production-3f1c0a9e5b7d2c4e8a6f0b1d3c5e7a9b
       data/postgres: production-8e2d4c6a0b1f3e5d7c9a2b4d6f8e0a1c
@@ -328,10 +337,49 @@ of each object. Deployment records link to their revisions in
 
 | Field | Meaning |
 | --- | --- |
+| `spec.format` | Schema version of the revision `spec`. Kix writes `2`. Revisions without `spec.format` are format `1` (which lacks `needs`, `imports`, and `slot.lifecycle`); Kix still reads them and replaces them on the next deploy. Kix refuses revisions with `spec.format` above `2` and asks you to upgrade Kix. |
 | `spec.cluster` | Name of the Kix cluster. |
-| `spec.slot` | Scope covered by the revision: `{ kind: instance, namespace, name }` for a package instance, `{ kind: clusterLevel }` for cluster-level objects outside any package instance, or `{ kind: keptOrphans }` for orphaned objects kept by deploys that ran without `--prune`. |
-| `spec.objects` | Sorted list of objects: `hash` (`kix.run/identity-hash`), `group` (`""` for core `v1`), `kind`, `namespace` (omitted when cluster-scoped), and `name`. |
-| `status.applied` | Map from each object's `hash` to the hash of the Kix-owned live fields after its last apply (excluding fields listed in [`kix.run/cede-fields`](#kixruncede-fields)). Used to detect drift. If an object has no entry, the next deploy reapplies it and records its hash. |
+| `spec.slot` | Scope covered by the revision: `{ kind: instance, namespace, name, lifecycle }` for a package instance, `{ kind: clusterLevel }` for cluster-level objects outside any package instance, or `{ kind: keptOrphans }` for orphaned objects kept by deploys that ran without `--prune`. `lifecycle` is the package's `meta.lifecycle` (`stateful`, `stateless`, or `ephemeral`), omitted when the package sets none. |
+| `spec.objects` | Sorted list of the objects Kix writes: `hash`, `group` (`""` for core `v1`), `kind`, `namespace` (omitted when cluster-scoped), `name`, and `needs`. |
+| `spec.objects[].hash` | Hash of the manifest Kix sends for the object, with keys sorted and nulls removed, taken before Kix fills in values from SOPS files. It covers every `kix.run/*` annotation Kix sends, so a changed SOPS file changes it through `kix.run/sops-digest`. In revisions converted from earlier deployment records, objects with an unchanged `kix.run/identity-hash` use the sent-manifest hash and other objects keep their earlier identity hash; in a kept-orphans revision rebuilt by `kix gc --full-scan`, every entry uses `"rebuilt"`. |
+| `spec.objects[].needs` | Sorted list of the objects this object depends on, each `{ group, kind, namespace, name, as }`. `group` is omitted for core `v1`, `namespace` for a cluster-scoped object, and `as` when the dependency has no role. `as` is the role from [`kix.run/depends-on`](#deployment-graph-and-apply-behavior-annotations): `requires`, `controller`, or `extra`. Omitted when empty. |
+| `spec.imports` | Sorted list of the instance's import markers (from `kix.mkImport`, `scope.mkCRDRef`, `scope.mkSecretRef`, and `scope.mkServiceRef`). Kix does not write marker objects to the cluster. Each entry records `namespace` (omitted when cluster-scoped), `name`, `hash`, `target` (`{ apiVersion, kind, namespace, name }` of the external object, omitted when unset), and `needs`. Objects that depend on a marker list it in `needs`, preserving transitive delete ordering through the marker. Omitted when empty. |
+| `status.applied` | Map from each object's `hash` to the hash of the fields Kix owned on the live object after its last apply (excluding fields listed in [`kix.run/cede-fields`](#kixruncede-fields) and the [retired annotations](#retired-annotations)). A deploy skips an object when a revision holds an applied hash for its new `hash`, the live object still matches it, and any ceded fields still owned by `kix/<cluster>` match the build (since ceded fields are excluded from `status.applied`). If an object has no entry, the next deploy reapplies it and records its hash. |
+
+A format 2 revision for one package instance:
+
+```yaml
+apiVersion: kix.run/v1alpha1
+kind: PackageInstanceRevision
+metadata:
+  name: production-c8d00c77132a0ee32647795e097150de
+  labels:
+    kix.run/cluster: production
+spec:
+  format: 2
+  cluster: production
+  slot: { kind: instance, namespace: apps, name: web, lifecycle: stateless }
+  objects:
+    - { hash: 0b1e..., group: kix.run, kind: PackageInstance, namespace: apps, name: web }
+    - { hash: 51ab..., group: "", kind: ConfigMap, namespace: apps, name: web-config }
+    - hash: 9f2c...
+      group: apps
+      kind: Deployment
+      namespace: apps
+      name: web
+      needs:
+        - { kind: ConfigMap, namespace: apps, name: web-config }
+        - { group: kix.run, kind: PackageInstance, namespace: apps, name: secret-ref-web-tls }
+  imports:
+    - namespace: apps
+      name: secret-ref-web-tls
+      hash: 77ab...
+      target: { apiVersion: v1, kind: Secret, namespace: apps, name: web-tls }
+status:
+  applied:
+    51ab...: d41c...
+    9f2c...: 3e07...
+```
 
 Each revision is named `<cluster>-<32-char spec hash>`, so any machine holding
 the same build computes the same revision name. The CRD makes `spec` immutable,
@@ -345,25 +393,28 @@ the active record, any queued or deploying record, and any `Failed` or
 `Superseded` records carry no revision links. Finishing a deploy or running
 `kix gc` deletes unreferenced revisions for that Kix cluster, and `kix rollback`
 recreates the target record's revisions from its build. Each revision holds up
-to roughly 1.5 MB (around 6,500 objects), and Kix stops before applying if a
-package instance exceeds that limit. Because deployment records from Kix 0.5
+to 1.5 MiB, which is a few thousand objects (fewer when objects have many
+dependencies), and Kix stops before applying if a package instance exceeds
+that limit. Because deployment records from Kix 0.5
 and earlier have no package index, upgrading places all of a record's objects
 into a single revision. If they exceed the size limit, Kix stops and tells you
 to deploy an updated build of the cluster once with Kix 0.9 (which writes a
 package index), then upgrade Kix again and redeploy.
 
-If a deployment record references a revision that is missing from the cluster,
-`kix deploy`, `kix gc`, and the Kix operator refuse to prune or delete
-resources, while `kix status` warns and continues. Redeploying that record's
-build recreates the missing revision under the same name. If the missing
-revision is `keptOrphans`, run `kix gc --full-scan` to rebuild it from live
+If a deployment record that Kix still consults references a revision that is
+missing from the cluster or that Kix cannot read, `kix deploy`, `kix rollback`,
+`kix gc`, and the Kix operator refuse to plan for that Kix cluster, while
+`kix status` warns and continues. If the missing or unreadable revision is
+`keptOrphans`, run `kix gc <cluster> --full-scan` to rebuild it from live
 objects owned by this Kix cluster that no other revision lists.
 
 Do not edit `PackageInstanceRevision` objects by hand.
 
 ## PackageInstance
 
-`PackageInstance` (`packageinstances.kix.run`, API version `kix.run/v1alpha1`) is a namespaced custom resource emitted for each active package instance, external import (`kix.mkImport`), Secret reference (`scope.mkSecretRef`), Service reference (`scope.mkServiceRef`), and CRD reference (`scope.mkCRDRef`).
+`PackageInstance` (`packageinstances.kix.run`, API version `kix.run/v1alpha1`) is a namespaced custom resource that Kix writes for each active package instance. Kix treats only `Activation` and `PackageInstance` in its own API group (`kix.run`, or a retired Kix group) as Kix records; resources of the same kind in other API groups are treated like any other Kubernetes resource.
+
+A build also contains a `PackageInstance` import marker for each external import (`kix.mkImport`), Secret reference (`scope.mkSecretRef`), Service reference (`scope.mkServiceRef`), and CRD reference (`scope.mkCRDRef`). Import markers order the deploy and name the external objects they stand for, and Kix never writes them to the cluster. Instead, each package instance's revision lists its markers under [`spec.imports`](#packageinstancerevision), and `kix deploy` verifies that a marker's target exists before writing any object that depends on it. As a result, `kubectl get packageinstances` lists only deployed package instances. Import-marker `PackageInstance` objects created by earlier versions of Kix are treated as removed resources and deleted by `kix deploy --prune` or `kix gc` (unless another Kix cluster still deploys them).
 
 A package instance's record sits in the instance's namespace. The record of an instance under a `_`-prefixed key, such as `instances._cluster`, sits in [`cluster.recordNamespace`](/docs/reference/cluster-configuration/#clusterrecordnamespace) (`kube-system` by default), and its `spec.namespaceName` keeps the key.
 
@@ -377,7 +428,6 @@ metadata:
     app.kubernetes.io/managed-by: kix
   annotations:
     kix.run/root: web-server
-    kix.run/depends-on: ...
 spec:
   instanceName: web
   namespaceName: apps
@@ -387,6 +437,8 @@ spec:
 ```
 
 ### `PackageInstance` spec and annotations
+
+Import and reference markers exist only in built manifests (never on the cluster); Kix reads their annotations during planning and records the target object in `spec.imports[].target` on the revision.
 
 | Field or annotation | Present on | Meaning |
 | --- | --- | --- |
@@ -402,7 +454,7 @@ spec:
 | `kix.run/auto-instantiated` | Auto-instantiated instances | `"true"` when created on demand from `availablePackages`. |
 | `kix.run/optional-activated` | Activated optional instances | `"true"` when an `optional = true` instance was activated by dependency demand. |
 | `kix.run/mode` | Import and ref markers | `"import"` on markers created by `kix.mkImport`, `scope.mkSecretRef`, `scope.mkServiceRef`, and `scope.mkCRDRef`. |
-| `kix.run/import-kind`, `kix.run/import-apiversion`, `kix.run/import-name` | Import, SecretRef, ServiceRef markers | Target Kubernetes object identity verified by `kix deploy` before dependent waves run. |
+| `kix.run/import-kind`, `kix.run/import-apiversion`, `kix.run/import-name` | Import, SecretRef, ServiceRef markers | Target Kubernetes object identity verified by `kix deploy` before it writes an object that depends on the marker. |
 | `kix.run/import-namespace` | `kix.mkImport` markers when `namespace` differs from the instance's namespace | Namespace of the target Kubernetes object. When omitted, build validation and `kix deploy` look for a namespaced target in the marker's own namespace. |
 | `kix.run/import-secret-keys` | `scope.mkSecretRef` markers | Comma-separated keys that must exist in the external `Secret`'s `data`. |
 | `kix.run/import-fqdn`, `kix.run/service-selector`, `kix.run/service-ports`, `kix.run/service-labels` | `scope.mkServiceRef` and Service imports | Service address, JSON-encoded selector, ports, and metadata labels used by network policy derivation and scorecard rules. |

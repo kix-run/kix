@@ -554,7 +554,8 @@
           "description": "The kind's API group. Left out for the core group.",
           "type": "string"
         },
-        "identity_hash": {
+        "hash": {
+          "description": "The hash the deploy record gives the object. For a deploy by this\nversion of Kix it is a hash of the manifest Kix sends for it. For a\ndeploy by an older Kix it is the object's identity hash annotation.",
           "type": "string"
         },
         "kind": {
@@ -615,7 +616,7 @@
         "kind",
         "namespace",
         "name",
-        "identity_hash",
+        "hash",
         "named",
         "present",
         "drift",

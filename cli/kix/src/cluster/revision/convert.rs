@@ -15,9 +15,30 @@
 //! in one write. From that write on, every reader reads the record from its
 //! revisions, and the notes on the objects only remain to be tidied away.
 //!
-//! What a record names comes, in this order, from its package index when
-//! the index names the objects, from the live objects whose build hash the
-//! index lists, and from the live objects whose note lists the record.
+//! A record whose map names format 1 revisions, which Kix built from `main`
+//! wrote, is converted the same way: its revisions cannot change, because a
+//! revision's name is a hash of its content, so it gets new revisions and a
+//! new map.
+//!
+//! What a record names comes, in this order, from its format 1 revisions,
+//! from its package index when the index names the objects, from the live
+//! objects whose build hash the index lists, and from the live objects
+//! whose note lists the record. What each object depends on comes from the
+//! `kix.run/depends-on` note of its live object, and an instance's lifecycle
+//! from the `kix.run/lifecycle` note of its live objects, because an older
+//! Kix recorded them nowhere else.
+//!
+//! An older Kix's applied hash left out every `kix.run/*` annotation, and
+//! this Kix's covers each one it sends, so no old value can be kept as it
+//! is. The conversion carries an applied hash only for an object the
+//! record's deploy wrote: its note lists the record and it carries the
+//! build hash the record gives it. When such an object still matches the
+//! old applied hash, the conversion stores this Kix's applied hash of the
+//! live object. Otherwise it stores the old value, which no live object can
+//! match, so a plan reports the drift. When the
+//! new build makes the same build file for an object, the entry takes the
+//! new build's object hash ([`BuildHashes`]), so a deploy that changes
+//! nothing writes nothing to it.
 //!
 //! The conversion is safe to run twice and safe to stop between any two of
 //! its writes. A revision's name is a hash of its content, so a second
@@ -33,12 +54,17 @@ use std::collections::{BTreeMap, HashMap};
 use kube::Client;
 use kube::api::DynamicObject;
 use kube::discovery::{ApiResource, Scope};
+use serde_json::Value;
 use thiserror::Error;
 
 use super::map::RevisionMap;
-use super::spec::{MAX_BYTES, Revision, RevisionObject, RevisionSet, RevisionSpec, Slot, TooLarge};
+use super::spec::{
+    MAX_BYTES, Need, Revision, RevisionObject, RevisionSet, RevisionSpec, Slot, TooLarge,
+};
 use super::store::{RevisionError, Revisions};
 use crate::cluster::activation::{Record, Records, RecordsError};
+use crate::cluster::field_manager::FieldManager;
+use crate::cluster::fieldsv1;
 use crate::eval::package_index::{IndexedName, RecordPackageIndex};
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{self, PHASE_FAILED, PHASE_PARTIAL, PHASE_SUPERSEDED};
@@ -132,18 +158,74 @@ pub fn current_of<'a>(head_current: Option<&str>, own: &'a [Record]) -> Option<&
 }
 
 /// Return the records of a Kix cluster a run converts: `current`, and each
-/// `Failed` or `Partial` record, when it has no revision map. A record whose
-/// map this Kix cannot read is not converted.
-pub fn targets<'a>(current: Option<&'a Record>, own: &'a [Record]) -> Vec<&'a Record> {
+/// `Failed` or `Partial` record, when it has no revision map or its map
+/// names a format 1 revision of `listed`. A record whose map this Kix cannot
+/// read is not converted.
+pub fn targets<'a>(
+    current: Option<&'a Record>,
+    own: &'a [Record],
+    listed: &[Revision],
+) -> Vec<&'a Record> {
+    let converts = |r: &Record| match &r.revisions {
+        None => true,
+        Some(Ok(map)) => format_one_map(map, listed).is_some(),
+        Some(Err(_)) => false,
+    };
     let mut out: Vec<&Record> = own
         .iter()
         .filter(|r| matches!(r.phase.as_str(), PHASE_FAILED | PHASE_PARTIAL))
         .filter(|r| Some(r.name.as_str()) != current.map(|c| c.name.as_str()))
-        .filter(|r| r.revisions.is_none())
+        .filter(|r| converts(r))
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
-    out.extend(current.filter(|c| c.revisions.is_none()));
+    out.extend(current.filter(|c| converts(c)));
     out
+}
+
+/// Return the revisions `map` names, from `listed`, when one of them is in
+/// format 1. A revision `listed` does not hold is left out.
+fn format_one_map<'a>(map: &RevisionMap, listed: &'a [Revision]) -> Option<Vec<&'a Revision>> {
+    let named: Vec<&Revision> = map
+        .names()
+        .filter_map(|n| listed.iter().find(|r| r.name == n))
+        .collect();
+    named
+        .iter()
+        .any(|r| !r.spec.records_edges())
+        .then_some(named)
+}
+
+/// The new build's hashes of each object, by name: the build hash an older
+/// Kix stamped on the objects it applied (`kix.run/identity-hash`), and the
+/// object hash this Kix records.
+#[derive(Debug, Clone, Default)]
+pub struct BuildHashes(HashMap<ResourceId, (String, String)>);
+
+impl BuildHashes {
+    /// Return the hashes of the objects the build whose manifests are
+    /// `manifests` makes on the cluster ([`lifecycle::makes`]).
+    pub fn of(manifests: &[Value]) -> BuildHashes {
+        BuildHashes(
+            manifests
+                .iter()
+                .filter(|m| lifecycle::makes(m) && !lifecycle::is_record(m))
+                .filter_map(|m| {
+                    let identity = keys::get(m, keys::IDENTITY_HASH)?;
+                    Some((
+                        ResourceId::from_value(m),
+                        (identity.to_string(), crate::manifest::hash::object_hash(m)),
+                    ))
+                })
+                .collect(),
+        )
+    }
+
+    /// Return the object hash of `rid` in the new build when its build file
+    /// for `rid` has the build hash `identity`.
+    fn object_hash_for(&self, rid: &ResourceId, identity: &str) -> Option<&str> {
+        let (built, object) = self.0.get(rid)?;
+        (built == identity).then_some(object.as_str())
+    }
 }
 
 /// The live objects a conversion reads, by object and by build hash.
@@ -179,6 +261,33 @@ impl<'a> Live<'a> {
             .collect();
         out.sort();
         out
+    }
+
+    /// Return `object` with the edges the `kix.run/depends-on` note of its
+    /// live object lists, each hash named by the live object that carries
+    /// it. The note describes the build that wrote the object last, which
+    /// may be a later one than `object` names. Those edges still order its
+    /// delete better than none. An edge to an object that no longer carries
+    /// the hash is lost.
+    fn with_noted_needs(&self, object: RevisionObject) -> RevisionObject {
+        let Some(obj) = self.by_id.get(&object.resource_id()) else {
+            return object;
+        };
+        let manifest = crate::manifest::types::to_manifest_value(obj);
+        let needs = Need::of_depends_on(&manifest, |hash| {
+            let found = self.by_hash.get(hash)?.first()?;
+            Some(crate::cluster::drift::resource_id(found))
+        });
+        object.with_needs(needs)
+    }
+
+    /// Return the lifecycle the `kix.run/lifecycle` note gives the first of
+    /// `objects` whose live object carries one.
+    fn lifecycle_of(&self, objects: &[RevisionObject]) -> Option<String> {
+        objects.iter().find_map(|o| {
+            let obj = self.by_id.get(&o.resource_id())?;
+            keys::get_meta(obj.metadata.annotations.as_ref()?, keys::LIFECYCLE).map(str::to_string)
+        })
     }
 }
 
@@ -260,41 +369,138 @@ fn named_by(record: &Record, live: &Live<'_>) -> BTreeMap<Option<String>, Vec<Re
         out.entry(None).or_default().extend(noted);
     }
     for objects in out.values_mut() {
-        objects.retain(|o| o.kind != lifecycle::RECORD_KIND);
+        objects.retain(|o| !lifecycle::is_record_kind(o.resource_id().group_kind()));
+        *objects = std::mem::take(objects)
+            .into_iter()
+            .map(|o| live.with_noted_needs(o))
+            .collect();
     }
     out
 }
 
-/// Return the applied hash of each object of `objects` whose live object
-/// carries the build hash the revision gives it and an applied-hash note.
-fn applied_of(objects: &[RevisionObject], live: &Live<'_>) -> BTreeMap<String, String> {
-    objects
-        .iter()
-        .filter_map(|o| {
-            let obj = live.by_id.get(&o.resource_id())?;
-            let annotations = obj.metadata.annotations.as_ref()?;
-            (keys::get_meta(annotations, keys::IDENTITY_HASH) == Some(o.hash.as_str()))
-                .then(|| keys::get_meta(annotations, keys::APPLIED_HASH))
-                .flatten()
-                .map(|applied| (o.hash.clone(), applied.to_string()))
-        })
-        .collect()
+/// Return the `kix.run/applied-hash` note of the live object of `object`
+/// when the deploy of the record whose hash is `record` wrote it: the
+/// object carries the build hash the revision gives it, and its
+/// `kix.run/activations` note lists the record. Another Kix cluster that
+/// builds the same file stamps the same build hash, so the build hash alone
+/// does not say which Kix cluster wrote the object.
+///
+/// A revision holds an applied hash only for an object a deploy of its Kix
+/// cluster wrote, and a plan reads it so ([`crate::plan::decide`]).
+fn noted_applied(object: &RevisionObject, record: &str, live: &Live<'_>) -> Option<String> {
+    let obj = live.by_id.get(&object.resource_id())?;
+    let annotations = obj.metadata.annotations.as_ref()?;
+    (keys::get_meta(annotations, keys::IDENTITY_HASH) == Some(object.hash.as_str())
+        && notes(obj).any(|h| h == record))
+    .then(|| keys::get_meta(annotations, keys::APPLIED_HASH))
+    .flatten()
+    .map(str::to_string)
 }
 
-fn with_applied(spec: RevisionSpec, live: &Live<'_>) -> Revision {
-    let mut revision = Revision::new(spec);
-    revision.applied = applied_of(&revision.spec.objects, live);
-    revision
+/// Where a conversion reads the applied hash an older Kix recorded for an
+/// object.
+enum OldApplied<'a> {
+    /// The `kix.run/applied-hash` notes on the live objects, for the record
+    /// whose hash is `record`.
+    Notes { live: &'a Live<'a>, record: &'a str },
+    /// The `status.applied` of the record's format 1 revisions.
+    Revisions(&'a [&'a Revision]),
+}
+
+impl OldApplied<'_> {
+    fn of(&self, object: &RevisionObject) -> Option<String> {
+        match self {
+            OldApplied::Notes { live, record } => noted_applied(object, record, live),
+            OldApplied::Revisions(revisions) => revisions
+                .iter()
+                .filter(|r| {
+                    r.spec
+                        .objects
+                        .iter()
+                        .any(|x| x.applied_key() == object.applied_key())
+                })
+                .find_map(|r| r.applied.get(&object.hash).cloned()),
+        }
+    }
+}
+
+/// How a conversion carries an older Kix's entries into revisions of this
+/// Kix's format.
+struct Carry<'a> {
+    live: &'a Live<'a>,
+    build: &'a BuildHashes,
+    /// The field manager that judges the live objects as the migration
+    /// write leaves them: the cluster's own, counting the entry under `kix`
+    /// an older Kix applied under.
+    manager: FieldManager,
+}
+
+impl Carry<'_> {
+    /// Return the revision of `spec`'s slot for `objects`, each with the
+    /// applied hash an older Kix recorded for it in `old`, carried as the
+    /// module docs say.
+    fn revision(
+        &self,
+        cluster: &str,
+        slot: Slot,
+        objects: Vec<RevisionObject>,
+        old: impl Fn(&RevisionObject) -> Option<String>,
+    ) -> Revision {
+        let mut applied = BTreeMap::new();
+        let objects: Vec<RevisionObject> = objects
+            .into_iter()
+            .map(|object| {
+                let carried = old(&object).map(|a| self.applied(&object, a));
+                let rid = object.resource_id();
+                let object = match self.build.object_hash_for(&rid, &object.hash) {
+                    Some(hash) => RevisionObject {
+                        hash: hash.to_string(),
+                        ..object
+                    },
+                    None => object,
+                };
+                if let Some(carried) = carried {
+                    applied.insert(object.hash.clone(), carried);
+                }
+                object
+            })
+            .collect();
+        let mut revision = Revision::new(RevisionSpec::new(cluster, slot, objects));
+        revision.applied.extend(
+            applied
+                .into_iter()
+                .filter(|(h, _)| revision.spec.objects.iter().any(|o| &o.hash == h)),
+        );
+        revision
+    }
+
+    /// Return the applied hash to store for `object`, whose older Kix's
+    /// applied hash is `old`: this Kix's applied hash of the live object
+    /// when the live object carries the build hash the revision gives it and
+    /// still matches `old`, and `old` otherwise.
+    fn applied(&self, object: &RevisionObject, old: String) -> String {
+        let Some(obj) = self.live.by_id.get(&object.resource_id()) else {
+            return old;
+        };
+        if build_hash(obj) != Some(object.hash.as_str())
+            || fieldsv1::older_kix_applied_hash(obj, &self.manager).as_deref() != Some(old.as_str())
+        {
+            return old;
+        }
+        fieldsv1::applied_content_hash(obj, &self.manager).unwrap_or(old)
+    }
 }
 
 /// Return what a run that takes the lock writes to give the records of Kix
 /// cluster `cluster` revisions: `current` is the record [`current_of`]
 /// returns, `own` the cluster's records, `listed` its revisions, `live`
-/// every live object that carries Kix's label, and `forbidden` the kinds
-/// the listing could not read. Refuse when a revision would pass the size
+/// every live object that carries Kix's label, `forbidden` the kinds the
+/// listing could not read, and `build` the hashes of the build the run
+/// deploys. Refuse when a revision would pass the size
 /// the API server stores, and when a record needs the listing to say what
 /// it names and the listing missed a kind. A conversion written from a
 /// partial listing would forget those objects for good.
+#[allow(clippy::too_many_arguments)]
 pub fn plan(
     cluster: &str,
     current: Option<&Record>,
@@ -302,17 +508,30 @@ pub fn plan(
     listed: &[Revision],
     live: &[DynamicObject],
     forbidden: &[String],
+    build: &BuildHashes,
 ) -> Result<Conversion, Refusal> {
     let live = Live::of(live);
+    let carry = Carry {
+        live: &live,
+        build,
+        manager: FieldManager::unmigrated(cluster),
+    };
     let mut out = Conversion::default();
-    for record in targets(current, own) {
+    for record in targets(current, own, listed) {
         let is_current = current.is_some_and(|c| c.name == record.name);
+        let format_one = match &record.revisions {
+            Some(Ok(map)) => format_one_map(map, listed),
+            _ => None,
+        };
         let reads_kept_notes = is_current
             && record
                 .orphans_kept_from
                 .iter()
                 .any(|source| kept_map(own, &source.identity_hash).is_none());
-        if !forbidden.is_empty() && (needs_listing(record) || reads_kept_notes) {
+        if !forbidden.is_empty()
+            && format_one.is_none()
+            && (needs_listing(record) || reads_kept_notes)
+        {
             let mut kinds = forbidden.to_vec();
             kinds.sort();
             kinds.dedup();
@@ -321,7 +540,20 @@ pub fn plan(
                 kinds,
             });
         }
-        let groups = named_by(record, &live);
+        let (groups, source) = match &format_one {
+            Some(revisions) => (
+                named_by_revisions(record, revisions, &live),
+                OldApplied::Revisions(revisions),
+            ),
+            None => (
+                named_by(record, &live),
+                OldApplied::Notes {
+                    live: &live,
+                    record: record.identity_hash.as_deref().unwrap_or_default(),
+                },
+            ),
+        };
+        let old = |o: &RevisionObject| source.of(o);
         let instances: BTreeMap<String, Revision> = groups
             .iter()
             .filter_map(|(key, objects)| {
@@ -330,18 +562,18 @@ pub fn plan(
                 let slot = Slot::Instance {
                     namespace: namespace.to_string(),
                     name: name.to_string(),
+                    lifecycle: live.lifecycle_of(objects),
                 };
-                let spec = RevisionSpec::new(cluster, slot, objects.clone());
-                Some((key.clone(), with_applied(spec, &live)))
+                Some((
+                    key.clone(),
+                    carry.revision(cluster, slot, objects.clone(), old),
+                ))
             })
             .collect();
         let cluster_objects = groups.get(&None).cloned().unwrap_or_default();
         let set = RevisionSet {
             instances,
-            cluster_level: with_applied(
-                RevisionSpec::new(cluster, Slot::ClusterLevel, cluster_objects),
-                &live,
-            ),
+            cluster_level: carry.revision(cluster, Slot::ClusterLevel, cluster_objects, old),
         };
         if record.package_index.is_none() && set.cluster_level.stored_bytes() > MAX_BYTES {
             return Err(Refusal::TooLarge(Box::new(TooLarge {
@@ -358,7 +590,7 @@ pub fn plan(
         set.check_size()
             .map_err(|e| Refusal::TooLarge(Box::new(e)))?;
         let kept = is_current
-            .then(|| kept_of(cluster, record, own, listed, &set, &live))
+            .then(|| kept_of(cluster, record, own, listed, &set, &carry))
             .flatten();
         if let Some(kept) = &kept
             && kept.stored_bytes() > MAX_BYTES
@@ -398,13 +630,28 @@ fn kept_of(
     own: &[Record],
     listed: &[Revision],
     set: &RevisionSet,
-    live: &Live<'_>,
+    carry: &Carry<'_>,
 ) -> Option<Revision> {
+    let live = carry.live;
     let named: std::collections::HashSet<ResourceId> = set
         .all()
         .flat_map(|r| r.spec.objects.iter().map(RevisionObject::resource_id))
         .collect();
     let mut objects: Vec<RevisionObject> = Vec::new();
+    // A record whose map names format 1 revisions keeps its own list.
+    if let Some(Ok(map)) = &record.revisions
+        && let Some(kept) = map.kept_orphans.as_ref()
+        && let Some(revision) = listed.iter().find(|r| &r.name == kept)
+    {
+        objects.extend(
+            revision
+                .spec
+                .objects
+                .iter()
+                .cloned()
+                .map(|o| live.with_noted_needs(o)),
+        );
+    }
     for source in &record.orphans_kept_from {
         match kept_map(own, &source.identity_hash) {
             Some(map) => {
@@ -422,12 +669,48 @@ fn kept_of(
             // object, so only an object whose note names the kept build is
             // one. An object of the same name made since by something else
             // carries no such note.
-            None => objects.extend(live.noting(&source.identity_hash)),
+            None => objects.extend(
+                live.noting(&source.identity_hash)
+                    .into_iter()
+                    .map(|o| live.with_noted_needs(o)),
+            ),
         }
     }
     objects.retain(|o| !named.contains(&o.resource_id()));
-    (!objects.is_empty())
-        .then(|| Revision::new(RevisionSpec::new(cluster, Slot::KeptOrphans, objects)))
+    (!objects.is_empty()).then(|| carry.revision(cluster, Slot::KeptOrphans, objects, |_| None))
+}
+
+/// Return what a record whose map names the format 1 `revisions` names, by
+/// instance key, with the cluster level under `None`. Its kept orphans are
+/// read apart ([`kept_of`]). Each object takes its edges from the note on
+/// its live object, because a format 1 revision does not record them.
+fn named_by_revisions(
+    record: &Record,
+    revisions: &[&Revision],
+    live: &Live<'_>,
+) -> BTreeMap<Option<String>, Vec<RevisionObject>> {
+    let mut out: BTreeMap<Option<String>, Vec<RevisionObject>> = BTreeMap::new();
+    let Some(Ok(map)) = &record.revisions else {
+        return out;
+    };
+    let find = |name: &str| revisions.iter().find(|r| r.name == name);
+    let objects = |r: &Revision| {
+        r.spec
+            .objects
+            .iter()
+            .cloned()
+            .map(|o| live.with_noted_needs(o))
+            .collect::<Vec<_>>()
+    };
+    for (key, name) in &map.instances {
+        if let Some(revision) = find(name) {
+            out.insert(Some(key.clone()), objects(revision));
+        }
+    }
+    if let Some(revision) = find(&map.cluster_level) {
+        out.insert(None, objects(revision));
+    }
+    out
 }
 
 /// Return the readable revision map of the record of `own` whose build is
@@ -463,14 +746,16 @@ pub async fn write(
     Ok(())
 }
 
-/// Read what the conversion of Kix cluster `cluster` needs and write it.
-/// Return whether it converted a record. List the live objects, with one
-/// request per kind of `discovery`, only when a record needs converting.
+/// Read what the conversion of Kix cluster `cluster` needs and write it,
+/// for a run that deploys the build whose hashes are `build`. Return whether
+/// it converted a record. List the live objects, with one request per kind
+/// of `discovery`, only when a record needs converting.
 pub async fn run(
     client: &Client,
     records: &Records,
     discovery: &[(ApiResource, Scope)],
     cluster: &str,
+    build: &BuildHashes,
 ) -> Result<bool, ConvertError> {
     let own: Vec<Record> = records.of_cluster(cluster).await?;
     let head = crate::cluster::head::read(client, cluster)
@@ -482,10 +767,10 @@ pub async fn run(
         .and_then(|h| h.status.as_ref())
         .and_then(|s| s.current.clone());
     let current = current_of(head_current.as_deref(), &own);
-    if targets(current, &own).is_empty() {
+    let listed = store_listed(client, cluster).await?;
+    if targets(current, &own, &listed).is_empty() {
         return Ok(false);
     }
-    let listed = store_listed(client, cluster).await?;
     let live = crate::cluster::inventory::list_managed(client, discovery)
         .await
         .map_err(|e| ConvertError::Listing(e.to_string()))?;
@@ -496,6 +781,7 @@ pub async fn run(
         &listed,
         &live.managed,
         &live.forbidden,
+        build,
     )
     .map_err(|e| ConvertError::Refused(Box::new(e)))?;
     write(client, records, &conversion).await?;

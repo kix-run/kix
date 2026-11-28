@@ -111,7 +111,7 @@ fn the_targets_are_the_records_a_run_needs_without_a_map() {
         record("old", "Superseded", None, &[]),
     ]);
     let current = current_of(None, &own);
-    let found: Vec<&str> = targets(current, &own)
+    let found: Vec<&str> = targets(current, &own, &[])
         .iter()
         .map(|r| r.name.as_str())
         .collect();
@@ -122,7 +122,7 @@ fn the_targets_are_the_records_a_run_needs_without_a_map() {
         cluster_level: "x".into(),
         kept_orphans: None,
     }));
-    let found: Vec<&str> = targets(current_of(None, &mapped), &mapped)
+    let found: Vec<&str> = targets(current_of(None, &mapped), &mapped, &[])
         .iter()
         .map(|r| r.name.as_str())
         .collect();
@@ -157,6 +157,7 @@ fn a_record_is_converted_from_its_index_and_the_notes() {
         &[],
         &objects(&live_values),
         &[],
+        &Default::default(),
     )
     .unwrap();
     let converted = &conversion.records()[0];
@@ -186,6 +187,58 @@ fn a_record_is_converted_from_its_index_and_the_notes() {
     assert_eq!(names(kept), ["kept"]);
 }
 
+/// A revision of a converted record holds an applied hash only for an
+/// object the record's deploy wrote, which its note lists. Another Kix
+/// cluster that builds the same file stamps the same build hash, so an
+/// object only that cluster wrote, whose note does not list the record,
+/// gets none.
+#[test]
+fn an_applied_hash_is_carried_only_for_an_object_the_record_wrote() {
+    let own_values = [
+        record("cur", PHASE_ACTIVE, None, &[]),
+        record(
+            "fail",
+            PHASE_FAILED,
+            Some(index(
+                &[("mine", &h("mine")), ("theirs", &h("theirs"))],
+                true,
+            )),
+            &[],
+        ),
+    ];
+    let own = parsed(&own_values);
+    let live_values = [
+        live("mine", &h("mine"), &[&h("fail")]),
+        live("theirs", &h("theirs"), &[&h("retired")]),
+    ];
+    let conversion = plan(
+        CLUSTER,
+        current_of(None, &own),
+        &own,
+        &[],
+        &objects(&live_values),
+        &[],
+        &Default::default(),
+    )
+    .unwrap();
+    let converted = conversion
+        .records()
+        .iter()
+        .find(|c| c.record == "fail")
+        .unwrap();
+    let instance = converted
+        .revisions
+        .iter()
+        .find(|r| r.name == converted.map.instances["app/web"])
+        .unwrap();
+    assert_eq!(names(instance), ["mine", "theirs", "web-instance"]);
+    assert_eq!(
+        instance.applied.get(&h("mine")).map(String::as_str),
+        Some("applied-mine")
+    );
+    assert!(!instance.applied.contains_key(&h("theirs")));
+}
+
 /// An index without names, as releases before 0.10 wrote, is read through
 /// the live objects that carry its hashes.
 #[test]
@@ -204,6 +257,7 @@ fn an_index_without_names_is_read_through_the_live_hashes() {
         &[],
         &objects(&live_values),
         &[],
+        &Default::default(),
     )
     .unwrap();
     let converted = &conversion.records()[0];
@@ -242,6 +296,7 @@ fn a_kept_build_with_revisions_is_read_from_them() {
         std::slice::from_ref(&earlier),
         &[],
         &[],
+        &Default::default(),
     )
     .unwrap();
     let converted = &conversion.records()[0];
@@ -259,7 +314,9 @@ async fn run_on(api: &FakeApi) -> bool {
         .await
         .unwrap();
     let records = crate::cluster::activation::Records::open_installed(&client, &found).unwrap();
-    run(&client, &records, &found, CLUSTER).await.unwrap()
+    run(&client, &records, &found, CLUSTER, &BuildHashes::default())
+        .await
+        .unwrap()
 }
 
 /// The conversion names the revisions on each record and writes the
@@ -295,6 +352,7 @@ async fn the_conversion_is_safe_to_run_twice_and_to_stop() {
         &[],
         &objects(&values[2..]),
         &[],
+        &Default::default(),
     )
     .unwrap();
     let store = Revisions::new(&api.client());
@@ -354,7 +412,16 @@ fn a_listing_that_missed_a_kind_refuses_a_record_without_names() {
         ),
     ] {
         let own = parsed(&[own_values]);
-        let err = plan(CLUSTER, current_of(None, &own), &own, &[], &[], &forbidden).unwrap_err();
+        let err = plan(
+            CLUSTER,
+            current_of(None, &own),
+            &own,
+            &[],
+            &[],
+            &forbidden,
+            &BuildHashes::default(),
+        )
+        .unwrap_err();
         assert_eq!(
             err,
             Refusal::NotListed {
@@ -376,7 +443,16 @@ fn a_listing_that_missed_a_kind_refuses_a_record_without_names() {
         Some(index(&[("web", &h("web"))], true)),
         &[],
     )]);
-    let conversion = plan(CLUSTER, current_of(None, &own), &own, &[], &[], &forbidden).unwrap();
+    let conversion = plan(
+        CLUSTER,
+        current_of(None, &own),
+        &own,
+        &[],
+        &[],
+        &forbidden,
+        &BuildHashes::default(),
+    )
+    .unwrap();
     assert_eq!(conversion.records().len(), 1);
 }
 
@@ -406,6 +482,7 @@ fn a_kept_orphan_is_found_by_its_note() {
         &[],
         &objects(&live_values),
         &[],
+        &Default::default(),
     )
     .unwrap();
     let converted = &conversion.records()[0];
@@ -434,6 +511,7 @@ fn a_record_without_an_index_too_large_for_one_revision_is_refused() {
         &[],
         &objects(&live_values),
         &[],
+        &Default::default(),
     )
     .unwrap_err();
     let text = err.to_string();
@@ -443,4 +521,57 @@ fn a_record_without_an_index_too_large_for_one_revision_is_refused() {
             && text.contains("Kix 0.9"),
         "{text}"
     );
+}
+
+/// An older Kix recorded an object's dependencies only in its
+/// `kix.run/depends-on` note, and an instance's lifecycle only in its
+/// objects' `kix.run/lifecycle` note. The conversion writes both into the
+/// revisions, each hash named by the live object that carries it.
+#[test]
+fn the_conversion_records_the_noted_edges_and_lifecycle() {
+    let own_values = [record(
+        "cur",
+        PHASE_ACTIVE,
+        Some(index(&[("web", &h("web")), ("db", &h("db"))], true)),
+        &[],
+    )];
+    let own = parsed(&own_values);
+    let mut web = live("web", &h("web"), &[&h("cur")]);
+    web["metadata"]["annotations"][keys::DEPENDS_ON] =
+        json!(format!("requires:{},{}", h("db"), h("nothing")));
+    web["metadata"]["annotations"][keys::LIFECYCLE] = json!("stateful");
+    let live_values = [web, live("db", &h("db"), &[&h("cur")])];
+    let conversion = plan(
+        CLUSTER,
+        current_of(None, &own),
+        &own,
+        &[],
+        &objects(&live_values),
+        &[],
+        &Default::default(),
+    )
+    .unwrap();
+    let converted = &conversion.records()[0];
+    let instance = converted
+        .revisions
+        .iter()
+        .find(|r| r.name == converted.map.instances["app/web"])
+        .unwrap();
+    assert!(instance.spec.records_edges());
+    assert!(matches!(
+        &instance.spec.slot,
+        Slot::Instance { lifecycle: Some(l), .. } if l == "stateful"
+    ));
+    let web = instance
+        .spec
+        .objects
+        .iter()
+        .find(|o| o.name == "web")
+        .unwrap();
+    let needs: Vec<(&str, Option<&str>)> = web
+        .needs
+        .iter()
+        .map(|n| (n.name.as_str(), n.role.as_deref()))
+        .collect();
+    assert_eq!(needs, [("db", Some("requires"))]);
 }

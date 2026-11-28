@@ -14,33 +14,6 @@ use kix::manifest::types::{ResourceId, to_manifest_value};
 
 use super::plan::{GarbageEntry, RecordRetirement};
 
-/// Print resources that carry the Kix label but no identity hash, and explain
-/// why GC leaves them alone by default.
-pub(super) fn print_unstamped(unstamped: &[GarbageEntry]) {
-    println!();
-    println!(
-        "{} {} object(s) carry Kix's label but no Kix build annotation:",
-        output::bold("No Kix build annotation:"),
-        unstamped.len(),
-    );
-    for entry in unstamped {
-        println!(
-            "    {} {}/{}/{}",
-            output::dim("?"),
-            entry.id.namespace,
-            entry.id.kind,
-            entry.id.name,
-        );
-    }
-    println!(
-        "  {}",
-        output::dim(
-            "Kept on the cluster because Kix cannot match them to a build. \
-             Review these objects, then pass `--include unstamped` to delete them."
-        ),
-    );
-}
-
 /// Print the objects that a pending deploy record of `cluster` names, which
 /// gc keeps, grouped by those records.
 pub(super) fn print_held(held: &[HeldObject], cluster: &str) {
@@ -138,8 +111,8 @@ pub(super) fn print_copies(objects: &[kube::api::DynamicObject], included: bool,
     println!("  {}", output::dim(&note));
 }
 
-/// Print the grouped per-resource garbage plan with reasons and owning
-/// activations. `compared` names the build the live objects were compared
+/// Print the grouped per-resource garbage plan with reasons and packages.
+/// `compared` names the build the live objects were compared
 /// with. Not every object was ever in one of this cluster's builds, so the
 /// heading does not say they left one.
 pub(super) fn print_garbage_plan(garbage: &[GarbageEntry], compared: &str) {
@@ -192,18 +165,6 @@ pub(super) fn print_garbage_plan(garbage: &[GarbageEntry], compared: &str) {
                         _ => format!("package: {pkg}"),
                     };
                     println!("        {}", output::dim(&pkg_display));
-                }
-                if let Some(acts) = &entry.activations {
-                    let acts_short: Vec<String> = acts
-                        .split(',')
-                        .map(|a| a.trim())
-                        .filter(|a| !a.is_empty())
-                        .map(|a| a[..12.min(a.len())].to_string())
-                        .collect();
-                    if !acts_short.is_empty() {
-                        let line = format!("deployments: {}", acts_short.join(", "));
-                        println!("        {}", output::dim(&line));
-                    }
                 }
             }
         }

@@ -1,7 +1,7 @@
 //! `status.revisions` of an Activation record: which revisions the record's
 //! deploy is made of.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -10,9 +10,17 @@ use super::spec::{Revision, RevisionSet, Slot};
 use crate::eval::package_index::{self, IndexedPackage, ObjectName, RecordPackageIndex};
 use crate::manifest::keys;
 use crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND;
+use crate::manifest::types::ResourceId;
 
-/// The format of `status.revisions` this release reads and writes.
-pub const FORMAT: u64 = 1;
+/// The format of `status.revisions` this release writes. A format 2 map
+/// may name format 2 revisions ([`super::spec::FORMAT`]), which a release
+/// that reads only format 1 cannot read correctly, so that release refuses
+/// the map and says a newer Kix wrote it.
+pub const FORMAT: u64 = 2;
+
+/// The formats of `status.revisions` this release reads. Format 1 has the
+/// same fields as format 2.
+const READS: [u64; 2] = [1, FORMAT];
 
 /// A `status.revisions` this release cannot read: it does not parse, or it
 /// is in a format a later release wrote. The record may name revisions this
@@ -64,11 +72,10 @@ impl RevisionMap {
     /// a format this release does not read.
     pub fn read(value: &Value) -> Result<RevisionMap, UnreadableMap> {
         let format = value.get("format").and_then(Value::as_u64);
-        if format.is_some_and(|f| f != FORMAT) {
+        if let Some(format) = format.filter(|f| !READS.contains(f)) {
             return Err(UnreadableMap {
                 reason: format!(
-                    "uses format {} (this version of Kix supports format {FORMAT})",
-                    format.unwrap_or_default()
+                    "uses format {format} (this version of Kix reads formats 1 and {FORMAT})"
                 ),
             });
         }
@@ -105,22 +112,40 @@ impl RevisionMap {
     }
 
     /// Return the package index of the build the map names, read from the
-    /// revisions `find` returns: which instance holds each object, and each
-    /// object's group, kind, namespace, and name. A revision `find` does not
-    /// return is left out. The kept orphans are not part of the build.
+    /// revisions `find` returns: which instance holds each object and each
+    /// import marker, and each one's group, kind, namespace, and name. A
+    /// revision `find` does not return is left out. The kept orphans are not
+    /// part of the build.
     pub fn package_index<'a>(
         &self,
         find: impl Fn(&str) -> Option<&'a Revision>,
     ) -> RecordPackageIndex {
         let mut names = BTreeMap::new();
         let mut groups = BTreeMap::new();
-        let mut add_names = |revision: &Revision| {
-            for object in &revision.spec.objects {
-                let rid = object.resource_id();
+        let mut imports = BTreeSet::new();
+        // Every object and marker of `revision`: its hash and its name.
+        let entries = |revision: &'a Revision| {
+            let objects = revision
+                .spec
+                .objects
+                .iter()
+                .map(|o| (o.hash.clone(), o.resource_id(), false));
+            let markers = revision
+                .spec
+                .imports
+                .iter()
+                .map(|i| (i.hash.clone(), i.resource_id(), true));
+            objects.chain(markers)
+        };
+        let mut add_names = |revision: &'a Revision| {
+            for (hash, rid, marker) in entries(revision) {
                 if !rid.group.is_empty() {
-                    groups.insert(object.hash.clone(), rid.group.clone());
+                    groups.insert(hash.clone(), rid.group.clone());
                 }
-                names.insert(object.hash.clone(), ObjectName::of(&rid));
+                if marker {
+                    imports.insert(hash.clone());
+                }
+                names.insert(hash, ObjectName::of(&rid));
             }
         };
         let mut packages = BTreeMap::new();
@@ -129,40 +154,35 @@ impl RevisionMap {
                 continue;
             };
             add_names(revision);
-            let is_instance = |o: &&super::RevisionObject| match &revision.spec.slot {
-                Slot::Instance { namespace, name } => {
-                    o.kind == PACKAGE_INSTANCE_KIND
-                        && o.group == keys::GROUP
-                        && o.namespace.as_deref() == Some(namespace.as_str())
-                        && &o.name == name
+            let is_instance = |rid: &ResourceId| match &revision.spec.slot {
+                Slot::Instance {
+                    namespace, name, ..
+                } => {
+                    rid.kind == PACKAGE_INSTANCE_KIND
+                        && rid.group == keys::GROUP
+                        && &rid.namespace == namespace
+                        && &rid.name == name
                 }
                 Slot::ClusterLevel | Slot::KeptOrphans => false,
             };
-            let instance = revision.spec.objects.iter().find(is_instance);
-            let resources = revision
-                .spec
-                .objects
-                .iter()
-                .filter(|o| Some(*o) != instance)
-                .map(|o| o.hash.clone())
-                .collect();
+            let (instance, resources): (Vec<_>, Vec<_>) =
+                entries(revision).partition(|(_, rid, _)| is_instance(rid));
             packages.insert(
                 key.clone(),
                 IndexedPackage {
-                    instance: instance.map(|o| o.hash.clone()).unwrap_or_default(),
-                    resources,
+                    instance: instance
+                        .into_iter()
+                        .next()
+                        .map(|(hash, _, _)| hash)
+                        .unwrap_or_default(),
+                    resources: resources.into_iter().map(|(hash, _, _)| hash).collect(),
                 },
             );
         }
         let mut cluster_level = Vec::new();
         if let Some(revision) = find(&self.cluster_level) {
             add_names(revision);
-            cluster_level = revision
-                .spec
-                .objects
-                .iter()
-                .map(|o| o.hash.clone())
-                .collect();
+            cluster_level = entries(revision).map(|(hash, _, _)| hash).collect();
             cluster_level.sort();
         }
         RecordPackageIndex {
@@ -171,6 +191,7 @@ impl RevisionMap {
             cluster_level,
             names,
             groups: Some(groups),
+            imports,
         }
     }
 }
