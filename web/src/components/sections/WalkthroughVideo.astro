@@ -1,12 +1,14 @@
 ---
-import { Play, X } from '@lucide/astro';
+import { Play, Star, X } from '@lucide/astro';
 import Section from '../Section.astro';
 import Heading from '../Heading.astro';
+import { GITHUB_URL } from '@/lib/links';
 
-const VIDEOS = {
-  explainer: {
+const VIDEO_TABS = [
+  {
+    key: 'explainer',
     slug: 'kix-explainer',
-    label: 'Technical walkthrough',
+    label: 'How Kix works',
     shortLabel: 'Walkthrough',
     duration: '1:42',
     mp4: 'https://media.kix.run/videos/kix-explainer/v1/kix-explainer.mp4',
@@ -14,17 +16,54 @@ const VIDEOS = {
     captions: 'https://media.kix.run/videos/kix-explainer/v1/captions.en.vtt',
     desc: 'Compile from one definition, catch cross-resource bugs offline, preview live drift, and deploy in dependency order.',
   },
-  overview: {
-    slug: 'kix-overview',
-    label: 'Architecture overview',
-    shortLabel: 'Overview',
-    duration: '0:57',
-    mp4: 'https://media.kix.run/videos/kix-overview/v1/kix-overview.mp4',
-    poster: 'https://media.kix.run/videos/kix-overview/v1/poster.webp',
-    captions: 'https://media.kix.run/videos/kix-overview/v1/captions.en.vtt',
-    desc: 'How Kix replaces separate configuration files with a single cluster blueprint, in plain language with no code.',
+  {
+    key: 'fiveBugs',
+    slug: 'kix-five-bugs',
+    label: '5 bugs Kix catches',
+    shortLabel: '5 bugs',
+    duration: '2:06',
+    mp4: 'https://media.kix.run/videos/kix-five-bugs/v2/kix-five-bugs.mp4',
+    poster: 'https://media.kix.run/videos/kix-five-bugs/v2/poster.webp',
+    captions: 'https://media.kix.run/videos/kix-five-bugs/v2/captions.en.vtt',
+    desc: 'Five everyday bugs that pass kubectl apply, and the compiler mechanisms Kix uses to prevent or catch each one offline.',
   },
-} as const;
+  {
+    key: 'escapeHatches',
+    slug: 'kix-escape-hatches',
+    label: 'Helm & escape hatches',
+    shortLabel: 'Escape hatches',
+    duration: '1:10',
+    mp4: 'https://media.kix.run/videos/kix-escape-hatches/v1/kix-escape-hatches.mp4',
+    poster: 'https://media.kix.run/videos/kix-escape-hatches/v1/poster.webp',
+    captions: 'https://media.kix.run/videos/kix-escape-hatches/v1/captions.en.vtt',
+    desc: 'Wrap third-party Helm charts, import cloud databases with kix.mkImport, override raw PodSpec fields, and export plain YAML for Flux or Argo CD.',
+  },
+  {
+    key: 'day2',
+    slug: 'kix-day2-workflow',
+    label: 'Drift & rollback',
+    shortLabel: 'Drift & rollback',
+    duration: '1:10',
+    mp4: 'https://media.kix.run/videos/kix-day2-workflow/v3/kix-day2-workflow.mp4',
+    poster: 'https://media.kix.run/videos/kix-day2-workflow/v3/poster.webp',
+    captions: 'https://media.kix.run/videos/kix-day2-workflow/v3/captions.en.vtt',
+    desc: 'Share workloads with HPA via Server-Side Apply field ownership, detect manual kubectl drift, record deploy receipts, and roll back from local store.',
+  },
+  {
+    key: 'agents',
+    slug: 'kix-coding-agents',
+    label: 'Coding agents',
+    shortLabel: 'Agents',
+    duration: '0:56',
+    mp4: 'https://media.kix.run/videos/kix-coding-agents/v2/kix-coding-agents.mp4',
+    poster: 'https://media.kix.run/videos/kix-coding-agents/v2/poster.webp',
+    captions: 'https://media.kix.run/videos/kix-coding-agents/v2/captions.en.vtt',
+    desc: 'Give AI coding agents a fast local compiler loop with zero cluster credentials, and review what changed by package on pull requests.',
+  },
+] as const;
+
+const VIDEOS = Object.fromEntries(VIDEO_TABS.map((t) => [t.key, t]));
+const DEFAULT_TAB = VIDEO_TABS[0];
 ---
 
 <Section id="walkthrough" tone="paper-2" rule class="md:hidden" labelledby="walkthrough-title">
@@ -32,43 +71,36 @@ const VIDEOS = {
     <div class="flex flex-col items-center gap-2.5">
       <Heading id="walkthrough-title">See how Kix works</Heading>
       <p id="mobile-video-desc" class="max-w-[540px] text-[15.5px] leading-[1.55] text-ink-2">
-        {VIDEOS.explainer.desc}
+        {DEFAULT_TAB.desc}
       </p>
     </div>
 
     <div
       role="tablist"
       aria-label="Choose walkthrough video"
-      class="inline-flex rounded-lg border border-line bg-paper p-1"
+      class="flex max-w-full flex-wrap justify-center gap-1 rounded-lg border border-line bg-paper p-1"
     >
-      <button
-        type="button"
-        role="tab"
-        aria-selected="true"
-        data-video-tab="explainer"
-        data-video-scope="mobile"
-        data-event="Switch Video Tab"
-        data-event-place="mobile-section"
-        data-event-video="kix-explainer"
-        class="video-pill is-active inline-flex cursor-pointer items-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] font-semibold transition-colors"
-      >
-        <span>{VIDEOS.explainer.shortLabel}</span>
-        <span class="font-mono text-[11.5px] opacity-75">{VIDEOS.explainer.duration}</span>
-      </button>
-      <button
-        type="button"
-        role="tab"
-        aria-selected="false"
-        data-video-tab="overview"
-        data-video-scope="mobile"
-        data-event="Switch Video Tab"
-        data-event-place="mobile-section"
-        data-event-video="kix-overview"
-        class="video-pill inline-flex cursor-pointer items-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] font-semibold transition-colors"
-      >
-        <span>{VIDEOS.overview.shortLabel}</span>
-        <span class="font-mono text-[11.5px] opacity-75">{VIDEOS.overview.duration}</span>
-      </button>
+      {
+        VIDEO_TABS.map((tab, idx) => (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={idx === 0 ? 'true' : 'false'}
+            data-video-tab={tab.key}
+            data-video-scope="mobile"
+            data-event="Video Tab"
+            data-event-tab={tab.slug}
+            data-event-place="mobile"
+            class:list={[
+              'video-pill inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12.5px] font-semibold whitespace-nowrap transition-colors',
+              { 'is-active': idx === 0 },
+            ]}
+          >
+            <span>{tab.shortLabel}</span>
+            <span class="font-mono text-[11px] opacity-75">{tab.duration}</span>
+          </button>
+        ))
+      }
     </div>
 
     <div class="relative aspect-video w-full overflow-hidden rounded-xl border border-line bg-night shadow-[0_18px_40px_rgba(11,19,43,0.14)]">
@@ -79,13 +111,13 @@ const VIDEOS = {
         crossorigin="anonymous"
         width="1920"
         height="1080"
-        poster={VIDEOS.explainer.poster}
+        poster={DEFAULT_TAB.poster}
       >
-        <source id="mobile-video-source" src={VIDEOS.explainer.mp4} type="video/mp4" />
+        <source id="mobile-video-source" src={DEFAULT_TAB.mp4} type="video/mp4" />
         <track
           id="mobile-video-track"
           kind="captions"
-          src={VIDEOS.explainer.captions}
+          src={DEFAULT_TAB.captions}
           srclang="en"
           label="English"
         />
@@ -99,7 +131,7 @@ const VIDEOS = {
       >
         <span class="inline-flex items-center gap-2.5 rounded-full bg-accent-brand px-5 py-3 text-[14px] font-semibold text-white shadow-[0_12px_30px_rgba(29,101,236,0.45)] transition-transform group-hover:scale-105">
           <Play size={16} aria-hidden="true" class="translate-x-[0.5px] fill-current" />
-          <span id="mobile-overlay-label">Play walkthrough ({VIDEOS.explainer.duration})</span>
+          <span id="mobile-overlay-label">Play {DEFAULT_TAB.shortLabel.toLowerCase()} ({DEFAULT_TAB.duration})</span>
         </span>
       </button>
     </div>
@@ -109,52 +141,45 @@ const VIDEOS = {
 <dialog
   id="walkthrough-modal"
   aria-label="Kix video walkthrough"
-  class="m-auto w-[min(94vw,1060px)] overflow-hidden rounded-2xl border border-night-line bg-night p-0 text-on-night shadow-[0_32px_80px_rgba(0,0,0,0.68)] backdrop:bg-black/75 backdrop:backdrop-blur-[3px]"
+  class="m-auto w-[min(94vw,1080px)] overflow-hidden rounded-2xl border border-night-line bg-night p-0 text-on-night shadow-[0_32px_80px_rgba(0,0,0,0.68)] backdrop:bg-black/75 backdrop:backdrop-blur-[3px]"
 >
   <div id="walkthrough-modal-surface" class="flex flex-col">
-    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-night-line bg-night-2 px-4 py-3 sm:px-5">
+    <div class="flex items-center justify-between gap-3 border-b border-night-line bg-night-2 px-4 py-3 sm:px-5">
       <div
         role="tablist"
         aria-label="Choose walkthrough video"
-        class="inline-flex rounded-lg border border-night-line bg-night p-1"
+        class="flex max-w-full overflow-x-auto rounded-lg border border-night-line bg-night p-1"
       >
-        <button
-          type="button"
-          role="tab"
-          aria-selected="true"
-          data-video-tab="explainer"
-          data-video-scope="modal"
-          data-event="Switch Video Tab"
-          data-event-place="modal"
-          data-event-video="kix-explainer"
-          class="modal-video-pill is-active inline-flex cursor-pointer items-center gap-2 rounded-md px-3.5 py-1.5 text-[13px] font-semibold transition-colors"
-        >
-          <span>{VIDEOS.explainer.label}</span>
-          <span class="font-mono text-[11.5px] opacity-80">{VIDEOS.explainer.duration}</span>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected="false"
-          data-video-tab="overview"
-          data-video-scope="modal"
-          data-event="Switch Video Tab"
-          data-event-place="modal"
-          data-event-video="kix-overview"
-          class="modal-video-pill inline-flex cursor-pointer items-center gap-2 rounded-md px-3.5 py-1.5 text-[13px] font-semibold transition-colors"
-        >
-          <span>{VIDEOS.overview.label}</span>
-          <span class="font-mono text-[11.5px] opacity-80">{VIDEOS.overview.duration}</span>
-        </button>
+        {
+          VIDEO_TABS.map((tab, idx) => (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={idx === 0 ? 'true' : 'false'}
+              data-video-tab={tab.key}
+              data-video-scope="modal"
+              data-event="Video Tab"
+              data-event-tab={tab.slug}
+              data-event-place="modal"
+              class:list={[
+                'modal-video-pill inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-3 py-1.5 text-[12.5px] font-semibold whitespace-nowrap transition-colors',
+                { 'is-active': idx === 0 },
+              ]}
+            >
+              <span>{tab.label}</span>
+              <span class="font-mono text-[11px] opacity-80">{tab.duration}</span>
+            </button>
+          ))
+        }
       </div>
 
       <button
         type="button"
         id="walkthrough-modal-close"
         aria-label="Close video"
-        class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-night-line bg-night px-2.5 py-1.5 text-[12.5px] font-medium text-on-night-2 transition-colors hover:border-t-blue hover:text-on-night"
+        class="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-night-line bg-night px-2.5 py-1.5 text-[12.5px] font-medium text-on-night-2 transition-colors hover:border-t-blue hover:text-on-night"
       >
-        <span class="hidden font-mono text-[11px] sm:inline">Esc</span>
+        <span class="hidden font-mono text-[11px] lg:inline">Esc</span>
         <X size={16} aria-hidden="true" />
       </button>
     </div>
@@ -168,13 +193,13 @@ const VIDEOS = {
         crossorigin="anonymous"
         width="1920"
         height="1080"
-        poster={VIDEOS.explainer.poster}
+        poster={DEFAULT_TAB.poster}
       >
-        <source id="modal-video-source" src={VIDEOS.explainer.mp4} type="video/mp4" />
+        <source id="modal-video-source" src={DEFAULT_TAB.mp4} type="video/mp4" />
         <track
           id="modal-video-track"
           kind="captions"
-          src={VIDEOS.explainer.captions}
+          src={DEFAULT_TAB.captions}
           srclang="en"
           label="English"
         />
@@ -188,13 +213,24 @@ const VIDEOS = {
       >
         <span class="inline-flex items-center gap-2.5 rounded-full bg-accent-brand px-6 py-3.5 text-[15px] font-semibold text-white shadow-[0_12px_30px_rgba(29,101,236,0.45)] transition-transform group-hover:scale-105">
           <Play size={18} aria-hidden="true" class="translate-x-[0.5px] fill-current" />
-          <span id="modal-overlay-label">Play walkthrough ({VIDEOS.explainer.duration})</span>
+          <span id="modal-overlay-label">Play {DEFAULT_TAB.shortLabel.toLowerCase()} ({DEFAULT_TAB.duration})</span>
         </span>
       </button>
     </div>
 
-    <div class="border-t border-night-line bg-night-2 px-5 py-3 text-[13.5px] text-on-night-2">
-      <p id="modal-video-desc">{VIDEOS.explainer.desc}</p>
+    <div class="flex flex-wrap items-center justify-between gap-3 border-t border-night-line bg-night-2 px-5 py-3 text-[13.5px] text-on-night-2">
+      <p id="modal-video-desc" class="min-w-0 flex-1">{DEFAULT_TAB.desc}</p>
+      <a
+        href={GITHUB_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        data-event="GitHub"
+        data-event-place="video-modal"
+        class="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-night-line bg-night px-3 py-1.5 text-[12.5px] font-semibold text-on-night transition-colors hover:border-t-yellow hover:text-t-yellow"
+      >
+        <Star size={13} aria-hidden="true" class="text-t-yellow" />
+        <span>Star on GitHub</span>
+      </a>
     </div>
   </div>
 </dialog>
@@ -221,6 +257,21 @@ const VIDEOS = {
     background: var(--accent-button);
     color: #ffffff;
   }
+
+  /* Keep vendor fullscreen rules separate so Firefox never drops the standard :fullscreen rule. */
+  #mobile-walkthrough-video:fullscreen {
+    width: 100vw;
+    height: 100vh;
+    background-color: #0c1117;
+    object-fit: contain;
+  }
+
+  #mobile-walkthrough-video:-webkit-full-screen {
+    width: 100vw;
+    height: 100vh;
+    background-color: #0c1117;
+    object-fit: contain;
+  }
 </style>
 
 <script define:vars={{ VIDEOS }}>
@@ -233,6 +284,7 @@ const VIDEOS = {
   const modalOverlayLabel = document.getElementById('modal-overlay-label');
   const modalDesc = document.getElementById('modal-video-desc');
 
+  const mobileSection = document.getElementById('walkthrough');
   const mobileVideo = document.getElementById('mobile-walkthrough-video');
   const mobileSource = document.getElementById('mobile-video-source');
   const mobileTrack = document.getElementById('mobile-video-track');
@@ -243,35 +295,36 @@ const VIDEOS = {
   let activeModalKey = 'explainer';
   let activeMobileKey = 'explainer';
 
-  const mobileViewport = window.matchMedia('(max-width: 47.999rem)');
-  function syncMobilePreload() {
-    if (mobileVideo && mobileViewport.matches && mobileVideo.preload === 'none') {
-      mobileVideo.preload = 'metadata';
-    }
+  function releaseMobileSectionHideOverride() {
+    if (mobileSection) mobileSection.classList.add('md:hidden');
   }
-  syncMobilePreload();
-  mobileViewport.addEventListener('change', syncMobilePreload);
 
   function enterVideoFullscreen(video) {
     if (!video || document.fullscreenElement) return;
+    // Remove md:hidden directly so expanding into desktop OS fullscreen never sets display:none on the parent.
+    if (mobileSection) mobileSection.classList.remove('md:hidden');
     if (typeof video.requestFullscreen === 'function') {
       video.requestFullscreen().catch(() => {
         if (typeof video.webkitEnterFullscreen === 'function') {
           try {
             video.webkitEnterFullscreen();
+            return;
           } catch {}
         }
+        releaseMobileSectionHideOverride();
       });
     } else if (typeof video.webkitEnterFullscreen === 'function') {
       try {
         video.webkitEnterFullscreen();
-      } catch {}
+      } catch {
+        releaseMobileSectionHideOverride();
+      }
     }
   }
 
-  function trackPlay(slug, place) {
+  function trackEvent(name, props) {
     if (typeof window !== 'undefined' && typeof window.plausible === 'function') {
-      window.plausible('Video Play', { props: { video: slug, place } });
+      window.plausible(name, { props });
     }
   }
 
@@ -283,10 +336,11 @@ const VIDEOS = {
       enterVideoFullscreen(video);
     }
     const playPromise = video.play();
-    trackPlay(slug, place);
+    trackEvent('Video Play', { video: slug, place });
     if (playPromise && typeof playPromise.catch === 'function') {
       playPromise.catch(() => {
         video.controls = false;
+        releaseMobileSectionHideOverride();
         if (overlay) {
           overlay.classList.remove('hidden');
           overlay.classList.add('flex');
@@ -372,6 +426,7 @@ const VIDEOS = {
 
   // Pause and restore the play overlay on fullscreen exit so replaying also enters fullscreen.
   function onMobileExitFullscreen() {
+    releaseMobileSectionHideOverride();
     if (!mobileVideo || !mobileOverlay) return;
     mobileVideo.pause();
     mobileVideo.controls = false;
@@ -389,6 +444,15 @@ const VIDEOS = {
   });
   if (mobileVideo) {
     mobileVideo.addEventListener('webkitendfullscreen', onMobileExitFullscreen);
+    mobileVideo.addEventListener('ended', () => {
+      trackEvent('Video Complete', { video: VIDEOS[activeMobileKey].slug, place: 'mobile-section' });
+    });
+  }
+
+  if (modalVideo) {
+    modalVideo.addEventListener('ended', () => {
+      trackEvent('Video Complete', { video: VIDEOS[activeModalKey].slug, place: 'modal' });
+    });
   }
 
   if (modalOverlay) {
