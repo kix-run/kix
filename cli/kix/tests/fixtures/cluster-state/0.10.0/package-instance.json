@@ -3,27 +3,47 @@
   "kind": "PackageInstance",
   "metadata": {
     "annotations": {
-      "kix.run/activations": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaold,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaact",
-      "kix.run/depends-on": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaweb,requires:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans",
-      "kix.run/identity-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaapi",
-      "kix.run/package": "fixtures",
-      "kix.run/package-namespace": "drift-fixtures",
-      "kix.run/root": "fixtures"
+      "kix.run/root": "web-web"
     },
-    "creationTimestamp": "2026-11-03T16:02:20Z",
+    "creationTimestamp": "2026-11-28T08:45:12Z",
     "generation": 1,
     "labels": {
-      "app.kubernetes.io/instance": "fixtures",
+      "app.kubernetes.io/instance": "web",
       "app.kubernetes.io/managed-by": "kix"
     },
-    "name": "fixtures",
-    "namespace": "drift-fixtures",
-    "resourceVersion": "2001",
-    "uid": "6f1c2a43-0d7e-4b8e-9a51-0000000000e5"
+    "managedFields": [
+      {
+        "apiVersion": "kix.run/v1alpha1",
+        "fieldsType": "FieldsV1",
+        "fieldsV1": {
+          "f:metadata": {
+            "f:annotations": {
+              "f:kix.run/root": {}
+            },
+            "f:labels": {
+              "f:app.kubernetes.io/instance": {},
+              "f:app.kubernetes.io/managed-by": {}
+            }
+          },
+          "f:spec": {
+            "f:instanceName": {},
+            "f:namespaceName": {},
+            "f:version": {}
+          }
+        },
+        "manager": "kix/lab",
+        "operation": "Apply",
+        "time": "2026-11-28T08:45:12Z"
+      }
+    ],
+    "name": "web",
+    "namespace": "lab",
+    "resourceVersion": "640",
+    "uid": "df344acb-0755-4ef2-a6db-00cf7b2b80fe"
   },
   "spec": {
-    "instanceName": "fixtures",
-    "namespaceName": "drift-fixtures",
-    "version": "1.0.0"
+    "instanceName": "web",
+    "namespaceName": "lab",
+    "version": "1"
   }
 }

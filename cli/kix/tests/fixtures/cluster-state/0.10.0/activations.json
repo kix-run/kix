@@ -4,117 +4,64 @@
     "kind": "Activation",
     "metadata": {
       "annotations": {
-        "kix.run/built-via": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaabvact-kix-activation-fixtures.json",
-        "kix.run/depends-on": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaweb,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaapi,requires:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans",
-        "kix.run/deployed-at": "2026-11-10T09:15:02.118422+00:00",
-        "kix.run/identity-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaact",
+        "kix.run/built-via": "/nix/store/azvrxljfnzlcp8psqdbacmhxjkz1hdlv-kix-activation-lab.json",
+        "kix.run/depends-on": "1r6xfrx4frw7ykj6378bjll4m3z6dkn9,4sq8laq4iq1acp2kfbc1jidw8h96hb2a,9mj3vjjh46hscryq00sqnwr5w29x5vw3,f7xwng4ysf1qxxs8w6ni9499lqx0j7sw,ja73817vc4p6zgppjfk73vzm6hzv4kp6,l9xki7gprvs9bxs4camdjsz2rn0ig2b7,lxjxbxn1frphzp731wbik22yaqv1rdxv,m7ig0zclsiwyryfll2lbhf03vqvmg032,mkgdf3yajj0a92l7fspcy7ciykw4dsl1,q8g0ivg05wmk2lw6jf7q5ldncr2vyj0x,z6jplic0cqaaknmrj525wn9g11qys9i3",
+        "kix.run/deployed-at": "2026-11-28T08:45:28.332519535+00:00",
+        "kix.run/identity-hash": "s084yw2v3nypyha02z0254iga83cdi72",
         "kix.run/package": "_cluster",
-        "kix.run/package-namespace": "_cluster",
-        "kix.run/previous": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaold"
+        "kix.run/package-namespace": "_cluster"
       },
-      "creationTimestamp": "2026-11-10T09:14:40Z",
-      "generation": 3,
+      "creationTimestamp": "2026-11-28T08:44:43Z",
+      "generation": 2,
       "labels": {
         "app.kubernetes.io/managed-by": "kix",
-        "kix.run/cluster": "fixtures"
+        "kix.run/cluster": "lab"
       },
-      "name": "fixtures-act000000000",
-      "resourceVersion": "1036",
-      "uid": "6f1c2a43-0d7e-4b8e-9a51-0000000000a1"
+      "name": "lab-s084yw2v3nyp",
+      "resourceVersion": "714",
+      "uid": "8e60f321-6738-4879-8b04-379d7928d2f9"
     },
     "spec": {
-      "cluster": "fixtures",
+      "cluster": "lab",
       "instances": {
-        "drift-fixtures": {
-          "fixtures": "fixtures"
+        "kube-system": {
+          "platform-dns": "platform-dns"
+        },
+        "lab": {
+          "web": "web"
         }
       }
     },
     "status": {
-      "orphansKeptFrom": [
-        {
-          "activation": "fixtures-old000000000",
-          "builtVia": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaabvold-kix-activation-fixtures.json",
-          "identityHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaold"
-        }
-      ],
-      "packageIndex": {
-        "clusterLevel": [
-          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans"
-        ],
-        "format": 1,
-        "packages": {
-          "drift-fixtures/fixtures": {
-            "instance": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaapi",
-            "resources": [
-              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaweb"
-            ]
-          }
-        },
-        "names": {
-          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans": [
-            "Namespace",
-            "",
-            "drift-fixtures"
-          ],
-          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaapi": [
-            "PackageInstance",
-            "drift-fixtures",
-            "fixtures"
-          ],
-          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaweb": [
-            "Deployment",
-            "drift-fixtures",
-            "fixture-web"
-          ]
-        }
-      },
-      "phase": "Active",
-      "previousActivation": "fixtures-old000000000",
+      "phase": "Superseded",
       "receipt": {
-        "activationHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaact",
+        "activationHash": "s084yw2v3nypyha02z0254iga83cdi72",
         "builder": {
           "arch": "x86_64",
-          "kixVersion": "0.9.0",
-          "nixVersion": "nix (Nix) 2.31.2",
+          "kixVersion": "0.10.0-rc.6",
+          "nixVersion": "nix (Nix) 2.35.4",
           "os": "linux"
         },
-        "cluster": "fixtures",
-        "deployedAt": "2026-11-10T09:15:02.118Z",
+        "cluster": "lab",
+        "deployedAt": "2026-11-28T08:44:40Z",
         "images": [
-          "nginx:1.27.0"
+          "docker.io/library/busybox:1.36",
+          "docker.io/nginxinc/nginx-unprivileged:1.30.6-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03"
         ],
-        "inputs": [
-          {
-            "name": "kix",
-            "narHash": "sha256-AAAA",
-            "rev": "deadbeef00000000000000000000000000000000"
-          }
-        ],
+        "inputs": [],
         "schema": "kix.run/receipt/v1",
         "source": {
-          "dirty": false,
-          "flakeLock": "blake3:0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
-          "flakeRef": ".",
-          "gitCommit": "c1b8d5e0000000000000000000000000000000aa",
-          "revision": "c1b8d5e0000000000000000000000000000000aa"
+          "flakeRef": "."
         }
       },
-      "totalWaves": 2,
+      "totalWaves": 1,
       "waves": [
         {
-          "applied": 1,
+          "applied": 26,
           "failed": 0,
-          "resources": 1,
+          "resources": 26,
           "status": "Complete",
           "wave": 0
-        },
-        {
-          "applied": 2,
-          "failed": 0,
-          "resources": 2,
-          "status": "Complete",
-          "wave": 1
         }
       ]
     }
@@ -124,161 +71,76 @@
     "kind": "Activation",
     "metadata": {
       "annotations": {
-        "kix.run/built-via": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaabvold-kix-activation-fixtures.json",
-        "kix.run/depends-on": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaweb,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaapi,requires:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans",
-        "kix.run/deployed-at": "2026-11-03T16:02:40.501977+00:00",
-        "kix.run/identity-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaold",
+        "kix.run/built-via": "/nix/store/4qf4s91ca7yrsq3nhjwykznaxffmqb7n-kix-activation-lab.json",
+        "kix.run/depends-on": "1r6xfrx4frw7ykj6378bjll4m3z6dkn9,4sq8laq4iq1acp2kfbc1jidw8h96hb2a,i9sfiza7q3xa48xs59wlny63q9mkc2v4,j2v49b2p0fdr3267g2phyg8abh7vj92k,k8b37apwh50k2xxwzylalm7124hk6wri,l9xki7gprvs9bxs4camdjsz2rn0ig2b7,mkgdf3yajj0a92l7fspcy7ciykw4dsl1,q8g0ivg05wmk2lw6jf7q5ldncr2vyj0x,qcyyrx6wys8s2hpvr8m492r3vjsbdf99,sg6bm99cffhx792ibacg6b0crxnc75sl,ymymnsn8ymsp11jn7ms70abjzl4622cn",
+        "kix.run/deployed-at": "2026-11-28T08:45:32.433348782+00:00",
+        "kix.run/identity-hash": "vibqalyvyxkzfi48bsb91v98kp83mzch",
         "kix.run/package": "_cluster",
-        "kix.run/package-namespace": "_cluster"
+        "kix.run/package-namespace": "_cluster",
+        "kix.run/previous": "s084yw2v3nypyha02z0254iga83cdi72"
       },
-      "creationTimestamp": "2026-11-03T16:02:11Z",
-      "generation": 3,
+      "creationTimestamp": "2026-11-28T08:45:32Z",
+      "generation": 2,
       "labels": {
         "app.kubernetes.io/managed-by": "kix",
-        "kix.run/cluster": "fixtures"
+        "kix.run/cluster": "lab"
       },
-      "name": "fixtures-old000000000",
-      "resourceVersion": "1036",
-      "uid": "6f1c2a43-0d7e-4b8e-9a51-0000000000b2"
+      "name": "lab-vibqalyvyxkz",
+      "resourceVersion": "715",
+      "uid": "a36b28ac-9bce-4a4a-8d5c-96df2969fead"
     },
     "spec": {
-      "cluster": "fixtures",
+      "cluster": "lab",
       "instances": {
-        "drift-fixtures": {
-          "fixtures": "fixtures"
-        }
-      },
-      "source": {
-        "type": "storePath",
-        "path": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaabvold-kix-activation-fixtures.json"
-      },
-      "request": "7d2e4f6a8b0c1d3e5f7a9b1c3d5e7f9a"
-    },
-    "status": {
-      "packageIndex": {
-        "clusterLevel": [
-          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans"
-        ],
-        "format": 1,
-        "packages": {
-          "drift-fixtures/fixtures": {
-            "instance": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaapi",
-            "resources": [
-              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaweb"
-            ]
-          }
-        }
-      },
-      "phase": "Superseded",
-      "totalWaves": 2,
-      "waves": [
-        {
-          "applied": 1,
-          "failed": 0,
-          "resources": 1,
-          "status": "Complete",
-          "wave": 0
+        "kube-system": {
+          "platform-dns": "platform-dns"
         },
-        {
-          "applied": 2,
-          "failed": 0,
-          "resources": 2,
-          "status": "Complete",
-          "wave": 1
-        }
-      ],
-      "startedRequest": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
-      "finishedRequest": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
-    }
-  },
-  {
-    "apiVersion": "kix.run/v1alpha1",
-    "kind": "Activation",
-    "metadata": {
-      "annotations": {
-        "kix.run/built-via": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaabvail-kix-activation-fixtures.json",
-        "kix.run/depends-on": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaweb,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaapi,requires:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans",
-        "kix.run/identity-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaafail",
-        "kix.run/package": "_cluster",
-        "kix.run/package-namespace": "_cluster"
-      },
-      "creationTimestamp": "2026-11-08T11:30:00Z",
-      "generation": 3,
-      "labels": {
-        "app.kubernetes.io/managed-by": "kix",
-        "kix.run/cluster": "fixtures"
-      },
-      "name": "fixtures-fail00000000",
-      "resourceVersion": "1036",
-      "uid": "6f1c2a43-0d7e-4b8e-9a51-0000000000c3"
-    },
-    "spec": {
-      "cluster": "fixtures",
-      "instances": {
-        "drift-fixtures": {
-          "fixtures": "fixtures"
+        "lab": {
+          "web": "web"
         }
       }
     },
     "status": {
-      "failure": {
-        "at": "2026-11-08T11:35:00.000000+00:00",
-        "reason": "Deployment drift-fixtures/fixture-web did not become ready within 300s"
+      "phase": "Active",
+      "previousActivation": "lab-s084yw2v3nyp",
+      "receipt": {
+        "activationHash": "vibqalyvyxkzfi48bsb91v98kp83mzch",
+        "builder": {
+          "arch": "x86_64",
+          "kixVersion": "0.10.0-rc.6",
+          "nixVersion": "nix (Nix) 2.35.4",
+          "os": "linux"
+        },
+        "cluster": "lab",
+        "deployedAt": "2026-11-28T08:45:32Z",
+        "images": [
+          "docker.io/library/busybox:1.36",
+          "docker.io/nginxinc/nginx-unprivileged:1.30.6-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03"
+        ],
+        "inputs": [],
+        "schema": "kix.run/receipt/v1",
+        "source": {
+          "flakeRef": "."
+        }
       },
-      "phase": "Failed",
-      "totalWaves": 2,
+      "revisions": {
+        "clusterLevel": "lab-19b26b4c4ba4ad54d817896502fd28a9",
+        "format": 2,
+        "instances": {
+          "kube-system/platform-dns": "lab-1b95a980b50e440b82396d3374855165",
+          "lab/web": "lab-4cf549e3404ac6b86a70c4c30f421eab"
+        }
+      },
+      "totalWaves": 1,
       "waves": [
         {
-          "applied": 1,
+          "applied": 3,
           "failed": 0,
-          "resources": 1,
+          "resources": 3,
           "status": "Complete",
           "wave": 0
-        },
-        {
-          "applied": 1,
-          "failed": 1,
-          "resources": 2,
-          "status": "Failed",
-          "wave": 1
         }
       ]
-    }
-  },
-  {
-    "apiVersion": "kix.run/v1alpha1",
-    "kind": "Activation",
-    "metadata": {
-      "annotations": {
-        "kix.run/built-via": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaasrc-kix-bundle-fixtures",
-        "kix.run/identity-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaqueued"
-      },
-      "creationTimestamp": "2026-11-10T10:00:00Z",
-      "generation": 1,
-      "labels": {
-        "app.kubernetes.io/managed-by": "kix",
-        "kix.run/cluster": "fixtures",
-        "kix.run/kubernetes-uid": "0b6d1e52-6a3f-4c1e-8c0a-7d2b5f9e1a00"
-      },
-      "name": "fixtures-queued000000",
-      "resourceVersion": "1036",
-      "uid": "6f1c2a43-0d7e-4b8e-9a51-0000000000d4"
-    },
-    "spec": {
-      "cluster": "fixtures",
-      "instances": {
-        "drift-fixtures": {
-          "fixtures": "fixtures"
-        }
-      },
-      "source": {
-        "path": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaasrc-kix-bundle-fixtures",
-        "type": "storePath"
-      },
-      "request": "3f1c9a2be47d4c0e9b8a6d5f2e1c0b9a"
-    },
-    "status": {
-      "startedRequest": "3f1c9a2be47d4c0e9b8a6d5f2e1c0b9a"
     }
   }
 ]

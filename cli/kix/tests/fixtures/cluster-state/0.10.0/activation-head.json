@@ -1,0 +1,22 @@
+{
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "ActivationHead",
+  "metadata": {
+    "creationTimestamp": "2026-11-28T08:44:43Z",
+    "generation": 10,
+    "labels": {
+      "kix.run/cluster": "lab"
+    },
+    "name": "lab",
+    "resourceVersion": "718",
+    "uid": "e62b6431-d052-46be-abd1-a9d79de0fe3f"
+  },
+  "status": {
+    "current": "lab-vibqalyvyxkz",
+    "generation": 2,
+    "writer": {
+      "program": "cli",
+      "version": "0.10.0-rc.6"
+    }
+  }
+}

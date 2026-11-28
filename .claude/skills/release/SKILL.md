@@ -123,12 +123,26 @@ same unreleased records, with the version taken from the prerelease.
    `## <version> - <YYYY-MM-DD>`, with today's date, to the top of
    `CHANGELOG.md`. Check that the new section is the one you read. For a
    prerelease, skip this step.
-5. The cluster state fixtures in `cli/kix/tests/fixtures/cluster-state/`,
-   only when a record of this release has `state = true`. Copy the newest
-   folder to `<version>/`, set `version` and `date` in its `written.toml`,
-   and replace the objects with ones this release writes. Delete
-   `expected.json`, run `cargo test -p kix-lib cluster_state` to write a new
-   one, and check each value in it.
+5. The cluster state fixtures. Skip this step unless a record in this release
+   has `state = true`. Create `cli/kix/tests/fixtures/cluster-state/<version>/`
+   with `written.toml` (setting `version` and `date`) and JSON files captured
+   from a live `kind` cluster. Do not construct synthetic JSON objects. Deploy
+   a small Kix cluster to a `kind` cluster twice with Kix `<version>`, changing
+   one value between deploys so the cluster has both an `Active` and a
+   `Superseded` Activation record. Then export the live objects with
+   `kubectl get -o json --show-managed-fields`: the Activation records, the
+   ActivationHead, every PackageInstanceRevision named in the `Active` record's
+   `status.revisions`, and one or two managed objects with their
+   `managedFields` (such as a Deployment and its PackageInstance).
+
+   Leave out Secret objects, and replace local project paths and hostnames
+   (such as `status.receipt.source.flakeRef`). To keep the folder small, you
+   may remove extra instances from `spec.instances` and
+   `status.revisions.instances` on the Activation records, along with their
+   PackageInstanceRevision objects. Never edit a revision's `spec`, because its
+   name includes a hash of `spec`. Delete `expected.json` if present, run
+   `cargo test -p kix-lib cluster_state` to generate it, and check every value
+   in `expected.json` against the captured objects.
 6. Required stops. When a record in the new section has
    `required-stop = true`, add the version to `REQUIRED_STOPS` in
    `cli/kix/src/cluster/stops.rs`. `kix deploy`, `kix rollback`, and the
