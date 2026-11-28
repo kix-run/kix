@@ -166,7 +166,9 @@ pub enum Attribution {
 }
 
 /// Attribute a swept object to the Kix clusters that deploy it
-/// ([`Tenancy::owners_of`]).
+/// ([`Tenancy::owners_of`]). An object no record names that carries an
+/// `Apply` entry of this Kix cluster is this cluster's: a deploy of it
+/// applied the object, and no record of any Kix cluster deploys it now.
 pub fn attribute(obj: &DynamicObject, tenancy: &Tenancy) -> Attribution {
     let mut owners = tenancy.owners_of(obj);
     let own = &tenancy.cluster;
@@ -176,6 +178,7 @@ pub fn attribute(obj: &DynamicObject, tenancy: &Tenancy) -> Attribution {
         (true, true) => Attribution::Ours,
         (true, false) => Attribution::Shared(owners),
         (false, false) => Attribution::Foreign(owners),
+        (false, true) if !own.is_empty() && tenancy.holds_own_entry(obj) => Attribution::Ours,
         (false, true) => Attribution::Unattributed,
     }
 }
@@ -470,6 +473,29 @@ pub(crate) fn split_shared_orphans_listed(
         Live::Absent | Live::Unserved | Live::Unread => None,
     };
     split_by_lookup(orphans, lookup, tenancy)
+}
+
+/// Return the objects of `shared` that carry an `Apply` entry under
+/// `manager` in `live`, which a run must release. Another shared orphan
+/// holds no field of the cluster, so its record stops naming it without a
+/// write.
+pub(crate) fn releases_of(
+    shared: &[SharedOrphan],
+    live: &LiveObjects,
+    manager: &super::field_manager::FieldManager,
+) -> Vec<ResourceId> {
+    shared
+        .iter()
+        .filter(|s| match live.get(&s.rid) {
+            Live::Present(obj) => obj.metadata.managed_fields.iter().flatten().any(|e| {
+                e.manager.as_deref() == Some(manager.name())
+                    && e.operation.as_deref() == Some("Apply")
+                    && e.subresource.is_none()
+            }),
+            Live::Absent | Live::Unserved | Live::Unread => false,
+        })
+        .map(|s| s.rid.clone())
+        .collect()
 }
 
 fn split_by_lookup<'a>(

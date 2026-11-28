@@ -1,0 +1,3 @@
+# 2026-11-28 · `cli/kix/src/cluster/edges.rs` · Edges unioned over every needed revision can form a cycle and block a prune.
+
+`Edges::of_revisions` gives an object every edge any needed revision records. If the current record says A needs B and a `Failed` record's build says B needs A, the delete order has a cycle, and the prune keeps those objects until the `Failed` record is superseded. No known package reverses an edge between builds, so this is suspected, not seen. Preferring the edges of the record whose applied hash the live object matches would restore what the live `kix.run/depends-on` gave before.

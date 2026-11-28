@@ -162,7 +162,8 @@ pub(crate) trait ResourceIo: Send + Sync + 'static {
     /// Give up this Kix cluster's fields on the orphan `rid`, which another
     /// Kix cluster still deploys, with an apply of nothing under its own
     /// manager. Return whether it wrote. An object with no `Apply` entry
-    /// under the manager needs nothing.
+    /// under the manager needs nothing. Return an error when the entry is
+    /// still on the object afterwards, so the run's record keeps naming it.
     async fn release(&self, _rid: &ResourceId) -> Result<bool, String> {
         Ok(false)
     }

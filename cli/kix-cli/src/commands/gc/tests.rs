@@ -653,6 +653,42 @@ mod hard_scope_tests {
         assert_eq!(names(&garbage), vec!["a-stale", "leftover"]);
     }
 
+    /// An object that no record of any Kix cluster names, and that carries
+    /// an `Apply` entry of Kix cluster `a`, is `a`'s: a full scan of `a`
+    /// deletes it without `--include unattributed`. One that carries only
+    /// `b`'s entry stays unattributed for `a`.
+    #[test]
+    fn a_full_scan_finds_an_object_only_its_entry_names() {
+        let tenancy = Tenancy::fixture(&[record("a", "a2"), record("b", "b1")], "a");
+        let entry_of = |cluster: &str, name: &str| {
+            let mut obj = live("ConfigMap", name, Some("h-left"), "");
+            obj.metadata.managed_fields = Some(vec![
+                k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry {
+                    manager: Some(format!("kix/{cluster}")),
+                    operation: Some("Apply".into()),
+                    ..Default::default()
+                },
+            ]);
+            obj
+        };
+        let sweep = inventory::partition_sweep(vec![
+            live("ConfigMap", "a-current", Some("h-cur"), "a2"),
+            entry_of("a", "applied-by-a"),
+            entry_of("b", "applied-by-b"),
+        ]);
+        let sweep =
+            inventory::scope_sweep(sweep, inventory::SweepScope::Cluster("a"), tenancy.clone());
+        let unattributed: Vec<&str> = sweep
+            .unattributed
+            .iter()
+            .filter_map(|o| o.metadata.name.as_deref())
+            .collect();
+        assert_eq!(unattributed, vec!["applied-by-b"]);
+        let expected: HashSet<String> = ["ConfigMap/d/a-current".to_string()].into();
+        let garbage = judge_hard(&sweep.managed, &expected, &tenancy).garbage;
+        assert_eq!(names(&garbage), vec!["applied-by-a"]);
+    }
+
     /// A full scan judges by name. An object the build makes is kept,
     /// whether or not it carries a build hash, such as an object of a record
     /// an older Kix wrote whose note was edited away. One the build does
@@ -1547,36 +1583,26 @@ mod revision_tests {
     /// A cluster that an earlier gc left with a marker no record names: the
     /// marker is on the cluster under `kix/a`, and the current record names
     /// no kept-orphans revision. A full scan finds it by its field manager
-    /// as an object no revision names, and deletes it with
-    /// `--include unattributed`, not without.
+    /// as this cluster's object that left the build, and deletes it without
+    /// `--include unattributed`.
     #[test]
-    fn a_full_scan_with_unattributed_finds_a_marker_no_record_names() {
+    fn a_full_scan_finds_a_marker_no_record_names_by_its_entry() {
         let mut state = leftover_marker(false);
         let old = state.revision_named("a-cur", "keptOrphans");
         state.remove_revision(&old);
         state.records[0]["status"]["revisions"]["keptOrphans"] = Value::Null;
         let graph = build_with_marker(&state);
         let tenancy = state.tenancy("a");
-        let sweep = || {
-            inventory::scope_sweep(
-                inventory::partition_sweep(vec![state.object("web"), state.object("platform-dns")]),
-                inventory::SweepScope::Cluster("a"),
-                tenancy.clone(),
-            )
-        };
-        let scoped = sweep();
-        let unattributed: Vec<&str> = scoped
-            .unattributed
-            .iter()
-            .map(|o| o.metadata.name.as_deref().unwrap())
-            .collect();
-        assert_eq!(unattributed, ["platform-dns"]);
+        let scoped = inventory::scope_sweep(
+            inventory::partition_sweep(vec![state.object("web"), state.object("platform-dns")]),
+            inventory::SweepScope::Cluster("a"),
+            tenancy.clone(),
+        );
+        assert!(scoped.unattributed.is_empty());
         let expected = identities(&graph);
         let without = judged_objects(scoped, false, false);
-        assert!(judge_hard(&without, &expected, &tenancy).garbage.is_empty());
-        let with = judged_objects(sweep(), true, false);
         assert_eq!(
-            names(&judge_hard(&with, &expected, &tenancy).garbage),
+            names(&judge_hard(&without, &expected, &tenancy).garbage),
             ["platform-dns"]
         );
     }

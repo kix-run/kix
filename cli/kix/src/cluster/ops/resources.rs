@@ -525,7 +525,10 @@ impl ResourceIo for KubeResources {
 
     async fn release(&self, rid: &ResourceId) -> Result<bool, String> {
         let Some((ar, scope)) = self.cached(rid).await else {
-            return Ok(false);
+            return Err(format!(
+                "could not release {}: the cluster's API discovery does not list its kind",
+                rid.display_id()
+            ));
         };
         let api = self.api_for(&ar, &scope, rid);
         let Some(live) = api
@@ -535,12 +538,14 @@ impl ResourceIo for KubeResources {
         else {
             return Ok(false);
         };
-        let applies = live.metadata.managed_fields.iter().flatten().any(|e| {
-            e.manager.as_deref() == Some(self.manager.name())
-                && e.operation.as_deref() == Some("Apply")
-                && e.subresource.is_none()
-        });
-        if !applies {
+        let applies = |obj: &DynamicObject| {
+            obj.metadata.managed_fields.iter().flatten().any(|e| {
+                e.manager.as_deref() == Some(self.manager.name())
+                    && e.operation.as_deref() == Some("Apply")
+                    && e.subresource.is_none()
+            })
+        };
+        if !applies(&live) {
             return Ok(false);
         }
         let mut metadata = serde_json::json!({ "name": rid.name });
@@ -552,18 +557,28 @@ impl ResourceIo for KubeResources {
             "kind": ar.kind,
             "metadata": metadata,
         });
-        api.patch(
-            &rid.name,
-            &kube::api::PatchParams::apply(self.manager.name()),
-            &kube::api::Patch::Apply(&nothing),
-        )
-        .await
-        .map_err(|e| {
-            format!(
-                "could not release this Kix cluster's field ownership on {}, which another Kix cluster still deploys: {e}",
-                rid.display_id()
+        let after = api
+            .patch(
+                &rid.name,
+                &kube::api::PatchParams::apply(self.manager.name()),
+                &kube::api::Patch::Apply(&nothing),
             )
-        })?;
+            .await
+            .map_err(|e| {
+                format!(
+                    "could not release this Kix cluster's field ownership on {}, which another Kix cluster still deploys: {e}",
+                    rid.display_id()
+                )
+            })?;
+        // The record stops naming the object only once its entry is gone, so
+        // judge the object Kubernetes returns rather than the answer's status.
+        if applies(&after) {
+            return Err(format!(
+                "Kubernetes accepted the release of {} but kept this Kix cluster's `Apply` entry `{}` on it",
+                rid.display_id(),
+                self.manager.name()
+            ));
+        }
         Ok(true)
     }
 

@@ -476,7 +476,11 @@ fn decided_changes(
     let migrations = crate::cluster::ops::Migrations {
         objects: decided.migrations.iter().cloned().collect(),
         renamed: decided.renamed.iter().cloned().collect(),
-        releases: shared.iter().map(|s| s.rid.clone()).collect(),
+        releases: inventory::releases_of(
+            &shared,
+            live,
+            &crate::cluster::field_manager::FieldManager::of(&tenancy.cluster),
+        ),
         record: ledger.record().map(str::to_string),
     };
     let actions = decided
@@ -3110,5 +3114,7 @@ mod tests {
                 ["operator"]
             );
         }
+
+        mod shared_marker;
     }
 }

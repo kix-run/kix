@@ -16,16 +16,22 @@
 //!
 //! The guard keeps an object when another Kix cluster
 //!
-//! - has an `Apply` entry under its own field manager on the object
-//!   ([`super::field_manager`]), whatever its records say,
 //! - has a record that is not `Superseded`, or the record its lock names,
-//!   whose revisions, other than its kept orphans, name the object, or
+//!   whose revisions, other than its kept orphans, name the object,
+//! - has an `Apply` entry under its own field manager on the object
+//!   ([`super::field_manager`]) and a kept-orphans revision that names it,
+//!   or
 //! - is read from records and has such a record whose identity hash the
 //!   object's `kix.run/activations` names.
 //!
+//! An `Apply` entry of a Kix cluster none of whose records name the object
+//! does not keep it. That cluster stopped naming the object, and its entry
+//! would otherwise keep the object on the cluster for ever.
+//!
 //! The records and revisions are read once per guard, which lives for one
-//! run, and read again only when the object names a record hash the last
-//! read does not settle ([`tenancy::settles`]).
+//! run, and read again when the object names a record hash the last read
+//! does not settle, or carries an `Apply` entry of another Kix cluster
+//! whose records in the last read do not name it ([`tenancy::settles`]).
 //!
 //! # Why a delete cannot remove what another Kix cluster is deploying
 //!
@@ -36,21 +42,23 @@
 //! B applies under its own field manager and plans from revisions: before a
 //! run writes any object, it gives the records an older Kix wrote revisions
 //! ([`super::revision::convert`]), and its plan reads them the same way.
-//! B's planner leaves an object unchanged only when the object has B's
-//! `Apply` entry, or when its entry under the legacy manager `kix` holds
-//! B's fields, which B's planner counts only on an object a record of B
-//! already named ([`super::migration_write::takes_legacy`]). On any other
-//! object it finds no fields of B's to compare, and applies it. So either
-//! B wrote the object, which changes `resourceVersion`, or a record of B
-//! named it before B's run.
+//! B's planner leaves an object unchanged only when a record of B already
+//! names it with the hash B applied, and the object has B's `Apply` entry,
+//! or its entry under the legacy manager `kix` holds B's fields
+//! ([`super::migration_write::takes_legacy`]). On any other object it
+//! applies. So either B wrote the object, which changes `resourceVersion`,
+//! or a record of B named it before B's run, its kept-orphans revision
+//! included, and B's entry is on it.
 //!
 //! - If B wrote the object before the guard's read, B's entry was there at
-//!   `v`, and the guard kept it.
+//!   `v`. B created its run's record before that write, so the records the
+//!   guard reads after it read the object name it, and the guard kept it.
 //! - If B writes the object after the guard's read and before its delete,
 //!   the delete is refused, the guard reads the object again, finds B's
-//!   entry, and keeps it. Kubernetes changes `resourceVersion` when an
-//!   apply under a new manager adds an entry, even when the values are the
-//!   same, and the migration write changes it too.
+//!   entry, reads the records again, finds B's record, and keeps it.
+//!   Kubernetes changes `resourceVersion` when an apply under a new manager
+//!   adds an entry, even when the values are the same, and the migration
+//!   write changes it too.
 //! - If B applies the object after the delete, B's apply creates it again,
 //!   or finds it still being deleted and fails with a message that says so.
 //! - If a record of B named the object before B's run, the guard finds it,
@@ -61,8 +69,9 @@
 //!   revisions. That write changes `resourceVersion`.
 //!
 //! So a failed migration write, which is best-effort for an unchanged
-//! object, leaves the object safe. No step depends on when the records were
-//! read, so reading them once is enough. The records cover a run that named
+//! object, leaves the object safe. Only an entry the last read of the
+//! records does not explain depends on when they were read, and the guard
+//! reads them again for it. The records cover a run that named
 //! the object but has not applied it yet, for example one that is under way
 //! or stopped before it got there.
 //!
@@ -302,7 +311,9 @@ impl PruneGuard {
     }
 
     /// Return a [`Tenancy`] read after `obj` whenever `obj` names a record hash
-    /// the cached tenancy does not settle ([`Tenancy::knows`]). Because a
+    /// the cached tenancy does not settle ([`Tenancy::knows`]), or carries an
+    /// `Apply` entry of another Kix cluster whose records in the cached
+    /// tenancy do not name it ([`Tenancy::unexplained_entries`]). Because a
     /// record's cluster never changes, a `Superseded` record stays
     /// `Superseded`, and a record's map names the same revisions once
     /// written, a cached tenancy that settles every hash can only overstate
@@ -929,94 +940,123 @@ mod tests {
         }
     }
 
-    fn role_applied_by(name: &str, activations: &str, managers: &[&str]) -> Value {
-        let mut o = role(name, activations);
-        for m in managers {
-            applied_by(&mut o, m);
+    /// Return the state of Kix cluster `a`, current record `a-cur` naming
+    /// `web`, and, with `with_b`, Kix cluster `b`, current record `b-cur`
+    /// naming `b-web` and keeping `b-kept` and `b-kept-plain`, both read
+    /// from revisions.
+    fn from_revisions(with_b: bool) -> crate::cluster::tenancy_fixture::State {
+        use crate::cluster::tenancy_fixture::{Rec, Written, state};
+        let mut recs = vec![Rec {
+            name: "a-cur",
+            cluster: "a",
+            hash: "acur",
+            phase: lifecycle::PHASE_ACTIVE,
+            current: true,
+            objects: &["web"],
+            ..Rec::default()
+        }];
+        if with_b {
+            recs.push(Rec {
+                name: "b-cur",
+                cluster: "b",
+                hash: "bcur",
+                phase: lifecycle::PHASE_ACTIVE,
+                current: true,
+                objects: &["b-web", "mine"],
+                kept: &["b-kept", "b-kept-plain"],
+                ..Rec::default()
+            });
         }
-        o
+        state(&recs, |_| Written::Revisions)
     }
 
-    fn cluster_role(name: &str) -> ResourceId {
-        ResourceId::new(
-            "rbac.authorization.k8s.io",
-            "ClusterRole",
-            CLUSTER_SCOPED,
-            name,
-        )
-    }
-
-    /// An object with an `Apply` entry of another Kix cluster's manager is
-    /// kept although no record of that cluster names it, and although that
-    /// cluster has no records at all. The legacy entry and this cluster's
-    /// own entry keep nothing.
+    /// An `Apply` entry of another Kix cluster keeps an object only while a
+    /// record of that cluster names it, here its kept-orphans revision. An
+    /// entry of a Kix cluster whose records do not name the object, an entry
+    /// of a Kix cluster with no records, a kept-orphans revision with no
+    /// entry, the legacy entry, and this cluster's own entry keep nothing.
     #[tokio::test]
-    async fn an_object_another_cluster_applies_is_kept_without_a_record() {
-        let api = FakeApi::new([
-            record("a", "a1", lifecycle::PHASE_ACTIVE),
-            record("b", "b1", lifecycle::PHASE_ACTIVE),
-            role_applied_by("by-b", "a1", &["kix/a", "kix/b"]),
-            role_applied_by("by-c", "a1", &["kix/c"]),
-            role_applied_by(
-                "own",
-                "a1",
-                &[crate::cluster::field_manager::LEGACY, "kix/a"],
-            ),
-        ]);
-        let (g, d) = guard(&api, "a").await;
-        for (name, other) in [("by-b", "b"), ("by-c", "c")] {
-            assert_eq!(
-                delete(&g, &d, &cluster_role(name)).await,
-                Pruned::Kept(SharedOrphan {
-                    rid: cluster_role(name),
-                    clusters: vec![other.into()],
-                })
-            );
+    async fn an_entry_keeps_an_object_only_while_a_record_of_its_cluster_names_it() {
+        let mut state = from_revisions(true);
+        for (name, managers) in [
+            ("b-left", &["kix/a", "kix/b"][..]),
+            ("by-c", &["kix/c"][..]),
+            ("own", &["kix/a"][..]),
+        ] {
+            let mut o = object_of(name, &[]);
+            for m in managers {
+                applied_by(&mut o, m);
+            }
+            state.objects.push(o);
         }
-        assert!(matches!(
-            delete(&g, &d, &cluster_role("own")).await,
-            Pruned::Deleted { .. }
-        ));
-        assert_eq!(api.names("ClusterRole"), ["by-b", "by-c"]);
-    }
-
-    /// Another Kix cluster applies the object under its own manager between
-    /// the guard's read and its delete, with the same content, and writes
-    /// nothing else. The new entry changes `resourceVersion`, so the delete
-    /// is refused, and the guard's second read finds the entry and keeps the
-    /// object. The records are read once.
-    #[tokio::test]
-    async fn another_clusters_first_apply_after_the_read_keeps_the_object() {
-        let api = FakeApi::new([
-            record("a", "a1", lifecycle::PHASE_ACTIVE),
-            record("b", "b1", lifecycle::PHASE_ACTIVE),
-            role_applied_by("first", "a1", &["kix/a"]),
-            role_applied_by("mine", "a1", &["kix/a"]),
-        ]);
-        api.after_get("mine", |o| applied_by(o, "kix/b"));
+        let api = FakeApi::new(state.all());
+        api.patch_object("ConfigMap", "b-kept", |o| {
+            applied_by(o, "kix/a");
+            applied_by(o, "kix/b");
+        });
+        let cm = |name: &str| ResourceId::new("", "ConfigMap", "d", name);
         let (g, d) = guard(&api, "a").await;
-        assert!(matches!(
-            delete(&g, &d, &cluster_role("first")).await,
-            Pruned::Deleted { .. }
-        ));
         assert_eq!(
-            delete(&g, &d, &cluster_role("mine")).await,
+            delete(&g, &d, &cm("b-kept")).await,
             Pruned::Kept(SharedOrphan {
-                rid: cluster_role("mine"),
+                rid: cm("b-kept"),
                 clusters: vec!["b".into()],
             })
         );
-        assert_eq!(api.names("ClusterRole"), ["mine"]);
+        for name in ["b-left", "by-c", "own", "b-kept-plain"] {
+            assert!(
+                matches!(delete(&g, &d, &cm(name)).await, Pruned::Deleted { .. }),
+                "{name}"
+            );
+        }
+        assert!(api.names("ConfigMap").contains(&"b-kept".to_string()));
+    }
+
+    /// Another Kix cluster `b` creates its first record, which names the
+    /// object, after the guard read the records, then applies the object
+    /// under its own manager between the guard's read of the object and its
+    /// delete, with the same content. The new entry changes
+    /// `resourceVersion`, so the delete is refused. The records the guard
+    /// read do not explain the new entry, so it reads them again, finds
+    /// `b`'s record, and keeps the object.
+    #[tokio::test]
+    async fn another_clusters_first_apply_after_the_read_keeps_the_object() {
+        let mut state = from_revisions(false);
+        for name in ["first", "mine"] {
+            let mut o = object_of(name, &[]);
+            applied_by(&mut o, "kix/a");
+            state.objects.push(o);
+        }
+        let api = FakeApi::new(state.all());
+        let cm = |name: &str| ResourceId::new("", "ConfigMap", "d", name);
+        let (g, d) = guard(&api, "a").await;
+        assert!(matches!(
+            delete(&g, &d, &cm("first")).await,
+            Pruned::Deleted { .. }
+        ));
+        let b = from_revisions(true);
+        for o in b.records.iter().chain(&b.heads).chain(&b.revisions) {
+            if o["metadata"]["labels"][keys::CLUSTER_LABEL] == "b" || o["metadata"]["name"] == "b" {
+                api.insert(o.clone());
+            }
+        }
+        api.after_get("mine", |o| applied_by(o, "kix/b"));
+        assert_eq!(
+            delete(&g, &d, &cm("mine")).await,
+            Pruned::Kept(SharedOrphan {
+                rid: cm("mine"),
+                clusters: vec!["b".into()],
+            })
+        );
+        assert!(api.names("ConfigMap").contains(&"mine".to_string()));
         let requests = api.requests();
-        let deletes = requests.iter().filter(|r| r.starts_with("DELETE")).count();
-        assert_eq!(deletes, 2, "{requests:?}");
         let record_lists = requests
             .iter()
             .filter(|r| {
                 r.starts_with("GET") && r.contains("/activations") && !r.contains("/activations/")
             })
             .count();
-        assert_eq!(record_lists, 1, "{requests:?}");
+        assert_eq!(record_lists, 2, "{requests:?}");
     }
 
     /// The pair of a Kix cluster `a` read from revisions that applies under
@@ -1097,9 +1137,9 @@ mod tests {
     }
 
     /// `b`, not migrated, prunes beside `a`, migrated. It keeps what `a`'s
-    /// revisions name, what carries `a`'s entry though no revision of `a`
-    /// names it, and an object `a` first applies between its read and its
-    /// delete. It deletes what only the legacy entry marks.
+    /// revisions name. It deletes what only the legacy entry marks, and what
+    /// carries `a`'s entry though no revision of `a` names it, also when
+    /// that entry appears between its read and its delete.
     #[tokio::test]
     async fn an_unmigrated_cluster_keeps_what_a_migrated_one_deploys() {
         let api = mixed();
@@ -1109,20 +1149,19 @@ mod tests {
         });
         api.after_get("b-only", |o| applied_by(o, "kix/a"));
         let (g, d) = guard(&api, "b").await;
-        for name in ["shared", "a-dropped", "b-only"] {
-            assert_eq!(
-                delete(&g, &d, &cm(name)).await,
-                Pruned::Kept(SharedOrphan {
-                    rid: cm(name),
-                    clusters: vec!["a".into()],
-                }),
+        assert_eq!(
+            delete(&g, &d, &cm("shared")).await,
+            Pruned::Kept(SharedOrphan {
+                rid: cm("shared"),
+                clusters: vec!["a".into()],
+            })
+        );
+        for name in ["a-dropped", "b-only", "b-dropped"] {
+            assert!(
+                matches!(delete(&g, &d, &cm(name)).await, Pruned::Deleted { .. }),
                 "{name}"
             );
         }
-        assert!(matches!(
-            delete(&g, &d, &cm("b-dropped")).await,
-            Pruned::Deleted { .. }
-        ));
     }
 
     /// A namespaced object whose manifest names no namespace is read and

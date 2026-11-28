@@ -352,6 +352,10 @@ struct Run<'a> {
     /// recovery. Excluded from post-deploy pruning because they now belong to
     /// the new build.
     consumed_orphans: HashSet<ResourceId>,
+    /// Whether the run gave up its fields on an orphan another Kix cluster
+    /// still deploys. The record must then stop naming that orphan, so the
+    /// run finalizes.
+    released: bool,
 }
 
 impl<'a> Run<'a> {
@@ -416,6 +420,7 @@ impl<'a> Run<'a> {
             discovery_failed: None,
             skipped: Vec::new(),
             consumed_orphans: HashSet::new(),
+            released: false,
         }
     }
 
@@ -1174,7 +1179,10 @@ impl<'a> Run<'a> {
                 tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, self.resources.release(&rid))
                     .await;
             let message = match released {
-                Ok(Ok(_)) => continue,
+                Ok(Ok(wrote)) => {
+                    self.released |= wrote;
+                    continue;
+                }
                 Ok(Err(e)) => e,
                 Err(_) => format!(
                     "{}: no answer within {}s",
@@ -1513,7 +1521,8 @@ impl<'a> Run<'a> {
             || r.pruned > 0
             || r.already_gone > 0
             || r.kept > 0
-            || r.failed > 0;
+            || r.failed > 0
+            || self.released;
         if let Some(record) = &self.record
             && actually_changed
         {

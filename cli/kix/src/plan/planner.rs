@@ -530,7 +530,12 @@ impl CheckedPlan {
             .nodes()
             .iter()
             .any(|n| n.action.written().is_some());
-        if writes || !self.orphans.is_empty() || self.migrations.count() > 0 || self.converts {
+        if writes
+            || !self.orphans.is_empty()
+            || self.migrations.count() > 0
+            || !self.migrations.releases.is_empty()
+            || self.converts
+        {
             return Work::Changes;
         }
         match last_runs {
@@ -621,6 +626,10 @@ impl CheckedPlan {
             .retain(|rid| !shared.iter().any(|s| &s.rid == rid));
         self.pkg_diff.keep_shared(shared);
         self.shared_orphans.extend(shared.iter().cloned());
+        // The run releases each one, or its record keeps naming it.
+        self.migrations
+            .releases
+            .extend(shared.iter().map(|s| s.rid.clone()));
     }
 
     /// Return the order in which the prune deletes the plan's orphans.
@@ -1526,7 +1535,14 @@ impl<'a> Planner<'a> {
             (Some((client, _)), None) => keep_shared(client, cluster, orphans).await?,
             (None, _) => (orphans, Vec::new()),
         };
-        migrations.releases = shared_orphans.iter().map(|s| s.rid.clone()).collect();
+        migrations.releases = match read {
+            Some((_, live)) => inventory::releases_of(
+                &shared_orphans,
+                live,
+                &crate::cluster::field_manager::FieldManager::of(cluster),
+            ),
+            None => shared_orphans.iter().map(|s| s.rid.clone()).collect(),
+        };
         let resource_graph =
             ResourceGraph::from_manifests(new_manifests).map_err(PlanError::Graph)?;
         let mut plan = DeployPlan::from_graph_and_changes(&resource_graph, &actions)

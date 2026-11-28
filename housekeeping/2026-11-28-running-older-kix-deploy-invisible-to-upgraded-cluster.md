@@ -1,0 +1,3 @@
+# 2026-11-28 · `cli/kix/src/cluster/migration_write.rs` · A deploy by Kix 0.9.2 that is still running is invisible to an upgraded Kix cluster, which may prune an object it is adding.
+
+Kix 0.9.2 stamps its record's hash on objects as it applies them and writes its Activation record in the last wave, so until then the hash names no record. `migration_write::needed` rewrites `kix.run/activations` to the hashes it can name and drops the unknown one, and `takes_legacy` may then take the other cluster's `kix` entry. `PruneGuard::tenancy_naming` re-reads the tenancy for an unknown hash and goes on, so an orphan of the upgraded cluster that the older cluster is adding in that deploy can be deleted. It needs both clusters deploying at once; suspected, not reproduced.
