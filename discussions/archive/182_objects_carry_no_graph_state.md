@@ -1,7 +1,7 @@
 # 182: Objects carry no graph state
 
-**Status:** Built (2026-11-28, branch `graph-off-objects`). Section 9 says what the adversarial review changed, and section 11 where the build differs from the design.
-**Related:** `archive/175_one_home_for_what_a_deploy_did.md` (this finishes it), `archive/175a_revisions_build_notes.md`, `archive/150_scope_managed_sweep_to_one_cluster.md`, `55_shared_resource_ownership.md`, `ROADMAP.md` ("Two Kix clusters that render one shared object differently").
+**Status:** Implemented (2026-11-28). Section 9 says what the adversarial review changed, and section 11 where the build differs from the design.
+**Related:** `175_one_home_for_what_a_deploy_did.md` (this finishes it), `175a_revisions_build_notes.md`, `150_scope_managed_sweep_to_one_cluster.md`, `../55_shared_resource_ownership.md`, `ROADMAP.md` ("Two Kix clusters that render one shared object differently").
 
 ## 1. Summary
 
