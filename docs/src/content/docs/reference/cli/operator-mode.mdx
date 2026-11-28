@@ -54,8 +54,9 @@ yet; pull-based Git sync is planned.
   [How a deploy decides what to write](/docs/reference/cli/deploy/#how-a-deploy-decides-what-to-write)),
   except that the operator never forces fields away from another field manager.
   When another manager modified fields set by the build (for example, via
-  `kubectl edit`), the operator leaves that resource untouched, emits a
-  `DriftNotReverted` Warning Event naming the manager and fields, and continues
+  `kubectl edit`), the operator applies the build without the fields that manager holds, which
+  restores the rest of the resource, emits a `DriftNotReverted` Warning Event
+  naming the manager and fields until the drift is gone, and continues
   repairing all other resources (including dependents). Run `kix deploy` to
   take those fields back, or list them in `ownership.cede` if the other manager
   should keep owning them. On a resource with no `managedFields` entry for this
@@ -357,8 +358,9 @@ A timeout ends the CLI only. The operator keeps working on the record.
   features is missing.
 - Upgrade the operator before running an upgraded Kix against its
   clusters. An older operator deploys without taking the deploy lock and writes
-  the retired `kix.run/activations` and `kix.run/applied-hash` annotations back
-  onto every resource it applies. Every command that modifies a Kix cluster
+  the [retired annotations](/docs/reference/annotations-crds-and-receipts/#retired-annotations),
+  such as `kix.run/activations` and `kix.run/identity-hash`, back onto every
+  resource it applies, and writes import markers to the cluster. Every command that modifies a Kix cluster
   (`kix deploy`, `kix rollback`, `kix gc`) stops with `[K9557]` before planning
   if a current, queued, or deploying record for that cluster was submitted to
   the operator and `kix.run/operator-features` lacks `revisions` (including

@@ -109,8 +109,10 @@ Render the manifests to verify the value received by the client:
 
 <Command {...clientConfig} />
 
-Kix renders a PackageInstance marker for `legacy-api`, but it does not render
-or update the Service itself. Keep the Service in the lifecycle of the system
+Kix renders a PackageInstance marker for `legacy-api` in the build, but it
+does not render or update the Service itself, and it does not write the marker
+to the cluster. Before deploying a consumer, `kix deploy` checks that the
+Service exists. Keep the Service in the lifecycle of the system
 that already owns it.
 
 ## Import an outside service with a login

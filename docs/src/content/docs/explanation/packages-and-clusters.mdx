@@ -56,7 +56,7 @@ In practice, that rule governs three design choices:
 
 Whenever a standard Kubernetes field expresses an intent, Kix uses the Kubernetes field name and structure rather than inventing a parallel schema. `scope.mkResource` and `scope.mkDeployment` accept real `apiVersion`, `kind`, and `spec` trees. Composition helpers such as `kix.port` and `kix.mkEnvVars` return standard Kubernetes container fragments that you can inspect or merge with ordinary Nix operators.
 
-The annotations Kix adds to compiled manifests (`kix.run/identity-hash`, `kix.run/depends-on`, `kix.run/package`) exist strictly for dependency tracking, change detection, and ownership bookkeeping. If you stop using Kix and export your cluster with `kix export`, you are left with ordinary Kubernetes manifests that `kubectl` and standard controllers already understand.
+The annotations Kix adds to compiled manifests (`kix.run/identity-hash`, `kix.run/depends-on`, `kix.run/package`) exist strictly for dependency tracking, change detection, and ownership bookkeeping. Kix removes them before it sends a manifest to the cluster, and keeps those facts in its own records. If you stop using Kix and export your cluster with `kix export`, you are left with ordinary Kubernetes manifests that `kubectl` and standard controllers already understand.
 
 ### Automation over brevity
 

@@ -38,7 +38,11 @@ them. See [Global flags](/docs/reference/cli/global-flags/) for
 | | `kix.run/*` annotations | Activation and PackageInstance resources |
 | --- | --- | --- |
 | Default | Removed | Skipped |
-| `--with-kix-metadata` | Kept, including the identity hash and package stamps a deploy writes | Written |
+| `--with-kix-metadata` | Kept, including the identity hash, package, and dependency annotations of the build, which a deploy does not send to the cluster | Written |
+
+The Activation and PackageInstance column covers only the kinds of Kix's API
+group (`kix.run`). A kind of the same name in another API group is exported
+like any other object.
 
 Every export drops null fields and writes keys in sorted order. Labels are
 written unchanged.

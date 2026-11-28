@@ -36,12 +36,12 @@ kix gc <CLUSTER> [-y] [--dry-run] [--full-scan [--include unattributed,copies]] 
 | `<CLUSTER>` | Cluster name to build from the flake. |
 | `-y`, `--yes` | Skip the confirmation prompt. Required when stdin is not a terminal. |
 | `--dry-run` | Print what gc would delete, both resources and Activation records, and delete nothing. |
-| `--full-scan` | Scan the named cluster's resources carrying the Kix managed-by label and delete those whose identity hash is not in the active deployment's build (or the build from your local files if the cluster has no `Active` Activation record). |
+| `--full-scan` | Scan the named cluster's resources carrying the Kix managed-by label and delete those whose kind, namespace, and name are not among the objects the active deployment's build makes (or the build from your local files if the cluster has no `Active` Activation record). |
 | `--include <KINDS>` | With `--full-scan` (required), also judge the kinds of resource a full scan only lists by default. A comma-separated list of the values below. |
 
 | `--include` value | Resources it adds |
 | --- | --- |
-| `unattributed` | Resources with no matching Activation record on the cluster. Kix cannot tell which Kix cluster they belong to, so by default they are only listed. |
+| `unattributed` | Resources with no matching Activation record on the cluster and no field manager entry of the named cluster. Kix cannot tell which Kix cluster they belong to, so by default they are only listed. |
 | `copies` | Resources with Kix's labels that Kix did not apply. Another controller or tool created or applied them, such as an operator copying a custom resource's labels onto a database volume claim or an Event. By default, copies are only listed. |
 | `--operator` | Delete the retired Activation records only; the operator's finalizer removes their resources. |
 | `--timeout <DURATION>` | How long to wait for a deleted resource while its finalizers do not change (`5m`, `300s`, or seconds). Default `3m`. Each removed finalizer resets the timer, up to 5 minutes in total per resource. Not with `--operator`. |
@@ -55,7 +55,7 @@ kix gc <CLUSTER> [-y] [--dry-run] [--full-scan [--include unattributed,copies]] 
 | Mode | What `kix gc` checks | What is deleted |
 | --- | --- | --- |
 | Default | Kept orphans on the `Active` Activation record: resources listed in its kept-orphans [revision](/docs/reference/annotations-crds-and-receipts/#packageinstancerevision) (or builds in `status.orphansKeptFrom` on records written by earlier versions) | Those resources whose kind, namespace, and name are absent from the active deployment's build. If the cluster has no `Active` Activation record, `kix gc` prints a message and exits without deleting anything. |
-| `--full-scan` | Every live Kix-managed resource for the named cluster | Resources whose identity hash is absent from the active deployment's build (or from the local files' build when the cluster has no `Active` Activation record). Any resource referenced by a revision of this cluster is deleted only if no revision other than the kept-orphans revision lists it. |
+| `--full-scan` | Every live Kix-managed resource for the named cluster | Resources whose kind, namespace, and name are absent from the objects the active deployment's build makes (or from the local files' build when the cluster has no `Active` Activation record). Any resource referenced by a revision of this cluster is deleted only if no revision other than the kept-orphans revision lists it. |
 | `--operator` | Activation records | Retired records; the operator deletes their resources |
 
 To load the active deployment's build, both the default mode and `--full-scan`
@@ -107,6 +107,11 @@ classifies each resource as follows:
   cluster whose records were deleted. This rule applies
   even when only one Kix cluster has records on the Kubernetes cluster, since
   missing records may have belonged to another Kix cluster.
+- A resource that no deployment record names but that carries the named
+  cluster's own field manager entry (`kix/<cluster>`) belongs to the named
+  cluster. The full scan deletes it when the build does not make it, without
+  `--include unattributed`. Such a resource can be left on the cluster when a
+  Kix cluster stopped deploying an object it shared with another Kix cluster.
 
 The default mode, `kix deploy --prune`, and `kix rollback --prune` apply the same rule to
 a resource both clusters deploy: when the named cluster's build drops it and
@@ -114,11 +119,18 @@ another cluster's current build still contains it, the plan lists it as kept.
 
 Right before deleting each resource, `kix gc` reads it again and deletes it only
 if it has not changed since that read and no other Kix cluster deploys it
-(checked against other clusters' records, revisions, and `managedFields`). A resource left for
+(checked against other clusters' records and revisions). Another Kix
+cluster's field manager entry on the resource keeps it only while that
+cluster's kept-orphans list names the resource. A resource left for
 either reason is printed as `= prune: kept ...` and is not a failure.
 
-Resources are deleted dependents first. Namespaces and
-CustomResourceDefinitions are skipped. A resource that is already gone when
+Resources are deleted dependents first. Kix reads the dependencies from the
+active build and from `needs` on this Kix cluster's revisions. A resource that
+no revision lists (one `--include unattributed` adds) has no recorded
+dependencies, so Kix deletes it in no particular order. Namespaces and CustomResourceDefinitions are skipped. A build makes no
+object for an import marker, so a marker that an earlier version of Kix wrote
+to the cluster is a leftover like any other, and `kix gc` deletes it unless
+another Kix cluster still deploys it. A resource that is already gone when
 gc deletes it is reported, not counted as a failure.
 
 Like `kix deploy --prune`, `kix gc` deletes most resources with `Background`
@@ -132,7 +144,8 @@ second delete request. It stops waiting if no finalizer is removed within
 `--timeout` (default `3m`), or after 5 minutes in total. If a resource is still on the cluster
 when the wait ends, `kix gc` counts it as a failure, prints `[K2794]` (with a
 `kubectl patch` command when finalizers remain), and keeps any resources
-recorded as its dependencies in `kix.run/depends-on`. When a package sets
+recorded as its dependencies (in `needs` on the cluster's revisions, or in the
+build). When a package sets
 `controller` on a custom resource kind, that dependency list includes the
 operator, and `[K2794]` reports whether the operator is ready, not ready, or
 not on the cluster. Most packages do not set `controller` yet, so removing a

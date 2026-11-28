@@ -1,6 +1,6 @@
 # 182: Objects carry no graph state
 
-**Status:** Accepted for building (2026-11-27). Section 9 says what the adversarial review changed.
+**Status:** Built (2026-11-28, branch `graph-off-objects`). Section 9 says what the adversarial review changed, and section 11 where the build differs from the design.
 **Related:** `archive/175_one_home_for_what_a_deploy_did.md` (this finishes it), `archive/175a_revisions_build_notes.md`, `archive/150_scope_managed_sweep_to_one_cluster.md`, `55_shared_resource_ownership.md`, `ROADMAP.md` ("Two Kix clusters that render one shared object differently").
 
 ## 1. Summary
@@ -483,3 +483,50 @@ Each step ends with the full tests green.
 Tests on a real cluster before the pull request: two Kix clusters that
 differ by one Namespace label; the upgrade from 0.9.2 and from rc.6 with the
 other Kix cluster left behind; a shared test cluster.
+
+## 11. As built
+
+Where the code differs from sections 4 to 6, or settles what they left open:
+
+- **Format 2.** The slot names the instance in `name`. A `needs` entry is an
+  object (`group`, `kind`, `namespace`, `name`, `as`), because a name can
+  hold a colon. An edge to a hash the build does not make is left out. A
+  `spec.format` above 2 is refused as written by a newer Kix.
+- **Map format 2.** `status.revisions` is written as format 2, and 1 and 2
+  are read, so an older Kix refuses the map instead of misreading it.
+- **Imports.** An entry records the marker's `namespace` and an optional
+  `target`. An edge passes through a marker only when the manifests at hand
+  do not hold it. The kept-orphans revision lists the imports its objects
+  reach. The derived package index lists markers with a flag.
+- **The object hash** is 32 hex digits of a SHA-256 of the sent manifest.
+  A rebuilt kept-orphans list uses the hash `rebuilt`.
+- **The rule has a third clause.** The applied hash leaves out ceded fields
+  and the object hash does not, so the two do not cover the same things
+  (section 4.3 says they must). A skip also needs each ceded field that
+  `kix/<cluster>` still owns to hold the value the build sends.
+- **Taking in leftovers** of a `Degraded`, `Failed`, or `Partial` record
+  needs an applied hash in that record's revision or an `Apply` entry under
+  `kix/<cluster>`. The shared `kix` manager alone never counts.
+- **Labels.** A stopped record shows as `unfinished_deploy` when the object
+  has no drift and as `reverts_drift` when it has drift.
+- **The operator** applies a drifted object without the fields another
+  manager holds and records no applied hash for it.
+- **What Kix sends** leaves out all seven retired notes, under every domain.
+- **Kept-orphans size** is checked when planning, before the lock. Orphans
+  that `--prune` deletes are not counted.
+- **Migration.** The conversion takes `needs` and lifecycle from the live
+  notes, and carries an applied hash only when the object's
+  `kix.run/activations` note lists the record. A marker an older Kix applied
+  gets the migration write once and is then a kept orphan.
+- **Kix's kinds** are matched by group and kind. Another group's `Activation`
+  or `PackageInstance` is an ordinary object.
+- **One definition of what a build makes** (`lifecycle::makes`) leaves
+  markers out everywhere, gc included.
+- **Hand-over of a shared object** goes through records only. Another Kix
+  cluster still deploys an object when its records name it. Its `Apply`
+  entry counts only beside its own kept-orphans list. A record stops naming
+  a shared orphan once the run saw its entry gone, and a release-only plan
+  runs. `kix gc --full-scan` takes an object no record names that carries
+  the cluster's own entry as the cluster's.
+- **`kix status -o json`** renames `resources[].identity_hash` to `hash`.
+- **Known limits** are in `ROADMAP.md` and `housekeeping/` (2026-11-28).
