@@ -455,7 +455,8 @@ mod both_sources {
         assert!(
             text.contains(&missing)
                 && text.contains("a-failed")
-                && text.contains("Redeploying that record's build recreates it"),
+                && text.contains("`a-failed` is an unfinished deploy")
+                && text.contains("run `kix deploy a` to finish that deploy"),
             "{text}"
         );
         assert!(a.complete_for_others().is_ok());
@@ -471,6 +472,118 @@ mod both_sources {
         let a = state.tenancy("a");
         let err = a.complete_for_kept().unwrap_err();
         assert!(err.to_string().contains(&kept), "{err}");
+    }
+
+    /// A revision's name says what it holds. Read with a build that names
+    /// it, a lost revision is no longer a problem, whether it was missing or
+    /// could not be read. It names its objects again without applied hashes,
+    /// and is not listed as on the cluster. A lost revision no build names
+    /// is still a problem, and so is one a newer Kix wrote.
+    #[test]
+    fn a_lost_revision_is_read_from_a_build_that_names_it() {
+        let mut state = state(&recs(), |_| Written::Revisions);
+        let name = state.revision_named("a-cur", "instance");
+        let value = state
+            .revisions
+            .iter()
+            .find(|r| r["metadata"]["name"] == name.as_str())
+            .unwrap()
+            .clone();
+        let built = Revision::from_object(&serde_json::from_value(value.clone()).unwrap()).unwrap();
+        assert!(!built.spec.objects.is_empty());
+        let set = revision::RevisionSet {
+            instances: [("d/app".to_string(), built.clone())].into(),
+            cluster_level: built.clone(),
+        };
+        let object = built.spec.objects[0].name.clone();
+
+        state.remove_revision(&name);
+        let missing = state.tenancy("a");
+        assert!(matches!(
+            missing.complete_for_own(),
+            Err(Problem::MissingRevision { revision, .. }) if revision == name
+        ));
+        let created = missing.with_rebuilt_from(std::slice::from_ref(&set));
+        assert!(
+            created.complete_for_own().is_ok(),
+            "{:?}",
+            created.problems()
+        );
+        assert!(
+            created
+                .owners_of(&state.object(&object))
+                .contains(&"a".to_string())
+        );
+        assert!(created.revision(&name).unwrap().applied.is_empty());
+        assert!(
+            created
+                .own_listed_revisions()
+                .iter()
+                .all(|r| r.name != name)
+        );
+        assert!(
+            created
+                .applied_by(&state.object(&object))
+                .iter()
+                .all(|h| h != "cur")
+        );
+
+        let mut broken: DynamicObject = serde_json::from_value(value).unwrap();
+        broken.data["spec"]["objects"][0]["name"] = json!("changed");
+        let unreadable = revision::ReadError::NameMismatch {
+            name: name.clone(),
+            expected: "other".into(),
+        };
+        assert!(Revision::from_object(&broken).is_err());
+        let heads = missing.raw.heads.clone();
+        let records = missing.raw.records.clone();
+        let mut listed = match &missing.raw.revisions {
+            Ok(Some(listed)) => listed.clone(),
+            other => panic!("{other:?}"),
+        };
+        listed.unreadable.push(unreadable);
+        let read = Tenancy::from_state("a", &heads, &records, Ok(Some(&listed)));
+        assert!(matches!(
+            read.complete_for_own(),
+            Err(Problem::UnreadableRevision { revision, .. }) if revision == name
+        ));
+        assert!(
+            read.with_rebuilt_from(std::slice::from_ref(&set))
+                .complete_for_own()
+                .is_ok()
+        );
+
+        listed.unreadable = vec![revision::ReadError::Newer {
+            name: name.clone(),
+            format: revision::FORMAT + 1,
+        }];
+        let newer = Tenancy::from_state("a", &heads, &records, Ok(Some(&listed)));
+        assert!(matches!(
+            newer.with_rebuilt_from(std::slice::from_ref(&set)).complete_for_own(),
+            Err(Problem::UnreadableRevision { revision, .. }) if revision == name
+        ));
+
+        let other = state.revision_named("a-failed", "instance");
+        state.remove_revision(&other);
+        let still = state
+            .tenancy("a")
+            .with_rebuilt_from(std::slice::from_ref(&set));
+        assert!(matches!(
+            still.complete_for_own(),
+            Err(Problem::MissingRevision { revision, .. }) if revision == other
+        ));
+    }
+
+    /// A `Superseded` record that no reader needs names revisions the
+    /// cleanup deletes. A rollback to it creates them again from its build,
+    /// so one that is missing or cannot be read is no problem.
+    #[test]
+    fn a_superseded_records_revisions_are_not_needed() {
+        let mut state = state(&recs(), |_| Written::Revisions);
+        let old = state.revision_named("a-old", "instance");
+        state.remove_revision(&old);
+        let a = state.tenancy("a");
+        assert!(a.complete().is_ok(), "{:?}", a.problems());
     }
 
     /// A current record whose map this release cannot read leaves its Kix

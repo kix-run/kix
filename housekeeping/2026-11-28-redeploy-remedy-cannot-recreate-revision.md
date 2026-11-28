@@ -1,3 +1,0 @@
-# 2026-11-28 · `cli/kix/src/cluster/tenancy.rs` · The remedy "Redeploying that record's build recreates it" for a missing or unreadable revision cannot work.
-
-`Problem::MissingRevision` and `Problem::UnreadableRevision` end with that remedy when the revision is not the kept-orphans one. But every deploy, rollback, and operator plan builds its ledger through `Ledger::of`, which calls `Tenancy::complete_for_own` and refuses on the same problem, so the redeploy stops before it creates anything. For an unreadable revision, `Revisions::create` would also answer `Exists` and keep the broken object. Found by reading the code, not by a run.

@@ -331,10 +331,13 @@ impl Baseline {
                 Baseline::empty()
             }
         };
-        baseline.tenancy = match tenancy {
+        let tenancy = match tenancy {
             Some(tenancy) => tenancy,
             None => read_tenancy(&opened, cluster).await?,
         };
+        // A lost revision the build names is read from it
+        // ([`Tenancy::with_rebuilt`]).
+        baseline.tenancy = tenancy.with_rebuilt(&[build.graph()]);
 
         // Objects an earlier deploy that did not prune left on the cluster.
         // The Active closure no longer declares those objects, so without
@@ -1007,7 +1010,8 @@ struct LiveRead {
 /// cluster belong to none of these, so they never become orphans. Objects
 /// of this cluster that only older builds name are excluded and reported
 /// via [`PlanEvent::OlderBuildsLeftOut`]. The [`Tenancy`] is read after the
-/// objects are listed, and returned for the rest of the baseline.
+/// objects are listed, with each lost revision `new` names read from it
+/// ([`Tenancy::with_rebuilt`]), and returned for the rest of the baseline.
 ///
 /// Returns an error if the sweep fails so the planner never falls back to an
 /// empty baseline when the apiserver is unhealthy.
@@ -1023,7 +1027,7 @@ async fn of_live(
     let sweep = inventory::list_managed(client, discovery)
         .await
         .map_err(|e| PlanError::Reconstruct(e.to_string()))?;
-    let tenancy = read_tenancy(opened, cluster).await?;
+    let tenancy = read_tenancy(opened, cluster).await?.with_rebuilt(&[new]);
     let stopped = match opened.records() {
         Some(records) => records
             .stopped(cluster)

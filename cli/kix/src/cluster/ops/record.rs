@@ -154,9 +154,10 @@ impl ActivationRecord {
             })
     }
 
-    /// Create every revision the record names. A revision that exists
-    /// already counts as created, because its name is a hash of its
-    /// contents. A run that writes no record creates none.
+    /// Create every revision the record names. A readable revision that
+    /// exists already counts as created, because its name is a hash of its
+    /// contents, and one that cannot be read is replaced
+    /// ([`Revisions::create`]). A run that writes no record creates none.
     ///
     /// Every run sends the creates, so a run that takes over or continues a
     /// record creates what an earlier run of it did not.

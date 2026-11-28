@@ -121,6 +121,10 @@ pub struct LivePlan {
     /// writes the record names in it. `None` when the record names no Kix
     /// cluster to label them with.
     revisions: Option<RevisionSet>,
+    /// The revisions of `revisions` the plan read from the build because the
+    /// cluster lost them ([`crate::cluster::tenancy::Tenancy::with_rebuilt`]).
+    /// A repair creates them, since it writes no record that would.
+    rebuilt: Vec<crate::cluster::revision::Revision>,
     drift_not_reverted: Vec<DriftNotReverted>,
     /// The objects the records name whose kind the cluster does not serve,
     /// which the run's kept-orphans revision names again.
@@ -195,6 +199,12 @@ impl LivePlan {
             .map_err(|e| LivePlanError::Conversion(Box::new(e)))?;
             tenancy.with_conversion(&conversion)
         };
+        // A lost revision the build names is read from it
+        // ([`crate::cluster::tenancy::Tenancy::with_rebuilt`]).
+        let tenancy = match &revisions {
+            Some(set) => tenancy.with_rebuilt_from(std::slice::from_ref(set)),
+            None => tenancy,
+        };
         // Only this Kix cluster's objects: every other Kix cluster's objects
         // are absent from this build and would otherwise be pruned as
         // orphans.
@@ -246,6 +256,12 @@ impl LivePlan {
         let graph = ResourceGraph::from_manifests(desired).map_err(LivePlanError::Graph)?;
         let plan =
             DeployPlan::from_graph_and_changes(&graph, &actions).map_err(LivePlanError::Marker)?;
+        let rebuilt = revisions
+            .iter()
+            .flat_map(RevisionSet::all)
+            .filter(|r| sweep.tenancy.rebuilt().contains(&r.name))
+            .cloned()
+            .collect();
 
         Ok(LivePlan {
             client: client.clone(),
@@ -263,6 +279,7 @@ impl LivePlan {
             foreign: sweep.foreign,
             unattributed: sweep.unattributed.len(),
             revisions,
+            rebuilt,
             drift_not_reverted,
             unknown,
         })
@@ -351,6 +368,20 @@ impl LivePlan {
         observer: Arc<dyn DeployObserver>,
     ) -> Result<DeployResult, DeployError> {
         lock.stop_with(&config.cancel);
+        if !manage_lifecycle {
+            // A revision whose name and content the record already names
+            // changes nothing a deploy of the record would not write.
+            let store = crate::cluster::revision::Revisions::new(&lock.guarded(&self.client));
+            for revision in &self.rebuilt {
+                store
+                    .create(revision)
+                    .await
+                    .map_err(|e| DeployError::BeginFailed {
+                        message: e.to_string(),
+                        partial: DeployResult::default(),
+                    })?;
+            }
+        }
         let (cluster, _) = Cluster::new(
             KubeResources::new(
                 lock.guarded(&self.client),
@@ -714,6 +745,7 @@ mod tests {
             foreign: inventory::Foreign::default(),
             unattributed: 0,
             revisions: None,
+            rebuilt: Vec::new(),
             drift_not_reverted: Vec::new(),
             unknown: Vec::new(),
             migrations: Default::default(),
@@ -3115,6 +3147,7 @@ mod tests {
             );
         }
 
+        mod missing_revision;
         mod shared_marker;
     }
 }

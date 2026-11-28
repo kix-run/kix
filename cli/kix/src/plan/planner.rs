@@ -1095,7 +1095,7 @@ impl<'a> Planner<'a> {
             self.settle_lock(&client, graph, settle).await?;
         }
         let baseline = Baseline::of_cluster(&client, build, self.report).await?;
-        let ledger = ledger_for(&client, &baseline, new_manifests).await?;
+        let ledger = ledger_for(&client, &baseline, graph, new_manifests).await?;
         let head = read_head(&client, cluster).await?;
         let live = read_live(&client, &listed_ids(new_manifests, Some(&ledger))).await?;
         let mut checked = self
@@ -1282,7 +1282,9 @@ impl<'a> Planner<'a> {
         let new_graph = build.graph();
         let new_manifests = manifests_of(new_graph);
         let ledger = match &client {
-            Some((client, _)) => Some(ledger_for(client, &baseline, &new_manifests).await?),
+            Some((client, _)) => {
+                Some(ledger_for(client, &baseline, new_graph, &new_manifests).await?)
+            }
             None => None,
         };
         // A half-applied closure is not a previous intended state, so
@@ -1359,7 +1361,7 @@ impl<'a> Planner<'a> {
     ) -> Result<CheckedPlan, PlanError> {
         let new_manifests = manifests_of(new_graph);
         let ledger = match client {
-            Some(client) => Some(ledger_for(client, baseline, &new_manifests).await?),
+            Some(client) => Some(ledger_for(client, baseline, new_graph, &new_manifests).await?),
             None => None,
         };
         let live = match client {
@@ -1681,12 +1683,15 @@ impl<'a> Planner<'a> {
 /// record a run needs has no revision map, the run gives it revisions first
 /// ([`crate::cluster::revision::convert`]). The plan lists every object that
 /// carries Kix's label, computes the same conversion, and reads the records
-/// as the run will find them. Refuse when the tenancy could not read what
-/// this Kix cluster's records name, because the plan could not tell which
-/// objects are orphans.
+/// as the run will find them. It reads each lost revision `new_graph` names
+/// from it, beside the local builds the read used
+/// ([`crate::cluster::tenancy::Tenancy::with_rebuilt`]). Refuse when the
+/// tenancy could not read what this Kix cluster's records name, because the
+/// plan could not tell which objects are orphans.
 async fn ledger_for(
     client: &Client,
     baseline: &Baseline,
+    new_graph: &StoreGraph,
     new_manifests: &[Value],
 ) -> Result<Ledger, PlanError> {
     use crate::cluster::revision::convert;
@@ -1715,7 +1720,9 @@ async fn ledger_for(
         )
         .map_err(|e| PlanError::Conversion(Box::new(e)))?
     };
-    let converted = tenancy.with_conversion(&conversion);
+    let converted = tenancy
+        .with_conversion(&conversion)
+        .with_rebuilt(&[new_graph]);
     let mut ledger =
         Ledger::of(&converted, take_in_stopped).map_err(|e| PlanError::Tenancy(Box::new(e)))?;
     ledger.set_converts(!conversion.is_empty());

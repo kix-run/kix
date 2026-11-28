@@ -253,3 +253,29 @@ pub async fn rebuild_kept(
         .map_err(|e| e.to_string())?;
     Ok(revision.name)
 }
+
+/// Return what a rebuilt kept-orphans list names: each labelled, prunable
+/// live object of `sweep` that the Kix cluster applied, that no other
+/// revision of it names, and that the build compared with, whose objects
+/// are `in_build`, lacks. Nothing says which build wanted each object, so
+/// each gets the hash [`super::REBUILT`], which no object hash equals, and
+/// no edges.
+pub fn kept_to_rebuild(
+    sweep: &crate::cluster::inventory::ManagedSweep,
+    in_build: &std::collections::HashSet<crate::manifest::types::ResourceId>,
+) -> Vec<super::RevisionObject> {
+    let tenancy = &sweep.tenancy;
+    let mut objects: Vec<super::RevisionObject> = sweep
+        .managed
+        .iter()
+        .chain(&sweep.unattributed)
+        .filter(|obj| crate::manifest::lifecycle::lifecycle_of_live(obj).prunable())
+        .filter(|obj| tenancy.unlisted_own(obj))
+        .map(crate::cluster::drift::resource_id)
+        .filter(|rid| !in_build.contains(rid))
+        .map(|rid| super::RevisionObject::of_id(super::REBUILT, &rid))
+        .collect();
+    objects.sort();
+    objects.dedup();
+    objects
+}

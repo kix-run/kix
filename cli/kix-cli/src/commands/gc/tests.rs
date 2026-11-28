@@ -1343,7 +1343,7 @@ mod revision_tests {
         .unwrap();
         assert!(sweep.tenancy.only_kept_unreadable());
         let in_build: HashSet<ResourceId> = [ResourceId::new("", "ConfigMap", "d", "web")].into();
-        let objects = kept_to_rebuild(&sweep, &in_build);
+        let objects = keep::kept_to_rebuild(&sweep, &in_build);
         let rebuilt: Vec<&str> = objects.iter().map(|o| o.name.as_str()).collect();
         // `added` is named by the `Partial` record, so it is not a kept
         // orphan.
@@ -1354,7 +1354,7 @@ mod revision_tests {
         assert!(
             objects
                 .iter()
-                .all(|o| o.hash == revision::REBUILT && o.needs.is_empty())
+                .all(|o| o.hash == kix::cluster::revision::REBUILT && o.needs.is_empty())
         );
 
         let records = opened.into_records().unwrap();
