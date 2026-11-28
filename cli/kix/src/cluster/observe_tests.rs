@@ -533,24 +533,74 @@ async fn every_cluster_with_a_current_record_gets_a_view() {
     );
 }
 
-/// Read the Active record and the Deployment that Kix 0.10.0 left on a
-/// cluster (`tests/fixtures/cluster-state/0.10.0`). Its package index names
-/// objects without their API group.
-fn state_from_0_10_0() -> (Record, Value) {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/cluster-state/0.10.0");
-    let read = |file: &str| -> Value {
-        serde_json::from_str(&std::fs::read_to_string(dir.join(file)).unwrap()).unwrap()
+/// Return an Active record and a Deployment it deploys. The record's package
+/// index names objects without their API group, as prereleases of Kix 0.10.0
+/// wrote it before revisions.
+fn state_with_index_without_groups() -> (Record, Value) {
+    let hash = |tail: &str| "a".repeat(32 - tail.len()) + tail;
+    let name = |kind: &str, ns: &str, name: &str| {
+        ObjectName(kind.to_string(), ns.to_string(), name.to_string())
     };
-    let Value::Array(records) = read("activations.json") else {
-        panic!("activations.json holds a list");
-    };
-    let active = records
-        .iter()
-        .map(|r| Record::of(&serde_json::from_value(r.clone()).unwrap()))
-        .find(|r| r.phase == "Active")
-        .unwrap();
-    (active, read("deployment.json"))
+    let mut record = Record::of(
+        &serde_json::from_value(json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": RECORD_KIND,
+            "metadata": {
+                "name": "fixtures-act000000000",
+                "labels": { (keys::CLUSTER_LABEL): "fixtures" },
+                "annotations": { (keys::IDENTITY_HASH): hash("act") },
+            },
+            "spec": { "cluster": "fixtures" },
+            "status": { "phase": "Active" },
+        }))
+        .unwrap(),
+    );
+    record.package_index = Some(RecordPackageIndex {
+        format: FORMAT,
+        packages: BTreeMap::from([(
+            "drift-fixtures/fixtures".to_string(),
+            IndexedPackage {
+                instance: hash("api"),
+                resources: vec![hash("web")],
+            },
+        )]),
+        cluster_level: vec![hash("ns")],
+        names: BTreeMap::from([
+            (hash("ns"), name("Namespace", "", "drift-fixtures")),
+            (
+                hash("api"),
+                name(
+                    crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND,
+                    "drift-fixtures",
+                    "fixtures",
+                ),
+            ),
+            (
+                hash("web"),
+                name("Deployment", "drift-fixtures", "fixture-web"),
+            ),
+        ]),
+        groups: None,
+        imports: Default::default(),
+    });
+    let deployment = json!({
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+            "name": "fixture-web",
+            "namespace": "drift-fixtures",
+            "annotations": { (keys::IDENTITY_HASH): hash("web") },
+        },
+        "spec": {
+            "replicas": 1,
+            "selector": { "matchLabels": { "app": "fixture-web" } },
+            "template": {
+                "metadata": { "labels": { "app": "fixture-web" } },
+                "spec": { "containers": [{ "name": "web", "image": "nginx:1.27.0" }] },
+            },
+        },
+    });
+    (record, deployment)
 }
 
 fn served(groups: &[&str], kind: &str) -> Vec<(ApiResource, Scope)> {
@@ -563,14 +613,14 @@ fn served(groups: &[&str], kind: &str) -> Vec<(ApiResource, Scope)> {
         .collect()
 }
 
-/// An index written by Kix 0.10.0 does not say an object's API group. A
+/// An index written before revisions may not say an object's API group. A
 /// Deployment live only under an older identity hash is found through the
 /// one group that serves `Deployment`, and is present. When several groups
 /// serve the kind, Kix reports the object as ambiguous: neither missing nor
 /// looked up in a guessed group.
 #[test]
 fn an_object_from_an_index_without_groups_is_found_through_discovery() {
-    let (record, mut deployment) = state_from_0_10_0();
+    let (record, mut deployment) = state_with_index_without_groups();
     let hash = keys::IDENTITY_HASH;
     assert!(
         matches!(
@@ -581,7 +631,7 @@ fn an_object_from_an_index_without_groups_is_found_through_discovery() {
             ),
             Some(IndexedName::GroupUnknown(_))
         ),
-        "the 0.10.0 index records no groups"
+        "the index records no groups"
     );
     deployment["metadata"]["annotations"][hash] = json!("o".repeat(32));
     let objects: Vec<DynamicObject> = vec![serde_json::from_value(deployment).unwrap()];

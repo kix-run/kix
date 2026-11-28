@@ -124,11 +124,23 @@ same unreleased records, with the version taken from the prerelease.
    `CHANGELOG.md`. Check that the new section is the one you read. For a
    prerelease, skip this step.
 5. The cluster state fixtures in `cli/kix/tests/fixtures/cluster-state/`,
-   only when a record of this release has `state = true`. Copy the newest
-   folder to `<version>/`, set `version` and `date` in its `written.toml`,
-   and replace the objects with ones this release writes. Delete
-   `expected.json`, run `cargo test -p kix-lib cluster_state` to write a new
-   one, and check each value in it.
+   only when a record of this release has `state = true`. Make a folder
+   `<version>/` with a `written.toml` that gives `version` and `date`, and
+   JSON files of objects that this release wrote on a real cluster. Do not
+   write them by hand. Deploy a small Kix cluster twice to a kind cluster,
+   changing one value between the deploys, so that it has an `Active` and a
+   `Superseded` record. Then read the objects with `kubectl get -o json
+   --show-managed-fields`. The folder holds the Activation records, the
+   ActivationHead, the PackageInstanceRevision objects that the `Active`
+   record's `status.revisions` names, and one or two managed objects with
+   their `managedFields`, such as a Deployment and its PackageInstance. To
+   keep the folder small, you can drop instances from both the records'
+   `spec.instances` and the map, together with their revisions. Do not edit
+   a revision's `spec`, because its name is a hash of it. Leave out Secrets,
+   and replace project paths and hostnames, such as
+   `status.receipt.source.flakeRef`. Delete `expected.json`, run
+   `cargo test -p kix-lib cluster_state` to write a new one, and check each
+   value in it against the objects.
 6. Required stops. When a record in the new section has
    `required-stop = true`, add the version to `REQUIRED_STOPS` in
    `cli/kix/src/cluster/stops.rs`. `kix deploy`, `kix rollback`, and the

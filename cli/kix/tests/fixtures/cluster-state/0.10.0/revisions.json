@@ -1,0 +1,189 @@
+[
+  {
+    "apiVersion": "kix.run/v1alpha1",
+    "kind": "PackageInstanceRevision",
+    "metadata": {
+      "creationTimestamp": "2026-11-28T08:44:44Z",
+      "generation": 1,
+      "labels": {
+        "kix.run/cluster": "lab"
+      },
+      "name": "lab-19b26b4c4ba4ad54d817896502fd28a9",
+      "resourceVersion": "681",
+      "uid": "b20c5e96-50a3-42e5-be77-9b79bb71e152"
+    },
+    "spec": {
+      "cluster": "lab",
+      "format": 2,
+      "objects": [
+        {
+          "group": "",
+          "hash": "002e834e454f2ee19ad187bdf2aa5426",
+          "kind": "Namespace",
+          "name": "other"
+        },
+        {
+          "group": "",
+          "hash": "1d3a9906bb6d4f5c14b99d0572b421c0",
+          "kind": "Namespace",
+          "name": "lab"
+        },
+        {
+          "group": "",
+          "hash": "5595dca67484e0903f9a735fc09bd1f0",
+          "kind": "Namespace",
+          "name": "kube-system"
+        }
+      ],
+      "slot": {
+        "kind": "clusterLevel"
+      }
+    },
+    "status": {
+      "applied": {
+        "002e834e454f2ee19ad187bdf2aa5426": "2d75d6d13a344c1128c9cf3b62d1419f6951a80da7bd8b393244e0eb1efecc74",
+        "1d3a9906bb6d4f5c14b99d0572b421c0": "68dc4a109d9dd5eab738e2205a2d1291d1cec6d36bcf631ae0957040ca84848f",
+        "5595dca67484e0903f9a735fc09bd1f0": "d4eba957998391745431f1d939f1bf0c69012b8371b7aa7d52b1845c8a30b6d1"
+      }
+    }
+  },
+  {
+    "apiVersion": "kix.run/v1alpha1",
+    "kind": "PackageInstanceRevision",
+    "metadata": {
+      "creationTimestamp": "2026-11-28T08:44:43Z",
+      "generation": 1,
+      "labels": {
+        "kix.run/cluster": "lab"
+      },
+      "name": "lab-1b95a980b50e440b82396d3374855165",
+      "resourceVersion": "430",
+      "uid": "143489ae-8a31-44d0-abb8-d9a34584d777"
+    },
+    "spec": {
+      "cluster": "lab",
+      "format": 2,
+      "imports": [
+        {
+          "hash": "bfe5c73dcd596f4e71677692cabf13bf",
+          "name": "platform-dns",
+          "namespace": "kube-system",
+          "needs": [
+            {
+              "kind": "Namespace",
+              "name": "kube-system"
+            }
+          ],
+          "target": {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "name": "kube-dns",
+            "namespace": "kube-system"
+          }
+        }
+      ],
+      "objects": [],
+      "slot": {
+        "kind": "instance",
+        "name": "platform-dns",
+        "namespace": "kube-system"
+      }
+    }
+  },
+  {
+    "apiVersion": "kix.run/v1alpha1",
+    "kind": "PackageInstanceRevision",
+    "metadata": {
+      "creationTimestamp": "2026-11-28T08:44:43Z",
+      "generation": 1,
+      "labels": {
+        "kix.run/cluster": "lab"
+      },
+      "name": "lab-4cf549e3404ac6b86a70c4c30f421eab",
+      "resourceVersion": "687",
+      "uid": "41a6e5c7-8772-4f25-836b-a7a75127ea28"
+    },
+    "spec": {
+      "cluster": "lab",
+      "format": 2,
+      "objects": [
+        {
+          "group": "kix.run",
+          "hash": "1df2c5217e3e59bcaf000fd7e2f8b8ff",
+          "kind": "PackageInstance",
+          "name": "web",
+          "namespace": "lab",
+          "needs": [
+            {
+              "kind": "Namespace",
+              "name": "lab"
+            },
+            {
+              "group": "apps",
+              "kind": "Deployment",
+              "name": "web-web",
+              "namespace": "lab"
+            }
+          ]
+        },
+        {
+          "group": "apps",
+          "hash": "62146f4e6822776c84f21e5ac250c026",
+          "kind": "Deployment",
+          "name": "web-web",
+          "namespace": "lab",
+          "needs": [
+            {
+              "kind": "ConfigMap",
+              "name": "base-cfg",
+              "namespace": "lab"
+            },
+            {
+              "kind": "Namespace",
+              "name": "lab"
+            }
+          ]
+        },
+        {
+          "group": "",
+          "hash": "6e64e4818721a5b86ea04852214a9297",
+          "kind": "Secret",
+          "name": "web-sec",
+          "namespace": "lab",
+          "needs": [
+            {
+              "kind": "Namespace",
+              "name": "lab"
+            }
+          ]
+        },
+        {
+          "group": "",
+          "hash": "86fd902234e6b515872dd5f6fe8c4188",
+          "kind": "Service",
+          "name": "web-web",
+          "namespace": "lab",
+          "needs": [
+            {
+              "kind": "Namespace",
+              "name": "lab"
+            }
+          ]
+        }
+      ],
+      "slot": {
+        "kind": "instance",
+        "name": "web",
+        "namespace": "lab"
+      }
+    },
+    "status": {
+      "applied": {
+        "1df2c5217e3e59bcaf000fd7e2f8b8ff": "c5f56034fdee095cc031647d0dc54627acd2b4130714d223f484f2803a2a2b32",
+        "62146f4e6822776c84f21e5ac250c026": "e0ce28cedf799b0094893fb18afaf58d69df2bd58283d514641d1e99171f0eb4",
+        "6e64e4818721a5b86ea04852214a9297": "a600ff50941d04e628c49f38c5bd044ca44c4b62a3042668741fe928be10ec10",
+        "86fd902234e6b515872dd5f6fe8c4188": "e8328fb9d03dcfe71ce0ba343ba8b8582dd8946f350f530dfc69cb6abc3373ab"
+      }
+    }
+  }
+]

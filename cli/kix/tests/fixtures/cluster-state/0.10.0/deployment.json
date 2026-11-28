@@ -4,18 +4,15 @@
   "metadata": {
     "annotations": {
       "deployment.kubernetes.io/revision": "1",
-      "kix.run/activations": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaold,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaact",
-      "kix.run/applied-hash": "dfe08d8503500f11e85314ce3fdb8d03fd8f09438d14282c7d97702d9d2c746e",
-      "kix.run/depends-on": "requires:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans",
-      "kix.run/identity-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaweb",
-      "kix.run/package": "fixtures",
-      "kix.run/package-namespace": "drift-fixtures"
+      "kix.run/cede-fields": "spec.replicas"
     },
-    "creationTimestamp": "2026-07-02T19:23:09Z",
-    "generation": 2,
+    "creationTimestamp": "2026-11-28T08:44:44Z",
+    "generation": 1,
     "labels": {
+      "app": "web-web",
+      "app.kubernetes.io/instance": "web",
       "app.kubernetes.io/managed-by": "kix",
-      "app.kubernetes.io/name": "fixture-web"
+      "app.kubernetes.io/name": "web"
     },
     "managedFields": [
       {
@@ -24,12 +21,11 @@
         "fieldsV1": {
           "f:metadata": {
             "f:annotations": {
-              "f:kix.run/depends-on": {},
-              "f:kix.run/identity-hash": {},
-              "f:kix.run/package": {},
-              "f:kix.run/package-namespace": {}
+              "f:kix.run/cede-fields": {}
             },
             "f:labels": {
+              "f:app": {},
+              "f:app.kubernetes.io/instance": {},
               "f:app.kubernetes.io/managed-by": {},
               "f:app.kubernetes.io/name": {}
             }
@@ -40,67 +36,23 @@
             "f:template": {
               "f:metadata": {
                 "f:labels": {
+                  "f:app": {},
                   "f:app.kubernetes.io/name": {}
                 }
               },
               "f:spec": {
                 "f:containers": {
-                  "k:{\"name\":\"sidecar\"}": {
+                  "k:{\"name\":\"web\"}": {
                     ".": {},
                     "f:command": {},
                     "f:env": {
-                      "k:{\"name\":\"ROLE\"}": {
+                      "k:{\"name\":\"BASE\"}": {
                         ".": {},
                         "f:name": {},
                         "f:value": {}
                       }
                     },
                     "f:image": {},
-                    "f:name": {}
-                  },
-                  "k:{\"name\":\"web\"}": {
-                    ".": {},
-                    "f:env": {
-                      "k:{\"name\":\"FEATURE_FLAG\"}": {
-                        ".": {},
-                        "f:name": {},
-                        "f:value": {}
-                      },
-                      "k:{\"name\":\"LOG_LEVEL\"}": {
-                        ".": {},
-                        "f:name": {},
-                        "f:value": {}
-                      }
-                    },
-                    "f:image": {},
-                    "f:name": {},
-                    "f:ports": {
-                      "k:{\"containerPort\":80,\"protocol\":\"TCP\"}": {
-                        ".": {},
-                        "f:containerPort": {},
-                        "f:name": {},
-                        "f:protocol": {}
-                      },
-                      "k:{\"containerPort\":9090,\"protocol\":\"TCP\"}": {
-                        ".": {},
-                        "f:containerPort": {},
-                        "f:name": {},
-                        "f:protocol": {}
-                      }
-                    },
-                    "f:volumeMounts": {
-                      "k:{\"mountPath\":\"/var/cache/nginx\"}": {
-                        ".": {},
-                        "f:mountPath": {},
-                        "f:name": {}
-                      }
-                    }
-                  }
-                },
-                "f:volumes": {
-                  "k:{\"name\":\"cache\"}": {
-                    ".": {},
-                    "f:emptyDir": {},
                     "f:name": {}
                   }
                 }
@@ -108,24 +60,9 @@
             }
           }
         },
-        "manager": "kix",
+        "manager": "kix/lab",
         "operation": "Apply",
-        "time": "2026-07-02T19:23:09Z"
-      },
-      {
-        "apiVersion": "apps/v1",
-        "fieldsType": "FieldsV1",
-        "fieldsV1": {
-          "f:metadata": {
-            "f:annotations": {
-              "f:kix.run/activations": {},
-              "f:kix.run/applied-hash": {}
-            }
-          }
-        },
-        "manager": "kix",
-        "operation": "Update",
-        "time": "2026-07-02T19:23:09Z"
+        "time": "2026-11-28T08:44:44Z"
       },
       {
         "apiVersion": "apps/v1",
@@ -137,6 +74,7 @@
             }
           },
           "f:status": {
+            "f:availableReplicas": {},
             "f:conditions": {
               ".": {},
               "k:{\"type\":\"Available\"}": {
@@ -159,30 +97,30 @@
               }
             },
             "f:observedGeneration": {},
+            "f:readyReplicas": {},
             "f:replicas": {},
             "f:terminatingReplicas": {},
-            "f:unavailableReplicas": {},
             "f:updatedReplicas": {}
           }
         },
         "manager": "kube-controller-manager",
         "operation": "Update",
         "subresource": "status",
-        "time": "2026-07-02T19:23:09Z"
+        "time": "2026-11-28T08:45:12Z"
       }
     ],
-    "name": "fixture-web",
-    "namespace": "drift-fixtures",
-    "resourceVersion": "485",
-    "uid": "749474c2-01e7-499c-9ff7-9d66216357f8"
+    "name": "web-web",
+    "namespace": "lab",
+    "resourceVersion": "638",
+    "uid": "41741b85-964c-489a-93a9-b594f7c6cbca"
   },
   "spec": {
     "progressDeadlineSeconds": 600,
-    "replicas": 2,
+    "replicas": 1,
     "revisionHistoryLimit": 10,
     "selector": {
       "matchLabels": {
-        "app.kubernetes.io/name": "fixture-web"
+        "app": "web-web"
       }
     },
     "strategy": {
@@ -195,61 +133,27 @@
     "template": {
       "metadata": {
         "labels": {
-          "app.kubernetes.io/name": "fixture-web"
+          "app": "web-web",
+          "app.kubernetes.io/name": "web"
         }
       },
       "spec": {
         "containers": [
           {
+            "command": [
+              "sh",
+              "-c",
+              "echo w1; sleep 100000"
+            ],
             "env": [
               {
-                "name": "LOG_LEVEL",
-                "value": "info"
-              },
-              {
-                "name": "FEATURE_FLAG",
-                "value": "on"
+                "name": "BASE",
+                "value": "base-cfg"
               }
             ],
-            "image": "nginx:1.27.0",
+            "image": "docker.io/library/busybox:1.36",
             "imagePullPolicy": "IfNotPresent",
             "name": "web",
-            "ports": [
-              {
-                "containerPort": 80,
-                "name": "http",
-                "protocol": "TCP"
-              },
-              {
-                "containerPort": 9090,
-                "name": "metrics",
-                "protocol": "TCP"
-              }
-            ],
-            "resources": {},
-            "terminationMessagePath": "/dev/termination-log",
-            "terminationMessagePolicy": "File",
-            "volumeMounts": [
-              {
-                "mountPath": "/var/cache/nginx",
-                "name": "cache"
-              }
-            ]
-          },
-          {
-            "command": [
-              "sleep",
-              "infinity"
-            ],
-            "env": [
-              {
-                "name": "ROLE",
-                "value": "sidecar"
-              }
-            ],
-            "image": "busybox:1.36",
-            "imagePullPolicy": "IfNotPresent",
-            "name": "sidecar",
             "resources": {},
             "terminationMessagePath": "/dev/termination-log",
             "terminationMessagePolicy": "File"
@@ -259,39 +163,34 @@
         "restartPolicy": "Always",
         "schedulerName": "default-scheduler",
         "securityContext": {},
-        "terminationGracePeriodSeconds": 30,
-        "volumes": [
-          {
-            "emptyDir": {},
-            "name": "cache"
-          }
-        ]
+        "terminationGracePeriodSeconds": 30
       }
     }
   },
   "status": {
+    "availableReplicas": 1,
     "conditions": [
       {
-        "lastTransitionTime": "2026-07-02T19:23:09Z",
-        "lastUpdateTime": "2026-07-02T19:23:09Z",
-        "message": "Deployment does not have minimum availability.",
-        "reason": "MinimumReplicasUnavailable",
-        "status": "False",
+        "lastTransitionTime": "2026-11-28T08:45:12Z",
+        "lastUpdateTime": "2026-11-28T08:45:12Z",
+        "message": "Deployment has minimum availability.",
+        "reason": "MinimumReplicasAvailable",
+        "status": "True",
         "type": "Available"
       },
       {
-        "lastTransitionTime": "2026-07-02T19:23:09Z",
-        "lastUpdateTime": "2026-07-02T19:23:09Z",
-        "message": "ReplicaSet \"fixture-web-755f855997\" is progressing.",
-        "reason": "ReplicaSetUpdated",
+        "lastTransitionTime": "2026-11-28T08:44:44Z",
+        "lastUpdateTime": "2026-11-28T08:45:12Z",
+        "message": "ReplicaSet \"web-web-789684dd88\" has successfully progressed.",
+        "reason": "NewReplicaSetAvailable",
         "status": "True",
         "type": "Progressing"
       }
     ],
-    "observedGeneration": 2,
-    "replicas": 2,
+    "observedGeneration": 1,
+    "readyReplicas": 1,
+    "replicas": 1,
     "terminatingReplicas": 0,
-    "unavailableReplicas": 2,
-    "updatedReplicas": 2
+    "updatedReplicas": 1
   }
 }

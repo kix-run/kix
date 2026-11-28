@@ -1,224 +1,221 @@
 {
-  "cluster": "fixtures",
-  "current": "fixtures-act000000000",
+  "cluster": "lab",
+  "current": "lab-vibqalyvyxkz",
   "currentReceiptSchema": "kix.run/receipt/v1",
+  "headCurrent": "lab-vibqalyvyxkz",
+  "heads": {
+    "lab": {
+      "current": "lab-vibqalyvyxkz",
+      "generation": 2,
+      "writer": {
+        "program": "cli",
+        "version": "0.10.0-rc.6"
+      }
+    }
+  },
+  "missingRevisions": [],
   "objects": [
     {
+      "appliedHash": "e0ce28cedf799b0094893fb18afaf58d69df2bd58283d514641d1e99171f0eb4",
       "drift": "InSync",
       "file": "deployment.json",
       "kind": "Deployment",
       "lifecycle": "Desired",
-      "name": "fixture-web",
+      "name": "web-web",
+      "namedByOwn": true,
       "owners": [
-        "fixtures"
+        "lab"
       ]
     },
     {
-      "drift": "Unstamped",
+      "appliedHash": "c5f56034fdee095cc031647d0dc54627acd2b4130714d223f484f2803a2a2b32",
+      "drift": "InSync",
       "file": "package-instance.json",
       "kind": "PackageInstance",
       "lifecycle": "Desired",
-      "name": "fixtures",
+      "name": "web",
+      "namedByOwn": true,
       "owners": [
-        "fixtures"
+        "lab"
       ]
     }
   ],
+  "problems": [],
   "receiptSchema": "kix.run/receipt/v1",
   "records": [
     {
-      "builtVia": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaabvact-kix-activation-fixtures.json",
-      "createdAt": "2026-11-10T09:14:40+00:00",
+      "builtVia": "/nix/store/azvrxljfnzlcp8psqdbacmhxjkz1hdlv-kix-activation-lab.json",
+      "createdAt": "2026-11-28T08:44:43+00:00",
       "deleting": false,
-      "deployedAt": "2026-11-10T09:15:02.118422+00:00",
+      "deployedAt": "2026-11-28T08:45:28.332519535+00:00",
       "failedAt": null,
       "failedAttempts": 0,
       "failureReason": null,
       "finishedRequest": null,
-      "identityHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaact",
+      "identityHash": "s084yw2v3nypyha02z0254iga83cdi72",
       "interfaces": {},
-      "name": "fixtures-act000000000",
+      "name": "lab-s084yw2v3nyp",
       "operatorDriven": false,
-      "orphansKeptFrom": [
-        {
-          "activation": "fixtures-old000000000",
-          "builtVia": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaabvold-kix-activation-fixtures.json",
-          "identityHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaold"
-        }
-      ],
-      "packageIndex": {
-        "clusterLevel": [
-          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans"
-        ],
-        "format": 1,
-        "names": {
-          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans": [
-            "Namespace",
-            "",
-            "drift-fixtures"
-          ],
-          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaapi": [
-            "PackageInstance",
-            "drift-fixtures",
-            "fixtures"
-          ],
-          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaweb": [
-            "Deployment",
-            "drift-fixtures",
-            "fixture-web"
-          ]
-        },
-        "packages": {
-          "drift-fixtures/fixtures": {
-            "instance": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaapi",
-            "resources": [
-              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaweb"
-            ]
-          }
-        }
-      },
-      "pendingRequest": null,
-      "phase": "Active",
-      "previousActivation": "fixtures-old000000000",
-      "publishedInterfaces": {},
-      "request": null,
-      "startedRequest": null,
-      "totalWaves": 2,
-      "uid": "6f1c2a43-0d7e-4b8e-9a51-0000000000a1",
-      "waves": [
-        {
-          "applied": 1,
-          "failed": 0,
-          "resources": 1,
-          "status": "Complete",
-          "wave": 0
-        },
-        {
-          "applied": 2,
-          "failed": 0,
-          "resources": 2,
-          "status": "Complete",
-          "wave": 1
-        }
-      ]
-    },
-    {
-      "builtVia": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaabvold-kix-activation-fixtures.json",
-      "createdAt": "2026-11-03T16:02:11+00:00",
-      "deleting": false,
-      "deployedAt": "2026-11-03T16:02:40.501977+00:00",
-      "failedAt": null,
-      "failedAttempts": 0,
-      "failureReason": null,
-      "finishedRequest": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
-      "identityHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaold",
-      "interfaces": {},
-      "name": "fixtures-old000000000",
-      "operatorDriven": true,
       "orphansKeptFrom": [],
-      "packageIndex": {
-        "clusterLevel": [
-          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans"
-        ],
-        "format": 1,
-        "packages": {
-          "drift-fixtures/fixtures": {
-            "instance": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaapi",
-            "resources": [
-              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaweb"
-            ]
-          }
-        }
-      },
-      "pendingRequest": "7d2e4f6a8b0c1d3e5f7a9b1c3d5e7f9a",
+      "packageIndex": null,
+      "pendingRequest": null,
       "phase": "Superseded",
       "previousActivation": null,
       "publishedInterfaces": {},
-      "request": "7d2e4f6a8b0c1d3e5f7a9b1c3d5e7f9a",
-      "startedRequest": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
-      "totalWaves": 2,
-      "uid": "6f1c2a43-0d7e-4b8e-9a51-0000000000b2",
-      "waves": [
-        {
-          "applied": 1,
-          "failed": 0,
-          "resources": 1,
-          "status": "Complete",
-          "wave": 0
-        },
-        {
-          "applied": 2,
-          "failed": 0,
-          "resources": 2,
-          "status": "Complete",
-          "wave": 1
-        }
-      ]
-    },
-    {
-      "builtVia": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaabvail-kix-activation-fixtures.json",
-      "createdAt": "2026-11-08T11:30:00+00:00",
-      "deleting": false,
-      "deployedAt": null,
-      "failedAt": "2026-11-08T11:35:00.000000+00:00",
-      "failedAttempts": 0,
-      "failureReason": "Deployment drift-fixtures/fixture-web did not become ready within 300s",
-      "finishedRequest": null,
-      "identityHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaafail",
-      "interfaces": {},
-      "name": "fixtures-fail00000000",
-      "operatorDriven": false,
-      "orphansKeptFrom": [],
-      "packageIndex": null,
-      "pendingRequest": null,
-      "phase": "Failed",
-      "previousActivation": null,
-      "publishedInterfaces": {},
       "request": null,
       "startedRequest": null,
-      "totalWaves": 2,
-      "uid": "6f1c2a43-0d7e-4b8e-9a51-0000000000c3",
+      "totalWaves": 1,
+      "uid": "8e60f321-6738-4879-8b04-379d7928d2f9",
       "waves": [
         {
-          "applied": 1,
+          "applied": 26,
           "failed": 0,
-          "resources": 1,
+          "resources": 26,
           "status": "Complete",
           "wave": 0
-        },
-        {
-          "applied": 1,
-          "failed": 1,
-          "resources": 2,
-          "status": "Failed",
-          "wave": 1
         }
       ]
     },
     {
-      "builtVia": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaasrc-kix-bundle-fixtures",
-      "createdAt": "2026-11-10T10:00:00+00:00",
+      "builtVia": "/nix/store/4qf4s91ca7yrsq3nhjwykznaxffmqb7n-kix-activation-lab.json",
+      "createdAt": "2026-11-28T08:45:32+00:00",
       "deleting": false,
-      "deployedAt": null,
+      "deployedAt": "2026-11-28T08:45:32.433348782+00:00",
       "failedAt": null,
       "failedAttempts": 0,
       "failureReason": null,
       "finishedRequest": null,
-      "identityHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaqueued",
+      "identityHash": "vibqalyvyxkzfi48bsb91v98kp83mzch",
       "interfaces": {},
-      "name": "fixtures-queued000000",
-      "operatorDriven": true,
+      "name": "lab-vibqalyvyxkz",
+      "operatorDriven": false,
       "orphansKeptFrom": [],
       "packageIndex": null,
       "pendingRequest": null,
-      "phase": "",
-      "previousActivation": null,
+      "phase": "Active",
+      "previousActivation": "lab-s084yw2v3nyp",
       "publishedInterfaces": {},
-      "request": "3f1c9a2be47d4c0e9b8a6d5f2e1c0b9a",
-      "startedRequest": "3f1c9a2be47d4c0e9b8a6d5f2e1c0b9a",
-      "totalWaves": 0,
-      "uid": "6f1c2a43-0d7e-4b8e-9a51-0000000000d4",
-      "waves": []
+      "request": null,
+      "revisions": {
+        "clusterLevel": "lab-19b26b4c4ba4ad54d817896502fd28a9",
+        "instances": {
+          "kube-system/platform-dns": "lab-1b95a980b50e440b82396d3374855165",
+          "lab/web": "lab-4cf549e3404ac6b86a70c4c30f421eab"
+        },
+        "keptOrphans": null
+      },
+      "startedRequest": null,
+      "totalWaves": 1,
+      "uid": "a36b28ac-9bce-4a4a-8d5c-96df2969fead",
+      "waves": [
+        {
+          "applied": 3,
+          "failed": 0,
+          "resources": 3,
+          "status": "Complete",
+          "wave": 0
+        }
+      ]
     }
-  ]
+  ],
+  "revisions": [
+    {
+      "cluster": "lab",
+      "format": 2,
+      "imports": [],
+      "name": "lab-19b26b4c4ba4ad54d817896502fd28a9",
+      "objects": [
+        {
+          "applied": "2d75d6d13a344c1128c9cf3b62d1419f6951a80da7bd8b393244e0eb1efecc74",
+          "hash": "002e834e454f2ee19ad187bdf2aa5426",
+          "id": "Namespace other",
+          "needs": []
+        },
+        {
+          "applied": "68dc4a109d9dd5eab738e2205a2d1291d1cec6d36bcf631ae0957040ca84848f",
+          "hash": "1d3a9906bb6d4f5c14b99d0572b421c0",
+          "id": "Namespace lab",
+          "needs": []
+        },
+        {
+          "applied": "d4eba957998391745431f1d939f1bf0c69012b8371b7aa7d52b1845c8a30b6d1",
+          "hash": "5595dca67484e0903f9a735fc09bd1f0",
+          "id": "Namespace kube-system",
+          "needs": []
+        }
+      ],
+      "slot": {
+        "kind": "clusterLevel"
+      }
+    },
+    {
+      "cluster": "lab",
+      "format": 2,
+      "imports": [
+        {
+          "hash": "bfe5c73dcd596f4e71677692cabf13bf",
+          "id": "PackageInstance.kix.run kube-system/platform-dns",
+          "needs": [
+            "Namespace kube-system"
+          ],
+          "target": "Service kube-system/kube-dns"
+        }
+      ],
+      "name": "lab-1b95a980b50e440b82396d3374855165",
+      "objects": [],
+      "slot": {
+        "kind": "instance",
+        "name": "platform-dns",
+        "namespace": "kube-system"
+      }
+    },
+    {
+      "cluster": "lab",
+      "format": 2,
+      "imports": [],
+      "name": "lab-4cf549e3404ac6b86a70c4c30f421eab",
+      "objects": [
+        {
+          "applied": "c5f56034fdee095cc031647d0dc54627acd2b4130714d223f484f2803a2a2b32",
+          "hash": "1df2c5217e3e59bcaf000fd7e2f8b8ff",
+          "id": "PackageInstance.kix.run lab/web",
+          "needs": [
+            "Namespace lab",
+            "Deployment.apps lab/web-web"
+          ]
+        },
+        {
+          "applied": "e0ce28cedf799b0094893fb18afaf58d69df2bd58283d514641d1e99171f0eb4",
+          "hash": "62146f4e6822776c84f21e5ac250c026",
+          "id": "Deployment.apps lab/web-web",
+          "needs": [
+            "ConfigMap lab/base-cfg",
+            "Namespace lab"
+          ]
+        },
+        {
+          "applied": "a600ff50941d04e628c49f38c5bd044ca44c4b62a3042668741fe928be10ec10",
+          "hash": "6e64e4818721a5b86ea04852214a9297",
+          "id": "Secret lab/web-sec",
+          "needs": [
+            "Namespace lab"
+          ]
+        },
+        {
+          "applied": "e8328fb9d03dcfe71ce0ba343ba8b8582dd8946f350f530dfc69cb6abc3373ab",
+          "hash": "86fd902234e6b515872dd5f6fe8c4188",
+          "id": "Service lab/web-web",
+          "needs": [
+            "Namespace lab"
+          ]
+        }
+      ],
+      "slot": {
+        "kind": "instance",
+        "name": "web",
+        "namespace": "lab"
+      }
+    }
+  ],
+  "source": "Revisions"
 }

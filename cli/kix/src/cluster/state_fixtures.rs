@@ -1,9 +1,10 @@
 //! Read cluster state written by earlier Kix releases with today's readers.
 //!
 //! Each folder under `tests/fixtures/cluster-state/<version>/` holds objects
-//! as Kix `<version>` left them on a cluster: Activation records, a
-//! PackageInstance, and a managed object with Kix's annotations and
-//! managedFields. `written.toml` names the release and its date.
+//! as Kix `<version>` left them on a cluster: Activation records, managed
+//! objects with their managedFields, and, from the release that introduced
+//! them, the ActivationHead and the PackageInstanceRevision objects the
+//! records name. `written.toml` names the release and its date.
 //! `expected.json` holds what today's readers make of those objects. A
 //! change to a reader that reads old state differently fails here.
 //!
@@ -20,10 +21,12 @@ use serde_json::{Value, json};
 
 use crate::cluster::activation::{self, Record};
 use crate::cluster::drift::{self, DriftVerdict};
+use crate::cluster::head::{self, HeadStatus};
 use crate::cluster::revision::{self, AppliedHashes, Revision};
 use crate::cluster::tenancy::Tenancy;
 use crate::manifest::keys;
 use crate::manifest::lifecycle;
+use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 /// How long a release's state must stay readable, in days (six months).
 const READABLE_FOR_DAYS: i64 = 183;
@@ -115,8 +118,50 @@ fn kind(obj: &DynamicObject) -> &str {
     obj.types.as_ref().map_or("", |t| t.kind.as_str())
 }
 
-fn record_view(r: &Record) -> Value {
+/// Return whether the folder holds no revisions, as every release before
+/// revisions wrote it.
+fn written_before_revisions(folder: &Path) -> bool {
+    !objects(folder)
+        .iter()
+        .any(|(_, o)| kind(o) == revision::KIND)
+}
+
+fn id_text(rid: &ResourceId) -> String {
+    let kind = if rid.group.is_empty() {
+        rid.kind.clone()
+    } else {
+        format!("{}.{}", rid.kind, rid.group)
+    };
+    if rid.namespace == CLUSTER_SCOPED {
+        format!("{kind} {}", rid.name)
+    } else {
+        format!("{kind} {}/{}", rid.namespace, rid.name)
+    }
+}
+
+fn revision_view(r: &Revision) -> Value {
     json!({
+        "name": r.name,
+        "format": r.spec.format,
+        "cluster": r.spec.cluster,
+        "slot": r.spec.slot,
+        "objects": r.spec.objects.iter().map(|o| json!({
+            "id": id_text(&o.resource_id()),
+            "hash": o.hash,
+            "applied": r.applied.get(&o.hash),
+            "needs": o.needs.iter().map(|n| id_text(&n.resource_id())).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+        "imports": r.spec.imports.iter().map(|i| json!({
+            "id": id_text(&i.resource_id()),
+            "hash": i.hash,
+            "target": i.target.as_ref().map(|t| id_text(&t.resource_id())),
+            "needs": i.needs.iter().map(|n| id_text(&n.resource_id())).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+    })
+}
+
+fn record_view(r: &Record) -> Value {
+    let mut view = json!({
         "name": r.name,
         "phase": r.phase,
         "identityHash": r.identity_hash,
@@ -148,7 +193,20 @@ fn record_view(r: &Record) -> Value {
             "consumer": v.consumer, "path": v.path, "sha256": v.sha256,
         }))).collect::<BTreeMap<_, _>>(),
         "publishedInterfaces": r.published_interfaces,
-    })
+    });
+    // Records written before revisions have no map, and their recorded
+    // view has no `revisions` key.
+    if let Some(map) = &r.revisions {
+        view["revisions"] = match map {
+            Ok(map) => json!({
+                "instances": map.instances,
+                "clusterLevel": map.cluster_level,
+                "keptOrphans": map.kept_orphans,
+            }),
+            Err(e) => json!({ "unreadable": e.to_string() }),
+        };
+    }
+    view
 }
 
 fn verdict_name(v: &DriftVerdict) -> &'static str {
@@ -178,35 +236,71 @@ fn read_back(folder: &Path) -> Value {
         })
         .unwrap_or_default()
         .to_string();
-    let tenancy = Tenancy::from_records(&records, &cluster);
-    let parsed: Vec<Record> = records.iter().map(Record::of).collect();
-    let revisions: Vec<Revision> = all
+    let heads: BTreeMap<String, HeadStatus> = all
+        .iter()
+        .filter(|(_, o)| kind(o) == head::KIND)
+        .map(|(file, o)| {
+            let status = serde_json::from_value(o.data["status"].clone())
+                .unwrap_or_else(|e| panic!("{file}: unreadable head status: {e}"));
+            (o.metadata.name.clone().unwrap_or_default(), status)
+        })
+        .collect();
+    let read: Vec<(String, Result<Revision, revision::ReadError>)> = all
         .iter()
         .filter(|(_, o)| kind(o) == revision::KIND)
-        .filter_map(|(_, o)| Revision::from_object(o).ok())
+        .map(|(_, o)| {
+            (
+                o.metadata.name.clone().unwrap_or_default(),
+                Revision::from_object(o),
+            )
+        })
         .collect();
+    let revisions: Vec<Revision> = read
+        .iter()
+        .filter_map(|(_, r)| r.as_ref().ok().cloned())
+        .collect();
+    // A folder written before heads and revisions is read the way a reader
+    // reads a cluster with neither, so its recorded values stay as they were.
+    let has_new_state = !heads.is_empty() || !read.is_empty();
+    let tenancy = if has_new_state {
+        Tenancy::fixture_of_state(&cluster, &heads, &records, &revisions)
+    } else {
+        Tenancy::from_records(&records, &cluster)
+    };
+    let parsed: Vec<Record> = records.iter().map(Record::of).collect();
     let applied = AppliedHashes::of(&parsed, &revisions);
     let current = activation::current_record(&records);
     let current_name = current.and_then(|c| c.metadata.name.clone());
+    let prefer = tenancy
+        .own_current()
+        .map(str::to_string)
+        .or(current_name.clone());
     let manager = tenancy.manager_of(&cluster);
 
     let others: Vec<Value> = all
         .iter()
-        .filter(|(_, o)| kind(o) != lifecycle::RECORD_KIND)
+        .filter(|(_, o)| {
+            ![lifecycle::RECORD_KIND, head::KIND, revision::KIND].contains(&kind(o))
+        })
         .map(|(file, o)| {
             let manifest = serde_json::to_value(o).unwrap();
-            json!({
+            let mut view = json!({
                 "file": file,
                 "kind": kind(o),
                 "name": o.metadata.name,
                 "lifecycle": format!("{:?}", lifecycle::lifecycle_of(&manifest)),
                 "owners": tenancy.owners_of(o),
-                "drift": verdict_name(&drift::check_object(o, applied.for_live(o, &manager, current_name.as_deref()), &manager).verdict),
-            })
+                "drift": verdict_name(&drift::check_object(o, applied.for_live(o, &manager, prefer.as_deref()), &manager).verdict),
+            });
+            if has_new_state {
+                view["namedByOwn"] = json!(tenancy.named_by_own(o));
+                view["appliedHash"] = json!(applied.for_live(o, &manager, prefer.as_deref()));
+            }
+            view
         })
         .collect();
 
-    json!({
+    let mut out = json!({
         "cluster": cluster,
         "records": records.iter().map(|r| record_view(&Record::of(r))).collect::<Vec<_>>(),
         "current": current.and_then(|c| c.metadata.name.clone()),
@@ -215,7 +309,29 @@ fn read_back(folder: &Path) -> Value {
             .cloned(),
         "receiptSchema": keys::RECEIPT_SCHEMA,
         "objects": others,
-    })
+    });
+    if has_new_state {
+        out["heads"] = json!(heads);
+        out["source"] = json!(format!("{:?}", tenancy.own_source()));
+        out["headCurrent"] = json!(tenancy.own_current());
+        out["problems"] = json!(
+            tenancy
+                .problems()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
+        out["missingRevisions"] = json!(applied.missing());
+        out["revisions"] = json!(
+            read.iter()
+                .map(|(name, r)| match r {
+                    Ok(r) => revision_view(r),
+                    Err(e) => json!({ "name": name, "unreadable": e.to_string() }),
+                })
+                .collect::<Vec<_>>()
+        );
+    }
+    out
 }
 
 /// Today's readers give the recorded values for state every fixture release
@@ -329,8 +445,8 @@ fn manifest_of(obj: &DynamicObject) -> Value {
     manifest
 }
 
-/// Each fixture cluster, as the release that wrote it left it, moves to
-/// revisions on its first deploy by this Kix. The deploy builds the same
+/// Each fixture cluster written before revisions, as the release that wrote
+/// it left it, moves to revisions on its first deploy by this Kix. The deploy builds the same
 /// managed objects again and writes none of them. Afterwards every object
 /// has one `Apply` entry under the cluster's own field manager and neither
 /// note, the revisions name every object with its object hash and this
@@ -340,7 +456,10 @@ fn manifest_of(obj: &DynamicObject) -> Value {
 async fn each_fixture_cluster_moves_to_revisions_on_its_first_deploy() {
     use crate::cluster::fake_api::FakeApi;
     use crate::plan::migration_tests::{deploy, managers, notes, plan, written};
-    for folder in folders() {
+    for folder in folders()
+        .into_iter()
+        .filter(|f| written_before_revisions(&f.path))
+    {
         let all = objects(&folder.path);
         let managed: Vec<&DynamicObject> = all
             .iter()
@@ -453,15 +572,18 @@ async fn each_fixture_cluster_moves_to_revisions_on_its_first_deploy() {
     }
 }
 
-/// An older Kix that deploys a Kix cluster after this Kix wrote its head
-/// leaves a record that is current by phase and has no revision map, while
-/// the head names the record this Kix deployed. Kix then reads the Kix
+/// An older Kix, one that wrote a fixture folder without revisions, that
+/// deploys a Kix cluster after this Kix wrote its head leaves a record that
+/// is current by phase and has no revision map, while the head names the
+/// record this Kix deployed. Kix then reads the Kix
 /// cluster as not migrated, from the notes, until it deploys it again.
 #[test]
 fn an_older_kix_that_deployed_after_this_one_leaves_the_cluster_not_migrated() {
-    use crate::cluster::head::HeadStatus;
     use crate::cluster::revision::{RevisionMap, Slot};
-    for folder in folders() {
+    for folder in folders()
+        .into_iter()
+        .filter(|f| written_before_revisions(&f.path))
+    {
         let all = objects(&folder.path);
         let mut records: Vec<DynamicObject> = all
             .iter()
