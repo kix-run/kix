@@ -180,6 +180,12 @@ impl RevisionObject {
         }
     }
 
+    /// Return whether this is one of the definitions that Kix installs
+    /// itself ([`lifecycle::is_kix_crd_named`]).
+    pub fn is_kix_crd(&self) -> bool {
+        lifecycle::is_kix_crd_named(self.resource_id().group_kind(), Some(&self.name))
+    }
+
     /// Return this object with `needs`, sorted and once each.
     pub fn with_needs(mut self, needs: impl IntoIterator<Item = Need>) -> RevisionObject {
         self.needs = needs.into_iter().collect();
@@ -500,6 +506,11 @@ impl Revision {
 
     /// Read a revision from the API. Refuse one in a format a newer Kix
     /// wrote, and one whose name does not match its `spec`.
+    ///
+    /// The objects leave out the definitions Kix installs itself
+    /// ([`RevisionObject::is_kix_crd`]). A revision converted from a record
+    /// of an earlier release can name them, and no record owns them now. The
+    /// name still covers the `spec` as stored.
     pub fn from_object(obj: &DynamicObject) -> Result<Revision, ReadError> {
         let name = obj.metadata.name.clone().unwrap_or_default();
         let malformed = |reason: String| ReadError::Malformed {
@@ -524,6 +535,8 @@ impl Revision {
         if expected != name {
             return Err(ReadError::NameMismatch { name, expected });
         }
+        let mut spec = spec;
+        spec.objects.retain(|o| !o.is_kix_crd());
         let applied = match obj.data.pointer("/status/applied") {
             None | Some(Value::Null) => BTreeMap::new(),
             Some(value) => serde_json::from_value(value.clone())

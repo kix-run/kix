@@ -249,7 +249,7 @@ pub(super) fn print_record_plan(retirement: &RecordRetirement, policy: &Retentio
         "  {}",
         output::dim(&format!(
             "{} deployment record(s) kept. Kix cannot roll back to a retired deployment \
-             record, and the next deploy removes it from tracking annotations on every object.",
+             record.",
             plan.kept.len(),
         ))
     );

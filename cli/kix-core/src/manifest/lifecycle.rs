@@ -192,9 +192,11 @@ pub fn never_pruned(kind: GroupKind<'_>) -> bool {
 ///
 /// Builds of earlier releases carry these two definitions. The Kix program
 /// installs them now (`cluster::own_crds` in `kix-lib`), so every loaded
-/// build, live sweep, and snapshot leaves them out. Without that, a build
-/// from before the change would put them back on a rollback, and every plan
-/// would list them, and the records they hold, as left behind.
+/// build, live sweep, snapshot, and record of what a deploy made leaves them
+/// out. That covers revisions, the conversion of an older record, and the
+/// objects `kix status` expects. Without that, a build from before the
+/// change would put them back on a rollback, every plan would list them as
+/// left behind, and `kix status` would report them missing.
 pub fn is_kix_crd(manifest: &Value) -> bool {
     is_kix_crd_named(
         GroupKind::of_manifest(manifest),
