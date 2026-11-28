@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix diff how-to-application --from ./snapshots/how-to-application",
-      "stdout": "4 packages: 4 unchanged, 0 changed, 0 added, 0 removed\n\u001b[32mNo differences found.\u001b[39m\n\n\u001b[2mDrift not checked: the deployed build is not on this machine, so Kix cannot tell which differences come from this build and which come from edits on the cluster (the deploy applies everything in the plan).\u001b[0m\n",
+      "stdout": "4 packages: 4 unchanged, 0 changed, 0 added, 0 removed\n\u001b[32mNo differences found.\u001b[39m\n",
       "stderr": "",
-      "stdoutDrift": "\n4 packages: 4 unchanged, 0 changed, 0 added, 0 removed\nDrift not checked: the deployed build is not on this machine, so Kix cannot tell which differences come from this build and which come from edits on the cluster (the deploy applies everything in the plan).\nNo differences found.\n",
+      "stdoutDrift": "4 packages: 4 unchanged, 0 changed, 0 added, 0 removed\nNo differences found.\n",
       "stderrDrift": "",
       "exitCode": 0
     }

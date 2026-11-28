@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix status 04-from-scratch",
-      "stdout": "Cluster \u001b[1m04-from-scratch\u001b[0m on Kubernetes v1.35.0 (context kind-kix-docs, https://127.0.0.1:39863)\nLast deploy: 04-from-scratch-sr9n3106hcxd  \u001b[32mActive\u001b[39m  0s ago\n\n  kube-system/platform-dns        1 resource   \u001b[32mok\u001b[39m\n  kube-system/platform-storage    1 resource   \u001b[32mok\u001b[39m\n  tutorial-04/hello-world         4 resources  \u001b[32mok\u001b[39m\n  (cluster-level)                 2 resources  \u001b[32mok\u001b[39m\n\n8 resources: 8 ok.\n",
+      "stdout": "Cluster \u001b[1m04-from-scratch\u001b[0m on Kubernetes v1.35.0 (context kind-kix-docs, https://127.0.0.1:44127)\nLast deploy: 04-from-scratch-sr9n3106hcxd  \u001b[32mActive\u001b[39m  0s ago\n\n  tutorial-04/hello-world    4 resources  \u001b[32mok\u001b[39m\n  (cluster-level)            2 resources  \u001b[32mok\u001b[39m\n\n6 resources: 6 ok.\n",
       "stderr": "",
-      "stdoutDrift": "\n(cluster-level) 2 resources ok\n8 resources: 8 ok.\nCluster 04-from-scratch on Kubernetes v1.35.0 (context kind-kix-docs, https://127.0.0.1:39863)\nLast deploy: 04-from-scratch-<activation-id> Active <DURATION> ago\nkube-system/platform-dns 1 resource ok\nkube-system/platform-storage 1 resource ok\ntutorial-04/hello-world 4 resources ok\n",
+      "stdoutDrift": "\n(cluster-level) 2 resources ok\n6 resources: 6 ok.\nCluster 04-from-scratch on Kubernetes v1.35.0 (context kind-kix-docs, https://127.0.0.1:44127)\nLast deploy: 04-from-scratch-<activation-id> Active <DURATION> ago\ntutorial-04/hello-world 4 resources ok\n",
       "stderrDrift": "",
       "exitCode": 0
     }

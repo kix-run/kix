@@ -82,9 +82,9 @@ diff, and confirm the report names the resource you changed and exits `2`.
 
 ## What the reviewer sees
 
-The Markdown report lists each changed package with its modified resources,
-resources affected only through a dependency, cluster-level resources such as
-namespaces, and the activation record names.
+The Markdown report groups resource changes by package, lists added or removed
+packages and changed cluster-level resources such as namespaces, and shows the
+old and new deployment record names.
 
 The report always contains text. When nothing changed, it contains a
 `### kix diff` heading followed by `No package-level changes (N unchanged)`.

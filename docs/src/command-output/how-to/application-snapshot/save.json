@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix snapshot how-to-application --out ./snapshots/how-to-application",
-      "stdout": "Discovering API resources...\nFetching managed resources (62 resource types)...\nFetched 15 resources\nSaved 15 resources to ./snapshots/how-to-application/\n",
+      "stdout": "Discovering API resources...\nFetching managed resources (62 resource types)...\nFetched 13 resources\nSaved 13 resources to ./snapshots/how-to-application/\n",
       "stderr": "",
-      "stdoutDrift": "Discovering API resources...\nFetched 15 resources\nFetching managed resources (62 resource types)...\nSaved 15 resources to ./snapshots/how-to-application/\n",
+      "stdoutDrift": "Discovering API resources...\nFetched 13 resources\nFetching managed resources (62 resource types)...\nSaved 13 resources to ./snapshots/how-to-application/\n",
       "stderrDrift": "",
       "exitCode": 0
     }
