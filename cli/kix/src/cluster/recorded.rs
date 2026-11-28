@@ -76,13 +76,15 @@ pub enum Incomplete {
     #[error(transparent)]
     Conversion(convert::Refusal),
     /// The tenancy was read for no Kix cluster, so no record is its own.
-    #[error("the records were read for no Kix cluster, so no object has an entry")]
+    #[error(
+        "no Kix cluster name was given, so Kix could not match live objects to deployment records. Pass a Kix cluster name when reading deployment records"
+    )]
     NoCluster,
     /// An older Kix is deploying these records, or has them queued. Their
     /// deploy may already have rewritten objects that the entries still
     /// file under the current record's build.
     #[error(
-        "an older version of Kix has not finished deploying record(s) {}, so objects it rewrote may be shown as the current deploy left them",
+        "deployment record(s) {} are queued, or an older version of Kix has not finished deploying them. Kix skipped those records, so any new objects they added are omitted, and any objects they updated are still attributed to the earlier deployment. Wait for the deploy to finish",
         records.join(", ")
     )]
     OlderKixPending { records: Vec<String> },
