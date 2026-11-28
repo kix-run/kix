@@ -487,11 +487,9 @@ pub(crate) fn releases_of(
     shared
         .iter()
         .filter(|s| match live.get(&s.rid) {
-            Live::Present(obj) => obj.metadata.managed_fields.iter().flatten().any(|e| {
-                e.manager.as_deref() == Some(manager.name())
-                    && e.operation.as_deref() == Some("Apply")
-                    && e.subresource.is_none()
-            }),
+            Live::Present(obj) => {
+                manager.holds_entry(obj.metadata.managed_fields.as_deref().unwrap_or_default())
+            }
             Live::Absent | Live::Unserved | Live::Unread => false,
         })
         .map(|s| s.rid.clone())

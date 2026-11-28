@@ -539,11 +539,8 @@ impl ResourceIo for KubeResources {
             return Ok(false);
         };
         let applies = |obj: &DynamicObject| {
-            obj.metadata.managed_fields.iter().flatten().any(|e| {
-                e.manager.as_deref() == Some(self.manager.name())
-                    && e.operation.as_deref() == Some("Apply")
-                    && e.subresource.is_none()
-            })
+            self.manager
+                .holds_entry(obj.metadata.managed_fields.as_deref().unwrap_or_default())
         };
         if !applies(&live) {
             return Ok(false);

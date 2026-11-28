@@ -169,6 +169,17 @@ impl FieldManager {
         }
     }
 
+    /// Return whether `entries` has an `Apply` entry of the object's main
+    /// resource under exactly this field manager. The legacy manager never
+    /// counts here, even for [`FieldManager::unmigrated`].
+    pub fn holds_entry(&self, entries: &[ManagedFieldsEntry]) -> bool {
+        entries.iter().any(|e| {
+            e.operation.as_deref() == Some("Apply")
+                && e.subresource.is_none()
+                && e.manager.as_deref() == Some(self.name.as_str())
+        })
+    }
+
     /// Return the `Apply` entry of the object's main resource (no
     /// subresource) that holds the fields this Kix cluster applied. Its own
     /// entry comes first. For [`FieldManager::unmigrated`], an object

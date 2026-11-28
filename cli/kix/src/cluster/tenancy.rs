@@ -800,11 +800,8 @@ impl Tenancy {
     /// Return whether `obj` has an `Apply` entry under this Kix cluster's
     /// own field manager.
     pub fn holds_own_entry(&self, obj: &DynamicObject) -> bool {
-        obj.metadata.managed_fields.iter().flatten().any(|e| {
-            e.operation.as_deref() == Some("Apply")
-                && e.subresource.is_none()
-                && e.manager.as_deref() == Some(self.manager.name())
-        })
+        self.manager
+            .holds_entry(obj.metadata.managed_fields.as_deref().unwrap_or_default())
     }
 
     /// Return the first problem about this Kix cluster, or about every Kix
