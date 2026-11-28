@@ -1039,11 +1039,12 @@ async fn status_judges_an_object_by_the_applied_hash_it_matches() {
     }
 }
 
-/// `kix status` reads an import marker from the revision that lists it
-/// under `imports`. Kix writes no object for it, so it is external and not
-/// missing, and the object that needs it depends on it and is not at risk.
+/// `kix status` checks the objects a deploy made. An import marker the
+/// revision lists under `imports` is not one: Kix writes no object for it,
+/// so status leaves it out instead of reporting it as present or missing,
+/// and the object that needs it is not at risk.
 #[tokio::test]
-async fn status_reads_imports_from_the_revisions() {
+async fn status_leaves_out_the_imports_a_revision_lists() {
     use crate::cluster::revision::{
         ImportedObject, Need, Revision, RevisionImport, RevisionObject, RevisionSpec, Slot,
     };
@@ -1104,11 +1105,11 @@ async fn status_reads_imports_from_the_revisions() {
     let [view] = seen.clusters.as_slice() else {
         panic!("one cluster: {:?}", seen.clusters);
     };
-    let imported = by_name(view, "secret-ref-app-creds");
-    assert_eq!(imported.presence, Presence::External);
-    assert_eq!(imported.readiness, Readiness::NotApplicable);
-    assert!(imported.content.is_none());
-    assert_eq!(by_name(view, "web").depends_on, ["h-import"]);
+    let names: Vec<&str> = view.objects.iter().map(|o| o.rid.name.as_str()).collect();
+    assert!(!names.contains(&"secret-ref-app-creds"), "{names:?}");
+    assert!(view.objects.iter().all(|o| o.hash != "h-import"));
+    assert_eq!(by_name(view, "web").presence, Presence::Present);
+    assert!(by_name(view, "web").depends_on.is_empty());
     assert!(!at_risk(view).contains("h-web"));
 }
 

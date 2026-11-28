@@ -452,7 +452,7 @@
         },
         {
           "const": "external",
-          "description": "An import marker, which stands for an object Kix does not manage.",
+          "description": "An import marker an older Kix applied to the cluster. It stands for\nan object Kix does not manage.",
           "type": "string"
         },
         {
