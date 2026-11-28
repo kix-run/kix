@@ -1,0 +1,3 @@
+# 2026-11-28 · `packages/stable/victoria-metrics-operator` · Converted VM objects can outlive the ServiceMonitor or PrometheusRule they came from.
+
+On a test cluster, four VMServiceScrape and VMRule objects stayed after Kix deleted their prometheus-operator sources. The operator's converter had made them (field manager `app`, no owner references) and copied every annotation, including the older Kix's `kix.run/activations`. Kix never wrote them, so the sweep sets them apart as copies, and neither `--prune` nor `kix gc --full-scan` removes them. They had to be deleted by hand. The package option `converterOwnerReferences` defaults to false, following upstream, whose description says the operator deletes converted objects itself. Here it did not.

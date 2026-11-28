@@ -175,15 +175,15 @@ impl Problem {
 
 /// One revision that names an object, and the record that names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Claim {
-    cluster: String,
-    record: String,
-    record_hash: Option<String>,
-    revision: String,
+pub(crate) struct Claim {
+    pub(crate) cluster: String,
+    pub(crate) record: String,
+    pub(crate) record_hash: Option<String>,
+    pub(crate) revision: String,
     /// The build hash the revision gives the object.
-    hash: String,
+    pub(crate) hash: String,
     /// The record names the revision as its kept-orphans revision.
-    kept: bool,
+    pub(crate) kept: bool,
     /// The record is queued, deploying, failed, or partly deployed.
     pending: bool,
 }
@@ -1026,7 +1026,9 @@ impl Tenancy {
         }
     }
 
-    fn claims_of(&self, obj: &DynamicObject) -> &[Claim] {
+    /// Return every revision of a needed record, of any Kix cluster, that
+    /// names `obj`.
+    pub(crate) fn claims_of(&self, obj: &DynamicObject) -> &[Claim] {
         if self.claims.by_object.is_empty() {
             return &[];
         }
@@ -1036,7 +1038,7 @@ impl Tenancy {
             .map_or(&[], Vec::as_slice)
     }
 
-    fn is_own(&self, cluster: &str) -> bool {
+    pub(crate) fn is_own(&self, cluster: &str) -> bool {
         !self.cluster.is_empty() && cluster == self.cluster
     }
 
