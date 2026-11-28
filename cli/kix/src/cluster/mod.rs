@@ -30,6 +30,7 @@ pub mod owned_view;
 pub mod preview;
 pub mod prune_guard;
 pub mod readiness;
+pub mod recorded;
 pub mod revision;
 pub mod scheduler;
 pub mod snapshot;

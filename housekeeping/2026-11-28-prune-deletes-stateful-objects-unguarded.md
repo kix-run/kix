@@ -1,0 +1,3 @@
+# 2026-11-28 · `cluster/scheduler` prune · A pruning deploy deletes a stateful object the build dropped, with no guard.
+
+`kix deploy --prune` and every operator deploy delete what the new build no longer makes. That includes objects with `kix.run/lifecycle: stateful`, PVCs that Kix declared, and database custom resources whose operator deletes the data with them. `lifecycle::never_pruned` protects only Namespace and CRD. The migration gate (`commands/deploy/mod.rs` `migration_gate`) stops only a stateful replacement in the same slot, not a plain removal. An edit that drops or renames a database package therefore deletes the database. The only review point is the delete list in `kix plan --prune`. This matters most for anyone who wants pruning on every deploy.

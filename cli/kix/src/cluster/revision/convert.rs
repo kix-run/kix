@@ -512,6 +512,62 @@ pub fn plan(
     forbidden: &[String],
     build: &BuildHashes,
 ) -> Result<Conversion, Refusal> {
+    convert(
+        cluster,
+        current,
+        own,
+        listed,
+        live,
+        forbidden,
+        build,
+        Limit::Stored,
+    )
+}
+
+/// Return what [`plan`] would convert, for a reader that only holds the
+/// result in memory and has no new build. No revision is stored, so none
+/// is refused for its size. Refuse only when a record needs the listing
+/// to say what it names and the listing missed one of the kinds in
+/// `forbidden`.
+pub fn in_memory(
+    cluster: &str,
+    current: Option<&Record>,
+    own: &[Record],
+    listed: &[Revision],
+    live: &[DynamicObject],
+    forbidden: &[String],
+) -> Result<Conversion, Refusal> {
+    convert(
+        cluster,
+        current,
+        own,
+        listed,
+        live,
+        forbidden,
+        &BuildHashes::of(&[]),
+        Limit::None,
+    )
+}
+
+/// Whether a conversion refuses a revision larger than the API server
+/// stores.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Limit {
+    Stored,
+    None,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn convert(
+    cluster: &str,
+    current: Option<&Record>,
+    own: &[Record],
+    listed: &[Revision],
+    live: &[DynamicObject],
+    forbidden: &[String],
+    build: &BuildHashes,
+    limit: Limit,
+) -> Result<Conversion, Refusal> {
     let live = Live::of(live);
     let carry = Carry {
         live: &live,
@@ -577,7 +633,10 @@ pub fn plan(
             instances,
             cluster_level: carry.revision(cluster, Slot::ClusterLevel, cluster_objects, old),
         };
-        if record.package_index.is_none() && set.cluster_level.stored_bytes() > MAX_BYTES {
+        if limit == Limit::Stored
+            && record.package_index.is_none()
+            && set.cluster_level.stored_bytes() > MAX_BYTES
+        {
             return Err(Refusal::TooLarge(Box::new(TooLarge {
                 what: format!(
                     "deployment record {} (written without a package index by a version older than Kix 0.6)",
@@ -589,12 +648,15 @@ pub fn plan(
                        Deploy an updated build of this cluster once with Kix 0.9 to write a package index, then upgrade Kix and deploy again.",
             })));
         }
-        set.check_size()
-            .map_err(|e| Refusal::TooLarge(Box::new(e)))?;
+        if limit == Limit::Stored {
+            set.check_size()
+                .map_err(|e| Refusal::TooLarge(Box::new(e)))?;
+        }
         let kept = is_current
             .then(|| kept_of(cluster, record, own, listed, &set, &carry))
             .flatten();
         if let Some(kept) = &kept
+            && limit == Limit::Stored
             && kept.stored_bytes() > MAX_BYTES
         {
             return Err(Refusal::TooLarge(Box::new(TooLarge {
