@@ -55,14 +55,36 @@ Each bundle is checked against its content as it is read, and must be a build
 of `<CLUSTER>`, as for `kix plan --bundle`. A bundled baseline is a build, so
 the report is the one `--from <build>` gives.
 
-A manifest directory must carry the Kix annotations that name each resource's
-package and identity hash. The default `kix export` output strips them, so use
-`--with-kix-metadata` when the baseline comes from an export.
+Snapshots saved by the current version of Kix include a `kix-snapshot.json`
+state file alongside the YAML files. It stores the same cluster state that
+[`kix plan --read-only`](/docs/reference/cli/plan/#read-only-plans) reads:
+deployment records, the revisions recording what Kix applied, and each live
+object with `Secret` values redacted. With `kix-snapshot.json` present,
+`kix diff --from` runs the same comparison as `kix plan --read-only`,
+including drift and orphan checks, so a snapshot taken right after a deploy
+reports no differences. Two checks require live API access and are skipped:
+namespaced kinds whose manifest omits `metadata.namespace`, and custom
+resources that `kix deploy --prune` would leave behind after removing their
+CRD.
 
-Every baseline goes through the same comparison that
-[`kix plan --read-only`](/docs/reference/cli/plan/#read-only-plans) runs
-against the live cluster. The live cluster and a snapshot of it produce the
-same report.
+If a directory has no `kix-snapshot.json` (for example, an older snapshot or a
+`kix export` directory), `kix diff --from` loads the YAML files directly. It
+matches each resource to the build by kind, namespace, and name, and compares
+it against what `kix deploy` sends. Resources removed from the build appear
+under cluster-level resources unless a `kix.run/package` annotation names
+their package.
+
+Without `kix-snapshot.json`, Kix cannot verify what it last applied unless a
+resource carries a `kix.run/identity-hash` annotation (such as in `kix export
+--with-kix-metadata` output or a snapshot of a cluster deployed by an older
+version of Kix). When a resource carries a `kix.run/identity-hash` matching
+the new build, Kix treats it as unchanged. Otherwise, the diff can report
+false differences:
+
+- `Secret` keys in a snapshot appear as changed because snapshots redact
+  `Secret` values.
+- Fields that the API server added, changed, or dropped when storing the
+  object (such as an omitted empty string) appear as changes.
 
 ## What is compared
 
@@ -81,7 +103,7 @@ Within a changed package, each resource is reported as one of:
 | --- | --- |
 | `+` added or `-` removed | The resource exists on one side only |
 | `~` modified | The content differs. Text output shows each differing path with a unified diff of the values. |
-| `~` tracking annotation only | Only `kix.run/identity-hash` changed because a dependency of this resource changed. Its own manifest is unchanged, so `kix deploy` leaves it untouched. Text and Markdown output mark these "tracking annotation only", and JSON lists them under `dep_affected_resources`. Appears only in `kix diff` between two builds; in `kix plan` and `kix plan --read-only`, the resource is unchanged. |
+| `~` tracking annotation only | Only `kix.run/identity-hash` changed because a dependency of this resource changed. Its own manifest is unchanged, so `kix deploy` leaves it untouched. Text and Markdown output mark these "tracking annotation only", and JSON lists them under `dep_affected_resources`. Appears only in `kix diff` between two builds (`--from <build>` or `--from-bundle`). Against a snapshot or manifest directory, in `kix plan`, and in `kix plan --read-only`, the resource is unchanged. |
 
 Two more sections follow the packages:
 
@@ -155,12 +177,14 @@ describes the top-level keys, the checked-section shape, and the
 | Key | Value from `kix diff` |
 | --- | --- |
 | `made_by` | `live_read` with a snapshot or export directory; `builds` with `--from <build>` or `--from-bundle` |
+| `kubernetes` | `null`: `kix diff` does not connect to a cluster |
 | `build` | The new build, as for `kix plan` |
 | `deployed` | The baseline's Activation record: the `--from` build's record, or the record in a `--from` snapshot. `null` when there is none |
 | `flags` | `null`: a diff plans no deploy |
 | `migrations` | Checked: the stateful migrations the comparison found |
-| `drift` | `not_checked`: `deployed_build_unavailable` for a snapshot, `builds_only` with `--from <build>` |
-| `conflicts`, `admission`, `prune` | `not_checked`, reason `read_only` for a snapshot, `builds_only` with `--from <build>` |
+| `drift` | Checked for a snapshot with `kix-snapshot.json`; `not_checked` with reason `deployed_build_unavailable` for a directory without `kix-snapshot.json`, or `builds_only` with `--from <build>` or `--from-bundle` |
+| `prune` | Checked for a snapshot with `kix-snapshot.json` (lists orphans kept when deploying without `--prune`); `not_checked` with reason `read_only` for a directory without `kix-snapshot.json`, or `builds_only` with `--from <build>` or `--from-bundle` |
+| `conflicts`, `admission` | `not_checked` with reason `read_only` for a snapshot or export directory, or `builds_only` with `--from <build>` or `--from-bundle` |
 | `readiness` | `not_checked`, reason `not_previewable` |
 | `not_checked` | Always empty |
 

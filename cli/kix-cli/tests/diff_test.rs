@@ -71,6 +71,60 @@ fn diff_from_own_audit_export_is_identical() {
         .stdout(predicate::str::contains("No differences"));
 }
 
+/// Verify that a directory shaped like a snapshot of a cluster this Kix
+/// deployed compares clean with the build. Kix sends no graph notes, so a
+/// snapshot has none: the test takes them off an export, as a deploy does.
+#[test]
+fn diff_from_a_snapshot_without_graph_notes_is_identical() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("snapshot");
+
+    kix()
+        .args([
+            "export",
+            "cli-fixture",
+            "--with-kix-metadata",
+            "--out",
+            dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let mut stripped = 0;
+    for entry in walk_yaml(&dir) {
+        let text = fs::read_to_string(&entry).unwrap();
+        let manifest: serde_json::Value = kix::yaml::from_str(&text).unwrap();
+        let sent = kix::manifest::sent::of(&manifest);
+        if *sent != manifest {
+            stripped += 1;
+            fs::write(&entry, kix::yaml::to_string(&*sent).unwrap()).unwrap();
+        }
+    }
+    assert!(
+        stripped > 0,
+        "the export carries no graph notes to take off"
+    );
+
+    kix()
+        .args(["diff", "cli-fixture", "--from", dir.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No differences"));
+}
+
+fn walk_yaml(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            found.extend(walk_yaml(&path));
+        } else if path.extension().is_some_and(|e| e == "yaml") {
+            found.push(path);
+        }
+    }
+    found
+}
+
 #[test]
 fn diff_from_self_is_identical() {
     let index = kix::eval::nix::eval_activation_index(repo_root(), "cli-fixture", &[], &|_| {})

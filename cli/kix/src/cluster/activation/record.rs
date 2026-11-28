@@ -450,6 +450,26 @@ pub fn current_record<'a>(
     )
 }
 
+/// Remove from `objects` every Activation record except the current one
+/// ([`current_record`]), and return that one. A comparison of the cluster
+/// with a build reads the current record as the old side's record, so
+/// Superseded and Failed records stay out of it.
+pub fn keep_current_record<T: std::borrow::Borrow<DynamicObject>>(
+    objects: &mut Vec<T>,
+) -> Option<DynamicObject> {
+    use crate::manifest::lifecycle::{Lifecycle, lifecycle_of_live};
+    let is_record = |obj: &DynamicObject| lifecycle_of_live(obj) == Lifecycle::Record;
+    let current = current_record(objects.iter().map(T::borrow).filter(|o| is_record(o))).cloned();
+    objects.retain(|obj| {
+        let obj = obj.borrow();
+        !is_record(obj)
+            || current
+                .as_ref()
+                .is_some_and(|c| c.metadata.name == obj.metadata.name)
+    });
+    current
+}
+
 /// Return `true` if `phase` represents the cluster's current state (`Active` or
 /// `Degraded`).
 pub(super) fn is_current_phase(phase: &str) -> bool {

@@ -13,9 +13,11 @@ use kix::cluster::binding::Connection;
 use kix::cluster::drift::{self, DriftReport, DriftVerdict};
 use kix::cluster::field_manager::FieldManager;
 use kix::cluster::migrate::{Instances, MigrationPair, detect_migration_pairs};
-use kix::cluster::owned_view;
+use kix::cluster::owned_view::{self, Observed};
 use kix::cluster::revision::AppliedHashes;
 use kix::cluster::scheduler::PrunePolicy;
+use kix::cluster::snapshot::Snapshot;
+use kix::cluster::tenancy::Tenancy;
 use kix::cluster::{discovery, inventory};
 use kix::eval::build_files::BuildFiles;
 use kix::eval::package_index::{IndexedName, RecordPackageIndex};
@@ -85,9 +87,12 @@ impl DiffResult {
 enum OldSide {
     /// A build result, where every difference comes from the new build.
     Build,
-    /// A directory of rendered manifests (such as a snapshot or export).
+    /// A directory of manifests (a snapshot or an export), read as objects
+    /// saved from the cluster. Its objects are joined to the build's by
+    /// kind, namespace, and name, as live objects are.
     Manifests,
-    /// The live cluster's Kix-owned view.
+    /// The live cluster's Kix-owned view, read now or saved by
+    /// `kix snapshot` with its state file.
     Live(Box<LiveSide>),
 }
 
@@ -177,10 +182,17 @@ pub(super) fn compare(args: &Comparison, ctx: &mut CommandContext) -> Result<Exi
                 return Err(miette!("from directory does not exist: {from}"));
             }
             let spinner = output::spinner("Loading old side...");
+            let saved = if build {
+                None
+            } else {
+                Snapshot::read(&on_disk).map_err(|e| miette!("{e}"))?
+            };
             let loaded = if build {
                 let status = |msg: &str| set_spinner(&spinner, msg);
                 let old = build_source::Build::local(&path, &status).into_diagnostic()?;
                 (old.into_graph(), OldSide::Build)
+            } else if let Some(saved) = saved {
+                snapshot_side(&saved, &new_graph)
             } else {
                 let manifests: Vec<Value> = load_manifests_from_dir(&on_disk)
                     .map_err(|e| miette!("failed to load manifest directory {from}: {e}"))?
@@ -200,21 +212,17 @@ pub(super) fn compare(args: &Comparison, ctx: &mut CommandContext) -> Result<Exi
             let connection = Connection::of_context(global.context.as_deref());
             crate::esay!("{}", connection.connecting());
             let spinner = output::spinner("Fetching live cluster state...");
-            let mut live = ctx
+            let read = ctx
                 .runtime()?
-                .block_on(fetch_live_manifests(&global, connection, &new_graph))?;
+                .block_on(read_live(&global, connection, &new_graph))?;
+            let mut live = live_side(read, &new_graph);
             clear_spinner(&spinner);
             let current = live.current.as_ref().map(activation::Record::of);
             super::deploy::stops::warn(
                 args.cluster,
                 &kix::cluster::stops::LastWrite::of(None, current.as_ref()),
             );
-            // The current record's revisions, or its package index, place
-            // each live object where the deployed build put it. Without
-            // either, the new build does.
-            let deployed = live.deployed.take();
-            let before_set_aside = live.manifests.clone();
-            live.set_aside_left_earlier(&new_graph, deployed.as_ref());
+            let (old, before_set_aside) = place(&mut live, &new_graph);
             let spinner = output::spinner(
                 "Checking for custom resources `--prune` would leave on the cluster...",
             );
@@ -225,10 +233,7 @@ pub(super) fn compare(args: &Comparison, ctx: &mut CommandContext) -> Result<Exi
                 &new_graph,
             ));
             clear_spinner(&spinner);
-            (
-                live.old_graph(&new_graph, deployed.as_ref()),
-                OldSide::Live(Box::new(live)),
-            )
+            (old, OldSide::Live(Box::new(live)))
         }
     };
 
@@ -278,6 +283,34 @@ pub(super) fn compare(args: &Comparison, ctx: &mut CommandContext) -> Result<Exi
     Ok(Exit::Success)
 }
 
+/// Return the old side read from `saved`, the state file of a snapshot.
+/// It holds what the comparison with the live cluster reads, so the
+/// comparison is that one, without what needs a connection: API discovery
+/// and the custom resources `--prune` would leave.
+fn snapshot_side(saved: &Snapshot, new_graph: &StoreGraph) -> (StoreGraph, OldSide) {
+    let read = LiveRead {
+        objects: saved.observed(),
+        tenancy: saved.tenancy(),
+        namespaceless: Vec::new(),
+        connection: None,
+    };
+    let mut live = live_side(read, new_graph);
+    let (old, _) = place(&mut live, new_graph);
+    (old, OldSide::Live(Box::new(live)))
+}
+
+/// Place each object of `live` in the package where the current record's
+/// revisions, or its package index, put it, and the new build `new_graph`
+/// otherwise. Set aside the orphans an earlier deploy left
+/// ([`LiveSide::set_aside_left_earlier`]). Return the old side's graph, and
+/// the compared objects as they were before the orphans were set aside.
+fn place(live: &mut LiveSide, new_graph: &StoreGraph) -> (StoreGraph, Vec<Value>) {
+    let deployed = live.deployed.take();
+    let before = live.manifests.clone();
+    live.set_aside_left_earlier(new_graph, deployed.as_ref());
+    (live.old_graph(new_graph, deployed.as_ref()), before)
+}
+
 fn set_spinner(spinner: &Option<indicatif::ProgressBar>, msg: &str) {
     if let Some(sp) = spinner {
         sp.set_message(msg.to_string());
@@ -296,11 +329,13 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
         OldSide::Build | OldSide::Manifests => &none,
     };
     let migration_pairs = detect_migration_pairs(&new_manifests, &old_manifests, instances);
-    // Against the cluster, compare what a deploy sends, as `kix plan` does.
-    // Between two builds, a change of dependencies alone still shows.
+    // Against the cluster, or objects read from it and saved to a directory,
+    // compare what a deploy sends, as `kix plan` does. A live object carries
+    // no graph notes, so a comparison that kept them would find every object
+    // changed. Between two builds, a change of dependencies alone still shows.
     let mut packages = match side {
-        OldSide::Live(_) => kix::plan::diff_sent(old, new),
-        OldSide::Build | OldSide::Manifests => kix::plan::diff_graphs(old, new),
+        OldSide::Live(_) | OldSide::Manifests => kix::plan::diff_sent(old, new),
+        OldSide::Build => kix::plan::diff_graphs(old, new),
     };
     let cluster = &new.cluster_name;
 
@@ -376,7 +411,7 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
                 &migration_pairs,
                 NotCheckedReason::ReadOnly,
             );
-            doc.kubernetes = Some((&live.connection).into());
+            doc.kubernetes = live.connection.as_ref().map(Into::into);
             doc.deployed = live
                 .current
                 .as_ref()
@@ -464,7 +499,8 @@ fn deployed_build(
     Some(Deployed::Loaded(Box::new(graph)))
 }
 
-/// Live cluster state collected for a cluster diff.
+/// Live cluster state collected for a cluster diff, from the cluster or
+/// from a snapshot's state file.
 struct LiveSide {
     /// Kix-owned view of each compared object read from the cluster. It
     /// holds no import marker a revision lists, because Kix writes no object
@@ -498,8 +534,9 @@ struct LiveSide {
     /// The live objects a deploy of the build would find orphaned: each
     /// stamped, prunable object that is not in the build, sorted.
     orphans: Vec<ResourceId>,
-    /// The Kubernetes cluster the objects were read from.
-    connection: Connection,
+    /// The Kubernetes cluster the objects were read from, or `None` when
+    /// they were read from a snapshot.
+    connection: Option<Connection>,
     /// For each orphan that declares a kind the build no longer declares,
     /// the objects of that kind a `kix deploy --prune` would leave on the
     /// cluster.
@@ -586,11 +623,11 @@ async fn left_behind_of(
     super::plan::left_behind(&client, &leaving, &deleting).await
 }
 
-async fn fetch_live_manifests(
+async fn read_live(
     global: &crate::cli::GlobalArgs,
     connection: Connection,
     new_graph: &StoreGraph,
-) -> Result<LiveSide> {
+) -> Result<LiveRead> {
     let client = client::make_client(global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
@@ -633,15 +670,52 @@ async fn fetch_live_manifests(
         crate::esay!("{note}");
     }
 
+    let mut namespaceless = kix::cluster::apply::namespaceless(&discovery, &new_graph.made());
+    namespaceless.sort();
+    let manager = sweep.tenancy.manager_of(&new_graph.cluster_name);
+    Ok(LiveRead {
+        objects: sweep
+            .managed
+            .into_iter()
+            .map(|o| Observed::read(o, &manager))
+            .collect(),
+        tenancy: sweep.tenancy,
+        namespaceless,
+        connection: Some(connection),
+    })
+}
+
+/// The Kix objects and state of one Kix cluster, read from the cluster or
+/// from a snapshot `kix snapshot` saved.
+struct LiveRead {
+    /// The Kix cluster's objects, Activation records included.
+    objects: Vec<Observed>,
+    tenancy: Tenancy,
+    /// Build resources that `kix deploy` would reject with
+    /// [`ApplyError::NoNamespace`]. Empty for a snapshot, which saves no
+    /// API discovery.
+    namespaceless: Vec<ResourceId>,
+    /// The Kubernetes cluster the objects were read from, or `None` for a
+    /// snapshot.
+    connection: Option<Connection>,
+}
+
+/// Compare `read` with the new build `new_graph`: the Kix-owned view of
+/// each object, its drift, and what places it.
+fn live_side(read: LiveRead, new_graph: &StoreGraph) -> LiveSide {
+    let LiveRead {
+        objects,
+        tenancy,
+        namespaceless,
+        connection,
+    } = read;
     // Exclude resources that this build drops when another Kix cluster still
     // deploys them, matching `kix deploy --prune`.
     let in_build = new_graph.made();
-    let mut namespaceless = kix::cluster::apply::namespaceless(&discovery, &in_build);
-    namespaceless.sort();
-    let tenancy = &sweep.tenancy;
-    let (elsewhere, mut compared): (Vec<_>, Vec<_>) = sweep.managed.into_iter().partition(|obj| {
-        !in_build.contains(&ResourceId::from_value(&to_manifest_value(obj)))
-            && !tenancy.still_deployed_by_others(obj).is_empty()
+    let tenancy = &tenancy;
+    let (elsewhere, mut compared): (Vec<_>, Vec<_>) = objects.into_iter().partition(|o| {
+        !in_build.contains(&ResourceId::from_value(&to_manifest_value(&o.obj)))
+            && !tenancy.still_deployed_by_others(&o.obj).is_empty()
     });
     if !elsewhere.is_empty() {
         crate::esay!(
@@ -652,26 +726,12 @@ async fn fetch_live_manifests(
 
     let records: Vec<activation::Record> = compared
         .iter()
-        .filter(|obj| lifecycle::lifecycle_of_live(obj) == Lifecycle::Record)
-        .map(activation::Record::of)
+        .filter(|o| lifecycle::lifecycle_of_live(&o.obj) == Lifecycle::Record)
+        .map(|o| activation::Record::of(&o.obj))
         .collect();
     let applied = AppliedHashes::of(&records, tenancy.revisions());
 
-    // Keep only the current Activation record alongside non-record resources so
-    // Superseded and Failed records do not appear in the diff.
-    let current = activation::current_record(
-        compared
-            .iter()
-            .filter(|obj| lifecycle::lifecycle_of_live(obj) == Lifecycle::Record),
-    )
-    .cloned();
-    compared.retain(|obj| {
-        lifecycle::lifecycle_of_live(obj) != Lifecycle::Record
-            || current
-                .as_ref()
-                .is_some_and(|c| c.metadata.name == obj.metadata.name)
-    });
-
+    let current = activation::keep_current_record(&mut compared);
     let current_record = current.as_ref().map(activation::Record::of);
     let deployed = current_record
         .as_ref()
@@ -689,9 +749,9 @@ async fn fetch_live_manifests(
     let built = new_graph.manifests_by_hash();
     let managed: HashMap<ResourceId, Value> = compared
         .iter()
-        .filter_map(|obj| {
-            let rid = ResourceId::from_value(&to_manifest_value(obj));
-            serde_json::to_value(obj).ok().map(|v| (rid, v))
+        .filter_map(|o| {
+            let rid = ResourceId::from_value(&to_manifest_value(&o.obj));
+            serde_json::to_value(&o.obj).ok().map(|v| (rid, v))
         })
         .collect();
     let deployed_as_new: HashSet<ResourceId> = preferred
@@ -709,9 +769,9 @@ async fn fetch_live_manifests(
                 .collect()
         })
         .unwrap_or_default();
-    let manifests = owned_view::kix_owned_manifests_against(compared, &built, &applied, &manager);
+    let manifests = owned_view::kix_owned_manifests_of(compared, &built, &applied, &manager);
 
-    Ok(LiveSide {
+    LiveSide {
         manifests,
         namespaceless,
         current,
@@ -725,7 +785,7 @@ async fn fetch_live_manifests(
         orphans: Vec::new(),
         connection,
         left_behind: HashMap::new(),
-    })
+    }
 }
 
 /// Run [`drift::check_object`] on each of `objects` against the fields
@@ -735,7 +795,7 @@ async fn fetch_live_manifests(
 /// many the check cannot judge because their applied hash is not known or
 /// they have no Kix `managedFields` entry.
 fn check_drift(
-    objects: &[DynamicObject],
+    objects: &[Observed],
     applied: &AppliedHashes,
     manager: &FieldManager,
     current: Option<&str>,
@@ -747,11 +807,12 @@ fn check_drift(
     // planner does not check records for drift either.
     let checked = objects
         .iter()
-        .filter(|obj| lifecycle::lifecycle_of_live(obj) != Lifecycle::Record);
-    for obj in checked {
-        let report = drift::check_object(obj, applied.for_live(obj, manager, current), manager);
+        .filter(|o| lifecycle::lifecycle_of_live(&o.obj) != Lifecycle::Record);
+    for observed in checked {
+        let report =
+            drift::check_observed(observed, applied.for_observed(observed, current), manager);
         match report.verdict {
-            DriftVerdict::Drifted { .. } => drifted.push((report, obj.clone())),
+            DriftVerdict::Drifted { .. } => drifted.push((report, observed.obj.clone())),
             DriftVerdict::Unstamped | DriftVerdict::NoFieldset => unchecked += 1,
             // `check_object` reports only on live objects, so never `Missing`.
             DriftVerdict::InSync => {}
@@ -972,7 +1033,8 @@ mod tests {
         let mut other = live.clone();
         other.metadata.name = Some("other".into());
         let (drifted, drift_unchecked) = check_drift(
-            &[live, other, no_fieldset, record],
+            &[live, other, no_fieldset, record]
+                .map(|o| Observed::read(o, &FieldManager::unmigrated("a"))),
             &applied,
             &FieldManager::unmigrated("a"),
             Some("r"),
@@ -990,7 +1052,7 @@ mod tests {
             drift_unchecked,
             deployed_as_new: [ResourceId::new("apps", "Deployment", "app", "web")].into(),
             orphans: Vec::new(),
-            connection: Connection::InCluster,
+            connection: Some(Connection::InCluster),
             left_behind: HashMap::new(),
         }));
         let result = diff_graphs(&old, &new, &side, Detail::Plain);
@@ -1065,7 +1127,7 @@ mod tests {
             drift_unchecked: 0,
             deployed_as_new: HashSet::new(),
             orphans: Vec::new(),
-            connection: Connection::InCluster,
+            connection: Some(Connection::InCluster),
             left_behind: HashMap::new(),
         };
         live.set_aside_left_earlier(&new, Some(&deployed));
@@ -1081,6 +1143,514 @@ mod tests {
         assert!(!result.has_diff(), "{}", result.doc.to_json());
         let prune: Vec<_> = result.doc.prune.items().iter().map(|p| p.fate).collect();
         assert_eq!(prune, [PruneFate::KeptWarnOnly, PruneFate::KeptWarnOnly]);
+    }
+
+    /// Return a build of cluster `c` with a Namespace at cluster level and a
+    /// package `app/web` that holds a ConfigMap and a Deployment running
+    /// `image`. Each manifest carries the graph notes a build stamps. The
+    /// ConfigMap is left out when `with_config` is false.
+    fn web_build(image: &str, with_config: bool) -> StoreGraph {
+        use kix::eval::store_graph::PackageNode;
+        use kix::manifest::lifecycle::PACKAGE_INSTANCE_KIND;
+        let hash = |seed: &str| {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            seed.hash(&mut hasher);
+            format!("{:032x}", hasher.finish())
+        };
+        let mut graph = StoreGraph::empty("c");
+        let mut add = |kind: &str, name: &str, mut manifest: Value, seed: &str| {
+            let h = hash(seed);
+            manifest["metadata"]["annotations"][keys::IDENTITY_HASH] = json!(h);
+            let path: std::path::PathBuf = format!("/nix/store/{h}-k8s-{kind}-{name}").into();
+            graph.resources.insert(
+                path.clone(),
+                ResourceNode {
+                    store_path: path.clone(),
+                    manifest,
+                },
+            );
+            path
+        };
+        let stamped = |mut m: Value| {
+            m["metadata"]["annotations"][keys::PACKAGE] = json!("web");
+            m["metadata"]["annotations"][keys::PACKAGE_NAMESPACE] = json!("app");
+            m
+        };
+        add(
+            "Namespace",
+            "app",
+            json!({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "app"}}),
+            "ns",
+        );
+        let mut resources = Vec::new();
+        let config_seed = "config";
+        if with_config {
+            resources.push(add(
+                "ConfigMap",
+                "web",
+                stamped(json!({
+                    "apiVersion": "v1", "kind": "ConfigMap",
+                    "metadata": {"name": "web", "namespace": "app"},
+                    "data": {"greeting": "hello"},
+                })),
+                config_seed,
+            ));
+        }
+        let mut deployment = stamped(json!({
+            "apiVersion": "apps/v1", "kind": "Deployment",
+            "metadata": {"name": "web", "namespace": "app",
+                         "annotations": {keys::READINESS: "rollout"}},
+            "spec": {"template": {"spec": {"containers": [{"name": "web", "image": image}]}}},
+        }));
+        if with_config {
+            deployment["metadata"]["annotations"][keys::DEPENDS_ON] = json!(hash(config_seed));
+        }
+        resources.push(add(
+            "Deployment",
+            "web",
+            deployment,
+            &format!("deploy-{image}-{with_config}"),
+        ));
+        let instance = add(
+            PACKAGE_INSTANCE_KIND,
+            "web",
+            stamped(json!({
+                "apiVersion": keys::API_VERSION, "kind": PACKAGE_INSTANCE_KIND,
+                "metadata": {"name": "web", "namespace": "app"},
+                "spec": {"instanceName": "web", "namespaceName": "app", "version": "1"},
+            })),
+            &format!("instance-{image}-{with_config}"),
+        );
+        for path in &resources {
+            graph.resource_owner.insert(path.clone(), instance.clone());
+        }
+        graph.packages.insert(
+            instance.clone(),
+            PackageNode {
+                store_path: instance,
+                instance_name: "web".into(),
+                namespace: "app".into(),
+                version: Some("1".into()),
+                lifecycle: None,
+                resource_paths: resources,
+                cross_deps: Vec::new(),
+            },
+        );
+        graph
+    }
+
+    /// Return the objects `kix snapshot` writes for a cluster that a deploy
+    /// of `build` left: each manifest as Kix sends it, without the graph
+    /// notes.
+    fn snapshot_of(build: &StoreGraph) -> Vec<Value> {
+        build
+            .resources
+            .values()
+            .map(|n| kix::manifest::sent::of(&n.manifest).into_owned())
+            .collect()
+    }
+
+    /// Return the manifests of `build` as they are, graph notes included, as
+    /// `kix export --with-kix-metadata` or a snapshot of a cluster an older
+    /// Kix deployed writes them.
+    fn annotated_of(build: &StoreGraph) -> Vec<Value> {
+        build
+            .resources
+            .values()
+            .map(|n| n.manifest.clone())
+            .collect()
+    }
+
+    fn diff_from_dir(saved: &[Value], new: &StoreGraph) -> DiffResult {
+        let old = StoreGraph::synthesize(saved, new);
+        diff_graphs(&old, new, &OldSide::Manifests, Detail::Plain)
+    }
+
+    /// A snapshot carries no graph notes, because Kix no longer sends them.
+    /// Compared with the build that was deployed, it shows no difference.
+    #[test]
+    fn a_snapshot_without_graph_notes_compares_clean_with_its_build() {
+        let new = web_build("web:1", true);
+        let snapshot = snapshot_of(&new);
+        assert!(
+            snapshot
+                .iter()
+                .all(|m| keys::get(m, keys::IDENTITY_HASH).is_none())
+        );
+        let result = diff_from_dir(&snapshot, &new);
+        assert!(!result.has_diff(), "{}", result.doc.to_json());
+        assert_eq!(result.packages.unchanged, 1);
+    }
+
+    /// A field the new build changes shows as one change of one resource.
+    #[test]
+    fn a_snapshot_shows_a_changed_field_as_one_change() {
+        let snapshot = snapshot_of(&web_build("web:1", true));
+        let new = web_build("web:2", true);
+        let result = diff_from_dir(&snapshot, &new);
+        assert!(result.has_diff());
+        assert!(result.packages.cluster_level.is_none());
+        let [change] = result.packages.changed.as_slice() else {
+            panic!("{}", result.doc.to_json());
+        };
+        assert_eq!(change.key, "app/web");
+        let paths: Vec<_> = change
+            .resource_diffs
+            .iter()
+            .flat_map(|(id, diffs)| diffs.iter().map(move |d| (id.kind.clone(), d.path.clone())))
+            .collect();
+        assert_eq!(
+            paths,
+            [(
+                "Deployment".to_string(),
+                "$.spec.template.spec.containers[web].image".to_string()
+            )]
+        );
+        assert!(change.added_resources.is_empty() && change.removed_resources.is_empty());
+    }
+
+    /// An object the new build no longer makes shows as removed from the
+    /// package the new build puts the rest of it in.
+    #[test]
+    fn a_snapshot_shows_an_object_the_build_dropped_as_removed() {
+        let snapshot = snapshot_of(&web_build("web:1", true));
+        let new = web_build("web:1", false);
+        let result = diff_from_dir(&snapshot, &new);
+        assert!(result.has_diff());
+        let removed: Vec<_> = result
+            .packages
+            .changed
+            .iter()
+            .chain(&result.packages.cluster_level)
+            .flat_map(|c| c.removed_resources.iter().map(|r| r.kind.clone()))
+            .collect();
+        assert_eq!(removed, ["ConfigMap"], "{}", result.doc.to_json());
+        let changed: usize = result
+            .packages
+            .changed
+            .iter()
+            .map(|c| c.resource_diffs.len())
+            .sum();
+        assert_eq!(changed, 0, "{}", result.doc.to_json());
+    }
+
+    /// A directory whose manifests carry the graph notes compares as before:
+    /// clean against its own build, and one change against a changed build.
+    #[test]
+    fn an_annotated_directory_still_compares_by_identity_hash() {
+        let old = web_build("web:1", true);
+        let saved = annotated_of(&old);
+        let result = diff_from_dir(&saved, &old);
+        assert!(!result.has_diff(), "{}", result.doc.to_json());
+
+        let result = diff_from_dir(&saved, &web_build("web:2", true));
+        let diffs: usize = result
+            .packages
+            .changed
+            .iter()
+            .map(|c| c.resource_diffs.len())
+            .sum();
+        assert_eq!(diffs, 1, "{}", result.doc.to_json());
+        assert!(result.packages.cluster_level.is_none());
+    }
+
+    /// Return a build of cluster `c` whose Activation record is `record`,
+    /// with a package `app/web` that holds a Secret with `password` and a
+    /// Deployment whose container sets an environment variable to `""`.
+    fn secret_build(record: &str, password: &str) -> StoreGraph {
+        use base64::Engine as _;
+        use kix::eval::store_graph::PackageNode;
+        use kix::manifest::lifecycle::PACKAGE_INSTANCE_KIND;
+        let mut graph = StoreGraph::empty("c");
+        let mut add = |mut m: Value| {
+            m["metadata"]["labels"]["app.kubernetes.io/managed-by"] = json!("kix");
+            let h = {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                m.to_string().hash(&mut hasher);
+                format!("{:032x}", hasher.finish())
+            };
+            m["metadata"]["annotations"][keys::IDENTITY_HASH] = json!(h);
+            let id = ResourceId::from_value(&m);
+            let path: std::path::PathBuf =
+                format!("/nix/store/{h}-k8s-{}-{}", id.kind, id.name).into();
+            graph.resources.insert(
+                path.clone(),
+                ResourceNode {
+                    store_path: path.clone(),
+                    manifest: m,
+                },
+            );
+            path
+        };
+        let stamped = |mut m: Value| {
+            m["metadata"]["annotations"][keys::PACKAGE] = json!("web");
+            m["metadata"]["annotations"][keys::PACKAGE_NAMESPACE] = json!("app");
+            m
+        };
+        add(json!({
+            "apiVersion": keys::API_VERSION, "kind": lifecycle::RECORD_KIND,
+            "metadata": {"name": record, "labels": {(keys::CLUSTER_LABEL): "c"}},
+        }));
+        let secret = add(stamped(json!({
+            "apiVersion": "v1", "kind": "Secret",
+            "metadata": {"name": "web", "namespace": "app"},
+            "data": {"password": base64::engine::general_purpose::STANDARD.encode(password)},
+        })));
+        let deployment = add(stamped(json!({
+            "apiVersion": "apps/v1", "kind": "Deployment",
+            "metadata": {"name": "web", "namespace": "app"},
+            "spec": {"template": {"spec": {"containers": [{
+                "name": "web", "image": "web:1",
+                "env": [{"name": "EMPTY", "value": ""}],
+            }]}}},
+        })));
+        let instance = add(stamped(json!({
+            "apiVersion": keys::API_VERSION, "kind": PACKAGE_INSTANCE_KIND,
+            "metadata": {"name": "web", "namespace": "app"},
+            "spec": {"instanceName": "web", "namespaceName": "app", "version": "1"},
+        })));
+        // An import marker at cluster level. Kix writes no object for it, and
+        // the revision lists it under `imports`.
+        add(json!({
+            "apiVersion": keys::API_VERSION, "kind": PACKAGE_INSTANCE_KIND,
+            "metadata": {"name": "platform-dns", "namespace": "kube-system",
+                         "annotations": {keys::MODE: "import"}},
+        }));
+        let resources = vec![secret, deployment];
+        for path in &resources {
+            graph.resource_owner.insert(path.clone(), instance.clone());
+        }
+        graph.packages.insert(
+            instance.clone(),
+            PackageNode {
+                store_path: instance,
+                instance_name: "web".into(),
+                namespace: "app".into(),
+                version: Some("1".into()),
+                lifecycle: None,
+                resource_paths: resources,
+                cross_deps: Vec::new(),
+            },
+        );
+        graph
+    }
+
+    /// Return a fake API server holding Kix cluster `c` as a deploy of
+    /// `build` left it. Kix applied each object with server-side apply. The
+    /// API server then dropped the empty environment value and defaulted
+    /// fields Kix does not own, and Kix recorded the applied hash of what
+    /// the server stored in the revisions of the current record.
+    async fn deployed(build: &StoreGraph) -> kix::cluster::fake_api::FakeApi {
+        use kix::cluster::fake_api::FakeApi;
+        use kix::cluster::revision::{RevisionMap, RevisionSet};
+        use kube::api::{Api, ApiResource, GroupVersionKind, Patch, PatchParams};
+        let manager = FieldManager::of("c");
+        let applying = FakeApi::new([]);
+        applying.track_owners();
+        let objects: Vec<&Value> = build
+            .resources
+            .values()
+            .map(|n| &n.manifest)
+            .filter(|m| !lifecycle::is_record(m) && !lifecycle::is_marker(m))
+            .collect();
+        for m in &objects {
+            let id = ResourceId::from_value(m);
+            let (group, version) = match m["apiVersion"].as_str().unwrap().split_once('/') {
+                Some((g, v)) => (g, v),
+                None => ("", m["apiVersion"].as_str().unwrap()),
+            };
+            let resource = ApiResource::from_gvk(&GroupVersionKind::gvk(group, version, &id.kind));
+            let api: Api<DynamicObject> =
+                Api::namespaced_with(applying.client(), &id.namespace, &resource);
+            api.patch(
+                &id.name,
+                &PatchParams::apply(manager.name()),
+                &Patch::Apply(&*kix::manifest::sent::of(m)),
+            )
+            .await
+            .unwrap();
+        }
+        applying.patch_object("Deployment", "web", |d| {
+            let container = &mut d["spec"]["template"]["spec"]["containers"][0];
+            container["env"][0].as_object_mut().unwrap().remove("value");
+            container["imagePullPolicy"] = json!("IfNotPresent");
+            d["spec"]["progressDeadlineSeconds"] = json!(600);
+        });
+
+        let applied: HashMap<ResourceId, String> = objects
+            .iter()
+            .map(|m| {
+                let id = ResourceId::from_value(m);
+                let live = applying.object(&id.kind, &id.name).unwrap();
+                let obj: DynamicObject = serde_json::from_value(live).unwrap();
+                let hash = kix::cluster::fieldsv1::applied_content_hash(&obj, &manager).unwrap();
+                (id, hash)
+            })
+            .collect();
+        let mut set = RevisionSet::of("c", build);
+        for revision in set.instances.values_mut().chain([&mut set.cluster_level]) {
+            for object in &revision.spec.objects {
+                if let Some(hash) = applied.get(&object.resource_id()) {
+                    revision.applied.insert(object.hash.clone(), hash.clone());
+                }
+            }
+        }
+        let stored: Vec<Value> = objects
+            .iter()
+            .map(|m| {
+                let id = ResourceId::from_value(m);
+                applying.object(&id.kind, &id.name).unwrap()
+            })
+            .collect();
+        let map = RevisionMap::of(&set);
+        let mut record = build
+            .resources
+            .values()
+            .map(|n| n.manifest.clone())
+            .find(lifecycle::is_record)
+            .unwrap();
+        record["status"] = json!({"phase": "Active", "revisions": map.to_value()});
+        let name = record["metadata"]["name"].clone();
+        let head = json!({
+            "apiVersion": keys::API_VERSION, "kind": kix::cluster::head::KIND,
+            "metadata": {"name": "c"},
+            "status": {"current": name, "generation": 1},
+        });
+        let revisions: Vec<Value> = set
+            .all()
+            .map(kix::cluster::tenancy_fixture::revision_value)
+            .collect();
+        FakeApi::new(stored.into_iter().chain([record, head]).chain(revisions))
+    }
+
+    /// Write the snapshot `kix snapshot` takes of Kix cluster `c` on `api`
+    /// into a new directory.
+    async fn snapshot_of_api(api: &kix::cluster::fake_api::FakeApi) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let sweep = super::super::snapshot::sweep_cluster(&api.client(), "c")
+            .await
+            .unwrap();
+        super::super::snapshot::write_snapshot(dir.path(), "c", sweep).unwrap();
+        dir
+    }
+
+    fn diff_from_snapshot(dir: &std::path::Path, new: &StoreGraph) -> DiffResult {
+        let saved = Snapshot::read(dir).unwrap().expect("a state file");
+        let (old, side) = snapshot_side(&saved, new);
+        diff_graphs(&old, new, &side, Detail::Plain)
+    }
+
+    /// A snapshot taken right after a deploy compares clean with the build,
+    /// although it holds a Secret and objects the API server changed when
+    /// it stored them. No file of the snapshot holds the Secret's value.
+    #[tokio::test]
+    async fn a_snapshot_with_a_secret_and_server_defaults_compares_clean() {
+        use base64::Engine as _;
+        let build = secret_build("c-1", "hunter2");
+        let api = deployed(&build).await;
+        let dir = snapshot_of_api(&api).await;
+
+        let encoded = base64::engine::general_purpose::STANDARD.encode("hunter2");
+        let mut files = 0;
+        for entry in walk(dir.path()) {
+            let text = std::fs::read_to_string(&entry).unwrap();
+            assert!(
+                !text.contains("hunter2") && !text.contains(&encoded),
+                "{} holds the Secret's value",
+                entry.display()
+            );
+            files += 1;
+        }
+        assert!(dir.path().join(kix::cluster::snapshot::STATE_FILE).exists());
+        assert!(files > 2, "{files}");
+
+        let result = diff_from_snapshot(dir.path(), &build);
+        assert!(!result.has_diff(), "{}", result.doc.to_json());
+        assert!(
+            result.doc.drift.items().is_empty(),
+            "{}",
+            result.doc.to_json()
+        );
+
+        // Without the state file, as in a snapshot an older Kix took, the
+        // saved views alone cannot show that Kix applied these objects.
+        std::fs::remove_file(dir.path().join(kix::cluster::snapshot::STATE_FILE)).unwrap();
+        assert!(Snapshot::read(dir.path()).unwrap().is_none());
+        let views: Vec<Value> = load_manifests_from_dir(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|(_, v)| v)
+            .collect();
+        assert!(diff_from_dir(&views, &build).has_diff());
+    }
+
+    /// A snapshot holds no object for an import marker the current
+    /// record's revision lists under `imports`, because Kix writes none. The
+    /// comparison takes the marker as the build has it, and does not list it
+    /// as an object that left the build.
+    #[tokio::test]
+    async fn a_snapshot_lists_no_import_a_revision_lists_as_left_the_build() {
+        let build = secret_build("c-1", "hunter2");
+        let api = deployed(&build).await;
+        assert!(
+            api.object(lifecycle::PACKAGE_INSTANCE_KIND, "platform-dns")
+                .is_none()
+        );
+        let dir = snapshot_of_api(&api).await;
+
+        let result = diff_from_snapshot(dir.path(), &build);
+        assert!(!result.has_diff(), "{}", result.doc.to_json());
+        assert!(result.orphans.is_empty(), "{:?}", result.orphans);
+        assert!(result.doc.prune.items().is_empty());
+        let text = text_output(&result);
+        assert!(!text.contains("left the build"), "{text}");
+        assert!(!text.contains("platform-dns"), "{text}");
+    }
+
+    /// A build that changes the Secret shows the Secret changed, and
+    /// nothing else of the package.
+    #[tokio::test]
+    async fn a_snapshot_shows_a_secret_the_build_changes() {
+        let api = deployed(&secret_build("c-1", "hunter2")).await;
+        let dir = snapshot_of_api(&api).await;
+
+        let result = diff_from_snapshot(dir.path(), &secret_build("c-2", "hunter3"));
+        let changed: Vec<_> = result
+            .packages
+            .changed
+            .iter()
+            .flat_map(|c| &c.resource_diffs)
+            .flat_map(|(id, diffs)| diffs.iter().map(move |d| (id.kind.clone(), d.path.clone())))
+            .collect();
+        assert_eq!(
+            changed,
+            [("Secret".to_string(), "$.data.password".to_string())],
+            "{}",
+            result.doc.to_json()
+        );
+        let text = result.doc.to_json().to_string();
+        assert!(!text.contains("hunter2"), "{text}");
+        let footer = render::render_text(&result.doc);
+        assert!(
+            footer.contains("comparing against a saved snapshot or manifest directory"),
+            "{footer}"
+        );
+        assert!(!footer.contains("comparison with the cluster."), "{footer}");
+    }
+
+    fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                found.extend(walk(&path));
+            } else {
+                found.push(path);
+            }
+        }
+        found
     }
 
     /// A build of one ConfigMap and the import marker `platform-dns`, the
@@ -1131,7 +1701,7 @@ mod tests {
         (new, web, marker, deployed)
     }
 
-    fn live_side(manifests: Vec<Value>) -> LiveSide {
+    fn live_of(manifests: Vec<Value>) -> LiveSide {
         LiveSide {
             manifests,
             namespaceless: Vec::new(),
@@ -1144,7 +1714,7 @@ mod tests {
             drift_unchecked: 0,
             deployed_as_new: HashSet::new(),
             orphans: Vec::new(),
-            connection: Connection::InCluster,
+            connection: Some(Connection::InCluster),
             left_behind: HashMap::new(),
         }
     }
@@ -1156,7 +1726,7 @@ mod tests {
     #[test]
     fn a_live_diff_lists_no_import_a_revision_lists_as_left_the_build() {
         let (new, web, _, deployed) = build_with_import();
-        let mut live = live_side(vec![web]);
+        let mut live = live_of(vec![web]);
         live.set_aside_left_earlier(&new, Some(&deployed));
         assert!(live.orphans.is_empty(), "{:?}", live.orphans);
 
@@ -1176,7 +1746,7 @@ mod tests {
     fn a_live_diff_lists_a_marker_an_older_kix_applied_as_left_the_build() {
         let (new, web, marker, mut deployed) = build_with_import();
         deployed.imports.clear();
-        let mut live = live_side(vec![web, marker]);
+        let mut live = live_of(vec![web, marker]);
         live.set_aside_left_earlier(&new, Some(&deployed));
         let names: Vec<&str> = live.orphans.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, ["platform-dns"]);

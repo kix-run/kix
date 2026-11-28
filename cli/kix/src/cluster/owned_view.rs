@@ -31,7 +31,7 @@ pub(crate) fn normalize_for_diff(obj: &mut DynamicObject) {
             meta.remove("managedFields");
 
             if let Some(annotations) = meta.get_mut("annotations").and_then(|a| a.as_object_mut()) {
-                annotations.remove("kubectl.kubernetes.io/last-applied-configuration");
+                annotations.remove(LAST_APPLIED);
                 if annotations.is_empty() {
                     meta.remove("annotations");
                 }
@@ -234,9 +234,87 @@ pub fn kix_owned_manifests(
         .collect()
 }
 
+/// A Kix object as a comparison with a build reads it: its served form and
+/// the applied hash of what it holds now.
+///
+/// The applied hash is computed once, from the object as the API server
+/// served it ([`super::fieldsv1::applied_content_hash`]). `kix snapshot`
+/// saves it beside an object whose `Secret` values it redacted
+/// ([`Observed::redacted`]), because the hash of the redacted object
+/// differs.
+#[derive(Debug, Clone)]
+pub struct Observed {
+    pub obj: DynamicObject,
+    /// The applied hash of `obj` as served, or `None` when it has no
+    /// server-side apply entry that counts as the Kix cluster's.
+    pub applied: Option<String>,
+}
+
+impl Observed {
+    /// Read `obj` as served, computing its applied hash under `manager`.
+    pub fn read(obj: DynamicObject, manager: &FieldManager) -> Observed {
+        let applied = super::fieldsv1::applied_content_hash(&obj, manager);
+        Observed { obj, applied }
+    }
+
+    /// Return this object with every `Secret` value replaced by
+    /// [`HIDDEN_SECRET_VALUE`] and the `last-applied-configuration`
+    /// annotation removed, which can hold the values too. The applied hash
+    /// stays as it was read. A comparison reads the values only to show
+    /// how a `Secret` the build changes differs, and a hidden value then
+    /// shows as changed.
+    pub fn redacted(mut self) -> Observed {
+        if crate::manifest::types::is_secret(&self.obj.data) {
+            let hidden = serde_json::Value::String(HIDDEN_SECRET_VALUE.into());
+            if let Some(data) = self
+                .obj
+                .data
+                .get_mut("data")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                data.values_mut().for_each(|v| *v = hidden.clone());
+            }
+            if let Some(map) = self.obj.data.as_object_mut() {
+                map.remove("stringData");
+            }
+            if let Some(annotations) = self.obj.metadata.annotations.as_mut() {
+                annotations.remove(LAST_APPLIED);
+            }
+        }
+        self
+    }
+}
+
+impl std::borrow::Borrow<DynamicObject> for Observed {
+    fn borrow(&self) -> &DynamicObject {
+        &self.obj
+    }
+}
+
+/// The annotation `kubectl apply` writes with the whole object it applied.
+const LAST_APPLIED: &str = "kubectl.kubernetes.io/last-applied-configuration";
+
 /// Build [`kix_owned_manifests`] for comparison against `built`, the
 /// manifests of a build (keyed by identity hash), replacing each object the
-/// build does not change with its build manifest.
+/// build does not change with its build manifest
+/// ([`kix_owned_manifests_of`]).
+pub fn kix_owned_manifests_against(
+    objects: impl IntoIterator<Item = DynamicObject>,
+    built: &HashMap<String, &serde_json::Value>,
+    applied: &AppliedHashes,
+    manager: &FieldManager,
+) -> Vec<serde_json::Value> {
+    kix_owned_manifests_of(
+        objects.into_iter().map(|o| Observed::read(o, manager)),
+        built,
+        applied,
+        manager,
+    )
+}
+
+/// Build [`kix_owned_manifests`] of `objects` for comparison against
+/// `built`, the manifests of a build (keyed by identity hash), replacing
+/// each object the build does not change with its build manifest.
 ///
 /// The build does not change an object when a revision of the Kix cluster
 /// holds an applied hash for the object with the object hash of its build
@@ -251,8 +329,8 @@ pub fn kix_owned_manifests(
 ///
 /// All other objects use their Kix-owned view after running [`redact_secret`]
 /// against the matching build manifest.
-pub fn kix_owned_manifests_against(
-    objects: impl IntoIterator<Item = DynamicObject>,
+pub fn kix_owned_manifests_of(
+    objects: impl IntoIterator<Item = Observed>,
     built: &HashMap<String, &serde_json::Value>,
     applied: &AppliedHashes,
     manager: &FieldManager,
@@ -263,16 +341,16 @@ pub fn kix_owned_manifests_against(
         .collect();
     objects
         .into_iter()
-        .map(|obj| {
-            let mut view = unredacted_view(&obj, manager);
+        .map(|observed| {
+            let mut view = unredacted_view(&observed.obj, manager);
             crate::legacy_domain::upgrade_manifest(&mut view);
             let build = by_id.get(&ResourceId::from_value(&view)).copied();
             if let Some(manifest) = build
-                && unchanged_by_build(&obj, manifest, applied, manager)
+                && unchanged_by_build(&observed, manifest, applied)
             {
                 return manifest.clone();
             }
-            redact_secret(&mut view, &obj, build, manager);
+            redact_secret(&mut view, &observed.obj, build, manager);
             view
         })
         .collect()
@@ -309,22 +387,21 @@ pub fn imports_as_built(
         .collect()
 }
 
-/// Return whether Kix last wrote the build manifest `manifest` to `obj`: a
-/// revision holds an applied hash for the object with the manifest's object
-/// hash, and the live object does not match an applied hash a revision holds
-/// for another build of it.
+/// Return whether Kix last wrote the build manifest `manifest` to the
+/// object: a revision holds an applied hash for the object with the
+/// manifest's object hash, and the object does not match an applied hash a
+/// revision holds for another build of it.
 fn unchanged_by_build(
-    obj: &DynamicObject,
+    observed: &Observed,
     manifest: &serde_json::Value,
     applied: &AppliedHashes,
-    manager: &FieldManager,
 ) -> bool {
-    let rid = super::drift::resource_id(obj);
+    let rid = super::drift::resource_id(&observed.obj);
     let Some(recorded) = applied.entry(&rid, &crate::manifest::hash::object_hash(manifest)) else {
         return false;
     };
-    match super::fieldsv1::applied_content_hash(obj, manager) {
-        Some(live) => live == recorded || !applied.holds(&rid, &live),
+    match &observed.applied {
+        Some(live) => live == recorded || !applied.holds(&rid, live),
         None => true,
     }
 }

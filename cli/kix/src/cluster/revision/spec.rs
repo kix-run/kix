@@ -433,7 +433,7 @@ pub fn name_of(spec: &RevisionSpec) -> String {
 }
 
 /// A revision: its name, its `spec`, and `status.applied`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Revision {
     pub name: String,
     pub spec: RevisionSpec,
@@ -443,7 +443,7 @@ pub struct Revision {
 }
 
 /// Why a revision read from the API cannot be used.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Serialize, Deserialize)]
 pub enum ReadError {
     #[error(
         "{} `{name}` has a `spec` that does not match its name (expected `{expected}`), so Kix cannot trust its object list. Either `{name}` was modified outside Kix, or the Kubernetes API server dropped fields from `spec` because the {} CustomResourceDefinition on the cluster is older than this version of Kix",

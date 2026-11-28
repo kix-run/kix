@@ -156,6 +156,39 @@ mod phase_tests {
         assert_eq!(current, Some("c-live"));
         assert!(current_record(&records[..2]).is_none());
     }
+
+    /// `kix snapshot` and a comparison with the live cluster keep the
+    /// current record and every object that is not a record.
+    #[test]
+    fn keep_current_record_drops_the_other_records() {
+        let object = |kind: &str, name: &str, phase: &str| -> DynamicObject {
+            let api_version = if kind == crate::manifest::lifecycle::RECORD_KIND {
+                keys::API_VERSION
+            } else {
+                "v1"
+            };
+            serde_json::from_value(json!({
+                "apiVersion": api_version, "kind": kind,
+                "metadata": {"name": name},
+                "status": {"phase": phase},
+            }))
+            .unwrap()
+        };
+        let record = crate::manifest::lifecycle::RECORD_KIND;
+        let mut objects = vec![
+            object(record, "c-old", PHASE_SUPERSEDED),
+            object("ConfigMap", "web", ""),
+            object(record, "c-live", PHASE_ACTIVE),
+            object(record, "c-failed", PHASE_FAILED),
+        ];
+        let current = keep_current_record(&mut objects);
+        assert_eq!(current.and_then(|r| r.metadata.name), Some("c-live".into()));
+        let names: Vec<_> = objects
+            .iter()
+            .filter_map(|o| o.metadata.name.as_deref())
+            .collect();
+        assert_eq!(names, ["web", "c-live"]);
+    }
 }
 
 mod orphans_kept_from_tests {

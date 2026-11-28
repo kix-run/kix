@@ -13,9 +13,11 @@ on a laptop off the VPN, in a CI job that holds no cluster credentials, or
 when several people need the same baseline for a review.
 
 `kix snapshot` writes the fields Kix applied to each resource of the named
-cluster. `kix diff --from` then compares a build with that directory the same
-way `kix plan --read-only` compares with the live cluster, so the two reports
-match.
+cluster, along with a `kix-snapshot.json` state file containing the cluster
+state that `kix plan --read-only` reads. `kix diff --from` compares a build
+against that directory using the same rules as `kix plan --read-only` against
+the live cluster, so both commands produce the same report. `Secret` values
+are redacted and never written to disk.
 
 This guide assumes the cluster has been deployed at least once and that you
 can reach it when saving. The examples use the `how-to-application` cluster
@@ -30,7 +32,8 @@ source agree:
 
 Pass `--context` when the cluster is not the current kubectl context. The
 command reports how many resources it fetched and wrote. The directory holds
-one YAML file per resource, grouped by namespace, plus a `README.md` with the
+one YAML file per resource (grouped by namespace), the `kix-snapshot.json`
+state file, and a `README.md` with the
 timestamp, cluster and context. Resources of other Kix clusters deployed to
 the same Kubernetes cluster are left out.
 
@@ -85,13 +88,17 @@ relative to `main`.
 
 ## Troubleshooting
 
-**Every resource shows as removed or cluster-level.** The directory was
-written by `kix export` in its default mode, which strips the annotations the
-comparison needs. Save a snapshot instead, or export with
-`--with-kix-metadata`.
+**Every package shows its `PackageInstance` as added, and the `Activation`
+line shows `(none)`.** The directory comes from `kix export` without
+`--with-kix-metadata`, which omits `PackageInstance` and `Activation`
+resources. Save a snapshot with `kix snapshot` instead, or export with
+`kix export --with-kix-metadata`.
 
 **The diff reports changes you did not make.** The snapshot is older than the
-last deploy. Save a fresh one and compare again.
+last deploy, or an older version of Kix saved it without `kix-snapshot.json`.
+Without that file, `Secret` values and fields modified by the API server
+appear as differences. Save a fresh snapshot with `kix snapshot` and compare
+again.
 
 :::note[Reference]
 See [`kix snapshot`](/docs/reference/cli/snapshot/) for the directory layout

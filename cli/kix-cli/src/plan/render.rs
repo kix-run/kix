@@ -1124,13 +1124,7 @@ fn write_not_checked(out: &mut String, plan: &Plan) -> fmt::Result {
         }
         MadeBy::LiveRead => {
             writeln!(out)?;
-            writeln!(
-                out,
-                "{}",
-                output::dim(
-                    "Made by a read-only comparison with the cluster. Not checked: admission webhooks, admission policies, field ownership conflicts, and invalid objects; `kix plan` checks them."
-                )
-            )?;
+            writeln!(out, "{}", output::dim(live_read_note(plan)))?;
         }
         MadeBy::Builds => {
             writeln!(out)?;
@@ -1206,6 +1200,20 @@ pub(crate) fn lock_holder_line(lock: &kix::cluster::head::LockView) -> String {
 }
 
 /// Render the Markdown plan sections that follow the package diff.
+/// Return the closing note of a read-only comparison. A plan that read no
+/// Kubernetes cluster (`kubernetes` is `null`) compared the build with
+/// objects saved to a directory, such as a `kix snapshot`.
+fn live_read_note(plan: &Plan) -> &'static str {
+    match plan.kubernetes {
+        Some(_) => {
+            "Made by a read-only comparison with the cluster. Not checked: admission webhooks, admission policies, field ownership conflicts, and invalid objects; `kix plan` checks them."
+        }
+        None => {
+            "Made by comparing against a saved snapshot or manifest directory, without reading the cluster. Not checked: admission webhooks, admission policies, field ownership conflicts, and invalid objects. Run `kix plan` to check them against the cluster."
+        }
+    }
+}
+
 pub fn render_markdown(plan: &Plan) -> String {
     written(|out| write_markdown(out, plan))
 }
@@ -1336,9 +1344,7 @@ fn write_markdown(out: &mut String, plan: &Plan) -> fmt::Result {
         MadeBy::DryRun => {
             "Made by a server-side dry run. Not checked: whether Pods start, pull their images, and pass their readiness probes."
         }
-        MadeBy::LiveRead => {
-            "Made by a read-only comparison with the cluster. Not checked: admission webhooks, admission policies, field ownership conflicts, and invalid objects; `kix plan` checks them."
-        }
+        MadeBy::LiveRead => live_read_note(plan),
         MadeBy::Builds => {
             "Made by comparing two builds, with no cluster read. Not checked: live cluster drift, admission webhooks, admission policies, field ownership conflicts, and invalid objects."
         }
@@ -1465,6 +1471,11 @@ mod tests {
             NotCheckedReason::ReadOnly,
         );
         plan.drift = Checked::found(drift);
+        // A read-only plan reads the cluster it names.
+        plan.kubernetes = Some(kix::cluster::binding::Target {
+            context: Some("prod".into()),
+            server: None,
+        });
         plan
     }
 
