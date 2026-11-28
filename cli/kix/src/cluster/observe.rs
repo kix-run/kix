@@ -171,9 +171,9 @@ pub struct ObjectView {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Presence {
     Present,
-    /// An import marker: a `PackageInstance` that stands for an object Kix
-    /// does not manage. A revision lists it, or an older Kix applied it and
-    /// it is on the cluster.
+    /// An import marker that an older Kix applied, which is on the cluster.
+    /// The marker is a `PackageInstance` that stands for an object Kix does
+    /// not manage. An import marker a revision lists is not checked at all.
     External,
     /// Kix can read the object's kind, and the cluster has no object with its
     /// identity hash or its name.
@@ -473,8 +473,14 @@ fn view(
         store = Some(entries);
     }
 
+    // An import marker a revision lists is not an object the deploy made,
+    // so status does not check it.
     let mut seen = HashSet::new();
-    expected.retain(|e| e.hash != root && seen.insert(e.hash.clone()));
+    expected.retain(|e| {
+        e.hash != root
+            && !index.as_ref().is_some_and(|i| i.imports.contains(&e.hash))
+            && seen.insert(e.hash.clone())
+    });
 
     // Name each object: from the index, else from its live object, else from
     // the local store.
@@ -527,13 +533,8 @@ fn view(
                     .contains(&(rid.group.clone(), rid.kind.clone())),
                 None => !apis.unreadable.is_empty(),
             };
-            // Kix writes no object for an import marker a revision lists, so
-            // nothing on the cluster is read for it.
-            let import = index.as_ref().is_some_and(|i| i.imports.contains(&e.hash));
-            let obj = obj.filter(|_| !import);
             let deleting = obj.and_then(Deleting::of);
             let (presence, content, readiness, depends_on) = match obj {
-                None if import => (Presence::External, None, Readiness::NotApplicable, vec![]),
                 Some(obj) => {
                     let marker = lifecycle_of_live(obj) == Lifecycle::Marker;
                     let recorded = name.as_ref().is_some_and(|rid| edges.records(rid));

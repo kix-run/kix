@@ -198,7 +198,8 @@ pub struct ResourceStatus {
 #[serde(rename_all = "snake_case")]
 pub enum Present {
     Yes,
-    /// An import marker, which stands for an object Kix does not manage.
+    /// An import marker an older Kix applied to the cluster. It stands for
+    /// an object Kix does not manage.
     External,
     No,
     /// This account may not list the object's kind.

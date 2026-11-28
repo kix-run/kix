@@ -226,11 +226,7 @@ pub(super) fn compare(args: &Comparison, ctx: &mut CommandContext) -> Result<Exi
             ));
             clear_spinner(&spinner);
             (
-                StoreGraph::synthesize_placed(
-                    &live.manifests,
-                    &new_graph,
-                    &Vec::from_iter(&deployed),
-                ),
+                live.old_graph(&new_graph, deployed.as_ref()),
                 OldSide::Live(Box::new(live)),
             )
         }
@@ -470,7 +466,9 @@ fn deployed_build(
 
 /// Live cluster state collected for a cluster diff.
 struct LiveSide {
-    /// Kix-owned view of each compared object.
+    /// Kix-owned view of each compared object read from the cluster. It
+    /// holds no import marker a revision lists, because Kix writes no object
+    /// for one ([`LiveSide::old_graph`]).
     manifests: Vec<Value>,
     /// Build resources that `kix deploy` would reject with [`ApplyError::NoNamespace`].
     namespaceless: Vec<ResourceId>,
@@ -547,6 +545,21 @@ impl LiveSide {
                 || named.contains(&ResourceId::from_value(m))
                 || keys::get(m, keys::IDENTITY_HASH).is_some_and(|h| hashes.contains(h))
         });
+    }
+
+    /// Return the old side of the comparison with the build `new`: the
+    /// compared objects, placed by the deployed build's package index
+    /// `deployed`, with each import marker that index lists taken as the
+    /// build has it ([`owned_view::imports_as_built`]). The imports join
+    /// only here, because Kix writes no object for one. The orphans are
+    /// objects read from the cluster, so they never include an import.
+    fn old_graph(&self, new: &StoreGraph, deployed: Option<&RecordPackageIndex>) -> StoreGraph {
+        let mut manifests = self.manifests.clone();
+        if let Some(index) = deployed {
+            let built = new.manifests_by_hash();
+            manifests.extend(owned_view::imports_as_built(index, &built, &self.manifests));
+        }
+        StoreGraph::synthesize_placed(&manifests, new, &Vec::from_iter(deployed))
     }
 }
 
@@ -696,12 +709,7 @@ async fn fetch_live_manifests(
                 .collect()
         })
         .unwrap_or_default();
-    let mut manifests =
-        owned_view::kix_owned_manifests_against(compared, &built, &applied, &manager);
-    if let Some(index) = &deployed {
-        let imports = owned_view::imports_as_built(index, &built, &manifests);
-        manifests.extend(imports);
-    }
+    let manifests = owned_view::kix_owned_manifests_against(compared, &built, &applied, &manager);
 
     Ok(LiveSide {
         manifests,
@@ -1073,5 +1081,117 @@ mod tests {
         assert!(!result.has_diff(), "{}", result.doc.to_json());
         let prune: Vec<_> = result.doc.prune.items().iter().map(|p| p.fate).collect();
         assert_eq!(prune, [PruneFate::KeptWarnOnly, PruneFate::KeptWarnOnly]);
+    }
+
+    /// A build of one ConfigMap and the import marker `platform-dns`, the
+    /// manifests of both, and the index a deploy of the build by this Kix
+    /// writes: it names both and lists the marker under `imports`.
+    fn build_with_import() -> (StoreGraph, Value, Value, RecordPackageIndex) {
+        use kix::eval::package_index::{FORMAT, ObjectName};
+        let web = json!({
+            "apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"name": "web", "namespace": "app",
+                         "annotations": {keys::IDENTITY_HASH: "d".repeat(32)}},
+        });
+        let marker = json!({
+            "apiVersion": keys::API_VERSION, "kind": "PackageInstance",
+            "metadata": {"name": "platform-dns", "namespace": "kube-system",
+                         "annotations": {keys::MODE: "import",
+                                         keys::IDENTITY_HASH: "m".repeat(32)}},
+        });
+        let mut new = StoreGraph::empty("c");
+        for (m, hash, name) in [(&web, 'd', "ConfigMap-web"), (&marker, 'm', "platform-dns")] {
+            let path = format!("/nix/store/{}-k8s-{name}", hash.to_string().repeat(32));
+            new.resources.insert(
+                path.clone().into(),
+                ResourceNode {
+                    store_path: path.into(),
+                    manifest: m.clone(),
+                },
+            );
+        }
+        let entry = |m: &Value| {
+            let rid = ResourceId::from_value(m);
+            (kix::manifest::hash::object_hash(m), rid)
+        };
+        let (web_hash, web_rid) = entry(&web);
+        let (marker_hash, marker_rid) = entry(&marker);
+        let deployed = RecordPackageIndex {
+            format: FORMAT,
+            packages: Default::default(),
+            cluster_level: vec![web_hash.clone(), marker_hash.clone()],
+            names: [
+                (web_hash.clone(), ObjectName::of(&web_rid)),
+                (marker_hash.clone(), ObjectName::of(&marker_rid)),
+            ]
+            .into(),
+            groups: Some([(marker_hash.clone(), marker_rid.group.clone())].into()),
+            imports: [marker_hash].into(),
+        };
+        (new, web, marker, deployed)
+    }
+
+    fn live_side(manifests: Vec<Value>) -> LiveSide {
+        LiveSide {
+            manifests,
+            namespaceless: Vec::new(),
+            current: None,
+            deployed: None,
+            instances: Instances::default(),
+            managed: HashMap::new(),
+            manager: FieldManager::unmigrated("a"),
+            drifted: Vec::new(),
+            drift_unchecked: 0,
+            deployed_as_new: HashSet::new(),
+            orphans: Vec::new(),
+            connection: Connection::InCluster,
+            left_behind: HashMap::new(),
+        }
+    }
+
+    /// This Kix writes no object for an import marker and lists it in the
+    /// revision's `imports`. Straight after such a deploy, `kix plan
+    /// --read-only` finds no change and does not list the marker as an
+    /// object that left the build.
+    #[test]
+    fn a_live_diff_lists_no_import_a_revision_lists_as_left_the_build() {
+        let (new, web, _, deployed) = build_with_import();
+        let mut live = live_side(vec![web]);
+        live.set_aside_left_earlier(&new, Some(&deployed));
+        assert!(live.orphans.is_empty(), "{:?}", live.orphans);
+
+        let old = live.old_graph(&new, Some(&deployed));
+        let result = diff_graphs(&old, &new, &OldSide::Live(Box::new(live)), Detail::Plain);
+        assert!(!result.has_diff(), "{}", result.doc.to_json());
+        assert!(result.orphans.is_empty(), "{:?}", result.orphans);
+        assert!(result.doc.prune.items().is_empty());
+        let text = text_output(&result);
+        assert!(!text.contains("left the build"), "{text}");
+    }
+
+    /// A marker an older Kix applied is on the cluster, and the build does
+    /// not make it. `kix plan --read-only` lists it as an object that left
+    /// the build, as a deploy finds.
+    #[test]
+    fn a_live_diff_lists_a_marker_an_older_kix_applied_as_left_the_build() {
+        let (new, web, marker, mut deployed) = build_with_import();
+        deployed.imports.clear();
+        let mut live = live_side(vec![web, marker]);
+        live.set_aside_left_earlier(&new, Some(&deployed));
+        let names: Vec<&str> = live.orphans.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["platform-dns"]);
+
+        let old = live.old_graph(&new, Some(&deployed));
+        let result = diff_graphs(&old, &new, &OldSide::Live(Box::new(live)), Detail::Plain);
+        let pruned: Vec<_> = result
+            .doc
+            .prune
+            .items()
+            .iter()
+            .map(|p| p.resource.clone())
+            .collect();
+        assert_eq!(pruned.len(), 1, "{pruned:?}");
+        let text = text_output(&result);
+        assert!(text.contains("platform-dns"), "{text}");
     }
 }
