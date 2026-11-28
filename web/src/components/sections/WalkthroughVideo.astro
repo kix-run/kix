@@ -1,0 +1,421 @@
+---
+import { Play, X } from '@lucide/astro';
+import Section from '../Section.astro';
+import Heading from '../Heading.astro';
+
+const VIDEOS = {
+  explainer: {
+    slug: 'kix-explainer',
+    label: 'Technical walkthrough',
+    shortLabel: 'Walkthrough',
+    duration: '1:42',
+    mp4: 'https://media.kix.run/videos/kix-explainer/v1/kix-explainer.mp4',
+    poster: 'https://media.kix.run/videos/kix-explainer/v1/poster.webp',
+    captions: 'https://media.kix.run/videos/kix-explainer/v1/captions.en.vtt',
+    desc: 'Compile from one definition, catch cross-resource bugs offline, preview live drift, and deploy in dependency order.',
+  },
+  overview: {
+    slug: 'kix-overview',
+    label: 'Architecture overview',
+    shortLabel: 'Overview',
+    duration: '0:57',
+    mp4: 'https://media.kix.run/videos/kix-overview/v1/kix-overview.mp4',
+    poster: 'https://media.kix.run/videos/kix-overview/v1/poster.webp',
+    captions: 'https://media.kix.run/videos/kix-overview/v1/captions.en.vtt',
+    desc: 'How Kix replaces separate configuration files with a single cluster blueprint, in plain language with no code.',
+  },
+} as const;
+---
+
+<Section id="walkthrough" tone="paper-2" rule class="md:hidden" labelledby="walkthrough-title">
+  <div class="mx-auto flex max-w-[680px] flex-col items-center gap-5 text-center">
+    <div class="flex flex-col items-center gap-2.5">
+      <Heading id="walkthrough-title">See how Kix works</Heading>
+      <p id="mobile-video-desc" class="max-w-[540px] text-[15.5px] leading-[1.55] text-ink-2">
+        {VIDEOS.explainer.desc}
+      </p>
+    </div>
+
+    <div
+      role="tablist"
+      aria-label="Choose walkthrough video"
+      class="inline-flex rounded-lg border border-line bg-paper p-1"
+    >
+      <button
+        type="button"
+        role="tab"
+        aria-selected="true"
+        data-video-tab="explainer"
+        data-video-scope="mobile"
+        data-event="Switch Video Tab"
+        data-event-place="mobile-section"
+        data-event-video="kix-explainer"
+        class="video-pill is-active inline-flex cursor-pointer items-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] font-semibold transition-colors"
+      >
+        <span>{VIDEOS.explainer.shortLabel}</span>
+        <span class="font-mono text-[11.5px] opacity-75">{VIDEOS.explainer.duration}</span>
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected="false"
+        data-video-tab="overview"
+        data-video-scope="mobile"
+        data-event="Switch Video Tab"
+        data-event-place="mobile-section"
+        data-event-video="kix-overview"
+        class="video-pill inline-flex cursor-pointer items-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] font-semibold transition-colors"
+      >
+        <span>{VIDEOS.overview.shortLabel}</span>
+        <span class="font-mono text-[11.5px] opacity-75">{VIDEOS.overview.duration}</span>
+      </button>
+    </div>
+
+    <div class="relative aspect-video w-full overflow-hidden rounded-xl border border-line bg-night shadow-[0_18px_40px_rgba(11,19,43,0.14)]">
+      <video
+        id="mobile-walkthrough-video"
+        class="h-full w-full bg-paper object-contain"
+        preload="none"
+        crossorigin="anonymous"
+        width="1920"
+        height="1080"
+        poster={VIDEOS.explainer.poster}
+      >
+        <source id="mobile-video-source" src={VIDEOS.explainer.mp4} type="video/mp4" />
+        <track
+          id="mobile-video-track"
+          kind="captions"
+          src={VIDEOS.explainer.captions}
+          srclang="en"
+          label="English"
+        />
+      </video>
+
+      <button
+        type="button"
+        id="mobile-video-overlay"
+        aria-label="Play Kix walkthrough video"
+        class="group absolute inset-0 flex cursor-pointer items-center justify-center bg-ink/10 transition-colors hover:bg-ink/15"
+      >
+        <span class="inline-flex items-center gap-2.5 rounded-full bg-accent-brand px-5 py-3 text-[14px] font-semibold text-white shadow-[0_12px_30px_rgba(29,101,236,0.45)] transition-transform group-hover:scale-105">
+          <Play size={16} aria-hidden="true" class="translate-x-[0.5px] fill-current" />
+          <span id="mobile-overlay-label">Play walkthrough ({VIDEOS.explainer.duration})</span>
+        </span>
+      </button>
+    </div>
+  </div>
+</Section>
+
+<dialog
+  id="walkthrough-modal"
+  aria-label="Kix video walkthrough"
+  class="m-auto w-[min(94vw,1060px)] overflow-hidden rounded-2xl border border-night-line bg-night p-0 text-on-night shadow-[0_32px_80px_rgba(0,0,0,0.68)] backdrop:bg-black/75 backdrop:backdrop-blur-[3px]"
+>
+  <div id="walkthrough-modal-surface" class="flex flex-col">
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-night-line bg-night-2 px-4 py-3 sm:px-5">
+      <div
+        role="tablist"
+        aria-label="Choose walkthrough video"
+        class="inline-flex rounded-lg border border-night-line bg-night p-1"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected="true"
+          data-video-tab="explainer"
+          data-video-scope="modal"
+          data-event="Switch Video Tab"
+          data-event-place="modal"
+          data-event-video="kix-explainer"
+          class="modal-video-pill is-active inline-flex cursor-pointer items-center gap-2 rounded-md px-3.5 py-1.5 text-[13px] font-semibold transition-colors"
+        >
+          <span>{VIDEOS.explainer.label}</span>
+          <span class="font-mono text-[11.5px] opacity-80">{VIDEOS.explainer.duration}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected="false"
+          data-video-tab="overview"
+          data-video-scope="modal"
+          data-event="Switch Video Tab"
+          data-event-place="modal"
+          data-event-video="kix-overview"
+          class="modal-video-pill inline-flex cursor-pointer items-center gap-2 rounded-md px-3.5 py-1.5 text-[13px] font-semibold transition-colors"
+        >
+          <span>{VIDEOS.overview.label}</span>
+          <span class="font-mono text-[11.5px] opacity-80">{VIDEOS.overview.duration}</span>
+        </button>
+      </div>
+
+      <button
+        type="button"
+        id="walkthrough-modal-close"
+        aria-label="Close video"
+        class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-night-line bg-night px-2.5 py-1.5 text-[12.5px] font-medium text-on-night-2 transition-colors hover:border-t-blue hover:text-on-night"
+      >
+        <span class="hidden font-mono text-[11px] sm:inline">Esc</span>
+        <X size={16} aria-hidden="true" />
+      </button>
+    </div>
+
+    <div class="relative aspect-video w-full bg-paper">
+      <video
+        id="modal-walkthrough-video"
+        class="h-full w-full object-contain"
+        preload="none"
+        playsinline
+        crossorigin="anonymous"
+        width="1920"
+        height="1080"
+        poster={VIDEOS.explainer.poster}
+      >
+        <source id="modal-video-source" src={VIDEOS.explainer.mp4} type="video/mp4" />
+        <track
+          id="modal-video-track"
+          kind="captions"
+          src={VIDEOS.explainer.captions}
+          srclang="en"
+          label="English"
+        />
+      </video>
+
+      <button
+        type="button"
+        id="modal-video-overlay"
+        aria-label="Play Kix walkthrough video"
+        class="group absolute inset-0 hidden cursor-pointer items-center justify-center bg-ink/10 transition-colors hover:bg-ink/15"
+      >
+        <span class="inline-flex items-center gap-2.5 rounded-full bg-accent-brand px-6 py-3.5 text-[15px] font-semibold text-white shadow-[0_12px_30px_rgba(29,101,236,0.45)] transition-transform group-hover:scale-105">
+          <Play size={18} aria-hidden="true" class="translate-x-[0.5px] fill-current" />
+          <span id="modal-overlay-label">Play walkthrough ({VIDEOS.explainer.duration})</span>
+        </span>
+      </button>
+    </div>
+
+    <div class="border-t border-night-line bg-night-2 px-5 py-3 text-[13.5px] text-on-night-2">
+      <p id="modal-video-desc">{VIDEOS.explainer.desc}</p>
+    </div>
+  </div>
+</dialog>
+
+<style>
+  .video-pill {
+    color: var(--ink-2);
+  }
+  .video-pill:hover {
+    color: var(--ink);
+  }
+  .video-pill.is-active {
+    background: var(--accent-brand);
+    color: #ffffff;
+  }
+
+  .modal-video-pill {
+    color: var(--on-night-2);
+  }
+  .modal-video-pill:hover {
+    color: var(--on-night);
+  }
+  .modal-video-pill.is-active {
+    background: var(--accent-button);
+    color: #ffffff;
+  }
+</style>
+
+<script define:vars={{ VIDEOS }}>
+  const modal = document.getElementById('walkthrough-modal');
+  const modalClose = document.getElementById('walkthrough-modal-close');
+  const modalVideo = document.getElementById('modal-walkthrough-video');
+  const modalSource = document.getElementById('modal-video-source');
+  const modalTrack = document.getElementById('modal-video-track');
+  const modalOverlay = document.getElementById('modal-video-overlay');
+  const modalOverlayLabel = document.getElementById('modal-overlay-label');
+  const modalDesc = document.getElementById('modal-video-desc');
+
+  const mobileVideo = document.getElementById('mobile-walkthrough-video');
+  const mobileSource = document.getElementById('mobile-video-source');
+  const mobileTrack = document.getElementById('mobile-video-track');
+  const mobileOverlay = document.getElementById('mobile-video-overlay');
+  const mobileOverlayLabel = document.getElementById('mobile-overlay-label');
+  const mobileDesc = document.getElementById('mobile-video-desc');
+
+  let activeModalKey = 'explainer';
+  let activeMobileKey = 'explainer';
+
+  const mobileViewport = window.matchMedia('(max-width: 47.999rem)');
+  function syncMobilePreload() {
+    if (mobileVideo && mobileViewport.matches && mobileVideo.preload === 'none') {
+      mobileVideo.preload = 'metadata';
+    }
+  }
+  syncMobilePreload();
+  mobileViewport.addEventListener('change', syncMobilePreload);
+
+  function enterVideoFullscreen(video) {
+    if (!video || document.fullscreenElement) return;
+    if (typeof video.requestFullscreen === 'function') {
+      video.requestFullscreen().catch(() => {
+        if (typeof video.webkitEnterFullscreen === 'function') {
+          try {
+            video.webkitEnterFullscreen();
+          } catch {}
+        }
+      });
+    } else if (typeof video.webkitEnterFullscreen === 'function') {
+      try {
+        video.webkitEnterFullscreen();
+      } catch {}
+    }
+  }
+
+  function trackPlay(slug, place) {
+    if (typeof window !== 'undefined' && typeof window.plausible === 'function') {
+      window.plausible('Video Play', { props: { video: slug, place } });
+    }
+  }
+
+  function startPlayback(video, overlay, slug, place, fullscreen = false) {
+    if (!video) return;
+    video.controls = true;
+    if (overlay) overlay.classList.add('hidden');
+    if (fullscreen) {
+      enterVideoFullscreen(video);
+    }
+    const playPromise = video.play();
+    trackPlay(slug, place);
+    if (playPromise && typeof playPromise.catch === 'function') {
+      playPromise.catch(() => {
+        video.controls = false;
+        if (overlay) {
+          overlay.classList.remove('hidden');
+          overlay.classList.add('flex');
+        }
+      });
+    }
+  }
+
+  function setVideoChoice(scope, key, autoplay) {
+    const info = VIDEOS[key];
+    if (!info) return;
+
+    const isModal = scope === 'modal';
+    const video = isModal ? modalVideo : mobileVideo;
+    const source = isModal ? modalSource : mobileSource;
+    const track = isModal ? modalTrack : mobileTrack;
+    const overlay = isModal ? modalOverlay : mobileOverlay;
+    const overlayLabel = isModal ? modalOverlayLabel : mobileOverlayLabel;
+    const desc = isModal ? modalDesc : mobileDesc;
+
+    if (isModal) {
+      activeModalKey = key;
+    } else {
+      activeMobileKey = key;
+    }
+
+    for (const btn of document.querySelectorAll(`[data-video-scope="${scope}"][data-video-tab]`)) {
+      const selected = btn.getAttribute('data-video-tab') === key;
+      btn.classList.toggle('is-active', selected);
+      btn.setAttribute('aria-selected', String(selected));
+    }
+
+    if (desc) desc.textContent = info.desc;
+    if (overlayLabel) {
+      overlayLabel.textContent = `Play ${info.shortLabel.toLowerCase()} (${info.duration})`;
+    }
+
+    if (video && source && source.getAttribute('src') !== info.mp4) {
+      video.pause();
+      video.poster = info.poster;
+      source.setAttribute('src', info.mp4);
+      if (track) track.setAttribute('src', info.captions);
+      video.load();
+    }
+
+    if (autoplay) {
+      startPlayback(video, overlay, info.slug, isModal ? 'modal' : 'mobile-section', !isModal);
+    } else if (video && overlay) {
+      video.controls = false;
+      overlay.classList.remove('hidden');
+      overlay.classList.add('flex');
+    }
+  }
+
+  for (const trigger of document.querySelectorAll('[data-open-walkthrough]')) {
+    trigger.addEventListener('click', () => {
+      const isDesktop = window.matchMedia('(min-width: 48rem)').matches;
+      if (isDesktop && modal && typeof modal.showModal === 'function') {
+        if (mobileVideo) mobileVideo.pause();
+        modal.showModal();
+        startPlayback(modalVideo, modalOverlay, VIDEOS[activeModalKey].slug, 'hero-modal');
+      } else if (mobileVideo) {
+        startPlayback(mobileVideo, mobileOverlay, VIDEOS[activeMobileKey].slug, 'hero-mobile', true);
+      }
+    });
+  }
+
+  for (const tab of document.querySelectorAll('[data-video-tab]')) {
+    tab.addEventListener('click', () => {
+      const scope = tab.getAttribute('data-video-scope');
+      const key = tab.getAttribute('data-video-tab');
+      if (!scope || !key) return;
+      const shouldAutoplay = scope === 'modal';
+      setVideoChoice(scope, key, shouldAutoplay);
+    });
+  }
+
+  if (mobileOverlay) {
+    mobileOverlay.addEventListener('click', () => {
+      startPlayback(mobileVideo, mobileOverlay, VIDEOS[activeMobileKey].slug, 'mobile-section', true);
+    });
+  }
+
+  // Pause and restore the play overlay on fullscreen exit so replaying also enters fullscreen.
+  function onMobileExitFullscreen() {
+    if (!mobileVideo || !mobileOverlay) return;
+    mobileVideo.pause();
+    mobileVideo.controls = false;
+    mobileOverlay.classList.remove('hidden');
+    mobileOverlay.classList.add('flex');
+  }
+  let wasMobileFullscreen = false;
+  document.addEventListener('fullscreenchange', () => {
+    if (document.fullscreenElement === mobileVideo) {
+      wasMobileFullscreen = true;
+    } else if (wasMobileFullscreen) {
+      wasMobileFullscreen = false;
+      onMobileExitFullscreen();
+    }
+  });
+  if (mobileVideo) {
+    mobileVideo.addEventListener('webkitendfullscreen', onMobileExitFullscreen);
+  }
+
+  if (modalOverlay) {
+    modalOverlay.addEventListener('click', () => {
+      startPlayback(modalVideo, modalOverlay, VIDEOS[activeModalKey].slug, 'modal');
+    });
+  }
+
+  if (modalClose && modal) {
+    modalClose.addEventListener('click', () => modal.close());
+  }
+
+  if (modal) {
+    // Close the dialog when clicking the backdrop outside the card.
+    modal.addEventListener('click', (event) => {
+      if (event.target === modal) {
+        modal.close();
+      }
+    });
+    modal.addEventListener('close', () => {
+      if (modalVideo) modalVideo.pause();
+    });
+  }
+
+  // Open the modal ready to play when visiting /#walkthrough on desktop.
+  if (window.location.hash === '#walkthrough' && window.matchMedia('(min-width: 48rem)').matches && modal) {
+    setVideoChoice('modal', 'explainer', false);
+    modal.showModal();
+  }
+</script>
