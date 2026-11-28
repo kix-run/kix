@@ -143,7 +143,9 @@ pub enum ExpectedFrom {
 /// One object of a deploy.
 #[derive(Debug, Clone)]
 pub struct ObjectView {
-    /// `kix.run/identity-hash` of the object in the deploy's build.
+    /// The hash the deploy's revision gives the object
+    /// ([`super::revision::RevisionObject::hash`]), or its
+    /// `kix.run/identity-hash` in the build of a record an older Kix wrote.
     pub identity_hash: String,
     /// The object's kind, namespace, and name. When Kix cannot name a missing
     /// object, the kind is `Unknown` and `named` is false.
@@ -356,7 +358,10 @@ impl Apis {
     }
 }
 
-/// The objects a sweep found, indexed for [`view`].
+/// The objects a sweep found, indexed for [`view`]. An older Kix stamped
+/// each object it applied with its build hash, and the package index of a
+/// record it wrote names objects by that hash, so `by_hash` finds those.
+/// Every other object is found by name.
 struct Live<'a> {
     by_hash: HashMap<&'a str, &'a DynamicObject>,
     by_rid: HashMap<ResourceId, &'a DynamicObject>,
@@ -536,7 +541,14 @@ fn view(
                         } else {
                             Presence::Present
                         },
-                        Some(drift::check_object(obj, applied.applied(obj), manager).verdict),
+                        Some(
+                            drift::check_object(
+                                obj,
+                                applied.for_live(obj, manager, Some(record.name.as_str())),
+                                manager,
+                            )
+                            .verdict,
+                        ),
                         if marker {
                             Readiness::NotApplicable
                         } else {
@@ -602,15 +614,9 @@ fn leaving(
     live: &[DynamicObject],
     owners: impl Fn(&DynamicObject) -> Vec<String>,
 ) -> Vec<Leaving> {
-    let hashes: HashSet<&str> = view
-        .objects
-        .iter()
-        .map(|o| o.identity_hash.as_str())
-        .collect();
     let rids: HashSet<&ResourceId> = view.objects.iter().map(|o| &o.rid).collect();
     let mut out: Vec<Leaving> = live
         .iter()
-        .filter(|obj| !annotation(obj, keys::IDENTITY_HASH).is_some_and(|h| hashes.contains(h)))
         .filter(|obj| !rids.contains(&drift::resource_id(obj)))
         .filter_map(|obj| Some((obj, Deleting::of(obj)?)))
         .filter(|(obj, _)| owners(obj).contains(&view.cluster))

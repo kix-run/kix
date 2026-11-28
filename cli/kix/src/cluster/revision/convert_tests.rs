@@ -111,7 +111,7 @@ fn the_targets_are_the_records_a_run_needs_without_a_map() {
         record("old", "Superseded", None, &[]),
     ]);
     let current = current_of(None, &own);
-    let found: Vec<&str> = targets(current, &own)
+    let found: Vec<&str> = targets(current, &own, &[])
         .iter()
         .map(|r| r.name.as_str())
         .collect();
@@ -122,7 +122,7 @@ fn the_targets_are_the_records_a_run_needs_without_a_map() {
         cluster_level: "x".into(),
         kept_orphans: None,
     }));
-    let found: Vec<&str> = targets(current_of(None, &mapped), &mapped)
+    let found: Vec<&str> = targets(current_of(None, &mapped), &mapped, &[])
         .iter()
         .map(|r| r.name.as_str())
         .collect();
@@ -157,6 +157,7 @@ fn a_record_is_converted_from_its_index_and_the_notes() {
         &[],
         &objects(&live_values),
         &[],
+        &Default::default(),
     )
     .unwrap();
     let converted = &conversion.records()[0];
@@ -204,6 +205,7 @@ fn an_index_without_names_is_read_through_the_live_hashes() {
         &[],
         &objects(&live_values),
         &[],
+        &Default::default(),
     )
     .unwrap();
     let converted = &conversion.records()[0];
@@ -242,6 +244,7 @@ fn a_kept_build_with_revisions_is_read_from_them() {
         std::slice::from_ref(&earlier),
         &[],
         &[],
+        &Default::default(),
     )
     .unwrap();
     let converted = &conversion.records()[0];
@@ -259,7 +262,9 @@ async fn run_on(api: &FakeApi) -> bool {
         .await
         .unwrap();
     let records = crate::cluster::activation::Records::open_installed(&client, &found).unwrap();
-    run(&client, &records, &found, CLUSTER).await.unwrap()
+    run(&client, &records, &found, CLUSTER, &BuildHashes::default())
+        .await
+        .unwrap()
 }
 
 /// The conversion names the revisions on each record and writes the
@@ -295,6 +300,7 @@ async fn the_conversion_is_safe_to_run_twice_and_to_stop() {
         &[],
         &objects(&values[2..]),
         &[],
+        &Default::default(),
     )
     .unwrap();
     let store = Revisions::new(&api.client());
@@ -354,7 +360,16 @@ fn a_listing_that_missed_a_kind_refuses_a_record_without_names() {
         ),
     ] {
         let own = parsed(&[own_values]);
-        let err = plan(CLUSTER, current_of(None, &own), &own, &[], &[], &forbidden).unwrap_err();
+        let err = plan(
+            CLUSTER,
+            current_of(None, &own),
+            &own,
+            &[],
+            &[],
+            &forbidden,
+            &BuildHashes::default(),
+        )
+        .unwrap_err();
         assert_eq!(
             err,
             Refusal::NotListed {
@@ -376,7 +391,16 @@ fn a_listing_that_missed_a_kind_refuses_a_record_without_names() {
         Some(index(&[("web", &h("web"))], true)),
         &[],
     )]);
-    let conversion = plan(CLUSTER, current_of(None, &own), &own, &[], &[], &forbidden).unwrap();
+    let conversion = plan(
+        CLUSTER,
+        current_of(None, &own),
+        &own,
+        &[],
+        &[],
+        &forbidden,
+        &BuildHashes::default(),
+    )
+    .unwrap();
     assert_eq!(conversion.records().len(), 1);
 }
 
@@ -406,6 +430,7 @@ fn a_kept_orphan_is_found_by_its_note() {
         &[],
         &objects(&live_values),
         &[],
+        &Default::default(),
     )
     .unwrap();
     let converted = &conversion.records()[0];
@@ -434,6 +459,7 @@ fn a_record_without_an_index_too_large_for_one_revision_is_refused() {
         &[],
         &objects(&live_values),
         &[],
+        &Default::default(),
     )
     .unwrap_err();
     let text = err.to_string();
@@ -470,6 +496,7 @@ fn the_conversion_records_the_noted_edges_and_lifecycle() {
         &[],
         &objects(&live_values),
         &[],
+        &Default::default(),
     )
     .unwrap();
     let converted = &conversion.records()[0];

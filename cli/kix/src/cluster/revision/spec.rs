@@ -33,6 +33,12 @@ const APPLIED_BYTES: usize = 120;
 /// Room for `apiVersion`, `kind`, and `metadata`.
 const OVERHEAD_BYTES: usize = 4096;
 
+/// The hash a kept-orphans list that `kix gc` rebuilt gives each object.
+/// The rebuild cannot know what build wanted the object to be. An object
+/// hash is hex digits only, so this value never equals one, and no plan
+/// skips an object for it.
+pub const REBUILT: &str = "rebuilt";
+
 /// The format of the revisions this Kix writes. Format 1 has no `needs`
 /// and no `slot.lifecycle`, and its `spec` has no `format` field.
 pub const FORMAT: u32 = 2;
@@ -47,10 +53,19 @@ fn is_format_one(format: &u32) -> bool {
 
 /// One object of a revision.
 ///
-/// The field order is the sort order, so objects sort by build hash first.
+/// The field order is the sort order, so objects sort by hash first.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct RevisionObject {
-    /// The object's build hash, as `kix.run/identity-hash` carries it.
+    /// What the build that the revision records wanted the object to be.
+    /// Kix compares it for equality and reads nothing else from it.
+    ///
+    /// For an object of a build this Kix read, it is the object hash of the
+    /// build's manifest ([`crate::manifest::hash::object_hash`]). In a
+    /// revision converted from a record an older Kix wrote, it is that
+    /// build's Nix store hash, which never equals an object hash. In a
+    /// kept-orphans list that `kix gc` rebuilt, it is [`REBUILT`]. No reader
+    /// joins it with a build's store hashes: every join between a revision
+    /// and a build goes by the object's group, kind, namespace, and name.
     pub hash: String,
     /// The API group, `""` for the core group.
     #[serde(default)]
@@ -171,12 +186,15 @@ impl RevisionObject {
         self
     }
 
-    /// Return the object `manifest` describes, with the build hash its
-    /// `kix.run/identity-hash` annotation carries, or `None` when it has
-    /// none. A stamped manifest and a live object Kix applied both carry it.
-    pub fn of_manifest(manifest: &Value) -> Option<RevisionObject> {
-        let hash = keys::get(manifest, keys::IDENTITY_HASH).filter(|h| !h.is_empty())?;
-        Some(RevisionObject::with_hash(hash.to_string(), manifest))
+    /// Return the object the built manifest `manifest` describes, with its
+    /// object hash, or `None` when `manifest` is not a manifest of a build:
+    /// it carries no `kix.run/identity-hash`, as a live object does not.
+    pub fn of_build(manifest: &Value) -> Option<RevisionObject> {
+        keys::get(manifest, keys::IDENTITY_HASH).filter(|h| !h.is_empty())?;
+        Some(RevisionObject::with_hash(
+            crate::manifest::hash::object_hash(manifest),
+            manifest,
+        ))
     }
 
     /// Return the object's group, kind, namespace, and name, without its
@@ -306,7 +324,8 @@ pub fn name_of(spec: &RevisionSpec) -> String {
 pub struct Revision {
     pub name: String,
     pub spec: RevisionSpec,
-    /// Each object's build hash mapped to the hash Kix applied.
+    /// Each object's [`RevisionObject::hash`] mapped to the applied hash of
+    /// what Kix wrote for it.
     pub applied: BTreeMap<String, String>,
 }
 
@@ -424,9 +443,13 @@ impl RevisionSet {
         // graph a deploy orders by drops such an entry too.
         let object = |path: &Path| {
             graph.resources.get(path).map(|node| {
-                RevisionObject::with_hash(store_hash(path), &node.manifest).with_needs(
-                    Need::of_depends_on(&node.manifest, |hash| by_hash.get(hash).cloned()),
+                RevisionObject::with_hash(
+                    crate::manifest::hash::object_hash(&node.manifest),
+                    &node.manifest,
                 )
+                .with_needs(Need::of_depends_on(&node.manifest, |hash| {
+                    by_hash.get(hash).cloned()
+                }))
             })
         };
         let instances = groups

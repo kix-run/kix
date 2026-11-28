@@ -127,6 +127,11 @@ pub struct LivePlan {
     unknown: Vec<crate::cluster::revision::RevisionObject>,
     /// The migration writes the run makes.
     migrations: crate::cluster::ops::Migrations,
+    /// Which object hash the run records each applied hash under.
+    recording: crate::cluster::ops::Recording,
+    /// The hashes of the build's objects, which the run's conversion of an
+    /// older Kix's records reads.
+    build_hashes: crate::cluster::revision::convert::BuildHashes,
 }
 
 impl LivePlan {
@@ -185,6 +190,7 @@ impl LivePlan {
                 &tenancy.own_listed_revisions(),
                 &inventory::managed_of(listed.clone()).managed,
                 &listed.forbidden,
+                &convert::BuildHashes::of(desired),
             )
             .map_err(|e| LivePlanError::Conversion(Box::new(e)))?;
             tenancy.with_conversion(&conversion)
@@ -226,12 +232,11 @@ impl LivePlan {
         live = crate::cluster::apply::baseline_manifests(&live, &[decided.orphan_manifests]);
         // Every manifest here is a live object, so the edges come from this
         // Kix cluster's revisions.
-        let prior = Prior {
-            edges: ledger.edges(&live),
-            manifests: live,
-        };
+        let prior = ledger.prior(live);
         let drift_not_reverted = decided.drift_not_reverted;
         let unknown = decided.unknown;
+        let recording =
+            crate::cluster::ops::Recording::of_build(desired, decided.unrecorded.iter().cloned());
         let (actions, shared_orphans) = (decided.actions, decided.shared);
         let orphans: Vec<ResourceId> = actions
             .iter()
@@ -250,6 +255,8 @@ impl LivePlan {
             cluster,
             record,
             migrations: decided.migrations,
+            recording,
+            build_hashes: crate::cluster::revision::convert::BuildHashes::of(desired),
             plan,
             orphans,
             shared_orphans,
@@ -356,7 +363,8 @@ impl LivePlan {
                 // owned by other controllers.
                 Force::None,
             )
-            .with_migrations(self.migrations),
+            .with_migrations(self.migrations)
+            .with_recording(self.recording),
             RecordConfig {
                 name: manage_lifecycle.then_some(self.record.name),
                 // The operator created the record itself and owns
@@ -378,6 +386,7 @@ impl LivePlan {
                 },
                 // Only a run that writes the record names revisions in it.
                 revisions: self.revisions.filter(|_| manage_lifecycle),
+                build_hashes: self.build_hashes,
                 // The operator deploys whole builds.
                 only: Vec::new(),
                 mark_failed_on_abort: false,
@@ -409,6 +418,9 @@ struct DecidedChanges {
     orphan_manifests: Vec<Value>,
     drift_not_reverted: Vec<DriftNotReverted>,
     unknown: Vec<crate::cluster::revision::RevisionObject>,
+    /// The objects the run applies without the fields another manager
+    /// holds.
+    unrecorded: Vec<ResourceId>,
 }
 
 /// Return every object of the build `desired` is part of: the objects of
@@ -484,6 +496,7 @@ fn decided_changes(
         orphan_manifests,
         drift_not_reverted,
         unknown: decided.unknown,
+        unrecorded: decided.unrecorded,
     })
 }
 
@@ -559,6 +572,7 @@ mod tests {
             &[],
             objects,
             &[],
+            &convert::BuildHashes::of(desired),
         )
         .unwrap();
         let tenancy = &tenancy.with_conversion(&conversion);
@@ -703,6 +717,8 @@ mod tests {
             drift_not_reverted: Vec::new(),
             unknown: Vec::new(),
             migrations: Default::default(),
+            recording: Default::default(),
+            build_hashes: Default::default(),
         };
         assert_eq!(operator.applies(), 0);
         assert_eq!(
@@ -805,7 +821,12 @@ mod tests {
 
         /// Return the stamped build of `manifests` for Kix cluster `a`.
         fn build(manifests: &[Value]) -> StoreGraph {
-            let graph = StoreGraph::synthesize(manifests, &StoreGraph::empty("a"));
+            build_of("a", manifests)
+        }
+
+        /// Return the stamped build of `manifests` for Kix cluster `cluster`.
+        fn build_of(cluster: &str, manifests: &[Value]) -> StoreGraph {
+            let graph = StoreGraph::synthesize(manifests, &StoreGraph::empty(cluster));
             crate::plan::fixtures::stamp(&graph).0
         }
 
@@ -1037,7 +1058,7 @@ mod tests {
             let edges = crate::cluster::edges::Edges::of_revisions([&once]);
             let kept_twice: Vec<RevisionObject> = manifests(&first)
                 .iter()
-                .filter_map(RevisionObject::of_manifest)
+                .filter_map(RevisionObject::of_build)
                 .map(|o| {
                     let needs: Vec<_> = edges.needs(&o.resource_id()).cloned().collect();
                     o.with_needs(needs)
@@ -1341,17 +1362,21 @@ mod tests {
         /// Return the build of `manifests` with its Activation record
         /// `record`, for Kix cluster `a`.
         fn release(record: &str, manifests: &[Value]) -> StoreGraph {
+            release_of("a", record, manifests)
+        }
+
+        fn release_of(cluster: &str, record: &str, manifests: &[Value]) -> StoreGraph {
             let mut all = manifests.to_vec();
             all.push(json!({
                 "apiVersion": keys::API_VERSION,
                 "kind": crate::manifest::lifecycle::RECORD_KIND,
                 "metadata": {
                     "name": record,
-                    "labels": { (keys::CLUSTER_LABEL): "a" },
+                    "labels": { (keys::CLUSTER_LABEL): cluster },
                 },
-                "spec": { "cluster": "a" },
+                "spec": { "cluster": cluster },
             }));
-            build(&all)
+            build_of(cluster, &all)
         }
 
         fn deployment(name: &str, cede: bool) -> Value {
@@ -1384,13 +1409,27 @@ mod tests {
         /// Return the current record of Kix cluster `a` and the baseline the
         /// CLI plans against.
         async fn current_baseline(client: &Client) -> crate::plan::baseline::Baseline {
+            current_baseline_of(client, "a").await
+        }
+
+        async fn current_baseline_of(
+            client: &Client,
+            cluster: &str,
+        ) -> crate::plan::baseline::Baseline {
             let opened = Records::open(
                 client,
                 &discovery::discover_resources(client).await.unwrap(),
             )
             .unwrap();
-            let tenancy = crate::cluster::tenancy::read(&opened, "a").await.unwrap();
-            let active = opened.into_records().unwrap().active("a").await.unwrap();
+            let tenancy = crate::cluster::tenancy::read(&opened, cluster)
+                .await
+                .unwrap();
+            let active = opened
+                .into_records()
+                .unwrap()
+                .active(cluster)
+                .await
+                .unwrap();
             crate::plan::baseline::Baseline {
                 active,
                 tenancy,
@@ -1401,10 +1440,18 @@ mod tests {
         /// Plan `graph` as `kix deploy` does, and ask what each forced apply
         /// takes, as its dry run does.
         async fn cli_plan(api: &FakeApi, graph: &StoreGraph) -> crate::plan::CheckedPlan {
+            cli_plan_of(api, "a", graph).await
+        }
+
+        async fn cli_plan_of(
+            api: &FakeApi,
+            cluster: &str,
+            graph: &StoreGraph,
+        ) -> crate::plan::CheckedPlan {
             let client = api.client();
-            let baseline = current_baseline(&client).await;
+            let baseline = current_baseline_of(&client, cluster).await;
             let mut checked = crate::plan::Planner::new(crate::plan::fixtures::flags(&[]), &|_| {})
-                .plan(graph, "a", &baseline, Some(&client))
+                .plan(graph, cluster, &baseline, Some(&client))
                 .await
                 .unwrap();
             let target =
@@ -1431,11 +1478,19 @@ mod tests {
             api: &FakeApi,
             checked: crate::plan::CheckedPlan,
         ) -> Result<crate::cluster::stream::DeployResult, DeployError> {
+            cli_run_of(api, "a", checked).await
+        }
+
+        async fn cli_run_of(
+            api: &FakeApi,
+            cluster: &str,
+            checked: crate::plan::CheckedPlan,
+        ) -> Result<crate::cluster::stream::DeployResult, DeployError> {
             let client = api.client();
             let lock = crate::cluster::head::take(
                 &client,
                 crate::cluster::head::Request {
-                    cluster: "a".into(),
+                    cluster: cluster.into(),
                     holder: crate::cluster::head::Holder::cli("kix deploy"),
                     purpose: crate::cluster::head::Purpose::Deploy,
                     activation: checked.activation_name().map(str::to_string),
@@ -1583,7 +1638,7 @@ mod tests {
             let plan = cli_plan(&api, &v1).await;
             assert_eq!(writes(&plan), ["fixed"]);
             let operator = operator_plan(&api, &v1).await;
-            assert_eq!(operator.applies(), 0);
+            assert_eq!(operator.applies(), 1);
             assert_eq!(
                 operator
                     .drift_not_reverted()
@@ -1593,9 +1648,22 @@ mod tests {
                 ["fixed"]
             );
 
-            // The operator sends nothing for it, so even a run that stops at
-            // the first failure has none, and the rest of the build goes on.
-            let before = api.requests().len();
+            // The operator applies the build without the field the
+            // autoscaler holds, so the apply is not refused, and the rest of
+            // the build goes on. It records no applied hash for it, so the
+            // drift is still reported.
+            // The autoscaled pods are ready, as they would be on a cluster.
+            api.patch_object("Deployment", "fixed", |o| {
+                for field in [
+                    "replicas",
+                    "readyReplicas",
+                    "updatedReplicas",
+                    "availableReplicas",
+                ] {
+                    o["status"][field] = json!(5);
+                }
+            });
+            let before = api.bodies().len();
             let result = operator_run(
                 &api,
                 operator_plan(&api, &v1).await,
@@ -1603,13 +1671,21 @@ mod tests {
             )
             .await;
             assert_eq!(result.failed, 0, "{result:?}");
-            assert!(
-                !api.requests()[before..]
-                    .iter()
-                    .any(|r| r.starts_with("PATCH") && r.contains("/deployments/fixed")),
-                "{:?}",
-                api.requests()
-            );
+            let bodies = api.bodies();
+            let sent: Vec<&str> = bodies[before..]
+                .iter()
+                .filter(|(line, _)| {
+                    line.starts_with("PATCH") && line.contains("/deployments/fixed")
+                })
+                .map(|(_, body)| body.as_str())
+                .collect();
+            assert_eq!(sent.len(), 1, "{bodies:?}");
+            let sent: Value = serde_json::from_str(sent[0]).unwrap();
+            assert_eq!(sent.pointer("/spec/replicas"), None, "{sent}");
+            let fixed = api.object("Deployment", "fixed").unwrap();
+            assert_eq!(fixed["spec"]["replicas"], json!(5));
+            let operator = operator_plan(&api, &v1).await;
+            assert_eq!(operator.drift_not_reverted().len(), 1);
 
             let second = cli_deploy(&api, &v1).await.unwrap();
             assert_eq!(second.failed, 0, "{second:?}");
@@ -1631,6 +1707,211 @@ mod tests {
                 (operator.applies(), operator.drift_not_reverted().len()),
                 (0, 0)
             );
+        }
+
+        /// The seven retired notes, which no request may carry but the
+        /// Activation record's own.
+        const RETIRED: [&str; 7] = [
+            keys::IDENTITY_HASH,
+            keys::DEPENDS_ON,
+            keys::PACKAGE,
+            keys::PACKAGE_NAMESPACE,
+            keys::LIFECYCLE,
+            keys::ACTIVATIONS,
+            keys::APPLIED_HASH,
+        ];
+
+        /// Return each request body sent from `from` on that carries a
+        /// retired note, leaving out the Activation records'.
+        fn retired_notes_sent(api: &FakeApi, from: usize) -> Vec<String> {
+            api.bodies()[from..]
+                .iter()
+                .filter(|(line, _)| !line.contains("/activations"))
+                .filter(|(_, body)| {
+                    RETIRED
+                        .iter()
+                        .any(|key| body.contains(&format!("\"{key}\"")))
+                })
+                .map(|(line, body)| format!("{line}: {body}"))
+                .collect()
+        }
+
+        /// The build `user` depends on `conf`, at `v`.
+        fn chained(record: &str, v: &str) -> StoreGraph {
+            let conf = config_map("conf", v);
+            let conf_hash = crate::manifest::hash::object_hash(&conf)[..32].to_string();
+            let mut graph = build_at(&[
+                (conf_hash.clone(), conf),
+                (
+                    format!("u{}", &conf_hash[1..]),
+                    depending(config_map("user", "1"), &format!("requires:{conf_hash}")),
+                ),
+                (
+                    format!("r{}", &conf_hash[1..]),
+                    json!({
+                        "apiVersion": keys::API_VERSION,
+                        "kind": crate::manifest::lifecycle::RECORD_KIND,
+                        "metadata": { "name": record, "labels": { (keys::CLUSTER_LABEL): "a" } },
+                        "spec": { "cluster": "a" },
+                    }),
+                ),
+            ]);
+            graph.activation_path = graph
+                .resources
+                .iter()
+                .find(|(_, r)| crate::manifest::lifecycle::is_record(&r.manifest))
+                .map(|(p, _)| p.clone())
+                .unwrap();
+            graph
+        }
+
+        /// A deploy that changes `conf` moves the build hash of `user`,
+        /// which depends on it, and leaves its manifest alone. The plan
+        /// lists no write for `user`, the run sends no request for it, and
+        /// the revisions name it as before.
+        #[tokio::test]
+        async fn a_change_of_dependencies_alone_writes_nothing_to_the_dependent() {
+            let api = FakeApi::new([]);
+            api.track_owners();
+            let (v1, v2) = (chained("a-v1", "1"), chained("a-v2", "2"));
+            let user = |g: &StoreGraph| {
+                g.resources
+                    .values()
+                    .find(|r| r.manifest["metadata"]["name"] == "user")
+                    .unwrap()
+                    .manifest
+                    .clone()
+            };
+            assert_ne!(
+                keys::get(&user(&v1), keys::IDENTITY_HASH),
+                keys::get(&user(&v2), keys::IDENTITY_HASH)
+            );
+            cli_deploy(&api, &v1).await.unwrap();
+            let named = |api: &FakeApi| {
+                let revisions = api.names(crate::cluster::revision::KIND);
+                revisions
+                    .iter()
+                    .filter_map(|name| api.object(crate::cluster::revision::KIND, name))
+                    .flat_map(|r| r["spec"]["objects"].as_array().cloned().unwrap_or_default())
+                    .filter(|o| o["name"] == "user")
+                    .map(|o| o["hash"].as_str().unwrap().to_string())
+                    .collect::<std::collections::BTreeSet<_>>()
+            };
+            let before_names = named(&api);
+            let checked = cli_plan(&api, &v2).await;
+            assert_eq!(writes(&checked), ["conf"]);
+            let before = api.bodies().len();
+            cli_run(&api, checked).await.unwrap();
+            assert!(
+                !api.bodies()[before..]
+                    .iter()
+                    .any(|(line, _)| line.contains("/configmaps/user")),
+                "{:?}",
+                api.bodies()
+            );
+            assert_eq!(named(&api), before_names);
+            assert_eq!(writes(&cli_plan(&api, &v2).await), Vec::<String>::new());
+        }
+
+        /// No request a deploy sends carries a retired note, from the CLI or
+        /// from the operator, except the Activation record, which keeps its
+        /// own. The build stamps them all.
+        #[tokio::test]
+        async fn no_request_sends_a_retired_note() {
+            let api = FakeApi::new([]);
+            api.track_owners();
+            let v1 = chained("a-v1", "1");
+            let stamped = v1
+                .resources
+                .values()
+                .find(|r| r.manifest["metadata"]["name"] == "user")
+                .unwrap();
+            for key in [keys::IDENTITY_HASH, keys::DEPENDS_ON, keys::PACKAGE] {
+                assert!(keys::get(&stamped.manifest, key).is_some(), "{key}");
+            }
+            cli_deploy(&api, &v1).await.unwrap();
+            cli_deploy(&api, &chained("a-v2", "2")).await.unwrap();
+            api.patch_object("ConfigMap", "user", |o| o["data"]["k"] = json!("by hand"));
+            let v2 = chained("a-v2", "2");
+            operator_repair(&api, operator_plan(&api, &v2).await).await;
+            assert_eq!(api.object("ConfigMap", "user").unwrap()["data"]["k"], "1");
+            assert!(
+                api.bodies()
+                    .iter()
+                    .any(|(line, _)| line.contains("/activations"))
+            );
+            assert_eq!(retired_notes_sent(&api, 0), Vec::<String>::new());
+        }
+
+        /// Two Kix clusters on one Kubernetes cluster whose definitions
+        /// differ by one label on a shared Namespace. Each owns the fields it
+        /// sets and both own the rest, so both deploy in either order with
+        /// no conflict and then plan nothing. A hand edit to a field both
+        /// set is reported to each once, as drift.
+        #[tokio::test]
+        async fn two_kix_clusters_that_differ_by_one_namespace_label_share_it() {
+            let namespace = |extra: Option<(&str, &str)>| {
+                let mut ns = json!({
+                    "apiVersion": "v1",
+                    "kind": "Namespace",
+                    "metadata": {
+                        "name": "shared",
+                        "labels": { "app.kubernetes.io/managed-by": "kix", "team": "web" },
+                    },
+                });
+                if let Some((k, v)) = extra {
+                    ns["metadata"]["labels"][k] = json!(v);
+                }
+                ns
+            };
+            let a = release_of("a", "a-v1", &[namespace(None), config_map("in-a", "1")]);
+            let d = release_of(
+                "d",
+                "d-v1",
+                &[namespace(Some(("tier", "1"))), config_map("in-d", "1")],
+            );
+            for order in [["a", "d"], ["d", "a"]] {
+                let api = FakeApi::new([]);
+                api.track_owners();
+                for cluster in order {
+                    let graph = if cluster == "a" { &a } else { &d };
+                    let checked = cli_plan_of(&api, cluster, graph).await;
+                    cli_run_of(&api, cluster, checked)
+                        .await
+                        .unwrap_or_else(|e| panic!("{order:?}: {cluster}: {e}"));
+                }
+                for (cluster, graph) in [("a", &a), ("d", &d)] {
+                    let again = cli_plan_of(&api, cluster, graph).await;
+                    assert_eq!(writes(&again), Vec::<String>::new(), "{order:?}: {cluster}");
+                }
+                let ns = api.object("Namespace", "shared").unwrap();
+                assert_eq!(ns["metadata"]["labels"]["tier"], "1");
+                assert!(
+                    ns["metadata"]
+                        .get("annotations")
+                        .is_none_or(|a| { RETIRED.iter().all(|key| a.get(*key).is_none()) })
+                );
+
+                api.update_as("kubectl-edit", None, "Namespace", "shared", |o| {
+                    o["metadata"]["labels"]["team"] = json!("db");
+                });
+                for (cluster, graph) in [("a", &a), ("d", &d)] {
+                    let checked = cli_plan_of(&api, cluster, graph).await;
+                    assert_eq!(writes(&checked), ["shared"], "{order:?}: {cluster}");
+                    assert_eq!(
+                        checked
+                            .plan()
+                            .nodes()
+                            .iter()
+                            .filter(|n| n
+                                .action
+                                .written()
+                                .is_some_and(|m| m["kind"] == "Namespace"))
+                            .count(),
+                        1
+                    );
+                }
+            }
         }
 
         /// An earlier Kix stored applied hashes that covered ceded fields.

@@ -304,7 +304,7 @@ fn check_object_in_sync_when_stamp_matches() {
         .insert(keys::APPLIED_HASH.to_string(), hash);
     let report = drift::check_object(
         &obj,
-        AppliedHashes::from_annotations().applied(&obj),
+        AppliedHashes::from_annotations().for_live(&obj, &manager(), None),
         &manager(),
     );
     assert_eq!(report.verdict, DriftVerdict::InSync);
@@ -324,7 +324,7 @@ fn check_object_unstamped_without_annotation() {
     assert_eq!(
         drift::check_object(
             &obj,
-            AppliedHashes::from_annotations().applied(&obj),
+            AppliedHashes::from_annotations().for_live(&obj, &manager(), None),
             &manager()
         )
         .verdict,
@@ -349,7 +349,7 @@ fn check_object_reads_a_stamp_under_a_retired_domain() {
     assert_ne!(
         drift::check_object(
             &obj,
-            AppliedHashes::from_annotations().applied(&obj),
+            AppliedHashes::from_annotations().for_live(&obj, &manager(), None),
             &manager()
         )
         .verdict,
@@ -364,7 +364,7 @@ fn check_object_no_fieldset_when_managed_fields_stripped() {
     assert_eq!(
         drift::check_object(
             &obj,
-            AppliedHashes::from_annotations().applied(&obj),
+            AppliedHashes::from_annotations().for_live(&obj, &manager(), None),
             &manager()
         )
         .verdict,
@@ -404,7 +404,7 @@ fn check_object_drifted_with_attribution() {
 
     let report = drift::check_object(
         &obj,
-        AppliedHashes::from_annotations().applied(&obj),
+        AppliedHashes::from_annotations().for_live(&obj, &manager(), None),
         &manager(),
     );
     let DriftVerdict::Drifted {
@@ -497,7 +497,7 @@ fn release_replicas(obj: &mut DynamicObject) {
 fn unrecorded_scale(obj: &DynamicObject) -> Option<drift::UnrecordedScale> {
     match drift::check_object(
         obj,
-        AppliedHashes::from_annotations().applied(obj),
+        AppliedHashes::from_annotations().for_live(obj, &manager(), None),
         &manager(),
     )
     .verdict

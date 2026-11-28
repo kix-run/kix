@@ -1,8 +1,8 @@
 //! The applied hashes in `status.applied`: which ones a run writes, and where
-//! a drift check reads an object's applied hash.
+//! a plan or a drift check reads an object's applied hash.
 //!
 //! A run writes the applied hash of each object it applied to every kept
-//! revision of its Kix cluster that names the object with the same build
+//! revision of its Kix cluster that names the object with the same object
 //! hash. A revision of a changed instance also takes the applied hashes of
 //! the objects the run did not apply from the revision it replaces.
 //!
@@ -24,7 +24,7 @@ use crate::manifest::lifecycle::PHASE_SUPERSEDED;
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 impl RevisionObject {
-    /// Return the object `rid` names, with build hash `hash`.
+    /// Return the object `rid` names, with hash `hash`.
     pub fn of_id(hash: &str, rid: &ResourceId) -> RevisionObject {
         RevisionObject {
             hash: hash.to_string(),
@@ -37,20 +37,20 @@ impl RevisionObject {
     }
 }
 
-/// Where a drift check reads the applied hash of a live object.
+/// The applied hashes the revisions of a Kix cluster's records hold, by
+/// object name.
 ///
 /// Each record is read from its own source. An object that a revision of a
 /// record with a readable `status.revisions` names takes its hash from that
-/// revision's `status.applied`. An object whose `kix.run/activations` names
-/// a consulted record without a map, which an older Kix wrote, takes it
-/// from its `kix.run/applied-hash` annotation. Any other object's hash is
-/// not known, and so is the hash of an object two revisions record
-/// differently.
+/// revision's `status.applied`, keyed by the object's name and the hash the
+/// revision gives it ([`RevisionObject::hash`]). An object whose
+/// `kix.run/activations` names a consulted record without a map, which an
+/// older Kix wrote, takes it from its `kix.run/applied-hash` annotation.
 #[derive(Debug, Default)]
 pub struct AppliedHashes {
-    /// Each object a consulted revision names, with what the revisions
-    /// record for it.
-    named: HashMap<AppliedKey, Recorded>,
+    /// Each object a consulted revision names, with each revision entry
+    /// that names it.
+    named: HashMap<ResourceId, Vec<Entry>>,
     /// The identity hashes of the consulted records without a map, or
     /// `None` to read every object's hash from its annotation
     /// ([`AppliedHashes::from_annotations`]).
@@ -60,14 +60,15 @@ pub struct AppliedHashes {
     missing: Vec<String>,
 }
 
-/// What the consulted revisions record for one object.
+/// One revision entry for an object.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Recorded {
-    /// No revision records a hash.
-    Nothing,
-    Hash(String),
-    /// Two revisions record different hashes.
-    Disagree,
+struct Entry {
+    /// The record whose map names the revision.
+    record: String,
+    /// The hash the revision gives the object.
+    hash: String,
+    /// The applied hash the revision holds for it.
+    applied: Option<String>,
 }
 
 impl AppliedHashes {
@@ -80,9 +81,7 @@ impl AppliedHashes {
 
     /// Index the objects that `revisions` holds and that the readable maps of
     /// `records` name. A `Superseded` record is skipped, because Kix deletes
-    /// its revisions. When two revisions name the same object, a recorded
-    /// hash wins over a missing one, and two different recorded hashes
-    /// disagree.
+    /// its revisions.
     ///
     /// A named revision that `revisions` does not hold may name any object,
     /// so then an object no other revision names reads as not known rather
@@ -96,7 +95,7 @@ impl AppliedHashes {
             .into_iter()
             .map(|r| (r.name.as_str(), r))
             .collect();
-        let mut named: HashMap<AppliedKey, Recorded> = HashMap::new();
+        let mut named: HashMap<ResourceId, Vec<Entry>> = HashMap::new();
         let mut noted = std::collections::HashSet::new();
         let mut missing: Vec<String> = Vec::new();
         for record in records {
@@ -116,15 +115,15 @@ impl AppliedHashes {
             );
             for revision in map.names().filter_map(|n| by_name.get(n)) {
                 for object in &revision.spec.objects {
-                    let entry = named
-                        .entry(object.applied_key())
-                        .or_insert(Recorded::Nothing);
-                    *entry = match (&*entry, revision.applied.get(&object.hash)) {
-                        (_, None) => entry.clone(),
-                        (Recorded::Nothing, Some(hash)) => Recorded::Hash(hash.clone()),
-                        (Recorded::Hash(held), Some(hash)) if held == hash => entry.clone(),
-                        (Recorded::Hash(_) | Recorded::Disagree, Some(_)) => Recorded::Disagree,
+                    let entry = Entry {
+                        record: record.name.clone(),
+                        hash: object.hash.clone(),
+                        applied: revision.applied.get(&object.hash).cloned(),
                     };
+                    let entries = named.entry(object.resource_id()).or_default();
+                    if !entries.contains(&entry) {
+                        entries.push(entry);
+                    }
                 }
             }
         }
@@ -165,35 +164,98 @@ impl AppliedHashes {
         Ok(AppliedHashes::of(records.iter().copied(), &listed.readable))
     }
 
-    /// Return the applied hash of the live object `obj`, or `None` when it
-    /// is not known.
-    pub fn applied<'a>(&'a self, obj: &'a DynamicObject) -> Option<&'a str> {
+    fn entries(&self, rid: &ResourceId) -> impl Iterator<Item = &Entry> {
+        self.named.get(rid).into_iter().flatten()
+    }
+
+    /// Return the applied hash the consulted revisions hold for the object
+    /// `rid` with hash `hash`, or `None` when none holds one or two hold
+    /// different ones.
+    pub fn entry(&self, rid: &ResourceId, hash: &str) -> Option<&str> {
+        agreed(self.entries(rid).filter(|e| e.hash == hash))
+    }
+
+    /// Return whether a revision of record `record` names the object `rid`
+    /// with hash `hash`: that record's build wanted the object to be the
+    /// manifest whose object hash is `hash`.
+    pub fn names(&self, rid: &ResourceId, hash: &str, record: &str) -> bool {
+        self.entries(rid)
+            .any(|e| e.hash == hash && e.record == record)
+    }
+
+    /// Return whether a consulted revision holds `applied` for the object
+    /// `rid`.
+    pub fn holds(&self, rid: &ResourceId, applied: &str) -> bool {
+        self.entries(rid)
+            .any(|e| e.applied.as_deref() == Some(applied))
+    }
+
+    /// Return the applied hash to judge the live object `obj` by, for a
+    /// reader with no new build, such as `kix status`. `manager` is the
+    /// field manager of the Kix cluster whose records were consulted, and
+    /// `prefer` the record the reader shows.
+    ///
+    /// When the live object matches an applied hash a consulted revision
+    /// holds for it, return that one: the deploy that wrote it applied
+    /// what the object holds. Otherwise return the one the revisions of
+    /// `prefer` hold. An object no consulted revision names takes its hash
+    /// from its annotation when a consulted record without a map names it.
+    /// Return `None` when the hash is not known.
+    pub fn for_live<'a>(
+        &'a self,
+        obj: &'a DynamicObject,
+        manager: &crate::cluster::field_manager::FieldManager,
+        prefer: Option<&str>,
+    ) -> Option<&'a str> {
+        let rid = drift::resource_id(obj);
+        if self.named.contains_key(&rid) {
+            let live = crate::cluster::fieldsv1::applied_content_hash(obj, manager);
+            if let Some(live) = live
+                && let Some(e) = self
+                    .entries(&rid)
+                    .find(|e| e.applied.as_deref() == Some(live.as_str()))
+            {
+                return e.applied.as_deref();
+            }
+            return agreed(
+                self.entries(&rid)
+                    .filter(|e| Some(e.record.as_str()) == prefer),
+            );
+        }
+        if !self.missing.is_empty() {
+            return None;
+        }
+        self.noted_hash(obj)
+    }
+
+    /// Return the `kix.run/applied-hash` note of `obj` when a consulted
+    /// record without a map names the object, as an older Kix wrote it.
+    fn noted_hash<'a>(&self, obj: &'a DynamicObject) -> Option<&'a str> {
         let annotations = obj.metadata.annotations.as_ref()?;
-        let recorded = keys::get_meta(annotations, keys::IDENTITY_HASH).and_then(|hash| {
-            self.named.get(&AppliedKey {
-                rid: drift::resource_id(obj),
-                hash: hash.to_string(),
-            })
-        });
-        let from_note = || {
-            let named_by_note = match &self.noted {
-                None => true,
-                Some(noted) => keys::get_meta(annotations, keys::ACTIVATIONS)
-                    .unwrap_or_default()
-                    .split(',')
-                    .any(|h| noted.contains(h.trim())),
-            };
-            named_by_note
-                .then(|| keys::get_meta(annotations, keys::APPLIED_HASH))
-                .flatten()
+        let named_by_note = match &self.noted {
+            None => true,
+            Some(noted) => keys::get_meta(annotations, keys::ACTIVATIONS)
+                .unwrap_or_default()
+                .split(',')
+                .any(|h| noted.contains(h.trim())),
         };
-        match recorded {
-            Some(Recorded::Hash(hash)) => Some(hash),
-            Some(Recorded::Disagree) => None,
-            None if !self.missing.is_empty() => None,
-            Some(Recorded::Nothing) | None => from_note(),
+        named_by_note
+            .then(|| keys::get_meta(annotations, keys::APPLIED_HASH))
+            .flatten()
+    }
+}
+
+/// Return the applied hash `entries` hold, or `None` when none holds one or
+/// two hold different ones.
+fn agreed<'a>(entries: impl Iterator<Item = &'a Entry>) -> Option<&'a str> {
+    let mut found: Option<&str> = None;
+    for applied in entries.filter_map(|e| e.applied.as_deref()) {
+        match found {
+            Some(held) if held != applied => return None,
+            _ => found = Some(applied),
         }
     }
+    found
 }
 
 fn readable_map(record: &Record) -> Option<&RevisionMap> {

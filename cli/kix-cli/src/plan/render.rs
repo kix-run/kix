@@ -64,10 +64,10 @@ fn write_metadata_rewrites(out: &mut String, plan: &Plan, markdown: bool) -> fmt
         format!("{n} objects")
     };
     let line = format!(
-        "This deploy also rewrites the metadata of {objects} once: it renames field manager `kix` to `kix/{cluster}` and removes retired annotations `{activations}` and `{applied}`. Controllers that copy annotations onto Pods may restart those Pods once.",
+        "This deploy also rewrites the metadata of {objects} once: it renames field manager `kix` to `kix/{cluster}` and removes retired annotations such as `{identity}` and `{activations}`. Controllers that copy annotations onto Pods may restart those Pods once.",
         cluster = plan.cluster,
+        identity = kix::manifest::keys::IDENTITY_HASH,
         activations = kix::manifest::keys::ACTIVATIONS,
-        applied = kix::manifest::keys::APPLIED_HASH,
     );
     writeln!(out)?;
     if markdown {

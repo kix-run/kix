@@ -88,12 +88,16 @@ fn graph(packages: &[Package], cluster_level: &[(&str, Value)], activation: &str
     g
 }
 
+/// The package `web`, whose ConfigMap `b` has store hash `config` and holds
+/// `config` as its data.
 fn web(config: &'static str) -> Package {
+    let mut b = cm("apps", "b");
+    b["data"] = json!({ "v": config });
     Package {
         namespace: "apps",
         name: "web",
         instance: "1",
-        resources: vec![("2", cm("apps", "a")), (config, cm("apps", "b"))],
+        resources: vec![("2", cm("apps", "a")), (config, b)],
     }
 }
 
@@ -157,15 +161,23 @@ fn the_same_build_gives_the_same_names_in_any_order() {
             lifecycle: None,
         }
     );
-    let kinds: Vec<&str> = web_rev
+    let mut kinds: Vec<&str> = web_rev
         .spec
         .objects
         .iter()
         .map(|o| o.kind.as_str())
         .collect();
-    assert_eq!(kinds, ["PackageInstance", "ConfigMap", "ConfigMap"]);
-    assert_eq!(web_rev.spec.objects[0].group, keys::GROUP);
-    assert_eq!(web_rev.spec.objects[1].hash, format!("{:a>32}", "2"));
+    kinds.sort();
+    assert_eq!(kinds, ["ConfigMap", "ConfigMap", "PackageInstance"]);
+    let a = web_rev.spec.objects.iter().find(|o| o.name == "a").unwrap();
+    assert_eq!(a.hash, crate::manifest::hash::object_hash(&cm("apps", "a")));
+    let instance = web_rev
+        .spec
+        .objects
+        .iter()
+        .find(|o| o.kind == "PackageInstance")
+        .unwrap();
+    assert_eq!(instance.group, keys::GROUP);
 }
 
 #[test]
@@ -184,6 +196,18 @@ fn changing_one_object_changes_only_its_instance() {
         before.cluster_level.name, after.cluster_level.name,
         "a new Activation record leaves the cluster level as it was"
     );
+}
+
+/// A build whose store hashes changed and whose manifests did not, as when
+/// only a dependency changed, gives the same revisions.
+#[test]
+fn a_change_of_store_hashes_alone_keeps_every_revision() {
+    let before = RevisionSet::of(CLUSTER, &graph(&[web("3"), db()], &namespaces(), "8"));
+    let mut moved = web("3");
+    moved.instance = "c";
+    moved.resources[0].0 = "d";
+    let after = RevisionSet::of(CLUSTER, &graph(&[moved, db()], &namespaces(), "e"));
+    assert_eq!(names(&before), names(&after));
 }
 
 #[test]
@@ -343,14 +367,14 @@ fn a_map_round_trips_and_names_every_revision() {
 }
 
 #[test]
-fn a_manifest_names_its_object_by_its_identity_hash() {
+fn a_build_manifest_names_its_object_by_its_object_hash() {
     let mut manifest = cm("apps", "a");
-    assert_eq!(RevisionObject::of_manifest(&manifest), None);
+    assert_eq!(RevisionObject::of_build(&manifest), None, "a live object");
     manifest["metadata"]["annotations"] = json!({ (keys::IDENTITY_HASH): "h1" });
     assert_eq!(
-        RevisionObject::of_manifest(&manifest),
+        RevisionObject::of_build(&manifest),
         Some(RevisionObject {
-            hash: "h1".into(),
+            hash: crate::manifest::hash::object_hash(&manifest),
             group: String::new(),
             kind: "ConfigMap".into(),
             namespace: Some("apps".into()),
@@ -1135,13 +1159,16 @@ mod applied_tests {
         .unwrap()
     }
 
+    fn manager() -> crate::cluster::field_manager::FieldManager {
+        crate::cluster::field_manager::FieldManager::of("a")
+    }
+
+    fn applied_of<'a>(source: &'a AppliedHashes, obj: &'a DynamicObject) -> Option<&'a str> {
+        source.for_live(obj, &manager(), Some("r"))
+    }
+
     fn verdict(obj: &DynamicObject, source: &AppliedHashes) -> DriftVerdict {
-        drift::check_object(
-            obj,
-            source.applied(obj),
-            &crate::cluster::field_manager::FieldManager::of("a"),
-        )
-        .verdict
+        drift::check_object(obj, applied_of(source, obj), &manager()).verdict
     }
 
     /// The drift check gives the same verdict whether the applied hash comes
@@ -1200,28 +1227,28 @@ mod applied_tests {
         let empty = web(vec![x.clone()], &[]);
         let revisions = std::slice::from_ref(&empty);
         let with_map = AppliedHashes::of(&[record(PHASE_ACTIVE, Some(&empty))], revisions);
-        assert_eq!(with_map.applied(&obj), None);
+        assert_eq!(applied_of(&with_map, &obj), None);
         let recorded = web(vec![x.clone()], &[(&x, "from-revision")]);
         let from_revision = AppliedHashes::of(
             &[record(PHASE_ACTIVE, Some(&recorded))],
             std::slice::from_ref(&recorded),
         );
-        assert_eq!(from_revision.applied(&obj), Some("from-revision"));
+        assert_eq!(applied_of(&from_revision, &obj), Some("from-revision"));
         let without_map = Record {
             identity_hash: Some("rec-r".into()),
             ..record(PHASE_ACTIVE, None)
         };
         let from_notes = AppliedHashes::of(std::slice::from_ref(&without_map), revisions);
-        assert_eq!(from_notes.applied(&noted), Some("from-annotation"));
-        assert_eq!(from_notes.applied(&obj), None);
+        assert_eq!(applied_of(&from_notes, &noted), Some("from-annotation"));
+        assert_eq!(applied_of(&from_notes, &obj), None);
         let superseded = Record {
             phase: PHASE_SUPERSEDED.into(),
             ..without_map
         };
         let superseded = AppliedHashes::of(std::slice::from_ref(&superseded), revisions);
-        assert_eq!(superseded.applied(&noted), None);
+        assert_eq!(applied_of(&superseded, &noted), None);
         assert_eq!(
-            AppliedHashes::from_annotations().applied(&obj),
+            applied_of(&AppliedHashes::from_annotations(), &obj),
             Some("from-annotation")
         );
     }
@@ -1240,11 +1267,11 @@ mod applied_tests {
         let source = AppliedHashes::of(&[map_record], std::slice::from_ref(&recorded));
         assert_eq!(source.missing(), ["a-missing"]);
         assert_eq!(
-            source.applied(&live(&x, Some("from-annotation"))),
+            applied_of(&source, &live(&x, Some("from-annotation"))),
             Some("from-revision")
         );
         let other = live(&object("y", "y"), Some("from-annotation"));
-        assert_eq!(source.applied(&other), None);
+        assert_eq!(applied_of(&source, &other), None);
     }
 
     /// Two revisions that record different applied hashes for one object,
@@ -1262,6 +1289,9 @@ mod applied_tests {
             map.kept_orphans = Some(two.name.clone());
         }
         let source = AppliedHashes::of(&[recorded], [&one, &two]);
-        assert_eq!(source.applied(&live(&x, Some("from-annotation"))), None);
+        assert_eq!(
+            applied_of(&source, &live(&x, Some("from-annotation"))),
+            None
+        );
     }
 }

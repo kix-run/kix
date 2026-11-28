@@ -122,6 +122,9 @@ pub(crate) struct KubeResources {
     /// answer, until the record writes them to the revisions
     /// ([`KubeResources::take_applied`]).
     applied: std::sync::Mutex<BTreeMap<AppliedKey, String>>,
+    /// Which object hash an applied hash is recorded under, and which
+    /// objects get none.
+    recording: super::Recording,
 }
 
 impl KubeResources {
@@ -163,7 +166,14 @@ impl KubeResources {
             unmigrated: std::sync::Mutex::new(HashSet::new()),
             prune_guard: tokio::sync::OnceCell::new(),
             applied: std::sync::Mutex::new(BTreeMap::new()),
+            recording: super::Recording::default(),
         }
+    }
+
+    /// Record applied hashes as `recording` says.
+    pub(crate) fn with_recording(mut self, recording: super::Recording) -> Self {
+        self.recording = recording;
+        self
     }
 
     /// Make the migration writes the plan listed ([`Migrations`]).
@@ -246,14 +256,21 @@ impl KubeResources {
     }
 
     /// Remember that the run applied `manifest` and the server's answer
-    /// hashed to `hash`. A manifest with no build hash is not remembered,
-    /// because no revision names it.
+    /// hashed to `hash`, under the object hash of the build's manifest for
+    /// the object. An object of no build of the run is not remembered,
+    /// because no revision names it, and neither is one the run applied
+    /// without the fields another manager holds.
     pub(super) fn note_applied(&self, manifest: &Value, hash: String) {
-        let Some(object) = RevisionObject::of_manifest(manifest) else {
+        let rid = ResourceId::from_value(manifest);
+        if self.recording.unrecorded.contains(&rid) {
+            return;
+        }
+        let Some(object_hash) = self.recording.object_hashes.get(&rid) else {
             return;
         };
+        let key = RevisionObject::of_id(object_hash, &rid).applied_key();
         if let Ok(mut applied) = self.applied.lock() {
-            applied.insert(object.applied_key(), hash);
+            applied.insert(key, hash);
         }
     }
 

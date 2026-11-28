@@ -48,7 +48,7 @@ use super::document::{DriftChange, LeftAlone, Objects, PlanFlags, WriteChange, W
 use super::objects;
 use super::origin::FoldedBy;
 use super::server::Overlay;
-use super::{PackageDiff, PlanError, PlanEvent, UnknownInstances, diff_graphs};
+use super::{PackageDiff, PlanError, PlanEvent, UnknownInstances, diff_sent};
 use crate::build_source::InstallableBuild;
 use crate::build_source::SopsSources;
 use crate::cluster::activation::{KeptOrphans, OpenedRecords, Record, Records, features};
@@ -163,6 +163,9 @@ impl Target {
 pub struct CheckedPlan {
     flags: PlanFlags,
     plan: DeployPlan,
+    /// The hashes of the new build's objects, which the run's conversion of
+    /// an older Kix's records reads.
+    build_hashes: crate::cluster::revision::convert::BuildHashes,
     orphans: Vec<ResourceId>,
     shared_orphans: Vec<SharedOrphan>,
     kept_orphans: KeptOrphans,
@@ -681,7 +684,10 @@ impl CheckedPlan {
                 self.cluster,
                 force,
             )
-            .with_migrations(self.migrations),
+            .with_migrations(self.migrations)
+            .with_recording(crate::cluster::ops::Recording::of_revisions(
+                &self.revisions,
+            )),
             RecordConfig {
                 name: self.activation_name,
                 // Created before the first node so a run that stops partway
@@ -693,6 +699,7 @@ impl CheckedPlan {
                 consumed_failed: self.consumed_failed,
                 kept_orphans: self.kept_orphans,
                 revisions: Some(self.revisions),
+                build_hashes: self.build_hashes,
                 only,
                 mark_failed_on_abort: true,
                 lock: Some(lock),
@@ -1414,7 +1421,7 @@ impl<'a> Planner<'a> {
         let mut reasons = HashMap::new();
         let mut actions = Vec::with_capacity(decided.decisions.len() + decided.orphans.len());
         for decision in decided.decisions {
-            if matches!(decision.label, Label::RevertsDrift(_)) {
+            if decision.label.reverts_drift() {
                 force.insert(decision.id.clone());
             }
             if let Some(reason) = write_reason(&decision.label) {
@@ -1529,7 +1536,7 @@ impl<'a> Planner<'a> {
         let activation_identity_hash =
             record.and_then(|m| keys::get(m, keys::IDENTITY_HASH).map(str::to_string));
 
-        let mut pkg_diff = diff_graphs(&baseline.diff_side(new_graph), new_graph);
+        let mut pkg_diff = diff_sent(&baseline.diff_side(new_graph), new_graph);
         pkg_diff.keep_shared(&shared_orphans);
         let aliased = pkg_diff.aliased_moves();
         if !aliased.is_empty() {
@@ -1605,6 +1612,7 @@ impl<'a> Planner<'a> {
 
         Ok(CheckedPlan {
             flags: self.flags.clone(),
+            build_hashes: crate::cluster::revision::convert::BuildHashes::of(new_manifests),
             plan,
             orphans,
             shared_orphans,
@@ -1622,10 +1630,7 @@ impl<'a> Planner<'a> {
                     &[orphan_manifests],
                 );
                 match ledger {
-                    Some(ledger) => Prior {
-                        edges: ledger.edges(&manifests),
-                        manifests,
-                    },
+                    Some(ledger) => ledger.prior(manifests),
                     None => Prior::of_build(manifests),
                 }
             },
@@ -1658,7 +1663,8 @@ async fn ledger_for(
     let tenancy = &baseline.tenancy;
     let own = tenancy.own_records();
     let current = convert::current_of(tenancy.own_current(), own);
-    let conversion = if convert::targets(current, own).is_empty() {
+    let listed = tenancy.own_listed_revisions();
+    let conversion = if convert::targets(current, own, &listed).is_empty() {
         crate::cluster::revision::Conversion::default()
     } else {
         let discovery = discovery::discover_resources(client)
@@ -1671,9 +1677,10 @@ async fn ledger_for(
             &tenancy.cluster,
             current,
             own,
-            &tenancy.own_listed_revisions(),
+            &listed,
             &sweep.managed,
             &sweep.forbidden,
+            &convert::BuildHashes::of(new_manifests),
         )
         .map_err(|e| PlanError::Conversion(Box::new(e)))?
     };
@@ -1728,13 +1735,21 @@ fn write_reason(label: &Label) -> Option<WriteReason> {
             record: record.clone(),
         }),
         Label::AppliedHashMissing => Some(WriteReason::AppliedHashMissing),
-        Label::RevertsDrift(report) => Some(WriteReason::RevertsDrift {
+        Label::RevertsDrift(report)
+        | Label::Unfinished {
+            drift: Some(report),
+            ..
+        } => Some(WriteReason::RevertsDrift {
             changed_by: super::document::DriftOwner::of_report(report),
         }),
         Label::HeldByOtherCluster(report) => Some(WriteReason::HeldByOtherCluster {
             changed_by: super::document::DriftOwner::of_report(report),
         }),
-        Label::Intended | Label::Reconciled | Label::Unchanged | Label::DriftReported(_) => None,
+        Label::Intended
+        | Label::Unfinished { drift: None, .. }
+        | Label::Reconciled
+        | Label::Unchanged
+        | Label::DriftReported(_) => None,
     }
 }
 

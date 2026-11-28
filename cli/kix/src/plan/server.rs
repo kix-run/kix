@@ -21,7 +21,7 @@ use serde_json::Value;
 
 use super::document::{BeingDeleted, DriftChange, EarlierDeployChange, FieldNotKept};
 use super::origin::{ChangeLabel, FoldedBy, ThreeWay};
-use super::{CLUSTER_LEVEL_KEY, PackageChangeDiff, PackageDiff, partition_propagation};
+use super::{CLUSTER_LEVEL_KEY, PackageChangeDiff, PackageDiff, partition_retired};
 
 /// Metadata the apiserver maintains on every write. A dry-run apply returns
 /// new values for these whatever the change, so they are not field changes.
@@ -218,7 +218,7 @@ impl Overlay<'_> {
             match (live, result) {
                 (None, _) => entry.added_resources.push(rid.clone()),
                 (Some(live), Some(result)) => {
-                    let (real, propagation) = partition_propagation(field_changes(&live, &result));
+                    let (real, _retired) = partition_retired(field_changes(&live, &result));
                     if !real.is_empty() {
                         if let (Some(deployed), Some(new)) = (&self.deployed, new_by_rid.get(rid)) {
                             let three = ThreeWay {
@@ -259,8 +259,6 @@ impl Overlay<'_> {
                         // A rerun Job deleted and created again with the
                         // same spec is still a change.
                         entry.resource_diffs.push((rid.clone(), Vec::new()));
-                    } else if !propagation.is_empty() {
-                        entry.dep_affected_resources.push(rid.clone());
                     }
                 }
                 (Some(_), None) => {}
@@ -556,9 +554,9 @@ mod tests {
         assert_eq!(diffs[0].b_value, Some(json!("new-value")), "{diffs:?}");
     }
 
-    /// The build comparison says a ConfigMap changed; the server says one
-    /// change already holds live, one object is missing live and would be
-    /// created, and an untouched package gains a change from drift.
+    /// The build comparison says a ConfigMap changed. The server says one
+    /// change already holds live and one object is missing live and would
+    /// be created.
     #[test]
     fn server_answers_replace_the_build_comparison() {
         let old = vec![
@@ -574,7 +572,8 @@ mod tests {
         let mut diff = super::super::diff_graphs(&old_graph, &new_graph);
         assert_eq!(diff.changed[0].resource_diffs.len(), 2);
 
-        // `a` already holds the new value live: only the hash moves.
+        // `a` already holds the new value live. Only a retired note differs,
+        // which Kix does not send, so the plan lists no change for it.
         let live_a = served(&{
             let mut a = new[0].clone();
             a["metadata"]["annotations"][keys::IDENTITY_HASH] = json!("a".repeat(32));
@@ -596,7 +595,7 @@ mod tests {
         assert!(drift.is_empty());
         let web = &diff.changed[0];
         assert!(web.resource_diffs.is_empty(), "{:?}", web.resource_diffs);
-        assert_eq!(web.dep_affected_resources, vec![rid("a")]);
+        assert!(web.dep_affected_resources.is_empty());
         assert_eq!(web.added_resources, vec![rid("b")]);
     }
 

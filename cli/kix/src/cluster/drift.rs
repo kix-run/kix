@@ -491,6 +491,31 @@ pub(crate) fn without_ceded_taken(
     out
 }
 
+/// Return the manifest Kix sends for `manifest` ([`sent::of`]) without each
+/// field another manager took from Kix on `obj`, ceded or not. An apply of
+/// the result without force is not refused on those fields, and leaves them
+/// to the manager that holds them.
+pub(crate) fn without_taken(
+    manifest: &Value,
+    obj: &DynamicObject,
+    manager: &FieldManager,
+) -> Value {
+    let mut out = sent::of(manifest).into_owned();
+    let secret = crate::manifest::types::is_secret(manifest);
+    for field in taken_fields(obj, manager) {
+        let Some(path) = segs(&field.keys) else {
+            continue;
+        };
+        apply::remove_path(&mut out, &path);
+        if secret && path.first() == Some(&apply::Seg::Field("data".into())) {
+            let mut in_strings = path.clone();
+            in_strings[0] = apply::Seg::Field("stringData".into());
+            apply::remove_path(&mut out, &in_strings);
+        }
+    }
+    out
+}
+
 /// Return the fields of `obj` that a manager other than Kix owns and Kix's
 /// `Apply` entry does not, leaving out status writes.
 fn taken_fields(obj: &DynamicObject, manager: &FieldManager) -> Vec<ForeignField> {

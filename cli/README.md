@@ -659,7 +659,7 @@ new Build (Build::of_flake, or --bundle → Build::carried; checked for a retire
       → leave out the Failed records if another (non-operator) deploy of this cluster is Deploying
       → else every Failed or Partial record is folded in; one whose build is not here is resolved without it (the one planner takes it in), and `PlanEvent::FailedValuesUnknown` says the package diff cannot tell the values it wrote from drift
     → the changes (see "Baseline: what a plan compares against"):
-      connected → the one planner. Its ledger comes from revisions (`decide::Ledger::of`), read after the conversion a run writes first when a record has no map (`revision::convert::plan`, after `inventory::list_managed`, and `Tenancy::with_conversion`). Then list the build's objects and the ones the ledger names (`listed_ids`), and `decide::decide` (three rules per object; orphans; the objects that need the migration write, see "Migration to revisions")
+      connected → the one planner. Its ledger comes from revisions (`decide::Ledger::of`), read after the conversion a run writes first when a record has no map (`revision::convert::plan`, after `inventory::list_managed`, and `Tenancy::with_conversion`). Then list the build's objects and the ones the ledger names (`listed_ids`), and `decide::decide` (one rule per object; orphans; the objects that need the migration write, see "Migration to revisions")
       --offline → Baseline::changes: detect_changes against the cached build, a preview only
     → Planner::plan: keep_shared, DeployPlan::from_graph_and_changes (no wave layer), the package diff
       → plan::objects::of: refuse unless every write and delete is one the package-grouped plan shows (see "Writes the plan shows")
@@ -1312,7 +1312,7 @@ each field change gets `labels`: `intended` where the deployed and new
 builds differ (by path overlap with `structural_diff(deployed, new)`),
 `reverts_drift` where the live object differs from the deployed build and
 the deploy applies the object, `drift_kept` where it differs and the deploy
-skips the object (unchanged identity hash; `--reconcile` applies it).
+skips the object (unchanged object hash; `--reconcile` applies it).
 In a plan, drifted fields go to the `drift` section with the managers
 (`drift::foreign_owners`) that own them live. A plan labels what it applies;
 `kix plan --read-only` labels against the live view (`origin::label_live`), and only on
@@ -1417,39 +1417,69 @@ and the Kix cluster's records and
 revisions (`decide::Ledger`, read from the `Tenancy` the plan already holds,
 with the applied hashes of `revision::AppliedHashes`). Live state decides.
 
-For each object of the new build, in this order:
+For each object of the new build, one rule: skip it when a revision this
+Kix cluster needs holds an applied hash for the object with the new build's
+object hash, and the live object still matches that applied hash
+(`AppliedHashes::entry`). In every other case apply it, and the run records
+the applied hash. The object hash (`manifest::hash::object_hash`) is a
+SHA-256 of the manifest Kix sends (`sent::of`), and the applied hash
+(`fieldsv1::applied_content_hash`) covers every field this Kix cluster owns.
+Both cover every `kix.run/*` annotation Kix sends and leave out the retired
+notes (`sent::is_retired_note`): `kix.run/identity-hash`,
+`kix.run/depends-on`, `kix.run/package`, `kix.run/package-namespace`,
+`kix.run/lifecycle`, `kix.run/activations`, and `kix.run/applied-hash`. Kix
+sends none of them, and nothing on a live object says which build wrote it.
+The revisions say it, by the object's name. So an object whose dependencies
+changed and whose own manifest did not is skipped, and so is its revision.
 
-1. The live object is missing or being deleted, or its build hash
-   (`kix.run/identity-hash`) or owner stamps differ from the new build's:
-   apply. Label: none for an intended change; `AppliedByRecord(record)` when a
-   `Failed` or `Partial` record's revision names the live build hash;
-   `LeftByDegraded(record)` when the current `Degraded` record names the
-   object with a hash the live object does not carry.
-2. The build hashes match and Kix has no applied hash: apply, labelled
-   `AppliedHashMissing`. The run writes the applied hash
-   (`DeployRecord::write_applied`), so the next plan leaves it unchanged. A
-   missing hash never reads as in sync.
-3. The applied hash differs from the hash of the live object's Kix-owned
-   fields (`drift::check_object`), or Kix recorded a hash and the object now
-   has no Kix field records: apply, labelled `RevertsDrift(report)`. The
-   applied hash leaves out the fields the object cedes (`kix.run/cede-fields`,
-   `fieldsv1::hashed_projection`), on the apply side and the check side, so a
-   ceded field never reads as drift. The manifest sent leaves out each ceded
-   field another manager owns (`drift::without_ceded_taken`), so a forced
-   apply does not take it back. A runner that never forces (`decide`'s
-   `forces` is false, the operator) labels an object whose changed fields
-   another manager owns `DriftReported(report)` and writes nothing
-   (`drift::conflicts`). A runner that forces labels an object whose changed
-   fields another Kix cluster owns `HeldByOtherCluster(report)` and applies
-   it without force (`drift::held_by_other_clusters`), so Kubernetes refuses
-   it with `ApplyError::KixClusterConflict` instead of the field moving back
-   and forth between the two clusters' deploys. "Kix-owned" fields are those
-   of the cluster's own field manager, or the legacy `kix` until migration
-   (`FieldManager::counts_as_own`); another Kix cluster's manager is another
-   manager.
+The labels (`decide::Label`):
 
-Otherwise the object is unchanged and nothing is written to it. The
-Activation record is decided by rule 1 only, because no revision names it.
+- `AppliedByRecord(record)`: the live object matches the applied hash a
+  revision of that `Failed` or `Partial` record holds. Applied without
+  force.
+- `LeftByDegraded(record)`: the current `Degraded` record names the object
+  and holds no applied hash for it.
+- `AppliedHashMissing`: a needed revision names the object with the new
+  object hash and holds no applied hash for it. The run writes one
+  (`DeployRecord::write_applied`). A missing hash never reads as in sync.
+- `Unfinished { record, drift }`: a revision of that `Failed` or `Partial`
+  record names the object without an applied hash, and the live object
+  matches no applied hash a revision holds. A killed run records no applied
+  hashes, so it may have written the object. With a drift report, a revision
+  holds an applied hash for the new object hash, and the apply reverts drift
+  as below.
+- `RevertsDrift(report)`: a revision holds an applied hash for the new
+  object hash, and the live object differs from it and from every applied
+  hash a revision holds (`drift::check_object`), or it has no Kix field
+  records left. The applied hash leaves out the fields the object cedes
+  (`kix.run/cede-fields`, `fieldsv1::hashed_projection`), on the apply side
+  and the check side, so a ceded field never reads as drift. The manifest
+  sent leaves out each ceded field another manager owns
+  (`drift::without_ceded_taken`), so a forced apply does not take it back.
+- `DriftReported(report)`: a runner that never forces (`decide`'s `forces`
+  is false, the operator) and an object whose changed fields another manager
+  took from Kix's own `Apply` entry (`drift::conflicts`). It applies the build
+  without the fields another manager holds (`drift::without_taken`), so the
+  apply is not refused and its own fields are put back, and records no
+  applied hash for it (`Decided::unrecorded`, `ops::Recording`), so the
+  report stays until the drift is gone.
+- `HeldByOtherCluster(report)`: a runner that forces and an object whose
+  changed fields another Kix cluster owns. Applied without force
+  (`drift::held_by_other_clusters`), so Kubernetes refuses it with
+  `ApplyError::KixClusterConflict` instead of the field moving back and forth
+  between the two clusters' deploys.
+
+"Kix-owned" fields are those of the cluster's own field manager, or the
+legacy `kix` until migration (`FieldManager::counts_as_own`); another Kix
+cluster's manager is another manager. A live object that matches an applied
+hash some other needed revision holds is no drift and is applied without
+force. The Activation record keeps its annotations: no revision names it,
+and it is applied when its build hash differs from the new build's.
+
+The run records each applied hash under the object hash of the build's
+manifest for the object (`ops::Recording`, by name), because the manifest it
+sends can differ from the build's: secret values are filled in, and a ceded
+field another manager holds is left out.
 
 The listing gives three answers for an object (`inventory::Live`): present,
 absent, or not known. An object of the build whose kind the cluster does not
@@ -1466,13 +1496,13 @@ kept-orphans revision also names the orphans of kinds Kix never prunes
 
 An orphan is a live, prunable object that the new build does not make and that
 the current record's revisions, its kept-orphans revision, or a `Failed` or
-`Partial` record's revisions name. A `Failed` or `Partial` record left an
-object only when the live object carries the build hash its revision gives the
-object, so a run that died before it wrote applied hashes still leaves objects
-the next deploy takes in. An object that a `Degraded` current record or a
-`Failed` or `Partial` record names is taken in only when it has a
-`managedFields` entry that counts as the cluster's own (`Ledger::takes_in`),
-since that deploy may never have reached it. `Failed` and `Partial` records are left out while
+`Partial` record's revisions name. An object that a `Degraded` current record
+names is taken in only when it has a `managedFields` entry that counts as the
+cluster's own, and one a `Failed` or `Partial` record names only when it has
+an `Apply` entry under the cluster's own manager `kix/<cluster>`
+(`Ledger::takes_in`), since that deploy may never have reached it. The legacy
+`kix` entry does not count for a stopped record, because another Kix cluster
+may have written the object under it before the upgrade. `Failed` and `Partial` records are left out while
 another deploy may be running (`FailedBaseline::left_out`); otherwise the run
 supersedes each one it took in (`Ledger::taken_in`). `made` is every object of
 the build, so the CRDs and the record the operator leaves out of `new` are not
@@ -1481,8 +1511,10 @@ orphans. Objects another Kix cluster still deploys are kept
 the plan already holds).
 
 The plan document carries the labels as `objects.writes[].reason`
-(`document::WriteReason`), and the text plan counts them. `kix deploy` applies
-with force exactly the objects labelled `RevertsDrift` (`ops::Force::Only`;
+(`document::WriteReason`; `Unfinished` shows as `reverts_drift` when it
+reverts drift, and with no reason otherwise), and the text plan counts them.
+`kix deploy` applies with force exactly the objects whose label reverts drift
+(`Label::reverts_drift`, `ops::Force::Only`;
 `--force-conflicts` still forces every apply), so a revert of drift takes back
 the fields others changed and any other conflict still stops the deploy. Each
 forced apply goes on only while it takes what the plan's answer from the API
@@ -1527,28 +1559,41 @@ stays with its manager. The plan hands the run the whole manifest. A recreate
 applies without force, since Kix deleted the object first, and so does the
 apply that follows the wait for an object that was being deleted. The plan's
 drift line for a field another manager took names the manager and points at
-`ownership.cede`. The operator never forces: it writes no object labelled
-`DriftReported`, which does not count as a failure, so its dependents go on.
+`ownership.cede`. The operator never forces: it applies an object labelled
+`DriftReported` without the fields another manager holds, so its dependents
+go on.
 `LivePlan::drift_not_reverted` lists them and the operator posts a
 `DriftNotReverted` Warning Event for each, which the Event recorder counts on
 one Event across requeues. Drift no other manager owns, such as a removed
 field or a replicas change Kubernetes recorded no owner for, the operator
 applies without force.
 
-`revision::AppliedHashes` reads an object's hash from the revisions that name
-it. An object no revision holds a hash for falls back to its
-`kix.run/applied-hash` annotation, which an older Kix wrote and the migration
-write removes. Two revisions that record different hashes leave it not known
-(rule 2), and so does an object no readable revision names while a revision a
-record names cannot be read (`AppliedHashes::missing`, warned once). A run
+`revision::AppliedHashes` indexes the applied hashes of a Kix cluster's
+revisions by object name. The planner asks for the entry of an object and
+the new object hash (`AppliedHashes::entry`). A reader with no new build,
+`kix status`, `kix diff --live`, and the cluster-state fixtures, asks
+`AppliedHashes::for_live`: the applied hash the live object matches among
+those the revisions hold, so an object a `Failed` deploy wrote reads as in
+sync, otherwise the one the current record's revisions hold. An object no
+revision names falls back to its `kix.run/applied-hash` annotation when a
+record without a map names it, which an older Kix wrote and the migration
+write removes. Two revisions that record different hashes leave it not known,
+and so does an object no readable revision names while a revision a record
+names cannot be read (`AppliedHashes::missing`, warned once). A run
 carries the old revisions' hashes into the revisions it replaces even when it
 applied nothing, and a revision that exists when the run creates it and that
 no record names has its `status.applied` cleared.
 
 The builds stay the source of three things: the old side of the package diff
-people review (`Baseline::diff_side`), migration pairs, and `--offline`. A
-plan under `--offline` compares the new build with the cached one
-(`Baseline::changes`, `apply::detect_changes`) as a preview. `kix deploy
+people review (`Baseline::diff_side`), migration pairs, and `--offline`. The
+package diff of a plan compares what a deploy sends (`plan::diff_sent`), so it
+lists no "tracking annotation only" resource; `kix diff` between two builds
+still does (`plan::diff_graphs`). When the deployed build is not on the
+machine, a live object reads as the build's manifest when a revision holds an
+applied hash for it with that manifest's object hash, unless it matches what
+another deploy applied (`owned_view::kix_owned_manifests_against`). A plan
+under `--offline` compares the object hashes of the new build and the cached
+one (`Baseline::changes`, `apply::detect_changes`) as a preview. `kix deploy
 --offline` plans again from the live cluster once it connects
 (`Planner::recheck`) and refuses when that plan writes or deletes other
 objects.
@@ -1695,13 +1740,26 @@ object the cluster applied (an `Apply` entry under its manager, or one under
 the cluster names and that the build compared with lacks
 (`gc::kept_to_rebuild`), and writes it under a lock bound to the generation
 read before the scan (`gc::write_rebuilt`, `revision::keep::rebuild_kept`),
-then scans again.
+then scans again. Nothing says which build wanted each object, so the list
+names each with the hash `revision::REBUILT`, which no object hash equals,
+and with no edges.
+
+`kix gc --full-scan` judges by name (`gc::plan::judge_hard`): an object the
+build compared with makes is never garbage, whatever annotations it carries,
+and one it does not make is garbage (`GarbageReason::NotInBuild`) unless a
+record that may still be deploying names it, another Kix cluster deploys it,
+or, for a Kix cluster read from revisions, a revision other than the
+kept-orphans one names it. The default mode deletes the kept orphans whose
+kind, namespace, and name the Active build does not make
+(`gc::plan::kept_garbage`).
 
 The package diff's old side is the Active build when this machine has it
 (`Baseline::diff_side`). Otherwise it is synthesized from the baseline's
 manifests, and each object goes to the package that the Active record's
-`status.packageIndex` names for its identity hash, then a folded-in Failed
-record's, and only then to where the new build puts that identity. The build
+package index places it in (from its revisions, by name, or from
+`status.packageIndex` by the identity hash an older Kix stamped), then a
+folded-in Failed record's, and only then to where the new build puts that
+identity (`StoreGraph::synthesize_placed`). The build
 on disk wins over its record's index; when both are present and differ, the
 plan logs a debug note and uses the build. A record without a readable index
 (Kix 0.5 wrote none, and neither does the operator for an Activation applied by hand or from git) gives the new-build placement, so an object that moved
@@ -1728,7 +1786,7 @@ a record line need regenerating.
 - `cluster/scheduler/` prune: an orphan whose kind is `Namespace` or `CustomResourceDefinition` is reported and never deleted (`lifecycle::never_pruned`, shared with `kix gc` in soft and hard mode and with the operator's teardown when an active Activation is deleted). Both take far more with them than the object named (a Namespace takes every object inside it, and a CRD takes every custom resource of that kind on the whole apiserver, including ones no Kix cluster ever touched), and neither is dangerous to leave behind, so removing one is a deliberate human act.
 - `cluster/apply/` `ApplyError::CrdStoredVersion`: the apiserver refuses a CRD that drops an API version the cluster still has objects stored at, reporting it as a validation error on `status.storedVersions` that says nothing about what to do. `classify_apply_error` turns it into an error naming the fix: migrate the stored objects to a version the CRD still serves, or keep serving the old one. A deploy meets it whenever a vendored CRD is re-vendored after upstream retires a version.
 
-- `commands/diff.rs`: one comparison of two `StoreGraph`s (`compare`, which `commands/plan.rs`'s `run_read_only` calls for `kix plan --read-only` with the live cluster as the old side), rendered by the same `plan::*` producers the deploy plan uses (text, `json`, `yaml`, and `markdown` for PR comments) plus stateful migration pairs. `--detail plain|fields|manifests` (default `plain`) sets how much `json` and `yaml` say about each change; text and markdown ignore it. New side: the flake's build, or `--bundle <file>` read through `kix_bundle::read_build` (content and cluster name checked, as for `kix plan --bundle`). Old side: `--from-bundle <file>` is a bundled build, read the same way; `--from <dir>` is a build result when `kix-packages.json` is inside, otherwise a manifest directory (`kix snapshot`, `kix export --with-kix-metadata`) synthesized into a graph (`StoreGraph::synthesize`); `--bundle` with neither compares against an empty build, so everything is added and the cluster is not read; otherwise it is the live cluster's objects of the built Kix cluster (`SweepScope::Cluster`, less the objects the build drops that another Kix cluster's current build still contains, which deploy would keep), fetched as the **Kix-owned view** (`owned_view::kix_owned_manifests_against`) and synthesized the same way. A live object whose `kix.run/identity-hash` names a build manifest of the same kind, namespace, and name is replaced by that build manifest carrying the live `kix.run/*` annotations. This is the rule `kix deploy` uses to skip an object (`apply::detect_changes`): the identity hash is the hash of the manifest file, so the build does not change the object, and no server normalisation (an `omitempty` `""` dropped, a field another manager took, `creationTimestamp: null` in an atomic list, a webhook default, a CRD-pruned field) reaches the diff. Whether the object was edited since apply is drift, reported separately. A field the server refused or changed at apply (a field the CRD schema pruned, a value a mutating webhook overwrote) does not show here, because the object compares as its build manifest and the drift stamp is taken from the apply response. `kix plan` reports it in `not_kept` before the write, and `kix deploy` warns about it after the write (`cluster::kept`). Every object not swapped goes through `redact_secret` against the build manifest of the same name: each `data` key in a Secret's view becomes the build's `data` or `stringData` value when the decoded live value equals it, otherwise `HIDDEN_SECRET_VALUE`, and each `stringData` key the build declares and Kix's fieldset lists is restored the same way. No live Secret value reaches the comparison, whether Kix applied the Secret through `data`, through `stringData`, or not at all (no Kix `Apply` entry, so the view is the whole object). A SOPS Secret, whose build has no plaintext, compares on its other fields only, so a value changed out of band does not show. `kix_owned_view` itself (snapshot, deploy plan) runs `redact_secret` with no build, so every Secret value in it is `HIDDEN_SECRET_VALUE`. Only the current record (`activation::current_record`: Active or Degraded, newest `deployed-at`) is kept, so the summary's old activation is the one the cluster runs. A Job Kix built never deletes itself (the library refuses `ttlSecondsAfterFinished` on a Job and `helm.nix` strips it from chart Jobs), so a finished Job is on the cluster and compares like any other object until a later build drops it. `StoreGraph::synthesize_placed` places a live object first by the deployed record's package index (`status.packageIndex`, see `activation/`): when the index lists the object's `kix.run/identity-hash`, the object goes where the deployed build put it, so an object that moved between packages and changed shows removed from its old package and added to its new one, as with the deployed build on disk. `kix diff` reads the current record's index; a plan reads the Active record's, then the folded-in Failed records', newest first (`Baseline::synthesized`). Kept builds name no record, so their objects are not placed by an index. Without an index (a record written by Kix 0.5, one too large to store, an unknown `format`) or for an object the index does not list, `StoreGraph::synthesize` places a live object by its kind, namespace, and name in the new build, and a moved object shows only under its new package: under every build package that lists that identity (the index of a build made by Kix 0.6.0 or earlier can list an import marker such as `secret-ref-*` under several; a newer build lists every path under one package, so the first comparison against a 0.6.0 record shows such a marker as removed from the package that no longer lists it, although nothing is deleted), as a build package's own PackageInstance, or at cluster level. The `kix.run/package` stamp is read only for an identity the build does not have, because a build stamps every PackageInstance, import markers included, `_cluster`, and a marker several packages hold with the package that built it. So a marker whose identity hash moved after a failed deploy still sits under its declaring package as a changed resource, not as a removed package. For an unknown identity, an import marker stamped with a package joins it, and any other PackageInstance (a `kix.mkImport` platform import such as `platform-storage` is stamped `_cluster`) is a package of its own. `PackageDiff` carries `cluster_level` (resources outside any package: Namespaces, CRDs, and cluster-scoped bundles) and `activation` (old → new record name) so nothing the old flat comparison showed is lost. Against the live cluster, `LiveSide::set_aside_left_earlier` records every stamped, prunable live object the build lacks as an orphan, and takes out of the old side the ones the current record's package index does not list either: an earlier deploy left those, so the build does not remove them. The document lists every orphan under `prune` with the fate a deploy with no flags gives it (`commands/plan.rs`'s `prune_entry`, which `kix plan` uses too), and the text output lists them as `kix plan` does. The exit status is `Plan::has_changes`, the same question `kix plan` asks. Exit 2 on any difference. It prints the `Plan` document for `-o json|yaml` (`made_by: builds` for `--from <build>`, `--from-bundle`, and `--bundle` alone, `live_read` otherwise; the write-path checks are `not_checked`). Against the live cluster it runs `drift::check_object` on every compared object and fills the `drift` section from the drifted ones (`origin::live_drift`), with or without the deployed build; the deployed value of a field comes from the build manifest when the identity hash is unchanged, else from the deployed build if loaded. When it can load the deployed build (`deployed_build`: the new build when the current record names it, else the record's `kix.run/built-via` directory) it also labels every field change three ways with `origin::label_live`, keeping each compared object's served form for the `managedFields` that name who made a drift; a drift on an object whose identity hash did not change is `drift_kept`. The text and Markdown output end with the drift section, printed after "No differences found." too, and a line saying what a read-only comparison cannot see. Drift alone does not make the exit status 2.
+- `commands/diff.rs`: one comparison of two `StoreGraph`s (`compare`, which `commands/plan.rs`'s `run_read_only` calls for `kix plan --read-only` with the live cluster as the old side), rendered by the same `plan::*` producers the deploy plan uses (text, `json`, `yaml`, and `markdown` for PR comments) plus stateful migration pairs. `--detail plain|fields|manifests` (default `plain`) sets how much `json` and `yaml` say about each change; text and markdown ignore it. New side: the flake's build, or `--bundle <file>` read through `kix_bundle::read_build` (content and cluster name checked, as for `kix plan --bundle`). Old side: `--from-bundle <file>` is a bundled build, read the same way; `--from <dir>` is a build result when `kix-packages.json` is inside, otherwise a manifest directory (`kix snapshot`, `kix export --with-kix-metadata`) synthesized into a graph (`StoreGraph::synthesize`); `--bundle` with neither compares against an empty build, so everything is added and the cluster is not read; otherwise it is the live cluster's objects of the built Kix cluster (`SweepScope::Cluster`, less the objects the build drops that another Kix cluster's current build still contains, which deploy would keep), fetched as the **Kix-owned view** (`owned_view::kix_owned_manifests_against`) and synthesized the same way. A live object is replaced by the build manifest of the same kind, namespace, and name when a revision of the Kix cluster holds an applied hash for it with that manifest's object hash, unless the live object matches an applied hash another deploy recorded: Kix applied that manifest to it, so the build does not change the object, and no server normalisation (an `omitempty` `""` dropped, a field another manager took, `creationTimestamp: null` in an atomic list, a webhook default, a CRD-pruned field) reaches the diff. Whether the object was edited since apply is drift, reported separately. A field the server refused or changed at apply (a field the CRD schema pruned, a value a mutating webhook overwrote) does not show here, because the object compares as its build manifest and the drift stamp is taken from the apply response. `kix plan` reports it in `not_kept` before the write, and `kix deploy` warns about it after the write (`cluster::kept`). Every object not swapped goes through `redact_secret` against the build manifest of the same name: each `data` key in a Secret's view becomes the build's `data` or `stringData` value when the decoded live value equals it, otherwise `HIDDEN_SECRET_VALUE`, and each `stringData` key the build declares and Kix's fieldset lists is restored the same way. No live Secret value reaches the comparison, whether Kix applied the Secret through `data`, through `stringData`, or not at all (no Kix `Apply` entry, so the view is the whole object). A SOPS Secret, whose build has no plaintext, compares on its other fields only, so a value changed out of band does not show. `kix_owned_view` itself (snapshot, deploy plan) runs `redact_secret` with no build, so every Secret value in it is `HIDDEN_SECRET_VALUE`. Only the current record (`activation::current_record`: Active or Degraded, newest `deployed-at`) is kept, so the summary's old activation is the one the cluster runs. A Job Kix built never deletes itself (the library refuses `ttlSecondsAfterFinished` on a Job and `helm.nix` strips it from chart Jobs), so a finished Job is on the cluster and compares like any other object until a later build drops it. `StoreGraph::synthesize_placed` places a live object first by the deployed record's package index (`status.packageIndex`, see `activation/`): when the index lists the object's `kix.run/identity-hash`, the object goes where the deployed build put it, so an object that moved between packages and changed shows removed from its old package and added to its new one, as with the deployed build on disk. `kix diff` reads the current record's index; a plan reads the Active record's, then the folded-in Failed records', newest first (`Baseline::synthesized`). Kept builds name no record, so their objects are not placed by an index. Without an index (a record written by Kix 0.5, one too large to store, an unknown `format`) or for an object the index does not list, `StoreGraph::synthesize` places a live object by its kind, namespace, and name in the new build, and a moved object shows only under its new package: under every build package that lists that identity (the index of a build made by Kix 0.6.0 or earlier can list an import marker such as `secret-ref-*` under several; a newer build lists every path under one package, so the first comparison against a 0.6.0 record shows such a marker as removed from the package that no longer lists it, although nothing is deleted), as a build package's own PackageInstance, or at cluster level. The `kix.run/package` stamp is read only for an identity the build does not have, because a build stamps every PackageInstance, import markers included, `_cluster`, and a marker several packages hold with the package that built it. So a marker whose identity hash moved after a failed deploy still sits under its declaring package as a changed resource, not as a removed package. For an unknown identity, an import marker stamped with a package joins it, and any other PackageInstance (a `kix.mkImport` platform import such as `platform-storage` is stamped `_cluster`) is a package of its own. `PackageDiff` carries `cluster_level` (resources outside any package: Namespaces, CRDs, and cluster-scoped bundles) and `activation` (old → new record name) so nothing the old flat comparison showed is lost. Against the live cluster, `LiveSide::set_aside_left_earlier` records every stamped, prunable live object the build lacks as an orphan, and takes out of the old side the ones the current record's package index does not list either: an earlier deploy left those, so the build does not remove them. The document lists every orphan under `prune` with the fate a deploy with no flags gives it (`commands/plan.rs`'s `prune_entry`, which `kix plan` uses too), and the text output lists them as `kix plan` does. The exit status is `Plan::has_changes`, the same question `kix plan` asks. Exit 2 on any difference. It prints the `Plan` document for `-o json|yaml` (`made_by: builds` for `--from <build>`, `--from-bundle`, and `--bundle` alone, `live_read` otherwise; the write-path checks are `not_checked`). Against the live cluster it runs `drift::check_object` on every compared object and fills the `drift` section from the drifted ones (`origin::live_drift`), with or without the deployed build; the deployed value of a field comes from the build manifest when the identity hash is unchanged, else from the deployed build if loaded. When it can load the deployed build (`deployed_build`: the new build when the current record names it, else the record's `kix.run/built-via` directory) it also labels every field change three ways with `origin::label_live`, keeping each compared object's served form for the `managedFields` that name who made a drift; a drift on an object whose identity hash did not change is `drift_kept`. The text and Markdown output end with the drift section, printed after "No differences found." too, and a line saying what a read-only comparison cannot see. Drift alone does not make the exit status 2.
 - `commands/plan.rs`: `kix plan`: `prepare` (the build, then `kix::plan::Planner` with the command line's flags or a saved plan's, against `OldSide::LocalCache` under `--offline` and the cluster otherwise), then `dry_run` (the engine under dry run with a `DryRunObserver` that counts writes on a stderr progress line and records failed and never-tried nodes), then `document` (the overlay, refusal classification, prune fates from the journal's prune answers, and `not_checked`). `print_text` is the plan text `kix deploy` also prints before confirming; `kix plan` passes `verbose` so every resource and field shows.
 - `commands/gc/` (`mod.rs`, `plan.rs`, `render.rs`): soft (the objects the Active record's kept-orphans revision names, or the closures under its `status.orphansKeptFrom` for a Kix cluster not read from revisions (`Tenancy::kept`), minus the Active build; afterwards it names a kept-orphans revision of what remains, keeping entries whose kind it could not read) and hard (full cluster scan against the Active build; for a Kix cluster read from revisions, an object a revision names is garbage only when the kept-orphans revision alone names it, `Tenancy::gc_may_delete`; a missing or unreadable kept-orphans revision is rebuilt first, see "Migration to revisions") garbage collection. Both keep everything the Active record's build contains, so gc never undoes a rollback or deletes what files not yet deployed drop. `active_build` reads that build from the cache or Kix's local store, and otherwise builds the current files and uses them only when their identity hash is the record's (`check_files_build`, which refuses otherwise, naming a Partial record of the files' build). Neither mode deletes an object a pending record names (`Tenancy::pending_records_of`): a full scan returns them as `Judged::held` from `judge_hard`, and soft mode splits them out with `kix::plan::keep_held` (`inventory::split_held_live`, one GET per candidate); both print them under "Kept for an unfinished deploy" (`render::print_held`). A full scan with no Active record compares with the build from the current files. Both list a garbage Namespace or CRD under "Kept" and never delete it (`plan::split_never_pruned`, `lifecycle::never_pruned`); deploy's plan and offline dry run list never-pruned orphans the same way, apart from the orphans they count for deletion. Hard mode sweeps with `SweepScope::Cluster`, so other Kix clusters' objects never reach the plan (it prints how many it skipped and names each other cluster once, from `inventory::Foreign`); an object that also names another cluster's current record is kept (`judge_hard`), and an object naming no record is listed under "Objects with no matching deployment record" and judged only with `--include unattributed`, whether or not other clusters have records. A record's `status.orphansKeptFrom` builds count as that record's cluster's (`Tenancy::from_records`), so a full scan and soft mode agree on whose a kept orphan is. The plan's reasons and notes name the build the run compared with (`the build of active deployment <name>`, or the files' build when there is no Active record). `--include unstamped` was removed: the sweep decides that an object is Kix's from its field managers, so no Kix object is set apart for lacking `kix.run/identity-hash`, and `removed::GC_INCLUDE_UNSTAMPED` refuses the value (`[K5538]`, naming `--include unattributed`). Copies a controller made of Kix objects (`ManagedSweep::copies`) are listed under "Copied labels" and judged only with `--include copies` (`judged_objects`); leaving them out does not block `clear_kept`, since they are not Kix's. `--operator` deletes retired (Superseded) Activation CRs; the operator's finalizer only lets them go, since it deletes resources only for an Active, Deploying, or Degraded record. `delete_resources` only prints and counts the steps `prune_guard::delete_in_order` reports as they happen, and that function skips never-pruned kinds, so a caller that forgets `split_never_pruned` still cannot delete one. Soft mode passes a `DeleteOrder` of the garbage manifests, so a stuck delete holds back what it depends on; the edges come from `cluster::edges`: soft mode (`soft_order`) takes them from the Active build and, for a Kix cluster read from revisions, from its revisions; hard mode (`live_order`) takes them from the revisions, or from the live objects' `kix.run/depends-on` notes for a Kix cluster whose records an older Kix wrote. An object no revision names has only the edges derived from content, and a rebuilt kept-orphans revision records none. Each delete waits for the object to be gone with `--timeout` as its idle budget (`deploy::parse_timeout`, default `readiness::DEFAULT_TIMEOUT`, 3 minutes); a stuck one counts as failed (exit 1) and prints the `[K2794]` message, and a held-back one is counted in `Deletions::held`, which like a failure stops `clear_kept`. Hard mode's plan shows `already being deleted, ...` under an object that has a `deletionTimestamp` (`GarbageEntry::deleting`). **Record retention** in every mode (`activation::RetentionPolicy`, `retire_plan`, pure and unit-tested): always keep the `--keep` newest Superseded Activation records (default 10) whatever their age, never more than `--keep-max` (default 50), and beyond the floor retire anything older than `--keep-for` (default 30d; `0` off). The floor counts only records that were ever current (rollback targets), so failed deploys cannot push the last rollback target out; a record superseded out of Failed is judged by the age rule, and `--keep-max` still caps everything kept, retiring the oldest such records first. Newest first by parsed `kix.run/deployed-at`, falling back to `status.failure.at` and then `creationTimestamp` for a record whose deploy never finished (the plan prints that time as `failed <t>` or `created <t>`); a record with none of them sorts oldest; ties break on name. Each retired record is deleted with `Preconditions { uid, resourceVersion }` (`Records::retire`), so a record that changed since the listing (a rollback made it Active again) is refused with 409 rather than deleted. The plan connects to the cluster before the Nix build (fail fast, one connection reused for the deletes). Soft mode never touches records otherwise. Retention bounds how far back a rollback can go. Records no longer cost anything on objects: a Kix cluster read from revisions keeps revisions only for the records it needs (`revision::keep::needed`), and a `Superseded` record names none. A listing failure is an error, never an empty plan. **Kept orphans**: `RecordRetirement` also carries the Active record, and soft mode adds `kept_garbage` (objects only a build in its `orphansKeptFrom` declares, resolved by `baseline::load_kept`) to what it deletes, listed under "Objects that left the build in earlier deploys". After a run with no failed resource deletes, soft and hard mode call `clear_kept`, which removes the field from the Active record when `may_clear_kept` holds: the build gc compared against is that record's build, and gc examined everything (soft mode: every source resolved; hard mode: the sweep was forbidden no kind). It also drops this machine's kept roots. A 404 on delete is "already gone", not a failure, since a kept orphan may have been removed by hand
 - `commands/migrate.rs`: `kix migrate domain <cluster>`, the one-off move of a cluster's Kix records off the retired `kix.dev` API group. Builds nothing: taking the deploy lock installs the current group's CRDs (`own_crds::ensure_all`). It always dry-runs first and prints the plan, then copies every Activation record to `kix.run` with spec, status, and history intact, verifies the count, clears the operator finalizer from the old records, and deletes the old CRDs. PackageInstance records are not copied: the next deploy re-creates them. Part of the compatibility layer in `kix/src/legacy_domain/` and goes when that goes.
@@ -1831,7 +1889,7 @@ a record line need regenerating.
 - `diff/equivalence.rs`: what the API server treats as the same: `null` and `[]` equal an absent field (`{}` does not, since `emptyDir: {}` and many CRD fields mean something), `SERVER_DEFAULTS` lists documented defaults that equal an absent or `null` field (`fieldRef.apiVersion: v1`; the `apiVersion`, `kind`, `spec.volumeMode`, and `status` the server adds to each `volumeClaimTemplates` entry; `volumeMounts[].readOnly: false`; probe `initialDelaySeconds`/`timeoutSeconds`/`periodSeconds`/`successThreshold`/`failureThreshold`), and members of `limits`, `requests`, `hard`, and `sizeLimit` compare as resource quantities by amount (`1` = `"1"`, `0.5` = `"500m"`). Matched against the path with list keys stripped. Applies to every comparison, build-to-build included
 - `diff/display.rs`: `format_diffs()` renders differences as colored text
 - `serialize.rs`: YAML/JSON output through `kix::yaml` (`strip_nulls` removes nulls and ONLY nulls before YAML: an empty map is content, such as `emptyDir: {}` or a CRD's `subresources: {status: {}}`, and `kix build`/`kix export` used to drop them), `load_manifests_from_dir()` for snapshot/export loading (every `.yaml` in the tree, PackageInstances included: they are Kix-managed objects like any other; ids come from the manifest content)
-- `sent.rs`: `sent::of(&Value) -> Cow<Value>`, the manifest Kix sends for a built manifest: the built manifest without the annotations in `sent::GRAPH_NOTES`, which describe one Kix cluster's graph (an Activation record is returned as it is). The list is empty for now. Every apply body goes through it (`apply::forced_manifest` and `apply::unforced_manifest` build them all, dry runs and the forced-write question included), and so does every comparison of a built manifest with a live object (`drift::conflicts`, `drift::held_by_other_clusters`, `origin::live_drift`, and the drift side of `origin::ThreeWay::label`). The scheduler, graph building, revisions, bundles, and the package index read the built manifest itself.
+- `sent.rs`: `sent::of(&Value) -> Cow<Value>`, the manifest Kix sends for a built manifest: the built manifest without the annotations in `sent::GRAPH_NOTES` (`kix.run/identity-hash`, `kix.run/depends-on`, `kix.run/package`, `kix.run/package-namespace`, `kix.run/lifecycle`), which describe one Kix cluster's graph (an Activation record is returned as it is). `sent::is_retired_note` adds `kix.run/activations`, `kix.run/applied-hash`, and their spellings under a retired domain: the one list of notes Kix never sends, leaves out of every hash it stores (`hash::object_hash`, `fieldsv1::projection_hash`), and removes with the migration write. `hash.rs`: `object_hash(&Value)`, 32 hex digits of the SHA-256 of `sent::of` without retired notes, nulls removed, keys sorted, taken before secret values are filled in; a test pins it, because revisions store it. Every apply body goes through it (`apply::forced_manifest` and `apply::unforced_manifest` build them all, dry runs and the forced-write question included), and so does every comparison of a built manifest with a live object (`drift::conflicts`, `drift::held_by_other_clusters`, `origin::live_drift`, and the drift side of `origin::ThreeWay::label`). The scheduler, graph building, revisions, bundles, and the package index read the built manifest itself.
 - `hash.rs`: manifest normalization helpers (strip server metadata, Kix annotations, status, and nulls; Blake3 `content_hash`, `hash_value`, and `sort_keys`). The old build-vs-live machinery (`detect_drift`/`project_onto_shape`/`DriftStatus`) has been **deleted**, superseded by `fieldsv1.rs` + `drift.rs` (build-time hashes can't exact-match live objects: server zero-value omission, `stringData`→`data`, and quantity canonicalization). `strip_kix_annotations` stays in active use (export, applied-hash recipe)
 
 #### pins (`kix/src/pins/`)

@@ -9,15 +9,64 @@
 //! Every request that sends a built manifest, and every comparison of a
 //! built manifest with a live object or a dry-run result, takes the
 //! manifest through [`of`].
+//!
+//! The retired notes ([`is_retired_note`]) are the graph notes and the two
+//! notes an older Kix wrote after each apply. Kix never sends one, leaves
+//! them out of every hash it stores, and the migration write removes them
+//! from objects.
 
 use std::borrow::Cow;
 
 use serde_json::Value;
 
+use super::keys;
 use super::lifecycle::is_record;
 
-/// The annotations [`of`] removes from a built manifest.
-pub const GRAPH_NOTES: &[&str] = &[];
+/// The annotations [`of`] removes from a built manifest. Each describes one
+/// Kix cluster's graph: the object's build hash, the build hashes it depends
+/// on, and the package instance it belongs to. A revision records the same
+/// facts by name.
+pub const GRAPH_NOTES: &[&str] = &[
+    keys::IDENTITY_HASH,
+    keys::DEPENDS_ON,
+    keys::PACKAGE,
+    keys::PACKAGE_NAMESPACE,
+    keys::LIFECYCLE,
+];
+
+/// The annotations an older Kix wrote to an object after applying it, which
+/// revisions hold now.
+const AFTER_APPLY_NOTES: &[&str] = &[keys::ACTIVATIONS, keys::APPLIED_HASH];
+
+/// Return whether `key` is a retired note: one of [`GRAPH_NOTES`],
+/// `kix.run/activations`, or `kix.run/applied-hash`, under Kix's domain or a
+/// retired one.
+pub fn is_retired_note(key: &str) -> bool {
+    GRAPH_NOTES.iter().chain(AFTER_APPLY_NOTES).any(|note| {
+        *note == key
+            || crate::legacy_domain::legacy_spellings(note)
+                .iter()
+                .any(|k| k == key)
+    })
+}
+
+/// Remove every retired note from the annotations of `manifest`, and the
+/// `annotations` map when that leaves it empty.
+pub fn strip_retired_notes(manifest: &mut Value) {
+    let Some(meta) = manifest.get_mut("metadata").and_then(Value::as_object_mut) else {
+        return;
+    };
+    let emptied = meta
+        .get_mut("annotations")
+        .and_then(Value::as_object_mut)
+        .is_some_and(|a| {
+            a.retain(|k, _| !is_retired_note(k));
+            a.is_empty()
+        });
+    if emptied {
+        meta.remove("annotations");
+    }
+}
 
 /// Return the manifest Kix sends for the built manifest `manifest`: the
 /// manifest without the annotations in [`GRAPH_NOTES`].
@@ -126,5 +175,35 @@ mod tests {
     fn of_removes_the_graph_notes() {
         let built = config_map(json!({ keys::IDENTITY_HASH: "h1", keys::DEPENDS_ON: "h2" }));
         assert_eq!(*of(&built), *without(&built, GRAPH_NOTES));
+    }
+
+    #[test]
+    fn the_retired_notes_are_seven_under_each_domain() {
+        let notes = [
+            keys::IDENTITY_HASH,
+            keys::DEPENDS_ON,
+            keys::PACKAGE,
+            keys::PACKAGE_NAMESPACE,
+            keys::LIFECYCLE,
+            keys::ACTIVATIONS,
+            keys::APPLIED_HASH,
+        ];
+        for note in notes {
+            assert!(is_retired_note(note), "{note}");
+            for old in crate::legacy_domain::legacy_spellings(note) {
+                assert!(is_retired_note(&old), "{old}");
+            }
+        }
+        for kept in [
+            keys::READINESS,
+            keys::SOPS_DIGEST,
+            keys::SOPS_SOURCE,
+            keys::RERUN_HASH,
+        ] {
+            assert!(!is_retired_note(kept), "{kept}");
+        }
+        let mut m = config_map(json!({ keys::APPLIED_HASH: "a", keys::PACKAGE: "p" }));
+        strip_retired_notes(&mut m);
+        assert_eq!(m.pointer("/metadata/annotations"), None);
     }
 }

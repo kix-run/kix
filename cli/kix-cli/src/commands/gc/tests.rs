@@ -32,10 +32,13 @@ mod kept_garbage_tests {
             ],
             vec![m("ConfigMap", "old", "h1"), m("Secret", "listed", "h3")],
         ];
-        let active_hashes: HashSet<String> = ["h3".to_string()].into();
-        let active_ids: HashSet<String> = ["Deployment/d/web".to_string()].into();
+        let active_ids: HashSet<String> = [
+            "Deployment/d/web".to_string(),
+            "Secret/d/listed".to_string(),
+        ]
+        .into();
 
-        let got: Vec<String> = kept_garbage(&kept, &active_hashes, &active_ids)
+        let got: Vec<String> = kept_garbage(&kept, &active_ids)
             .iter()
             .map(k8s_identity)
             .collect();
@@ -59,14 +62,9 @@ mod kept_garbage_tests {
             m("Service", "web2", "b-svc"),
         ];
         let kept = [build_b.to_vec()];
-        let hashes = |b: &[Value]| -> HashSet<String> {
-            b.iter()
-                .filter_map(|m| keys::get(m, keys::IDENTITY_HASH).map(str::to_string))
-                .collect()
-        };
         let ids = |b: &[Value]| -> HashSet<String> { b.iter().map(k8s_identity).collect() };
 
-        let got: Vec<String> = kept_garbage(&kept, &hashes(&build_a), &ids(&build_a))
+        let got: Vec<String> = kept_garbage(&kept, &ids(&build_a))
             .iter()
             .map(k8s_identity)
             .collect();
@@ -75,14 +73,14 @@ mod kept_garbage_tests {
         // The same kept build compared with the build from the files (B)
         // finds nothing, and the files build is refused below, so `web` is
         // never planned for deletion.
-        assert!(kept_garbage(&kept, &hashes(&build_b), &ids(&build_b)).is_empty());
+        assert!(kept_garbage(&kept, &ids(&build_b)).is_empty());
     }
 
     /// Verify that a full scan's reason names the build this run compared
     /// with, never a choice of two.
     #[test]
     fn the_reason_names_the_build_compared_with() {
-        let label = GarbageReason::HashNotExpected.label("the build of active deployment c-v2");
+        let label = GarbageReason::NotInBuild.label("the build of active deployment c-v2");
         assert_eq!(label, "not in the build of active deployment c-v2");
     }
 
@@ -591,8 +589,8 @@ mod hard_scope_tests {
             live("ConfigMap", "from-only", Some("h-p"), "part"),
             live("ConfigMap", "both", Some("h-b"), "fail,part"),
         ];
-        let expected: HashSet<String> = ["h-cur".to_string()].into();
-        let judged = judge_hard(&objects, &expected, &HashSet::new(), &tenancy);
+        let expected: HashSet<String> = ["ConfigMap/d/current".to_string()].into();
+        let judged = judge_hard(&objects, &expected, &tenancy);
         assert_eq!(names(&judged.garbage), vec!["stale"]);
         let held: Vec<(&str, Vec<&str>)> = judged
             .held
@@ -640,10 +638,10 @@ mod hard_scope_tests {
         assert_eq!(sweep.foreign.clusters, ["b".to_string()].into());
         assert_eq!(sweep.unattributed.len(), 1);
 
-        let expected: HashSet<String> = ["h-cur".to_string()].into();
+        let expected: HashSet<String> = ["ConfigMap/d/a-current".to_string()].into();
         let plan::Judged {
             garbage, shared, ..
-        } = judge_hard(&sweep.managed, &expected, &HashSet::new(), &tenancy);
+        } = judge_hard(&sweep.managed, &expected, &tenancy);
         assert_eq!(names(&garbage), vec!["a-stale"]);
         assert_eq!(shared.len(), 1);
         assert_eq!(shared[0].rid.name, "shared");
@@ -651,8 +649,35 @@ mod hard_scope_tests {
 
         let mut with_flag = sweep.managed.clone();
         with_flag.extend(sweep.unattributed);
-        let garbage = judge_hard(&with_flag, &expected, &HashSet::new(), &tenancy).garbage;
+        let garbage = judge_hard(&with_flag, &expected, &tenancy).garbage;
         assert_eq!(names(&garbage), vec!["a-stale", "leftover"]);
+    }
+
+    /// A full scan judges by name. An object the build makes is kept,
+    /// whether or not it carries a build hash, such as an object of a record
+    /// an older Kix wrote whose note was edited away. One the build does
+    /// not make is garbage either way.
+    #[test]
+    fn hard_gc_keeps_what_the_build_makes_by_name() {
+        let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");
+        let objects = [
+            live("ConfigMap", "in-build", None, "a2"),
+            live("ConfigMap", "stamped", Some("h-other"), "a2"),
+            live("ConfigMap", "left", None, "a2"),
+        ];
+        let expected: HashSet<String> = [
+            "ConfigMap/d/in-build".to_string(),
+            "ConfigMap/d/stamped".to_string(),
+        ]
+        .into();
+        let judged = judge_hard(&objects, &expected, &tenancy);
+        assert_eq!(names(&judged.garbage), vec!["left"]);
+        assert!(
+            judged
+                .garbage
+                .iter()
+                .all(|g| g.reason == GarbageReason::NotInBuild)
+        );
     }
 
     /// Verify that copies another program made of Kix objects, and left
@@ -678,16 +703,16 @@ mod hard_scope_tests {
                 tenancy.clone(),
             )
         };
-        let expected: HashSet<String> = ["h-cur".to_string()].into();
+        let expected: HashSet<String> = ["ConfigMap/d/a-current".to_string()].into();
 
         let scoped = sweep();
         assert_eq!(scoped.copies.len(), 1);
         let judged = judged_objects(scoped, false, false);
-        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
+        let garbage = judge_hard(&judged, &expected, &tenancy).garbage;
         assert!(garbage.is_empty());
 
         let judged = judged_objects(sweep(), false, true);
-        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
+        let garbage = judge_hard(&judged, &expected, &tenancy).garbage;
         assert_eq!(names(&garbage), vec!["web-x-guest"]);
     }
 
@@ -725,14 +750,14 @@ mod hard_scope_tests {
         let scoped = sweep();
         assert_eq!(object_names(&scoped.copies), ["db.1a2b"]);
         assert_eq!(object_names(&scoped.unattributed), ["unannotated"]);
-        let expected: HashSet<String> = ["h-cur".to_string()].into();
+        let expected: HashSet<String> = ["ConfigMap/d/a-current".to_string()].into();
 
         let judged = judged_objects(scoped, false, true);
-        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
+        let garbage = judge_hard(&judged, &expected, &tenancy).garbage;
         assert_eq!(names(&garbage), vec!["db.1a2b"]);
 
         let judged = judged_objects(sweep(), true, true);
-        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
+        let garbage = judge_hard(&judged, &expected, &tenancy).garbage;
         assert_eq!(names(&garbage), vec!["db.1a2b", "unannotated"]);
     }
 
@@ -754,19 +779,19 @@ mod hard_scope_tests {
                 tenancy.clone(),
             )
         };
-        let expected: HashSet<String> = ["h-cur".to_string()].into();
+        let expected: HashSet<String> = ["ConfigMap/d/a-current".to_string()].into();
 
         let scoped = sweep();
         assert_eq!(scoped.unattributed.len(), 2);
         let judged = judged_objects(scoped, false, false);
         let plan::Judged {
             garbage, shared, ..
-        } = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
+        } = judge_hard(&judged, &expected, &tenancy);
         assert!(garbage.is_empty());
         assert!(shared.is_empty());
 
         let judged = judged_objects(sweep(), true, false);
-        let garbage = judge_hard(&judged, &expected, &HashSet::new(), &tenancy).garbage;
+        let garbage = judge_hard(&judged, &expected, &tenancy).garbage;
         assert_eq!(names(&garbage), vec!["b-web", "leftover"]);
     }
 
@@ -787,13 +812,7 @@ mod hard_scope_tests {
         let deployment = stamped("Deployment", "web2", "baseline");
         let tenancy = kix::cluster::tenancy::Tenancy::fixture(&[], "a");
 
-        let garbage = judge_hard(
-            &[record, deployment],
-            &HashSet::new(),
-            &HashSet::new(),
-            &tenancy,
-        )
-        .garbage;
+        let garbage = judge_hard(&[record, deployment], &HashSet::new(), &tenancy).garbage;
         let packages: Vec<(Option<&str>, Option<&str>)> = garbage
             .iter()
             .map(|g| (g.package_namespace.as_deref(), g.package.as_deref()))
@@ -836,7 +855,7 @@ mod live_order_tests {
             package: None,
             package_namespace: None,
             activations: None,
-            reason: GarbageReason::HashNotExpected,
+            reason: GarbageReason::NotInBuild,
             deleting: None,
         }
     }
@@ -1022,7 +1041,6 @@ mod revision_tests {
     /// record also names is held for that record.
     #[test]
     fn a_full_scan_judges_the_same_from_either_source() {
-        let expected: HashSet<String> = ["h-web".to_string()].into();
         for written in [Written::Records, Written::Revisions] {
             let state = state(&recs(), |_| written);
             let tenancy = state.tenancy("a");
@@ -1030,7 +1048,8 @@ mod revision_tests {
                 .iter()
                 .map(|n| state.object(n))
                 .collect();
-            let judged = judge_hard(&live, &expected, &HashSet::new(), &tenancy);
+            let expected: HashSet<String> = [plan::live_identity(&state.object("web"))].into();
+            let judged = judge_hard(&live, &expected, &tenancy);
             assert_eq!(names(&judged.garbage), ["left", "stuck"], "{written:?}");
             let held: Vec<(&str, &[String])> = judged
                 .held
@@ -1121,7 +1140,7 @@ mod revision_tests {
             package: None,
             package_namespace: None,
             activations: None,
-            reason: GarbageReason::HashNotExpected,
+            reason: GarbageReason::NotInBuild,
             deleting: None,
         };
         let order = live_order(
@@ -1292,6 +1311,14 @@ mod revision_tests {
         // `added` is named by the `Partial` record, so it is not a kept
         // orphan.
         assert_eq!(rebuilt, ["left", "stuck"]);
+        // Nothing says which build wanted each object, and the live objects
+        // carry no build hash, so the list names them with a hash no object
+        // hash equals.
+        assert!(
+            objects
+                .iter()
+                .all(|o| o.hash == revision::REBUILT && o.needs.is_empty())
+        );
 
         let records = opened.into_records().unwrap();
         let generation = kix::cluster::head::generation_of(

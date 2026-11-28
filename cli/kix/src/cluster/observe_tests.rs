@@ -891,3 +891,99 @@ async fn needed_by_comes_from_the_revisions() {
     assert_eq!(needed_by("h-db"), ["web"]);
     assert_eq!(at_risk(view), BTreeSet::from(["h-web".to_string()]));
 }
+
+/// The current record and a deploy that failed after it name one object
+/// with two hashes and two applied hashes. `kix status`, which has no new
+/// build, finds the object by name and judges it by the applied hash it
+/// matches: a live object either deploy wrote is in sync, and one neither
+/// wrote has drifted from what the current record applied.
+#[tokio::test]
+async fn status_judges_an_object_by_the_applied_hash_it_matches() {
+    use crate::cluster::field_manager::FieldManager;
+    use crate::cluster::revision::{
+        Revision, RevisionMap, RevisionObject, RevisionSpec, Revisions, Slot,
+    };
+    use crate::manifest::lifecycle::{PHASE_ACTIVE, PHASE_FAILED};
+    let live = |v: &str| {
+        json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": "web",
+                "namespace": "d",
+                "labels": { "app.kubernetes.io/managed-by": "kix", (keys::CLUSTER_LABEL): "a" },
+                "managedFields": [{
+                    "manager": "kix/a", "operation": "Apply", "apiVersion": "v1",
+                    "fieldsV1": { "f:data": { "f:k": {} } },
+                }],
+            },
+            "data": { "k": v },
+        })
+    };
+    let applied = |v: &str| {
+        let obj: DynamicObject = serde_json::from_value(live(v)).unwrap();
+        fieldsv1::applied_content_hash(&obj, &FieldManager::of("a")).unwrap()
+    };
+    let rid = ResourceId::new("", "ConfigMap", "d", "web");
+    let revision = |record: &str, hash: &str, v: &str| {
+        let mut r = Revision::new(RevisionSpec::new(
+            "a",
+            Slot::Instance {
+                namespace: "d".into(),
+                name: record.into(),
+                lifecycle: None,
+            },
+            vec![RevisionObject::of_id(hash, &rid)],
+        ));
+        r.applied.insert(hash.into(), applied(v));
+        r
+    };
+    let empty = Revision::new(RevisionSpec::new("a", Slot::ClusterLevel, Vec::new()));
+    let (cur, failed) = (
+        revision("cur", "h-one", "1"),
+        revision("failed", "h-two", "2"),
+    );
+    let record = |name: &str, phase: &str, at: &str, instance: &Revision| {
+        let map = RevisionMap {
+            instances: [("d/app".to_string(), instance.name.clone())].into(),
+            cluster_level: empty.name.clone(),
+            kept_orphans: None,
+        };
+        json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": RECORD_KIND,
+            "metadata": {
+                "name": name,
+                "creationTimestamp": at,
+                "labels": { (keys::CLUSTER_LABEL): "a" },
+                "annotations": { (keys::IDENTITY_HASH): format!("rec-{name}") },
+            },
+            "status": { "phase": phase, "revisions": map.to_value() },
+        })
+    };
+    for (v, in_sync) in [("1", true), ("2", true), ("by hand", false)] {
+        let api = FakeApi::new([
+            record("a-cur", PHASE_ACTIVE, "2026-11-01T00:00:00Z", &cur),
+            record("a-failed", PHASE_FAILED, "2026-11-02T00:00:00Z", &failed),
+            live(v),
+        ]);
+        let store = Revisions::new(&api.client());
+        for r in [&cur, &failed, &empty] {
+            store.create(r).await.unwrap();
+            store.write_applied(&r.name, &r.applied).await.unwrap();
+        }
+        let seen = observe_fake(&api, ObserveScope::Cluster("a")).await;
+        let [view] = seen.clusters.as_slice() else {
+            panic!("one cluster: {:?}", seen.clusters);
+        };
+        assert!(view.failed.is_some(), "{v}");
+        let web = by_name(view, "web");
+        assert_eq!(web.presence, Presence::Present, "{v}");
+        assert_eq!(
+            matches!(web.content, Some(DriftVerdict::InSync)),
+            in_sync,
+            "{v}: {:?}",
+            web.content
+        );
+    }
+}

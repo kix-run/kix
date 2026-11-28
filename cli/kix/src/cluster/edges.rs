@@ -136,22 +136,61 @@ impl Edges {
 }
 
 /// The objects earlier deploys of a Kix cluster made, as a run that may
-/// delete some of them knows them: a manifest for each, and the recorded
-/// edges between them.
+/// delete some of them knows them: a manifest for each, the recorded edges
+/// between them, and the hash each earlier revision or build gives them.
 #[derive(Debug, Clone, Default)]
 pub struct Prior {
     /// The manifests of earlier builds, or the live objects where no build
     /// is at hand.
     pub manifests: Vec<Value>,
     pub edges: Edges,
+    /// The hashes ([`crate::cluster::revision::RevisionObject::hash`]) the
+    /// earlier revisions or builds give each object. A kept-orphans
+    /// revision names an orphan with them.
+    pub hashes: HashMap<ResourceId, BTreeSet<String>>,
 }
 
 impl Prior {
     /// Return the objects of earlier builds whose manifests are all from
-    /// builds, with the edges their annotations record.
+    /// builds, with the edges their annotations record and their object
+    /// hashes.
     pub fn of_build(manifests: Vec<Value>) -> Prior {
         let edges = Edges::of_build(&manifests);
-        Prior { manifests, edges }
+        let mut hashes: HashMap<ResourceId, BTreeSet<String>> = HashMap::new();
+        for m in manifests
+            .iter()
+            .filter(|m| keys::get(m, keys::IDENTITY_HASH).is_some())
+        {
+            hashes
+                .entry(ResourceId::from_value(m))
+                .or_default()
+                .insert(crate::manifest::hash::object_hash(m));
+        }
+        Prior {
+            manifests,
+            edges,
+            hashes,
+        }
+    }
+
+    /// Return the objects `revisions` name, as `manifests` describe them,
+    /// with the edges and hashes the revisions give them.
+    pub fn of_revisions<'a>(
+        manifests: Vec<Value>,
+        revisions: impl IntoIterator<Item = &'a Revision> + Clone,
+    ) -> Prior {
+        let mut hashes: HashMap<ResourceId, BTreeSet<String>> = HashMap::new();
+        for object in revisions.clone().into_iter().flat_map(|r| &r.spec.objects) {
+            hashes
+                .entry(object.resource_id())
+                .or_default()
+                .insert(object.hash.clone());
+        }
+        Prior {
+            manifests,
+            edges: Edges::of_revisions(revisions),
+            hashes,
+        }
     }
 }
 

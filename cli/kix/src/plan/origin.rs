@@ -13,7 +13,7 @@ use crate::cluster::drift;
 use crate::cluster::field_manager::FieldManager;
 use crate::manifest::diff::engine::structural_diff;
 use crate::manifest::diff::{DiffConfig, DiffKind, Difference};
-use crate::manifest::keys;
+use crate::manifest::hash::object_hash;
 use crate::manifest::sent;
 use crate::manifest::types::{self, ResourceId};
 use schemars::JsonSchema;
@@ -216,7 +216,7 @@ pub struct Sides<'a> {
 
 /// Label every field change of a comparison whose old side is the live
 /// cluster. A resource counts as applied when the deployed build lacks it or
-/// its identity hash differs from the new build's, which is how `kix deploy`
+/// its object hash differs from the new build's, which is how `kix deploy`
 /// decides.
 ///
 /// A drift label goes only on an object that [`drift::check_object`] finds
@@ -231,9 +231,7 @@ pub fn label_live(diff: &mut super::PackageDiff, sides: &Sides) {
                 continue;
             };
             let deployed = sides.deployed.get(rid).copied();
-            let applies = deployed.is_none_or(|d| {
-                keys::get(d, keys::IDENTITY_HASH) != keys::get(new, keys::IDENTITY_HASH)
-            });
+            let applies = deployed.is_none_or(|d| object_hash(d) != object_hash(new));
             let three = ThreeWay {
                 deployed,
                 live,
@@ -267,9 +265,9 @@ pub fn label_live(diff: &mut super::PackageDiff, sides: &Sides) {
 /// change Kubernetes recorded no owner for is an entry with no manager. An
 /// object with neither gets one entry at path `$`.
 ///
-/// The deployed value comes from the manifest whose identity hash the live
-/// object carries: the new build's when the build does not change the object,
-/// or `deployed`'s. It is `None` when neither has that manifest.
+/// The deployed value comes from `deployed`, the build of the record whose
+/// applied hash the drift check compared the live object with. It is `None`
+/// when that build is not at hand.
 pub fn live_drift(
     drifted: &[(drift::DriftReport, kube::api::DynamicObject)],
     new: &HashMap<ResourceId, &Value>,
@@ -287,19 +285,10 @@ pub fn live_drift(
         let Some(&new) = new.get(&report.rid) else {
             continue;
         };
-        let live_hash = obj
-            .metadata
-            .annotations
-            .as_ref()
-            .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH));
-        let applies = live_hash.is_none() || live_hash != keys::get(new, keys::IDENTITY_HASH);
-        let applied = if applies {
-            deployed
-                .and_then(|d| d.get(&report.rid).copied())
-                .filter(|d| live_hash.is_some() && keys::get(d, keys::IDENTITY_HASH) == live_hash)
-        } else {
-            Some(new)
-        };
+        let applied = deployed.and_then(|d| d.get(&report.rid).copied());
+        // The live object differs from every applied hash Kix recorded for
+        // it, so a deploy of the new build writes it and reverts the drift.
+        let applies = true;
         // Foreign fields are compared with what Kix sends, not with the
         // built manifests.
         let applied = applied.map(sent::of);
@@ -497,6 +486,7 @@ fn segments(path: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::cluster::revision::AppliedHashes;
+    use crate::manifest::keys;
     use serde_json::json;
 
     fn deployment(replicas: i64, image: &str) -> Value {
@@ -724,7 +714,11 @@ mod tests {
         (
             drift::check_object(
                 &obj,
-                AppliedHashes::from_annotations().applied(&obj),
+                AppliedHashes::from_annotations().for_live(
+                    &obj,
+                    &crate::cluster::field_manager::FieldManager::of("a"),
+                    None,
+                ),
                 &crate::cluster::field_manager::FieldManager::of("a"),
             ),
             obj,
@@ -737,11 +731,11 @@ mod tests {
         new
     }
 
-    /// An image someone set with `kubectl edit` shows as drift from the live
-    /// object alone, with no deployed build. A controller's annotation the
-    /// build does not set is not listed.
+    /// An image someone set with `kubectl edit` shows as drift, with the
+    /// deployed build's value. A controller's annotation the build does not
+    /// set is not listed.
     #[test]
-    fn an_out_of_band_edit_shows_as_drift_without_the_deployed_build() {
+    fn an_out_of_band_edit_shows_as_drift_against_the_deployed_build() {
         let live = drifted_deployment(
             "web:2",
             json!({"f:replicas": {}, "f:template": {"f:spec": {"f:containers": {
@@ -764,7 +758,13 @@ mod tests {
         ));
         let new = new_build("web:1");
         let rid = ResourceId::from_value(&new);
-        let found = live_drift(&[live], &[(rid, &new)].into(), None, &FieldManager::of("a"));
+        let deployed: HashMap<ResourceId, &Value> = [(rid.clone(), &new)].into();
+        let found = live_drift(
+            &[live],
+            &[(rid, &new)].into(),
+            Some(&deployed),
+            &FieldManager::of("a"),
+        );
         assert_eq!(
             found,
             vec![super::super::document::DriftChange {
@@ -773,7 +773,7 @@ mod tests {
                 deployed: Some(json!("web:1")),
                 live: Some(json!("web:2")),
                 managers: vec!["kubectl-edit".into()],
-                reverted: false,
+                reverted: true,
             }]
         );
     }
@@ -790,7 +790,13 @@ mod tests {
         );
         let new = new_build("web:1");
         let rid = ResourceId::from_value(&new);
-        let found = live_drift(&[live], &[(rid, &new)].into(), None, &FieldManager::of("a"));
+        let deployed: HashMap<ResourceId, &Value> = [(rid.clone(), &new)].into();
+        let found = live_drift(
+            &[live],
+            &[(rid, &new)].into(),
+            Some(&deployed),
+            &FieldManager::of("a"),
+        );
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].path, "$.spec.replicas");
         assert_eq!(found[0].live, found[0].deployed);

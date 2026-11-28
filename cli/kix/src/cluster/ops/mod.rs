@@ -277,6 +277,55 @@ impl Migrations {
     }
 }
 
+/// What a run records about the objects it applies.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Recording {
+    /// The object hash of each object of the build, by name
+    /// ([`crate::manifest::hash::object_hash`]). The run records an applied
+    /// hash under it, because the manifest it applies can differ from the
+    /// build's: secret values are filled in, and a ceded field another
+    /// manager holds is left out.
+    pub(crate) object_hashes: std::collections::HashMap<ResourceId, String>,
+    /// The objects a runner that never forces applies without the fields
+    /// another manager holds. What the cluster stores for them is not the
+    /// build, so the run records no applied hash for them.
+    pub(crate) unrecorded: std::collections::HashSet<ResourceId>,
+}
+
+impl Recording {
+    /// Return what a run of the build whose objects `manifests` holds
+    /// records, leaving out `unrecorded`.
+    pub(crate) fn of_build(
+        manifests: &[Value],
+        unrecorded: impl IntoIterator<Item = ResourceId>,
+    ) -> Recording {
+        Recording {
+            object_hashes: manifests
+                .iter()
+                .map(|m| {
+                    (
+                        ResourceId::from_value(m),
+                        crate::manifest::hash::object_hash(m),
+                    )
+                })
+                .collect(),
+            unrecorded: unrecorded.into_iter().collect(),
+        }
+    }
+
+    /// Return what a run of the build `revisions` records.
+    pub(crate) fn of_revisions(revisions: &crate::cluster::revision::RevisionSet) -> Recording {
+        Recording {
+            object_hashes: revisions
+                .all()
+                .flat_map(|r| &r.spec.objects)
+                .map(|o| (o.resource_id(), o.hash.clone()))
+                .collect(),
+            unrecorded: Default::default(),
+        }
+    }
+}
+
 /// The orphans a run left on the cluster.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Left<'a> {

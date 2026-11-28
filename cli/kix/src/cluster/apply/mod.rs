@@ -3,7 +3,7 @@
 //! Uses server-side apply (`Patch::Apply`) under the Kix cluster's own field
 //! manager ([`super::field_manager`]).
 //! Change detection diffs two sets of stamped manifests locally by comparing
-//! identity-hashes, without querying the live cluster. A Job under the rerun
+//! object hashes, without querying the live cluster. A Job under the rerun
 //! rule is recreated only when its content hash changed or its last run
 //! failed (see [`changed`]).
 
@@ -13,13 +13,13 @@ mod tests;
 
 use std::collections::{HashMap, HashSet};
 
+use crate::manifest::hash::object_hash;
 use crate::manifest::keys;
 use crate::manifest::kinds::{self, GroupKind};
-use crate::manifest::lifecycle::{is_record, lifecycle_of};
+use crate::manifest::lifecycle::lifecycle_of;
 #[cfg(test)]
 use crate::manifest::types::CLUSTER_SCOPED;
 use crate::manifest::types::ResourceId;
-use kube::api::DynamicObject;
 use serde_json::Value;
 
 pub use ssa::{ApplyAction, ApplyError, ApplyPreview, namespaceless};
@@ -80,7 +80,7 @@ pub enum ChangeAction {
     /// whose last run failed. It is deleted and created again so that it
     /// runs again.
     Recreate(Value, RerunReason),
-    /// Resource has the same identity-hash and can be skipped.
+    /// Resource is unchanged and can be skipped.
     Skip(ResourceId),
     /// Resource exists in the old activation but not the new one and is a
     /// candidate for pruning.
@@ -153,38 +153,12 @@ pub(crate) fn changed(
     ChangeAction::Recreate(manifest.clone(), reason)
 }
 
-/// Annotations the CLI stamps from the build's package index. They are not
-/// part of the identity hash, so an object whose content is unchanged is
-/// still applied when one of them differs, and the live object keeps the
-/// owner the current build names. Activation records are exempt: the deploy
-/// writes them itself, and an unchanged build must skip everything.
-const OWNER_STAMPS: [&str; 3] = [keys::PACKAGE, keys::PACKAGE_NAMESPACE, keys::LIFECYCLE];
-
-/// Return the owner stamps of a manifest, in `OWNER_STAMPS` order.
-fn owner_stamps(manifest: &Value) -> [Option<&str>; 3] {
-    let annotations = manifest.pointer("/metadata/annotations");
-    OWNER_STAMPS.map(|key| annotations.and_then(|a| a.get(key)).and_then(Value::as_str))
-}
-
-/// Return the owner stamps of a live object, in `OWNER_STAMPS` order.
-fn live_owner_stamps(obj: &DynamicObject) -> [Option<&str>; 3] {
-    let annotations = obj.metadata.annotations.as_ref();
-    OWNER_STAMPS.map(|key| annotations.and_then(|a| keys::get_meta(a, key)))
-}
-
-/// Return whether the owner stamps of the live object `obj` differ from those
-/// of `manifest`, so an apply must rewrite them although the content is the
-/// same.
-pub(crate) fn owner_stamps_moved(manifest: &Value, obj: &DynamicObject) -> bool {
-    live_owner_stamps(obj) != owner_stamps(manifest)
-}
-
 /// Detect changes by diffing two sets of stamped manifests locally.
 ///
-/// Matches resources by Kubernetes identity ([`ResourceId`]) and
-/// compares `kix.run/identity-hash` annotations to determine whether content
-/// changed, and the owner stamps (`OWNER_STAMPS`) to determine whether the
-/// annotations need rewriting. Returns [`ChangeAction::Apply`] or
+/// Matches resources by Kubernetes identity ([`ResourceId`]) and compares
+/// their object hashes ([`crate::manifest::hash::object_hash`]), which a
+/// deploy compares too: an object whose dependencies changed and whose own
+/// manifest did not is skipped. Returns [`ChangeAction::Apply`] or
 /// [`ChangeAction::Skip`] for each manifest in `new_manifests`, followed by
 /// [`ChangeAction::Orphan`] for prunable stamped resources present in
 /// `old_manifests` but absent from `new_manifests`.
@@ -209,20 +183,15 @@ pub(crate) fn detect_changes(
     for manifest in new_manifests {
         let rid = ResourceId::from_value(manifest);
 
-        let new_hash = manifest
-            .pointer("/metadata/annotations")
-            .and_then(|a| a.get(keys::IDENTITY_HASH))
-            .and_then(Value::as_str);
-
-        match (old_by_k8s_id.get(&rid), new_hash) {
-            (Some(old), Some(new_h))
-                if manifest_identity_hash(old) == Some(new_h)
-                    && (is_record(manifest) || owner_stamps(old) == owner_stamps(manifest)) =>
+        match old_by_k8s_id.get(&rid) {
+            Some(old)
+                if manifest_identity_hash(manifest).is_some()
+                    && object_hash(old) == object_hash(manifest) =>
             {
                 matched_old_ids.insert(rid.clone());
                 actions.push(ChangeAction::Skip(rid));
             }
-            (Some(old), _) => {
+            Some(old) => {
                 matched_old_ids.insert(rid);
                 actions.push(changed(
                     manifest,
@@ -230,7 +199,7 @@ pub(crate) fn detect_changes(
                     false,
                 ));
             }
-            (None, _) => {
+            None => {
                 actions.push(changed(manifest, Deployed::Nothing, false));
             }
         }

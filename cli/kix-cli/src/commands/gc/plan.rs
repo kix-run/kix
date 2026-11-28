@@ -19,12 +19,10 @@ use kix::manifest::types::{CLUSTER_SCOPED, ResourceId, to_manifest_value};
 /// Reason a live resource was classified as garbage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum GarbageReason {
-    /// Resource carries a `kix.run/identity-hash` that is absent from the
-    /// build gc compares with: the Active build, or the build from the current
-    /// files when the cluster has no Active record.
-    HashNotExpected,
-    /// Resource carries the Kix label but no `kix.run/identity-hash` annotation.
-    NoIdentityHash,
+    /// The build gc compares with does not make the resource: the Active
+    /// build, or the build from the current files when the cluster has no
+    /// Active record.
+    NotInBuild,
     /// Superseded `Activation` record retired by the retention policy
     /// (`--keep`, `--keep-max`, `--keep-for`).
     RetiredActivation,
@@ -35,10 +33,7 @@ impl GarbageReason {
     /// live objects with, such as `the build of active deployment c-v2`.
     pub(super) fn label(&self, compared: &str) -> String {
         match self {
-            GarbageReason::HashNotExpected => format!("not in {compared}"),
-            GarbageReason::NoIdentityHash => {
-                "no Kix build annotation, so Kix cannot match it to a build".to_string()
-            }
+            GarbageReason::NotInBuild => format!("not in {compared}"),
             GarbageReason::RetiredActivation => {
                 "activation record retired by retention".to_string()
             }
@@ -119,22 +114,15 @@ impl RecordRetirement {
     }
 }
 
-/// Return manifests from `closures` (`status.orphansKeptFrom`) that the
-/// Active build does not contain, once each. `active_hashes` and `active_ids`
-/// are the Active build's store hashes and Kubernetes identities.
-pub(super) fn kept_garbage(
-    closures: &[Vec<Value>],
-    active_hashes: &HashSet<String>,
-    active_ids: &HashSet<String>,
-) -> Vec<Value> {
+/// Return manifests from `closures` (the kept orphans) whose kind,
+/// namespace, and name the Active build does not make, once each.
+/// `active_ids` holds the Kubernetes identities of the Active build's
+/// objects.
+pub(super) fn kept_garbage(closures: &[Vec<Value>], active_ids: &HashSet<String>) -> Vec<Value> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut out = Vec::new();
     for manifest in closures.iter().flatten() {
-        let Some(hash) = keys::get(manifest, keys::IDENTITY_HASH) else {
-            continue;
-        };
         if !lifecycle::lifecycle_of(manifest).prunable()
-            || active_hashes.contains(hash)
             || active_ids.contains(&k8s_identity(manifest))
         {
             continue;
@@ -170,8 +158,9 @@ pub(super) struct Judged {
     pub held: Vec<inventory::HeldObject>,
 }
 
-/// Classify `live` objects against `expected_hashes` and `expected_ids`,
-/// the objects of the build gc compares with.
+/// Classify `live` objects against `expected_ids`, the Kubernetes
+/// identities of the objects of the build gc compares with. An object of
+/// that build is never garbage.
 ///
 /// An object outside that build is kept, not garbage, when a pending record
 /// of this Kix cluster deploys it, such as a failed or partly deployed
@@ -181,7 +170,6 @@ pub(super) struct Judged {
 /// are skipped here and handled by the retention policy.
 pub(super) fn judge_hard(
     live: &[kube::api::DynamicObject],
-    expected_hashes: &HashSet<String>,
     expected_ids: &HashSet<String>,
     tenancy: &Tenancy,
 ) -> Judged {
@@ -194,12 +182,17 @@ pub(super) fn judge_hard(
         {
             continue;
         }
+        if expected_ids.contains(&live_identity(obj)) {
+            continue;
+        }
 
         let annotations_from_data = obj
             .data
             .pointer("/metadata/annotations")
             .and_then(|a| a.as_object());
 
+        // An older Kix stamped these notes on the objects it applied. The
+        // list shows them when an object still carries them.
         let ann_get = |key: &str| -> Option<String> {
             if let Some(map) = annotations_from_data
                 && let Some(v) = map.get(key).and_then(|v| v.as_str())
@@ -211,23 +204,6 @@ pub(super) fn judge_hard(
                 .as_ref()
                 .and_then(|a| keys::get_meta(a, key))
                 .map(str::to_string)
-        };
-
-        let identity_hash = ann_get(keys::IDENTITY_HASH);
-
-        let reason = match &identity_hash {
-            Some(hash) if expected_hashes.contains(hash) => continue,
-            // Objects stamped before the domain migration carry hashes computed
-            // from store paths under the retired domain, so compare them by
-            // Kubernetes identity instead.
-            Some(_)
-                if kix::legacy_domain::stamped_before_move(|key| has_key(obj, key))
-                    && expected_ids.contains(&live_identity(obj)) =>
-            {
-                continue;
-            }
-            Some(_) => GarbageReason::HashNotExpected,
-            None => GarbageReason::NoIdentityHash,
         };
 
         let records = tenancy.pending_records_of(obj);
@@ -266,11 +242,11 @@ pub(super) fn judge_hard(
             };
         garbage.push(GarbageEntry {
             id: kix::cluster::drift::resource_id(obj),
-            identity_hash,
+            identity_hash: ann_get(keys::IDENTITY_HASH),
             package,
             package_namespace,
             activations: ann_get(keys::ACTIVATIONS),
-            reason,
+            reason: GarbageReason::NotInBuild,
             deleting: kix::cluster::readiness::deletion_reason(obj),
         });
     }
@@ -279,19 +255,6 @@ pub(super) fn judge_hard(
         shared,
         held,
     }
-}
-
-/// Return `true` if `obj` carries annotation `key` in its raw data or typed metadata.
-pub(super) fn has_key(obj: &kube::api::DynamicObject, key: &str) -> bool {
-    obj.data
-        .pointer("/metadata/annotations")
-        .and_then(|a| a.as_object())
-        .is_some_and(|m| m.contains_key(key))
-        || obj
-            .metadata
-            .annotations
-            .as_ref()
-            .is_some_and(|a| a.contains_key(key))
 }
 
 /// Collect the swept objects that hard GC evaluates against the build,
@@ -476,7 +439,7 @@ pub(super) fn record_garbage(plan: &Retirement) -> Vec<GarbageEntry> {
 }
 
 /// Return `kind/namespace/name` for a live object, matching [`k8s_identity`].
-fn live_identity(obj: &kube::api::DynamicObject) -> String {
+pub(super) fn live_identity(obj: &kube::api::DynamicObject) -> String {
     let kind = obj
         .data
         .get("kind")

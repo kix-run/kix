@@ -35,6 +35,7 @@ use crate::build_source::{Build, InstallableBuild};
 use crate::cluster::activation::{KeptOrphanSource, OpenedRecords, Record, Records};
 use crate::cluster::apply::{self, ChangeAction};
 use crate::cluster::inventory::{Live, LiveObjects};
+use crate::cluster::revision::AppliedHashes;
 use crate::cluster::tenancy::{self, Kept, Tenancy};
 use crate::cluster::{discovery, inventory, owned_view};
 use crate::eval::package_index::RecordPackageIndex;
@@ -1055,9 +1056,11 @@ async fn of_live(
         .into_iter()
         .filter(|obj| lifecycle::lifecycle_of_live(obj).prunable())
         .collect();
+    let applied = AppliedHashes::of(tenancy.own_records(), tenancy.revisions());
     let manifests = owned_view::kix_owned_manifests_against(
         objects.iter().cloned(),
         &new.manifests_by_hash(),
+        &applied,
         &tenancy.manager_of(cluster),
     );
     let closures = LiveClosures::of(
@@ -1089,8 +1092,7 @@ pub(crate) async fn read_tenancy(
 /// `status.orphansKeptFrom` ([`load_kept`]). For one read from revisions,
 /// they are the objects its kept-orphans revision names that the cluster
 /// still holds, listed with one request for each of their kinds and read as
-/// the Kix-owned part of each object, against `built` when it holds the
-/// object's build hash. Refuse when that revision could not be read.
+/// the Kix-owned part of each object, against the build manifests `built`. Refuse when that revision could not be read.
 #[allow(clippy::too_many_arguments)]
 pub async fn kept_of(
     client: &Client,
@@ -1125,8 +1127,13 @@ pub async fn kept_of(
             Live::Absent => {}
         }
     }
-    let manifests =
-        owned_view::kix_owned_manifests_against(present, built, &tenancy.manager_of(cluster));
+    let applied = AppliedHashes::of(tenancy.own_records(), tenancy.revisions());
+    let manifests = owned_view::kix_owned_manifests_against(
+        present,
+        built,
+        &applied,
+        &tenancy.manager_of(cluster),
+    );
     Ok(KeptBaseline {
         closures: if manifests.is_empty() {
             Vec::new()

@@ -137,8 +137,8 @@ fn managers(value: &Value) -> Vec<String> {
 /// Which objects need the migration write, and what it leaves. The entry
 /// under `kix` moves to this cluster only on an object a record of it names
 /// and that every other Kix cluster naming it holds under its own entry.
-/// A note naming a cluster an older Kix deploys keeps both notes and the
-/// entries under `kix`.
+/// The write removes every retired note. A note naming a cluster an older
+/// Kix deploys keeps the retired notes and the entries under `kix`.
 #[tokio::test]
 async fn which_objects_need_the_write_and_what_it_leaves() {
     let a = FieldManager::of("a");
@@ -156,6 +156,10 @@ async fn which_objects_need_the_write_and_what_it_leaves() {
         (keys::ACTIVATIONS): OWN_OLD,
         (keys::APPLIED_HASH): "h1",
         (keys::IDENTITY_HASH): "i1",
+        (keys::DEPENDS_ON): "requires:i2",
+        (keys::PACKAGE): "web",
+        (keys::PACKAGE_NAMESPACE): "apps",
+        (keys::LIFECYCLE): "stateful",
     });
     let shared = json!({
         (keys::ACTIVATIONS): format!("{OTHER},{OWN_OLD}"),
@@ -165,7 +169,7 @@ async fn which_objects_need_the_write_and_what_it_leaves() {
     let cases = [
         Case {
             name: "tidied already",
-            annotations: json!({ (keys::IDENTITY_HASH): "i1" }),
+            annotations: json!({ (keys::READINESS): "none" }),
             entries: vec![entry("kix/a", "Apply")],
             with_c: false,
             managers: None,
@@ -242,6 +246,15 @@ async fn which_objects_need_the_write_and_what_it_leaves() {
             annotations: json!({ (keys::IDENTITY_HASH): "i1" }),
             entries: vec![entry("kix", "Apply")],
             with_c: false,
+            managers: Some(vec!["kix:Apply"]),
+            note: None,
+            applied: None,
+        },
+        Case {
+            name: "no record of this cluster names the object, and no note is left",
+            annotations: json!({ (keys::READINESS): "none" }),
+            entries: vec![entry("kix", "Apply")],
+            with_c: false,
             managers: None,
             note: None,
             applied: None,
@@ -298,7 +311,23 @@ async fn which_objects_need_the_write_and_what_it_leaves() {
             "{}",
             case.name
         );
-        assert_eq!(annotations[keys::IDENTITY_HASH], "i1", "{}", case.name);
+        // Every retired note goes, unless an older Kix that deploys another
+        // Kix cluster still reads them.
+        let identity = case.note.map(|_| "i1");
+        assert_eq!(
+            annotations[keys::IDENTITY_HASH].as_str(),
+            identity,
+            "{}",
+            case.name
+        );
+        for note in [
+            keys::DEPENDS_ON,
+            keys::PACKAGE,
+            keys::PACKAGE_NAMESPACE,
+            keys::LIFECYCLE,
+        ] {
+            assert!(annotations.get(note).is_none(), "{}: {note}", case.name);
+        }
         assert!(
             needed(&object(&after), &a, &tenancy, Some(RECORD)).is_none(),
             "{}: the write leaves an object that needs no other",

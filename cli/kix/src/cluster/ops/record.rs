@@ -54,6 +54,9 @@ pub(crate) struct RecordConfig {
     /// [`DeployRecord::finalize`] adds the kept orphans. `None` for a run
     /// that writes no record, such as the operator correcting drift.
     pub(crate) revisions: Option<RevisionSet>,
+    /// The hashes of the build the run deploys, which the conversion of an
+    /// older Kix's records reads ([`revision::convert::BuildHashes`]).
+    pub(crate) build_hashes: revision::convert::BuildHashes,
     /// The instances (`namespace/instance`) a deploy with `--only` selected,
     /// which [`DeployRecord::end_partial`] writes to `status.partial`. Empty
     /// for a run of the whole build.
@@ -201,9 +204,9 @@ impl ActivationRecord {
     /// name, or `None` when the deploy left nothing or the run names no
     /// revisions.
     ///
-    /// It lists the orphans the run left, as the manifests they came from
-    /// describe them, each with the edges `left.prior` records for it, so an
-    /// orphan kept across many deploys keeps its place in the delete order.
+    /// It lists the orphans the run left, with each hash and the edges
+    /// `left.prior` records for them, so an orphan kept across many deploys
+    /// keeps its place in the delete order.
     /// When the plan did not read the cluster (`--offline`),
     /// it also carries forward the objects of `current`'s kept-orphans
     /// revision unexamined. Refuse when that revision cannot be read, or the
@@ -219,20 +222,16 @@ impl ActivationRecord {
         };
         let store = Revisions::new(self.resources.client());
         let wanted: HashSet<&ResourceId> = left.orphans.iter().chain(left.never_pruned).collect();
-        let mut objects: Vec<RevisionObject> = left
-            .prior
-            .manifests
+        let mut objects: Vec<RevisionObject> = wanted
             .iter()
-            .filter(|m| wanted.contains(&ResourceId::from_value(m)))
-            .filter_map(RevisionObject::of_manifest)
-            .map(|o| {
-                let needs = left
-                    .prior
-                    .edges
-                    .needs(&o.resource_id())
-                    .cloned()
-                    .collect::<Vec<_>>();
-                o.with_needs(needs)
+            .flat_map(|rid| {
+                let needs: Vec<_> = left.prior.edges.needs(rid).cloned().collect();
+                left.prior
+                    .hashes
+                    .get(*rid)
+                    .into_iter()
+                    .flatten()
+                    .map(move |hash| RevisionObject::of_id(hash, rid).with_needs(needs.clone()))
             })
             .collect();
         let kept = &self.config.kept_orphans;
@@ -374,6 +373,7 @@ impl DeployRecord for ActivationRecord {
                 &records,
                 &discovery,
                 self.resources.cluster(),
+                &self.config.build_hashes,
             )
             .await
             .map_err(RecordWriteError::Convert)?;
@@ -607,15 +607,29 @@ mod tests {
         name: Option<&str>,
         only: Vec<String>,
     ) -> ActivationRecord {
+        record_recording(api, name, only, Default::default()).await
+    }
+
+    /// Return the record of a run that records applied hashes as
+    /// `recording` says.
+    async fn record_recording(
+        api: &FakeApi,
+        name: Option<&str>,
+        only: Vec<String>,
+        recording: crate::cluster::ops::Recording,
+    ) -> ActivationRecord {
         let client = api.client();
         let discovery = discovery::discover_resources(&client).await.unwrap();
         ActivationRecord::new(
-            Arc::new(KubeResources::new(
-                client,
-                discovery,
-                "a".into(),
-                crate::cluster::ops::Force::None,
-            )),
+            Arc::new(
+                KubeResources::new(
+                    client,
+                    discovery,
+                    "a".into(),
+                    crate::cluster::ops::Force::None,
+                )
+                .with_recording(recording),
+            ),
             RecordConfig {
                 name: name.map(str::to_string),
                 manifest: None,
@@ -623,6 +637,7 @@ mod tests {
                 consumed_failed: Vec::new(),
                 kept_orphans: KeptOrphans::default(),
                 revisions: None,
+                build_hashes: Default::default(),
                 only,
                 mark_failed_on_abort: true,
                 lock: None,
@@ -918,7 +933,11 @@ mod tests {
             set: Option<RevisionSet>,
             lock: Option<Arc<head::Lock>>,
         ) -> ActivationRecord {
-            let mut run = record(api, Some(name)).await;
+            let recording = set
+                .as_ref()
+                .map(crate::cluster::ops::Recording::of_revisions)
+                .unwrap_or_default();
+            let mut run = record_recording(api, Some(name), Vec::new(), recording).await;
             run.config.revisions = set;
             run.config.lock = lock;
             run
@@ -1220,6 +1239,8 @@ mod tests {
                 .unwrap()
                 .iter()
                 .map(|o| o["name"].as_str().unwrap().to_string())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
                 .collect()
         }
 
@@ -1347,10 +1368,7 @@ mod tests {
                     m
                 })
                 .collect();
-            let prior = crate::cluster::edges::Prior {
-                edges: crate::cluster::edges::Edges::of_revisions([&kept]),
-                manifests: live,
-            };
+            let prior = crate::cluster::edges::Prior::of_revisions(live, [&kept]);
             api.insert(activation("two", "Deploying", None));
             let lock2 = lock(&api, "two").await;
             let two = run(&api, "two", Some(build("2")), Some(lock2.clone())).await;
@@ -1647,7 +1665,13 @@ mod tests {
                     store.create(revision).await.unwrap();
                 }
             }
-            let repair = record(&api, None).await;
+            let repair = record_recording(
+                &api,
+                None,
+                Vec::new(),
+                crate::cluster::ops::Recording::of_revisions(&current),
+            )
+            .await;
             repair.resources.note_applied(&manifest(&z), "hz".into());
             repair.write_applied().await.unwrap();
             let expected = BTreeMap::from([(z.hash.clone(), "hz".to_string())]);

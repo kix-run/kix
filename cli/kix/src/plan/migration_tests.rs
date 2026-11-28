@@ -764,6 +764,64 @@ async fn a_drifted_object_is_reverted_on_the_first_deploy() {
     assert_eq!(managers(&api, "ConfigMap", "web"), ["kix/a:Apply"]);
 }
 
+/// A hand edit made before the upgrade is still reported as drift by a
+/// second migration deploy, after the first one stopped once it had given
+/// the older Kix's records revisions and before it wrote the object. The
+/// conversion stored what it read from the notes, so the second deploy does
+/// not need the notes the first one may have removed. An object that still
+/// matches what the older Kix applied is left alone.
+#[tokio::test]
+async fn a_migration_that_stops_after_its_conversion_still_reports_drift() {
+    use crate::plan::document::WriteReason;
+    let api = FakeApi::new([]);
+    api.track_owners();
+    let build = |record: &str| {
+        release(
+            "a",
+            record,
+            &[config_map("web", "1"), config_map("calm", "1")],
+        )
+    };
+    deployed_by_an_older_kix(&api, "a", &build("a-r0"), PHASE_ACTIVE, &[]).await;
+    api.update_as("kubectl", None, "ConfigMap", "web", |o| {
+        o["data"]["k"] = json!("by-hand");
+    });
+    // The read and the write of `web` fail, so the run stops after the
+    // conversion and before it writes `web`.
+    api.fail_next("/api/v1/namespaces/app/configmaps/web", 2, 500);
+    assert!(deploy(&api, "a", &build("a-r1")).await.is_err());
+    assert_eq!(
+        api.object("ConfigMap", "web").unwrap()["data"]["k"],
+        json!("by-hand")
+    );
+    let converted = record_of(&build("a-r0"))["metadata"]["name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let current = api.object(lifecycle::RECORD_KIND, &converted).unwrap();
+    assert!(current["status"]["revisions"].is_object(), "{current}");
+    let checked = plan(&api, "a", &build("a-r2")).await;
+    let reason = |name: &str| {
+        checked
+            .objects()
+            .writes
+            .iter()
+            .find(|w| w.name == name)
+            .map(|w| w.reason.clone())
+    };
+    assert!(
+        matches!(reason("web"), Some(Some(WriteReason::RevertsDrift { .. }))),
+        "{:?}",
+        checked.objects().writes
+    );
+    assert_eq!(reason("calm"), None, "{:?}", checked.objects().writes);
+    deploy(&api, "a", &build("a-r2")).await.unwrap();
+    assert_eq!(
+        api.object("ConfigMap", "web").unwrap()["data"]["k"],
+        json!("1")
+    );
+}
+
 /// A build that adds an object another Kix cluster applied under `kix`
 /// does not read that entry as its own: the plan applies the object, which
 /// adds the cluster's own entry, and keeps the note for the older Kix.

@@ -8,11 +8,12 @@
 //! delete:
 //!
 //! - Each write, by object id and the store hash of its file, must be one
-//!   the diff lists as added, modified, or dep-affected, or the new
-//!   Activation record, or a re-apply.
-//! - A re-apply is a write of a file that a build this cluster already ran
-//!   holds for the same object: the deployed build, or the closure of a
-//!   deploy that stopped part way or kept its orphans. `--reconcile` writes
+//!   the diff lists as added or modified, or the new Activation record, or a
+//!   re-apply.
+//! - A re-apply is a write of a file whose object hash is that of a file a
+//!   build this cluster already ran holds for the same object: the deployed
+//!   build, or the closure of a deploy that stopped part way or kept its
+//!   orphans. The two files then send the same manifest. `--reconcile` writes
 //!   unchanged objects again this way, and a deploy repairs what a stopped
 //!   deploy changed. An unchanged Job under `kix.run/rerun` is written
 //!   again only if its last run failed. The deploy reads that run when it
@@ -23,12 +24,12 @@
 //!   read the cluster, one its `prune` section lists.
 //!
 //! A write's hash comes from its store path, the file's content hash, never
-//! from its stamped manifest's annotation. The builds the cluster ran are
-//! known by their `kix.run/identity-hash` stamps, which on a plan without a
-//! deployed build are read off the live objects. A forged stamp cannot add
-//! a write: a re-apply is only a write the diff does not list, and the diff
-//! lists every object whose file differs from the old side in content,
-//! list order included.
+//! from its stamped manifest's annotation. The files of the builds the
+//! cluster ran are the manifests of those builds, and on a plan without a
+//! deployed build the build manifests that live objects read as
+//! ([`crate::cluster::owned_view::kix_owned_manifests_against`]). A re-apply
+//! is only a write the diff does not list, and the diff lists every object
+//! whose sent manifest differs from the old side, list order included.
 //!
 //! The plan document lists these objects as `objects` and their [`digest`]
 //! as `objects_digest`, and `kix deploy --plan` refuses a deploy whose
@@ -50,6 +51,7 @@ use std::path::Path;
 use crate::cluster::apply::ChangeAction;
 use crate::cluster::scheduler::DeployPlan;
 use crate::eval::store_graph::{StoreGraph, store_hash};
+use crate::manifest::hash::object_hash;
 use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
 use serde_json::Value;
@@ -79,14 +81,10 @@ pub(crate) fn of<'a>(
             .or_default()
             .push(path);
     }
-    let ran: HashSet<(ResourceId, &str)> = old
+    let ran: HashSet<(ResourceId, String)> = old
         .into_iter()
-        .filter_map(|m| {
-            Some((
-                ResourceId::from_value(m),
-                keys::get(m, keys::IDENTITY_HASH)?,
-            ))
-        })
+        .filter(|m| keys::get(m, keys::IDENTITY_HASH).is_some())
+        .map(|m| (ResourceId::from_value(m), object_hash(m)))
         .collect();
 
     let mut unshown = Unshown::default();
@@ -117,9 +115,13 @@ pub(crate) fn of<'a>(
             }
         };
         let hash = store_hash(path);
+        let sends = graph
+            .resources
+            .get(path)
+            .map(|node| object_hash(&node.manifest));
         let (package, change) = match shown.writes.get(&(id.clone(), hash.clone())) {
             Some((package, change)) => (package.clone(), *change),
-            None if ran.contains(&(id.clone(), hash.as_str())) => {
+            None if sends.is_some_and(|h| ran.contains(&(id.clone(), h))) => {
                 let change = if certain {
                     WriteChange::Reapplied
                 } else {

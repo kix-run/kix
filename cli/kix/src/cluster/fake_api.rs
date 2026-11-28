@@ -153,6 +153,9 @@ struct State {
     next_rv: u64,
     /// `METHOD path` of every request, in order, with `?query` when it has one.
     requests: Vec<String>,
+    /// The body of every request that has one, beside its `METHOD path`
+    /// line, in order.
+    bodies: Vec<(String, String)>,
     after_get: Vec<(String, Hook)>,
     on_apply: Vec<(String, Hook)>,
     on_create: Vec<(String, Hook)>,
@@ -486,6 +489,12 @@ impl FakeApi {
         self.state.lock().unwrap().requests.clone()
     }
 
+    /// Return every request body sent so far, each with its `METHOD path`
+    /// line, in order.
+    pub fn bodies(&self) -> Vec<(String, String)> {
+        self.state.lock().unwrap().bodies.clone()
+    }
+
     pub fn client(&self) -> Client {
         let api = self.clone();
         let service = tower::service_fn(move |req: http::Request<kube::client::Body>| {
@@ -533,6 +542,10 @@ impl FakeApi {
             } else {
                 format!("{method} {path}?{query}")
             };
+            if !body.is_empty() {
+                st.bodies
+                    .push((line.clone(), String::from_utf8_lossy(body).into_owned()));
+            }
             st.requests.push(line);
             if let Some(f) = st
                 .failures

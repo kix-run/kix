@@ -569,6 +569,72 @@ fn an_executable_sops_source_is_carried() {
     assert_eq!(bundle.other_files().unwrap()[source], bytes);
 }
 
+/// One build read from a bundle and from the local store gives every
+/// object the same object hash, a Secret from a SOPS file included, so a
+/// deploy from one writes nothing a deploy from the other wrote.
+#[test]
+fn a_bundle_and_the_store_give_the_same_object_hashes() {
+    let mut contents = real();
+    let source = add_file(
+        &mut contents,
+        "db.sops.yaml",
+        "password: ENC[AES256_GCM,data:abc]\nsops:\n  age: []\n",
+        vec![],
+    );
+    let secret = json!({
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+            "name": "db",
+            "namespace": "kix-enterprise-test-web",
+            "annotations": { (keys::SOPS_SOURCE): source, (keys::SOPS_DIGEST): "ab12" },
+        },
+        "type": "Opaque",
+    });
+    let path = add_file(
+        &mut contents,
+        "k8s-Secret-db",
+        &secret.to_string(),
+        vec![source.clone()],
+    );
+    list_in_index(&mut contents, STATUS_PAGE, &path);
+    let bytes = written(&contents);
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("b.kixbundle");
+    std::fs::write(&file, &bytes).unwrap();
+    let from_bundle = crate::read_build(&file, &[], "kix-enterprise-test").unwrap();
+    // A build from the store holds the same files and is stamped the same
+    // way.
+    let from_store = kix::plan::fixtures::stamp(&read(&bytes).unwrap()).0;
+    let hashes = |g: &StoreGraph| {
+        g.resources
+            .values()
+            .map(|r| &r.manifest)
+            .filter(|m| !lifecycle::is_record(m))
+            .map(|m| {
+                (
+                    kix::manifest::types::ResourceId::from_value(m),
+                    kix::manifest::hash::object_hash(m),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let (bundle, store) = (hashes(from_bundle.graph()), hashes(&from_store));
+    assert_eq!(bundle, store);
+    let db = kix::manifest::types::ResourceId::new("", "Secret", "kix-enterprise-test-web", "db");
+    assert!(bundle.contains_key(&db), "{bundle:?}");
+    let shown = from_bundle
+        .graph()
+        .resources
+        .values()
+        .find(|r| kix::manifest::types::ResourceId::from_value(&r.manifest) == db)
+        .unwrap();
+    assert_eq!(
+        keys::get(&shown.manifest, keys::SOPS_SOURCE),
+        Some(source.as_str())
+    );
+}
+
 /// Names with spaces, colons, and characters beyond ASCII are the
 /// API server's to judge.
 #[test]

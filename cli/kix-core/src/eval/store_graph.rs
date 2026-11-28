@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::build_files::BuildFiles;
 use super::error::KixEvalError;
-use super::package_index::RecordPackageIndex;
+use super::package_index::{IndexedName, RecordPackageIndex};
 use super::store::disk_path;
 use crate::manifest::types::ResourceId;
 use crate::manifest::{keys, lifecycle};
@@ -320,6 +320,7 @@ fn resource_label(manifest: &serde_json::Value) -> String {
 }
 
 /// Where [`StoreGraph::synthesize`] puts an object its reference build holds.
+#[derive(Clone)]
 enum Place {
     /// The `PackageInstance` of the reference package keyed `ns/instance`.
     PackageInstance(String),
@@ -363,6 +364,27 @@ fn places_by_hash<'a>(indexes: &[&'a RecordPackageIndex]) -> HashMap<&'a str, Pl
             if !hash.is_empty() {
                 places.entry(hash).or_insert(place);
             }
+        }
+    }
+    places
+}
+
+/// Return where `indexes` place each object they name, by kind, namespace,
+/// and name. `by_hash` is [`places_by_hash`] of the same indexes, so the first
+/// index that names an object wins here too.
+fn places_by_name(
+    indexes: &[&RecordPackageIndex],
+    by_hash: &HashMap<&str, Place>,
+) -> HashMap<ResourceId, Place> {
+    let mut places: HashMap<ResourceId, Place> = HashMap::new();
+    for index in indexes {
+        for hash in index.hashes() {
+            let (Some(IndexedName::Named(rid)), Some(place)) =
+                (index.name_of(hash), by_hash.get(hash))
+            else {
+                continue;
+            };
+            places.entry(rid).or_insert_with(|| place.clone());
         }
     }
     places
@@ -735,12 +757,12 @@ impl StoreGraph {
     /// Run [`StoreGraph::synthesize`], placing first by the package indexes in
     /// `deployed`, which the deployed records carry.
     ///
-    /// A resource whose `kix.run/identity-hash` one of the indexes lists goes
-    /// where that index puts it, the first index that lists it winning. The
-    /// hash names the build file the object was applied from, so the index
-    /// places it as the deployed build did, wherever `reference` puts an
-    /// object of that identity. Other resources are placed as `synthesize`
-    /// places them.
+    /// A resource that one of the indexes names goes where that index puts
+    /// it, the first index that names it winning, so it is placed as the
+    /// deployed build placed it, wherever `reference` puts an object of that
+    /// identity. An index lists an object by its `kix.run/identity-hash`
+    /// when an older Kix wrote it, and names it by kind, namespace, and name
+    /// otherwise. Other resources are placed as `synthesize` places them.
     pub fn synthesize_placed(
         manifests: &[serde_json::Value],
         reference: &StoreGraph,
@@ -798,6 +820,7 @@ impl StoreGraph {
             .collect();
 
         let place_by_hash = places_by_hash(deployed);
+        let place_by_name = places_by_name(deployed, &place_by_hash);
 
         let ann = |m: &Value, key: &str| -> Option<String> {
             m.pointer("/metadata/annotations")
@@ -860,9 +883,11 @@ impl StoreGraph {
                 (key, (path.clone(), version, lifecycle))
             };
 
+            let id = ResourceId::from_value(m);
             let place = place_by_hash
                 .get(hash.as_str())
-                .or_else(|| place_by_id.get(&ResourceId::from_value(m)));
+                .or_else(|| place_by_name.get(&id))
+                .or_else(|| place_by_id.get(&id));
             match place {
                 Some(Place::PackageInstance(key)) => {
                     let (key, entry) = package_instance(key.clone());

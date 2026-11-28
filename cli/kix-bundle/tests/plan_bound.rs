@@ -1352,10 +1352,13 @@ fn plan_and_check(
             .map(|s| s.package.as_str());
         let shows = || shown_new.as_ref() == Some(&expected) && shown_under == Some(package);
         let ok = match change {
+            // A re-apply sends what a build the cluster ran holds for the
+            // object.
             WriteChange::Reapplied | WriteChange::IfLastRunFailed => {
                 active_manifests.iter().any(|m| {
                     ResourceId::from_value(m) == id
-                        && keys::get(m, keys::IDENTITY_HASH) == Some(hash.as_str())
+                        && kix::manifest::hash::object_hash(m)
+                            == kix::manifest::hash::object_hash(manifest)
                 })
             }
             _ if lifecycle::is_record_kind(kind) => {

@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 
 use super::field_manager::FieldManager;
+use super::revision::AppliedHashes;
 use crate::manifest::keys;
 use crate::manifest::types::{ResourceId, to_manifest_value};
 use kube::api::DynamicObject;
@@ -233,26 +234,27 @@ pub fn kix_owned_manifests(
         .collect()
 }
 
-/// Build [`kix_owned_manifests`] for comparison against `built` (keyed by
-/// identity hash), replacing each object the build does not change with its
-/// build manifest.
+/// Build [`kix_owned_manifests`] for comparison against `built`, the
+/// manifests of a build (keyed by identity hash), replacing each object the
+/// build does not change with its build manifest.
 ///
-/// The build does not change an object when the object's
-/// `kix.run/identity-hash` names a manifest in `built` for the same kind,
-/// namespace, and name. This is the rule `kix deploy` uses to skip an object.
-/// The identity hash is the hash of the manifest file, so the build manifest
-/// is what Kix applied. A value diff of the live object cannot stand in for
-/// it, because the API server drops `omitempty` values, defaults custom
-/// resources, and lets other field managers take fields. Whether someone has
-/// edited the object since apply is answered separately by
-/// [`super::drift::check_object`]. Live `kix.run/*` annotations are kept so
-/// the record and activation stamps read as the cluster has them.
+/// The build does not change an object when a revision of the Kix cluster
+/// holds an applied hash for the object with the object hash of its build
+/// manifest ([`AppliedHashes::entry`]): Kix applied that manifest to it. The
+/// build manifest is then what Kix applied. A value diff of the live object
+/// cannot stand in for it, because the API server drops `omitempty` values,
+/// defaults custom resources, and lets other field managers take fields.
+/// That holds when the object drifted since, because drift is reported apart
+/// from the diff ([`super::drift::check_object`]). It does not hold when the
+/// live object matches an applied hash a revision holds for another build,
+/// because another deploy wrote it then.
 ///
 /// All other objects use their Kix-owned view after running [`redact_secret`]
 /// against the matching build manifest.
 pub fn kix_owned_manifests_against(
     objects: impl IntoIterator<Item = DynamicObject>,
     built: &HashMap<String, &serde_json::Value>,
+    applied: &AppliedHashes,
     manager: &FieldManager,
 ) -> Vec<serde_json::Value> {
     let by_id: HashMap<ResourceId, &serde_json::Value> = built
@@ -264,52 +266,36 @@ pub fn kix_owned_manifests_against(
         .map(|obj| {
             let mut view = unredacted_view(&obj, manager);
             crate::legacy_domain::upgrade_manifest(&mut view);
-            if let Some(manifest) = unchanged_by_build(&obj, &view, built) {
-                return manifest;
-            }
             let build = by_id.get(&ResourceId::from_value(&view)).copied();
+            if let Some(manifest) = build
+                && unchanged_by_build(&obj, manifest, applied, manager)
+            {
+                return manifest.clone();
+            }
             redact_secret(&mut view, &obj, build, manager);
             view
         })
         .collect()
 }
 
-/// Return the build manifest with `obj`'s identity hash and resource id, with
-/// the live `kix.run/*` annotations in place of the build's.
+/// Return whether Kix last wrote the build manifest `manifest` to `obj`: a
+/// revision holds an applied hash for the object with the manifest's object
+/// hash, and the live object does not match an applied hash a revision holds
+/// for another build of it.
 fn unchanged_by_build(
     obj: &DynamicObject,
-    view: &serde_json::Value,
-    built: &HashMap<String, &serde_json::Value>,
-) -> Option<serde_json::Value> {
-    let hash = obj
-        .metadata
-        .annotations
-        .as_ref()
-        .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH))?;
-    let manifest = *built.get(hash)?;
-    if ResourceId::from_value(manifest) != ResourceId::from_value(view) {
-        return None;
+    manifest: &serde_json::Value,
+    applied: &AppliedHashes,
+    manager: &FieldManager,
+) -> bool {
+    let rid = super::drift::resource_id(obj);
+    let Some(recorded) = applied.entry(&rid, &crate::manifest::hash::object_hash(manifest)) else {
+        return false;
+    };
+    match super::fieldsv1::applied_content_hash(obj, manager) {
+        Some(live) => live == recorded || !applied.holds(&rid, &live),
+        None => true,
     }
-    let mut out = manifest.clone();
-    let live_stamps: Vec<(String, serde_json::Value)> = view
-        .pointer("/metadata/annotations")
-        .and_then(serde_json::Value::as_object)
-        .into_iter()
-        .flatten()
-        .filter(|(k, _)| keys::is_kix_key(k))
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    crate::manifest::hash::strip_kix_annotations(&mut out);
-    if !live_stamps.is_empty()
-        && let Some(meta) = out.get_mut("metadata").and_then(|m| m.as_object_mut())
-        && let Some(annotations) = meta
-            .entry("annotations")
-            .or_insert_with(|| serde_json::json!({}))
-            .as_object_mut()
-    {
-        annotations.extend(live_stamps);
-    }
-    Some(out)
 }
 
 #[cfg(test)]
@@ -611,15 +597,6 @@ mod tests {
         obj
     }
 
-    fn built_cluster(spec: Value, annotations: Value) -> Value {
-        json!({
-            "apiVersion": "stackgres.io/v1",
-            "kind": "SGCluster",
-            "metadata": {"name": "postgres", "namespace": "data", "annotations": annotations},
-            "spec": spec
-        })
-    }
-
     fn diff_paths(built: &Value, compared: &Value) -> Vec<String> {
         let config = crate::manifest::diff::DiffConfig::default();
         crate::manifest::diff::engine::structural_diff(built, compared, "$", &config)
@@ -628,63 +605,98 @@ mod tests {
             .collect()
     }
 
-    /// Because identity and applied-content hashes exclude `kix.run/*`
-    /// annotations, the comparison preserves live `kix.run/*` annotations so
-    /// package moves or annotation edits remain visible.
+    /// Return the applied hashes of a Kix cluster `a` whose revision names
+    /// the object of `built` with its object hash and holds `applied` for
+    /// it.
+    fn recorded(built: &Value, applied: &str) -> AppliedHashes {
+        recorded_all(&[(built, applied.to_string())])
+    }
+
+    /// Return the applied hashes of a Kix cluster `a` with one revision for
+    /// each of `entries`, each naming the object of its build manifest with
+    /// its object hash and holding its applied hash.
+    fn recorded_all(entries: &[(&Value, String)]) -> AppliedHashes {
+        use crate::cluster::revision::{Revision, RevisionMap, RevisionObject, RevisionSpec, Slot};
+        let revisions: Vec<Revision> = entries
+            .iter()
+            .enumerate()
+            .map(|(i, (built, applied))| {
+                let object = RevisionObject::of_id(
+                    &crate::manifest::hash::object_hash(built),
+                    &ResourceId::from_value(built),
+                );
+                let mut revision = Revision::new(RevisionSpec::new(
+                    "a",
+                    Slot::Instance {
+                        namespace: "data".into(),
+                        name: format!("i{i}"),
+                        lifecycle: None,
+                    },
+                    vec![object.clone()],
+                ));
+                revision.applied.insert(object.hash, applied.clone());
+                revision
+            })
+            .collect();
+        let record = crate::cluster::activation::Record {
+            name: "r".into(),
+            phase: "Active".into(),
+            revisions: Some(Ok(RevisionMap {
+                instances: revisions
+                    .iter()
+                    .enumerate()
+                    .map(|(i, r)| (format!("data/i{i}"), r.name.clone()))
+                    .collect(),
+                cluster_level: revisions[0].name.clone(),
+                kept_orphans: None,
+            })),
+            ..Default::default()
+        };
+        AppliedHashes::of([&record], &revisions)
+    }
+
+    /// Return the applied hash Kix records for `obj` as it is now.
+    fn applied_now(obj: &DynamicObject) -> String {
+        crate::cluster::fieldsv1::applied_content_hash(
+            obj,
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
+        )
+        .unwrap()
+    }
+
+    /// The applied hash covers every `kix.run/*` annotation Kix sends, so a
+    /// changed one is drift. A retired note, such as the package an older
+    /// Kix stamped, is out of the hash and changes nothing.
     #[test]
-    fn a_changed_stamp_annotation_shows_in_the_comparison() {
+    fn a_changed_kix_annotation_is_drift_and_a_retired_note_is_not() {
         let spec = json!({"postgres": {"extensions": [{"name": "cube"}]}});
-        let built = built_cluster(
+        let manager = crate::cluster::field_manager::FieldManager::unmigrated("a");
+        let applied = applied_now(&applied_cluster(
             spec.clone(),
-            json!({keys::IDENTITY_HASH: "h-pg", keys::PACKAGE: "postgres-new"}),
-        );
-        let by_hash: HashMap<String, &Value> = [("h-pg".to_string(), &built)].into();
-
+            &[(keys::READINESS, "none")],
+            None,
+        ));
+        let edited = applied_cluster(spec.clone(), &[(keys::READINESS, "edited")], None);
+        assert!(matches!(
+            crate::cluster::drift::check_object(&edited, Some(&applied), &manager).verdict,
+            crate::cluster::drift::DriftVerdict::Drifted { .. }
+        ));
         let moved = applied_cluster(
-            spec.clone(),
-            &[
-                (keys::IDENTITY_HASH, "h-pg"),
-                (keys::PACKAGE, "postgres-old"),
-            ],
-            None,
-        );
-        let out = kix_owned_manifests_against(
-            [moved],
-            &by_hash,
-            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
-        )
-        .remove(0);
-        assert_eq!(
-            out["metadata"]["annotations"][keys::PACKAGE],
-            json!("postgres-old")
-        );
-
-        let extra = applied_cluster(
             spec,
-            &[
-                (keys::IDENTITY_HASH, "h-pg"),
-                (keys::PACKAGE, "postgres-new"),
-                (keys::LIFECYCLE, "stateful"),
-            ],
+            &[(keys::READINESS, "none"), (keys::PACKAGE, "postgres-old")],
             None,
         );
-        let out = kix_owned_manifests_against(
-            [extra],
-            &by_hash,
-            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
-        )
-        .remove(0);
         assert_eq!(
-            out["metadata"]["annotations"][keys::LIFECYCLE],
-            json!("stateful")
+            crate::cluster::drift::check_object(&moved, Some(&applied), &manager).verdict,
+            crate::cluster::drift::DriftVerdict::InSync
         );
     }
 
-    /// The build does not change an object whose identity hash names a build
-    /// manifest of the same resource, so the object compares as that
-    /// manifest. That holds when it drifted since apply too, because drift is
-    /// reported apart from the diff. Another resource carrying the hash, or a
-    /// hash the build lacks, compares as the live view.
+    /// An object compares as its build manifest when a revision holds an
+    /// applied hash for the object with the build manifest's object hash.
+    /// That holds when it drifted since apply too, because drift is reported
+    /// apart from the diff. An object another deploy wrote, another
+    /// resource, or a build that lacks the object compares as the live view.
     #[test]
     fn an_object_the_build_does_not_change_compares_as_its_build_manifest() {
         let built = json!({
@@ -696,40 +708,42 @@ mod tests {
         });
         let by_hash: HashMap<String, &Value> = [("h-pg".to_string(), &built)].into();
         let live_extensions = json!([{"name": "cube", "publisher": "com.ongres"}]);
+        let manager = crate::cluster::field_manager::FieldManager::unmigrated("a");
 
         let in_sync = webhook_defaulted_cluster(live_extensions.clone(), None);
+        let in_sync_hash = applied_now(&in_sync);
+        let recorded = recorded(&built, &in_sync_hash);
         assert_eq!(
-            kix_owned_manifests_against(
-                [in_sync],
-                &by_hash,
-                &crate::cluster::field_manager::FieldManager::unmigrated("a")
-            ),
+            kix_owned_manifests_against([in_sync], &by_hash, &recorded, &manager),
             std::slice::from_ref(&built)
         );
 
-        let drifted = webhook_defaulted_cluster(live_extensions.clone(), Some("other"));
-        let out = kix_owned_manifests_against(
-            [drifted],
-            &by_hash,
-            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
-        );
+        let mut drifted = webhook_defaulted_cluster(live_extensions.clone(), None);
+        drifted.data["spec"]["postgres"]["extensions"] = json!([{"name": "other"}]);
+        let out = kix_owned_manifests_against([drifted.clone()], &by_hash, &recorded, &manager);
         assert_eq!(out[0]["spec"], built["spec"]);
+
+        // A failed deploy wrote `drifted`, and its revision holds what it
+        // applied, so the object compares as the live view.
+        let failed_build = json!({"kind": "SGCluster", "apiVersion": "stackgres.io/v1",
+            "metadata": {"name": "postgres", "namespace": "data"}, "spec": {}});
+        let by_failed = recorded_all(&[
+            (&built, in_sync_hash.clone()),
+            (&failed_build, applied_now(&drifted)),
+        ]);
+        let out = kix_owned_manifests_against([drifted], &by_hash, &by_failed, &manager);
+        assert_eq!(
+            out[0]["spec"]["postgres"]["extensions"],
+            json!([{"name": "other"}])
+        );
 
         let mut renamed = webhook_defaulted_cluster(live_extensions.clone(), None);
         renamed.metadata.name = Some("other".into());
-        let out = kix_owned_manifests_against(
-            [renamed],
-            &by_hash,
-            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
-        );
+        let out = kix_owned_manifests_against([renamed], &by_hash, &recorded, &manager);
         assert_eq!(out[0]["spec"]["postgres"]["extensions"], live_extensions);
 
         let in_sync = webhook_defaulted_cluster(live_extensions.clone(), None);
-        let out = kix_owned_manifests_against(
-            [in_sync],
-            &HashMap::new(),
-            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
-        );
+        let out = kix_owned_manifests_against([in_sync], &HashMap::new(), &recorded, &manager);
         assert_eq!(out[0]["spec"]["postgres"]["extensions"], live_extensions);
     }
 
@@ -783,9 +797,11 @@ mod tests {
             "the case does not reproduce"
         );
         let by_hash: HashMap<String, &Value> = [("h-live".to_string(), built)].into();
+        let recorded = recorded(built, &applied_now(&live));
         let out = kix_owned_manifests_against(
             [live],
             &by_hash,
+            &recorded,
             &crate::cluster::field_manager::FieldManager::unmigrated("a"),
         )
         .remove(0);
@@ -889,9 +905,11 @@ mod tests {
             )],
         );
         let by_hash: HashMap<String, &Value> = [("h-live".to_string(), &built)].into();
+        let recorded = recorded(&built, &applied_now(&live));
         let out = kix_owned_manifests_against(
             [live],
             &by_hash,
+            &recorded,
             &crate::cluster::field_manager::FieldManager::unmigrated("a"),
         )
         .remove(0);
@@ -899,13 +917,15 @@ mod tests {
     }
 
     /// Compare `live` against a build holding only `built`, keyed by its
-    /// identity hash or by `h-new` when it has none.
+    /// identity hash or by `h-new` when it has none, with no applied hash
+    /// recorded for it.
     fn compare_with_build(live: DynamicObject, built: &Value) -> Value {
         let hash = keys::get(built, keys::IDENTITY_HASH).unwrap_or("h-new");
         let by_hash: HashMap<String, &Value> = [(hash.to_string(), built)].into();
         kix_owned_manifests_against(
             [live],
             &by_hash,
+            &AppliedHashes::default(),
             &crate::cluster::field_manager::FieldManager::unmigrated("a"),
         )
         .remove(0)
