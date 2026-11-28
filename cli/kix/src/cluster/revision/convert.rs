@@ -671,8 +671,9 @@ fn convert(
                 ),
                 objects: set.cluster_level.spec.objects.len(),
                 bytes: set.cluster_level.stored_bytes(),
-                next: "Without a package index, Kix places an object in its package instance only when the live object carries a package note. \
-                       Too many of this record's objects have none to fit in one revision. \
+                next: "Without a package index, Kix reads package membership from the live objects on the cluster \
+                       and puts cluster-level objects and objects without package annotations into one revision. \
+                       Kix stopped without converting this record. \
                        Deploy an updated build of this cluster once with Kix 0.9 to write a package index, then upgrade Kix and deploy again.",
             })));
         }
