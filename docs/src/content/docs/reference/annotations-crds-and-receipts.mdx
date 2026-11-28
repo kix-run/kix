@@ -401,12 +401,24 @@ into a single revision. If they exceed the size limit, Kix stops and tells you
 to deploy an updated build of the cluster once with Kix 0.9 (which writes a
 package index), then upgrade Kix again and redeploy.
 
-If a deployment record that Kix still consults references a revision that is
-missing from the cluster or that Kix cannot read, `kix deploy`, `kix rollback`,
-`kix gc`, and the Kix operator refuse to plan for that Kix cluster, while
-`kix status` warns and continues. If the missing or unreadable revision is
-`keptOrphans`, run `kix gc <cluster> --full-scan` to rebuild it from live
-objects owned by this Kix cluster that no other revision lists.
+If a consulted deployment record references a revision that is missing from the
+cluster or unreadable (unless a newer version of Kix wrote it), Kix reconstructs
+the revision's object list from any available build that includes it: the build
+being planned, deployed, or rolled back to, or the deployment record's build on
+this machine. Because the last-applied hashes are lost, the next apply reapplies
+the revision's objects. Deploying or rolling back to a build that includes the
+revision (or running an operator drift repair for it) restores it on the
+cluster: Kix creates a missing revision, replaces one with a corrupted `spec`,
+and clears an unreadable `status.applied`.
+
+When no available build includes the lost revision, Kix cannot tell which
+objects it listed: `kix plan`, `kix deploy`, `kix rollback`, `kix gc`, and the
+Kix operator stop before changing the cluster and name the deployment record
+whose commit to check out and redeploy, while `kix status` warns and continues.
+If the missing or unreadable revision is `keptOrphans`, run
+`kix gc <cluster> --full-scan` first to rebuild `keptOrphans` from live objects
+owned by this Kix cluster that no other revision lists (reading any other lost
+revisions from available builds on this machine), then deploy.
 
 Do not edit `PackageInstanceRevision` objects by hand.
 

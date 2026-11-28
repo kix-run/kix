@@ -61,7 +61,7 @@ pub enum Problem {
     #[error(
         "deployment record `{record}` of Kix cluster '{cluster}' references {} `{revision}`, which is missing from the cluster. {}",
         revision::KIND,
-        remedy(*kept, cluster)
+        remedy(*kept, *pending, cluster, record)
     )]
     MissingRevision {
         cluster: String,
@@ -69,11 +69,13 @@ pub enum Problem {
         revision: String,
         /// The record names it as its kept-orphans revision.
         kept: bool,
+        /// The record is queued, deploying, failed, or partly deployed.
+        pending: bool,
     },
     #[error(
         "deployment record `{record}` of Kix cluster '{cluster}' references {} `{revision}`, which Kix cannot read: {source}.{}",
         revision::KIND,
-        unreadable_remedy(source, *kept, cluster)
+        unreadable_remedy(source, *kept, *pending, cluster, record)
     )]
     UnreadableRevision {
         cluster: String,
@@ -81,6 +83,7 @@ pub enum Problem {
         revision: String,
         source: Box<revision::ReadError>,
         kept: bool,
+        pending: bool,
     },
     #[error(
         "deployment record `{record}` of Kix cluster '{cluster}' cannot be read by this version of Kix ({source}), likely because a newer version of Kix wrote it. Upgrade Kix so it can determine which objects `{record}` deploys"
@@ -106,20 +109,37 @@ pub enum Problem {
 
 /// Return what to do about a revision Kix cannot read because of `source`,
 /// with a leading space, or nothing when `source` already says it.
-fn unreadable_remedy(source: &revision::ReadError, kept: bool, cluster: &str) -> String {
+fn unreadable_remedy(
+    source: &revision::ReadError,
+    kept: bool,
+    pending: bool,
+    cluster: &str,
+    record: &str,
+) -> String {
     match source {
         revision::ReadError::Newer { .. } => String::new(),
-        _ => format!(" {}", remedy(kept, cluster)),
+        _ => format!(" {}", remedy(kept, pending, cluster, record)),
     }
 }
 
-fn remedy(kept: bool, cluster: &str) -> String {
+/// Return how to rebuild a revision that `record` names. Kix reads a lost
+/// revision from the builds at hand ([`Tenancy::with_rebuilt`]), and a
+/// deploy creates the revisions of its own build. `kix gc --full-scan`
+/// rebuilds a kept-orphans revision.
+fn remedy(kept: bool, pending: bool, cluster: &str, record: &str) -> String {
+    const AT_HAND: &str = "Kix could not reconstruct that revision from any build on this machine";
     if kept {
         format!(
             "That revision lists orphaned objects kept from earlier deploys. Run `kix gc --full-scan {cluster}` to rebuild it"
         )
+    } else if pending {
+        format!(
+            "{AT_HAND}. `{record}` is an unfinished deploy; check out the commit it was built from and run `kix deploy {cluster}` to finish that deploy and restore the revision"
+        )
     } else {
-        "Redeploying that record's build recreates it".to_string()
+        format!(
+            "{AT_HAND}. Check out the commit `{record}` was built from and run `kix deploy {cluster}` to restore the revision"
+        )
     }
 }
 
@@ -231,6 +251,9 @@ pub struct Tenancy {
     /// What the read found, kept so a plan can read the same state with the
     /// conversion a deploy would write ([`Tenancy::with_conversion`]).
     raw: Raw,
+    /// The revisions read from a build rather than from the cluster
+    /// ([`Tenancy::with_rebuilt`]).
+    rebuilt: BTreeSet<String>,
 }
 
 /// The heads, records, and revisions one read found.
@@ -342,6 +365,7 @@ impl Tenancy {
                 revisions: Ok(None),
                 heads_problem: None,
             },
+            rebuilt: BTreeSet::new(),
         }
     }
 
@@ -476,24 +500,156 @@ impl Tenancy {
             listed.readable.retain(|r| r.name != revision.name);
             listed.readable.push(revision.clone());
         }
+        self.reread(&records, listed)
+    }
+
+    /// Return this tenancy with each lost revision read from a build of
+    /// `builds` whose revisions name it. A lost revision is one a record that
+    /// a reader needs names, that this read found missing or could not read,
+    /// and that a newer Kix did not write.
+    ///
+    /// A revision's name is a hash of its `spec`, so any build whose
+    /// revisions include that name says exactly which objects the revision
+    /// lists. What Kix applied for them is lost, so the revision is read with
+    /// no applied hashes, and a plan applies its objects again. The builds
+    /// Kix reads lost revisions from are the builds at hand: a command's own
+    /// build, which it passes here, and the build of each record naming a
+    /// lost revision that this machine holds, which [`read`] adds.
+    pub fn with_rebuilt(&self, builds: &[&crate::eval::store_graph::StoreGraph]) -> Tenancy {
+        if self.lost().next().is_none() {
+            return self.clone();
+        }
+        let sets: Vec<revision::RevisionSet> = builds
+            .iter()
+            .map(|graph| revision::RevisionSet::of(&graph.cluster_name, graph))
+            .collect();
+        self.with_rebuilt_from(&sets)
+    }
+
+    /// Return this tenancy with each lost revision read from `sets`, as
+    /// [`Tenancy::with_rebuilt`] does with the revisions of its builds.
+    pub(crate) fn with_rebuilt_from(&self, sets: &[revision::RevisionSet]) -> Tenancy {
+        let lost: HashSet<&str> = self.lost().map(|(_, _, name)| name).collect();
+        let Ok(Some(listed)) = &self.raw.revisions else {
+            return self.clone();
+        };
+        let mut listed = listed.clone();
+        let mut rebuilt = self.rebuilt.clone();
+        for revision in sets.iter().flat_map(revision::RevisionSet::all) {
+            if !lost.contains(revision.name.as_str()) || rebuilt.contains(&revision.name) {
+                continue;
+            }
+            listed.unreadable.retain(|e| e.name() != revision.name);
+            listed.readable.push(Revision::new(revision.spec.clone()));
+            rebuilt.insert(revision.name.clone());
+        }
+        if rebuilt.len() == self.rebuilt.len() {
+            return self.clone();
+        }
+        let mut tenancy = self.reread(&self.raw.records, listed);
+        tenancy.rebuilt = rebuilt;
+        tenancy
+    }
+
+    /// Return this tenancy with each lost revision read from the build of a
+    /// record that names it, when this machine holds that build
+    /// ([`crate::plan::baseline::record_graph`]).
+    fn with_local_builds(self) -> Tenancy {
+        self.with_builds_of_records(|cluster, record| {
+            let hash = record.identity_hash.as_deref()?;
+            crate::plan::baseline::record_graph(None, cluster, hash, record.built_via.as_deref())
+                .unwrap_or_else(|error| {
+                    tracing::debug!(
+                        record = %record.name,
+                        %error,
+                        "could not load local build for deployment record to reconstruct lost revision"
+                    );
+                    None
+                })
+        })
+    }
+
+    /// Return this tenancy with each lost revision read from the build
+    /// `build_of` finds for the record, of the Kix cluster it is given,
+    /// that names it.
+    pub(crate) fn with_builds_of_records(
+        self,
+        build_of: impl Fn(&str, &Record) -> Option<crate::eval::store_graph::StoreGraph>,
+    ) -> Tenancy {
+        let wanted: BTreeSet<(String, String)> = self
+            .lost()
+            .map(|(cluster, record, _)| (cluster.to_string(), record.to_string()))
+            .collect();
+        if wanted.is_empty() {
+            return self;
+        }
+        let sets: Vec<revision::RevisionSet> = self
+            .raw
+            .records
+            .iter()
+            .map(|record| (cluster_label(record).unwrap_or("?"), Record::of(record)))
+            .filter(|(cluster, record)| {
+                wanted.contains(&(cluster.to_string(), record.name.clone()))
+            })
+            .filter_map(|(cluster, record)| {
+                build_of(cluster, &record).map(|graph| revision::RevisionSet::of(cluster, &graph))
+            })
+            .collect();
+        self.with_rebuilt_from(&sets)
+    }
+
+    /// Return the names of the revisions read from a build rather than from
+    /// the cluster ([`Tenancy::with_rebuilt`]).
+    pub fn rebuilt(&self) -> &BTreeSet<String> {
+        &self.rebuilt
+    }
+
+    /// Return the Kix cluster, the record, and the name of each lost
+    /// revision ([`Tenancy::with_rebuilt`]).
+    fn lost(&self) -> impl Iterator<Item = (&str, &str, &str)> {
+        self.problems.iter().filter_map(|p| match p {
+            Problem::MissingRevision {
+                cluster,
+                record,
+                revision: name,
+                ..
+            } => Some((cluster.as_str(), record.as_str(), name.as_str())),
+            Problem::UnreadableRevision {
+                cluster,
+                record,
+                revision: name,
+                source,
+                ..
+            } if !matches!(**source, revision::ReadError::Newer { .. }) => {
+                Some((cluster.as_str(), record.as_str(), name.as_str()))
+            }
+            _ => None,
+        })
+    }
+
+    /// Return the tenancy a read that found `records` and `listed` would
+    /// give, with this read's heads and the problem listing them gave.
+    fn reread(&self, records: &[DynamicObject], listed: Listed) -> Tenancy {
         let revisions = match &self.raw.revisions {
             Err(reason) => Err(reason.clone()),
             Ok(_) => Ok(Some(&listed)),
         };
-        let mut tenancy = Tenancy::from_state(&self.cluster, &self.raw.heads, &records, revisions);
+        let mut tenancy = Tenancy::from_state(&self.cluster, &self.raw.heads, records, revisions);
         tenancy.problems.extend(self.raw.heads_problem.clone());
         tenancy.raw.heads_problem = self.raw.heads_problem.clone();
+        tenancy.rebuilt = self.rebuilt.clone();
         tenancy
     }
 
     /// Return the revisions of this Kix cluster the read listed, readable
-    /// ones only, whatever record names them.
+    /// ones only, whatever record names them. A revision read from a build
+    /// ([`Tenancy::with_rebuilt`]) is not on the cluster, so it is left out.
     pub(crate) fn own_listed_revisions(&self) -> Vec<Revision> {
         match &self.raw.revisions {
             Ok(Some(listed)) => listed
                 .readable
                 .iter()
-                .filter(|r| r.spec.cluster == self.cluster)
+                .filter(|r| r.spec.cluster == self.cluster && !self.rebuilt.contains(&r.name))
                 .cloned()
                 .collect(),
             Ok(None) | Err(_) => Vec::new(),
@@ -598,12 +754,14 @@ impl Tenancy {
                         revision: name.clone(),
                         source,
                         kept,
+                        pending: is_pending(&record.phase),
                     },
                     None => Problem::MissingRevision {
                         cluster: cluster.to_string(),
                         record: record.name.clone(),
                         revision: name.clone(),
                         kept,
+                        pending: is_pending(&record.phase),
                     },
                 };
                 let Some(revision) = readable.get(name.as_str()) else {
@@ -1202,6 +1360,11 @@ pub(crate) fn settles(tenancy: &Tenancy, obj: &DynamicObject) -> bool {
 /// is read from its revisions whenever it has a map, whatever the head of
 /// its Kix cluster names, so a deploy that finishes between the reads of
 /// the heads and the records does not hide its revisions.
+///
+/// A revision a needed record names that is missing or unreadable is read
+/// from that record's build when this machine holds it
+/// ([`Tenancy::with_rebuilt`]). A command adds its own build with
+/// [`Tenancy::with_rebuilt`].
 pub async fn read(records: &OpenedRecords, cluster: &str) -> Result<Tenancy, RecordsError> {
     let Some(records) = records.records() else {
         return Ok(Tenancy::empty(cluster));
@@ -1242,7 +1405,7 @@ pub async fn read(records: &OpenedRecords, cluster: &str) -> Result<Tenancy, Rec
     };
     tenancy.problems.extend(heads_problem.clone());
     tenancy.raw.heads_problem = heads_problem;
-    Ok(tenancy)
+    Ok(tenancy.with_local_builds())
 }
 
 #[cfg(test)]

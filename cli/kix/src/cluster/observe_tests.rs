@@ -1039,11 +1039,12 @@ async fn status_judges_an_object_by_the_applied_hash_it_matches() {
     }
 }
 
-/// `kix status` reads an import marker from the revision that lists it
-/// under `imports`. Kix writes no object for it, so it is external and not
-/// missing, and the object that needs it depends on it and is not at risk.
+/// `kix status` checks the objects a deploy made. An import marker the
+/// revision lists under `imports` is not one: Kix writes no object for it,
+/// so status leaves it out instead of reporting it as present or missing,
+/// and the object that needs it is not at risk.
 #[tokio::test]
-async fn status_reads_imports_from_the_revisions() {
+async fn status_leaves_out_the_imports_a_revision_lists() {
     use crate::cluster::revision::{
         ImportedObject, Need, Revision, RevisionImport, RevisionObject, RevisionSpec, Slot,
     };
@@ -1104,10 +1105,147 @@ async fn status_reads_imports_from_the_revisions() {
     let [view] = seen.clusters.as_slice() else {
         panic!("one cluster: {:?}", seen.clusters);
     };
-    let imported = by_name(view, "secret-ref-app-creds");
-    assert_eq!(imported.presence, Presence::External);
-    assert_eq!(imported.readiness, Readiness::NotApplicable);
-    assert!(imported.content.is_none());
-    assert_eq!(by_name(view, "web").depends_on, ["h-import"]);
+    let names: Vec<&str> = view.objects.iter().map(|o| o.rid.name.as_str()).collect();
+    assert!(!names.contains(&"secret-ref-app-creds"), "{names:?}");
+    assert!(view.objects.iter().all(|o| o.hash != "h-import"));
+    assert_eq!(by_name(view, "web").presence, Presence::Present);
+    assert!(by_name(view, "web").depends_on.is_empty());
     assert!(!at_risk(view).contains("h-web"));
+}
+
+const ACTIVATIONS: char = 'a';
+const PACKAGE_INSTANCES: char = 'p';
+
+/// Return `index` with Kix's own definitions added to its cluster level, as
+/// a record of an earlier release lists them.
+fn with_own_crds(mut index: RecordPackageIndex) -> RecordPackageIndex {
+    for (c, name) in [
+        (ACTIVATIONS, keys::ACTIVATIONS_CRD),
+        (PACKAGE_INSTANCES, keys::PACKAGE_INSTANCES_CRD),
+    ] {
+        index.cluster_level.push(h(c));
+        if index.groups.is_some() {
+            index.names.insert(
+                h(c),
+                ObjectName(
+                    "CustomResourceDefinition".into(),
+                    String::new(),
+                    name.into(),
+                ),
+            );
+        }
+        if let Some(groups) = &mut index.groups {
+            groups.insert(h(c), "apiextensions.k8s.io".into());
+        }
+    }
+    index
+}
+
+/// A record of an earlier release lists Kix's own definitions, and an object
+/// of the deploy depends on one. They are on the cluster, but Kix installs
+/// them itself and no record owns them, so `kix status` lists neither of
+/// them, as missing or at all, and no object needs them.
+#[tokio::test]
+async fn kixs_own_definitions_are_not_objects_of_a_deploy() {
+    let index = with_own_crds(index(true));
+    let mut objects = live_objects();
+    objects[0] = object(
+        "v1",
+        "ConfigMap",
+        "web",
+        "web-instance",
+        INSTANCE,
+        &[h(PACKAGE_INSTANCES)],
+        true,
+    );
+    for (c, name) in [
+        (ACTIVATIONS, keys::ACTIVATIONS_CRD),
+        (PACKAGE_INSTANCES, keys::PACKAGE_INSTANCES_CRD),
+    ] {
+        objects.push(object(
+            "apiextensions.k8s.io/v1",
+            "CustomResourceDefinition",
+            "",
+            name,
+            c,
+            &[],
+            true,
+        ));
+    }
+    objects.push(record(Some(&index), ""));
+    let api = FakeApi::new(objects);
+
+    let seen = observe_fake(&api, ObserveScope::Cluster("shop")).await;
+
+    let [view] = seen.clusters.as_slice() else {
+        panic!("one cluster: {:?}", seen.clusters);
+    };
+    let kinds: Vec<&str> = view.objects.iter().map(|o| o.rid.kind.as_str()).collect();
+    assert!(!kinds.contains(&"CustomResourceDefinition"), "{kinds:?}");
+    assert_eq!(view.objects.len(), 6);
+    assert!(by_name(view, "web-instance").depends_on.is_empty());
+    assert!(view.needed_by(&h(PACKAGE_INSTANCES)).is_empty());
+}
+
+/// A record without names lists Kix's own definitions by hash, and the
+/// local store names them. `kix status` leaves them out.
+#[test]
+fn kixs_own_definitions_the_store_names_are_left_out() {
+    let objects: Vec<DynamicObject> = live_objects()
+        .into_iter()
+        .map(|o| serde_json::from_value(o).unwrap())
+        .collect();
+    let live = Live::of(&objects);
+    let record = Record {
+        identity_hash: Some(h(ROOT)),
+        package_index: Some(with_own_crds(index(false))),
+        ..Record::default()
+    };
+    let crd = |name: &str| ResourceId {
+        group: "apiextensions.k8s.io".into(),
+        kind: "CustomResourceDefinition".into(),
+        namespace: CLUSTER_SCOPED.into(),
+        name: name.into(),
+    };
+
+    let view = view(
+        "shop".into(),
+        record.clone(),
+        record.package_index.clone(),
+        &live,
+        &crate::cluster::edges::Edges::default(),
+        &Apis::default(),
+        &AppliedHashes::from_annotations(),
+        &crate::cluster::field_manager::FieldManager::unmigrated("shop"),
+        |_| {
+            HashMap::from([
+                (
+                    h(ACTIVATIONS),
+                    StoreEntry::Resource(crd(keys::ACTIVATIONS_CRD)),
+                ),
+                (
+                    h(PACKAGE_INSTANCES),
+                    StoreEntry::Resource(crd(keys::PACKAGE_INSTANCES_CRD)),
+                ),
+            ])
+        },
+    );
+
+    let missing: Vec<String> = view
+        .objects
+        .iter()
+        .filter(|o| o.presence == Presence::Missing)
+        .map(|o| o.rid.to_string())
+        .collect();
+    assert!(
+        missing
+            .iter()
+            .all(|m| !m.starts_with("CustomResourceDefinition")),
+        "{missing:?}"
+    );
+    assert!(
+        view.objects
+            .iter()
+            .all(|o| o.hash != h(ACTIVATIONS) && o.hash != h(PACKAGE_INSTANCES))
+    );
 }

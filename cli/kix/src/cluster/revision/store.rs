@@ -21,6 +21,13 @@ pub enum Created {
     Exists,
 }
 
+/// What a create found under the name it wanted.
+enum Existing {
+    Readable,
+    Gone,
+    Unreadable(Box<DynamicObject>, ReadError),
+}
+
 /// Why a read or write of revisions failed.
 #[derive(Debug, Error)]
 pub enum RevisionError {
@@ -97,8 +104,16 @@ impl Revisions {
 
     /// Create `revision` with its `spec` and its cluster label. The API
     /// server drops `status` on a create, so write applied hashes with
-    /// [`Revisions::write_applied`]. A revision of the same name counts as
-    /// created, because the name is a hash of the `spec`.
+    /// [`Revisions::write_applied`]. A readable revision of the same name
+    /// counts as created, because the name is a hash of the `spec`.
+    ///
+    /// Repair a revision of the same name that cannot be read. The name says
+    /// what its `spec` must be, and `revision` holds exactly that. One whose
+    /// `spec` does not match its name or cannot be parsed is deleted and
+    /// created again. One whose `spec` is right but whose `status.applied`
+    /// cannot be parsed keeps its `spec` and loses its applied hashes.
+    /// Refuse on a revision in a format a newer Kix wrote, which this Kix
+    /// must not change, and on one still unreadable after the repair.
     ///
     /// Refuse when the server stored a `spec` other than the one sent. The
     /// definition prunes fields it does not know, and a revision whose
@@ -106,6 +121,90 @@ impl Revisions {
     /// just created is deleted again, because a later create of the same
     /// name would find it and count the revision as created.
     pub async fn create(&self, revision: &Revision) -> Result<Created, RevisionError> {
+        if self.create_once(revision).await? == Created::Created {
+            return Ok(Created::Created);
+        }
+        match self.existing(&revision.name).await? {
+            Existing::Readable => Ok(Created::Exists),
+            Existing::Gone => self.create_checked(revision).await,
+            Existing::Unreadable(_, ReadError::UnreadableApplied { .. }) => {
+                self.clear_applied(&revision.name).await?;
+                self.require_readable(&revision.name).await?;
+                Ok(Created::Exists)
+            }
+            Existing::Unreadable(found, _) => {
+                self.delete_only(&revision.name, &found).await?;
+                self.create_checked(revision).await
+            }
+        }
+    }
+
+    /// Create `revision`, and refuse when a revision of its name that
+    /// cannot be read is there instead.
+    async fn create_checked(&self, revision: &Revision) -> Result<Created, RevisionError> {
+        let created = self.create_once(revision).await?;
+        if created == Created::Exists {
+            self.require_readable(&revision.name).await?;
+        }
+        Ok(created)
+    }
+
+    async fn require_readable(&self, name: &str) -> Result<(), RevisionError> {
+        match self.existing(name).await? {
+            Existing::Readable => Ok(()),
+            Existing::Unreadable(_, e) => Err(e.into()),
+            Existing::Gone => Err(ReadError::Malformed {
+                name: name.to_string(),
+                reason: "another process deleted it while Kix was creating it; try again".into(),
+            }
+            .into()),
+        }
+    }
+
+    /// Read the revision named `name` that a create found. Refuse on one a
+    /// newer Kix wrote.
+    async fn existing(&self, name: &str) -> Result<Existing, RevisionError> {
+        let found = self
+            .api
+            .get_opt(name)
+            .await
+            .map_err(|source| RevisionError::Api {
+                action: "read",
+                name: name.to_string(),
+                source,
+            })?;
+        let Some(found) = found else {
+            return Ok(Existing::Gone);
+        };
+        match Revision::from_object(&found) {
+            Ok(_) => Ok(Existing::Readable),
+            Err(e @ ReadError::Newer { .. }) => Err(e.into()),
+            Err(e) => Ok(Existing::Unreadable(Box::new(found), e)),
+        }
+    }
+
+    /// Delete `found`, the object named `name`, and no object created in
+    /// its place since it was read.
+    async fn delete_only(&self, name: &str, found: &DynamicObject) -> Result<(), RevisionError> {
+        let only_this = DeleteParams {
+            preconditions: Some(kube::api::Preconditions {
+                uid: found.metadata.uid.clone(),
+                resource_version: None,
+            }),
+            ..DeleteParams::default()
+        };
+        match self.api.delete(name, &only_this).await {
+            Ok(_) => Ok(()),
+            Err(kube::Error::Api(e)) if e.code == 404 => Ok(()),
+            Err(source) => Err(RevisionError::Api {
+                action: "replace",
+                name: name.to_string(),
+                source,
+            }),
+        }
+    }
+
+    async fn create_once(&self, revision: &Revision) -> Result<Created, RevisionError> {
         let obj = json!({
             "apiVersion": keys::API_VERSION,
             "kind": KIND,
@@ -123,14 +222,7 @@ impl Revisions {
                 if stored.data.get("spec") == Some(&sent) {
                     return Ok(Created::Created);
                 }
-                let only_this = DeleteParams {
-                    preconditions: Some(kube::api::Preconditions {
-                        uid: stored.metadata.uid.clone(),
-                        resource_version: None,
-                    }),
-                    ..DeleteParams::default()
-                };
-                if let Err(e) = self.api.delete(&revision.name, &only_this).await {
+                if let Err(e) = self.delete_only(&revision.name, &stored).await {
                     tracing::warn!(
                         name = %revision.name,
                         error = %e,

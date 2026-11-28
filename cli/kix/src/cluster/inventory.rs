@@ -280,6 +280,19 @@ pub async fn sweep_managed(
     records: &OpenedRecords,
     scope: SweepScope<'_>,
 ) -> Result<ManagedSweep, FetchError> {
+    sweep_managed_with(client, discovery, records, scope, &[]).await
+}
+
+/// Sweep as [`sweep_managed`] does, reading each lost revision that one of
+/// `builds` names from that build ([`Tenancy::with_rebuilt`]) before the
+/// sweep is narrowed, so the objects such a revision names are attributed.
+pub async fn sweep_managed_with(
+    client: &Client,
+    discovery: &[(ApiResource, Scope)],
+    records: &OpenedRecords,
+    scope: SweepScope<'_>,
+    builds: &[&crate::eval::store_graph::StoreGraph],
+) -> Result<ManagedSweep, FetchError> {
     let sweep = list_managed(client, discovery).await?;
     let cluster = match scope {
         SweepScope::Cluster(cluster)
@@ -289,7 +302,8 @@ pub async fn sweep_managed(
     };
     let tenancy = tenancy::read(records, cluster)
         .await
-        .map_err(FetchError::RecordsError)?;
+        .map_err(FetchError::RecordsError)?
+        .with_rebuilt(builds);
     Ok(scope_sweep(sweep, scope, tenancy))
 }
 

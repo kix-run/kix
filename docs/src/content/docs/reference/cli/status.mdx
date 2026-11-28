@@ -62,6 +62,12 @@ not in the current deploy and are still being deleted (see
 objects on the cluster, whether orphaned from an earlier deploy or created
 outside Kix. See [Objects Kix did not apply](/docs/reference/cli/diff/#objects-kix-did-not-apply).
 
+Imports and external references (`kix.mkImport`, `scope.mkCRDRef`,
+`scope.mkSecretRef`, and `scope.mkServiceRef`) represent objects managed
+outside Kix. Kix writes no marker objects for them to the cluster, so
+`kix status` does not check, list, or count them. A package that deploys no
+objects of its own, such as `kube-system/platform-dns`, does not appear.
+
 The `readiness` check reflects what Kubernetes and each object's controller
 report on the cluster. It does not test external calls from inside your pods;
 for example, a pod that starts and passes its probes counts as ready even if a
@@ -285,7 +291,7 @@ Each entry of `resources[]`:
 | `group` | The kind's API group, such as `apps`. Omitted for core `v1` kinds. |
 | `hash` | Hash recorded for the object in the deployment record: a hash of the sent manifest (`spec.objects[].hash` on its [revision](/docs/reference/annotations-crds-and-receipts/#packageinstancerevision)) for deploys made by this version of Kix, or the build identity hash for deploys made by earlier versions. |
 | `named` | `false` when Kix could not name a missing object. |
-| `present` | `yes`, `no`, `external` (an import marker for an external object not managed by Kix), `unknown` (the account may not list the kind), or `ambiguous` (no live object matches its identity hash, multiple API groups serve its kind, and an older deploy record lacks its API group; run `kix deploy <cluster> --reconcile` to record it). |
+| `present` | `yes`, `no`, `external` (an import marker that an earlier version of Kix applied to the cluster for an object managed outside Kix), `unknown` (the account may not list the kind), or `ambiguous` (no live object matches its identity hash, multiple API groups serve its kind, and an older deploy record lacks its API group; run `kix deploy <cluster> --reconcile` to record it). |
 | `drift` | `null` when the drift check did not run or the object is gone. Otherwise `verdict` (`in_sync`, `changed`, `unstamped`, or `no_fieldset`), `foreign_owners` (other field managers, each with `manager`, `operation`, `subresource`, `time`, `paths`, and `unshared_paths`; `unshared_paths` lists the paths Kix does not co-own, which can conflict on deploy), and `unrecorded_scale` (a replica count changed through `/scale` that Kubernetes recorded no owner for). |
 | `ready` | `true` or `false` (always `false` while an object is being deleted). `null` when the readiness check did not run, when the object is gone, or when the object is not being deleted and has no readiness check (such as a ConfigMap, or a Service of a type other than `LoadBalancer`). |
 | `not_ready_reason` | Why the object is not ready, such as `0/1 ready, 0/1 updated`. |

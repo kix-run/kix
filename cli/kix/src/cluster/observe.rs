@@ -33,7 +33,7 @@ use super::tenancy::Problem;
 use crate::eval::package_index::{IndexedName, ObjectName, RecordPackageIndex};
 use crate::eval::store_graph::{self, StoreEntry};
 use crate::manifest::keys;
-use crate::manifest::lifecycle::{Lifecycle, lifecycle_of_live};
+use crate::manifest::lifecycle::{self, Lifecycle, lifecycle_of_live};
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 /// Which Kix clusters [`observe`] reads.
@@ -171,9 +171,9 @@ pub struct ObjectView {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Presence {
     Present,
-    /// An import marker: a `PackageInstance` that stands for an object Kix
-    /// does not manage. A revision lists it, or an older Kix applied it and
-    /// it is on the cluster.
+    /// An import marker that an older Kix applied, which is on the cluster.
+    /// The marker is a `PackageInstance` that stands for an object Kix does
+    /// not manage. An import marker a revision lists is not checked at all.
     External,
     /// Kix can read the object's kind, and the cluster has no object with its
     /// identity hash or its name.
@@ -473,8 +473,14 @@ fn view(
         store = Some(entries);
     }
 
+    // An import marker a revision lists is not an object the deploy made,
+    // so status does not check it.
     let mut seen = HashSet::new();
-    expected.retain(|e| e.hash != root && seen.insert(e.hash.clone()));
+    expected.retain(|e| {
+        e.hash != root
+            && !index.as_ref().is_some_and(|i| i.imports.contains(&e.hash))
+            && seen.insert(e.hash.clone())
+    });
 
     // Name each object: from the index, else from its live object, else from
     // the local store.
@@ -527,13 +533,8 @@ fn view(
                     .contains(&(rid.group.clone(), rid.kind.clone())),
                 None => !apis.unreadable.is_empty(),
             };
-            // Kix writes no object for an import marker a revision lists, so
-            // nothing on the cluster is read for it.
-            let import = index.as_ref().is_some_and(|i| i.imports.contains(&e.hash));
-            let obj = obj.filter(|_| !import);
             let deleting = obj.and_then(Deleting::of);
             let (presence, content, readiness, depends_on) = match obj {
-                None if import => (Presence::External, None, Readiness::NotApplicable, vec![]),
                 Some(obj) => {
                     let marker = lifecycle_of_live(obj) == Lifecycle::Marker;
                     let recorded = name.as_ref().is_some_and(|rid| edges.records(rid));
@@ -586,6 +587,19 @@ fn view(
             }
         })
         .collect();
+
+    // A record of an earlier release can name the definitions Kix installs
+    // itself, and the local store names them for a record whose index has no
+    // names. No record owns them now, and the sweep leaves them out.
+    let own_crds: HashSet<String> = objects
+        .iter()
+        .filter(|o| o.named && lifecycle::is_kix_crd_named(o.rid.group_kind(), Some(&o.rid.name)))
+        .map(|o| o.hash.clone())
+        .collect();
+    objects.retain(|o| !own_crds.contains(&o.hash));
+    for object in &mut objects {
+        object.depends_on.retain(|d| !own_crds.contains(d));
+    }
 
     // An object on the cluster depends on each object of the deploy that
     // `edges` names for it.

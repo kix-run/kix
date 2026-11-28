@@ -66,7 +66,7 @@ use kix::cluster::inventory;
 use kix::cluster::prune_guard::{self, Pruned, Removal, Step};
 use kix::cluster::readiness::{self, DeletePath};
 use kix::cluster::revision::{
-    self, Revision, RevisionImport, RevisionObject, RevisionSpec, Revisions, Slot, keep,
+    Revision, RevisionImport, RevisionObject, RevisionSpec, Revisions, Slot, keep,
 };
 use kix::cluster::tenancy::{self, Kept, Source, Tenancy};
 use kix::eval::store;
@@ -795,6 +795,7 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     ctx.runtime()?.block_on(run_hard_async(
         args,
         &global,
+        &graph,
         &expected_ids,
         &in_build,
         &cluster_name,
@@ -808,6 +809,7 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
 async fn run_hard_async(
     args: &GcArgs,
     global: &crate::cli::GlobalArgs,
+    graph: &StoreGraph,
     expected_ids: &HashSet<String>,
     in_build: &HashSet<ResourceId>,
     cluster_name: &str,
@@ -850,11 +852,14 @@ async fn run_hard_async(
     );
     // Scope the sweep to this Kix cluster so another Kix cluster's resources on
     // the same Kubernetes cluster are not flagged as garbage.
-    let sweep = inventory::sweep_managed(
+    // A lost revision the build compared with names is read from it, so a
+    // lost kept-orphans list can be rebuilt beside lost built revisions.
+    let sweep = inventory::sweep_managed_with(
         &client,
         &discovery,
         &records,
         inventory::SweepScope::Cluster(cluster_name),
+        &[graph],
     )
     .await
     .map_err(|e| miette!("failed to fetch live resources: {e}"))?;
@@ -863,6 +868,7 @@ async fn run_hard_async(
         return rebuild_kept_list(
             args,
             global,
+            graph,
             &client,
             &records,
             &sweep,
@@ -1043,6 +1049,7 @@ async fn run_hard_async(
 async fn rebuild_kept_list(
     args: &GcArgs,
     global: &crate::cli::GlobalArgs,
+    graph: &StoreGraph,
     client: &kube::Client,
     records: &OpenedRecords,
     sweep: &inventory::ManagedSweep,
@@ -1059,7 +1066,7 @@ async fn rebuild_kept_list(
         .first()
         .map(ToString::to_string)
         .unwrap_or_default();
-    let objects = kept_to_rebuild(sweep, in_build);
+    let objects = keep::kept_to_rebuild(sweep, in_build);
     crate::say!(
         "{} {problem}. Rebuilding the kept-orphans list from {} live object(s) applied by this Kix cluster that are absent from {compared} and from this cluster's other revisions.",
         output::yellow("Note:"),
@@ -1084,6 +1091,7 @@ async fn rebuild_kept_list(
     Box::pin(run_hard_async(
         args,
         global,
+        graph,
         expected_ids,
         in_build,
         cluster_name,
@@ -1092,32 +1100,6 @@ async fn rebuild_kept_list(
         compared,
     ))
     .await
-}
-
-/// Return what a rebuilt kept-orphans list names: each labelled, prunable
-/// live object of `sweep` that the Kix cluster applied, that no other
-/// revision of it names, and that the build compared with, whose objects
-/// are `in_build`, lacks. Nothing says which build wanted each object, so
-/// each gets the hash [`revision::REBUILT`], which no object hash equals,
-/// and no edges.
-fn kept_to_rebuild(
-    sweep: &inventory::ManagedSweep,
-    in_build: &HashSet<ResourceId>,
-) -> Vec<RevisionObject> {
-    let tenancy = &sweep.tenancy;
-    let mut objects: Vec<RevisionObject> = sweep
-        .managed
-        .iter()
-        .chain(&sweep.unattributed)
-        .filter(|obj| lifecycle::lifecycle_of_live(obj).prunable())
-        .filter(|obj| tenancy.unlisted_own(obj))
-        .map(kix::cluster::drift::resource_id)
-        .filter(|rid| !in_build.contains(rid))
-        .map(|rid| RevisionObject::of_id(revision::REBUILT, &rid))
-        .collect();
-    objects.sort();
-    objects.dedup();
-    objects
 }
 
 /// Name a kept-orphans revision of `objects` on record `record` of Kix

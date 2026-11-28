@@ -303,6 +303,84 @@ async fn a_read_refuses_a_revision_a_newer_kix_wrote() {
     }
 }
 
+/// A create that finds a revision of its name whose `spec` no longer
+/// matches the name replaces it, because the name says what the `spec`
+/// must be. The replacement has no applied hashes.
+#[tokio::test]
+async fn create_replaces_a_revision_whose_spec_does_not_match_its_name() {
+    let api = FakeApi::new([]);
+    let store = Revisions::new(&api.client());
+    let rev = revision(CLUSTER, "apps/web");
+    store.create(&rev).await.unwrap();
+    store
+        .write_applied(
+            &rev.name,
+            &[("h".to_string(), "a".to_string())].into_iter().collect(),
+        )
+        .await
+        .unwrap();
+    api.patch_object(KIND, &rev.name, |o| {
+        o["spec"]["objects"][1]["name"] = json!("changed");
+    });
+    assert_eq!(store.create(&rev).await.unwrap(), Created::Created);
+    assert_eq!(store.get(&rev.name).await.unwrap(), Some(rev.clone()));
+
+    api.patch_object(KIND, &rev.name, |o| {
+        o["spec"]["objects"] = json!("not a list");
+    });
+    assert_eq!(store.create(&rev).await.unwrap(), Created::Created);
+    assert_eq!(store.get(&rev.name).await.unwrap(), Some(rev));
+}
+
+/// A create leaves a revision of its name that a newer Kix wrote, and says
+/// so, even when this Kix cannot parse the rest of its `spec`.
+#[tokio::test]
+async fn create_keeps_a_revision_a_newer_kix_wrote() {
+    let api = FakeApi::new([]);
+    let store = Revisions::new(&api.client());
+    let rev = revision(CLUSTER, "apps/web");
+    store.create(&rev).await.unwrap();
+    api.patch_object(KIND, &rev.name, |o| {
+        o["spec"]["format"] = json!(FORMAT + 1);
+        o["spec"]["slot"] = json!({ "kind": "SomethingNew" });
+    });
+    assert!(matches!(
+        store.create(&rev).await,
+        Err(RevisionError::Read(ReadError::Newer { .. }))
+    ));
+    let kept = api.object(KIND, &rev.name).unwrap();
+    assert_eq!(kept["spec"]["format"], json!(FORMAT + 1));
+    assert_eq!(kept["spec"]["slot"]["kind"], json!("SomethingNew"));
+}
+
+/// A revision whose `spec` matches its name but whose `status.applied`
+/// cannot be parsed keeps its `spec`. A create clears the applied hashes
+/// instead of deleting it.
+#[tokio::test]
+async fn create_clears_applied_hashes_it_cannot_parse() {
+    let api = FakeApi::new([]);
+    let store = Revisions::new(&api.client());
+    let rev = revision(CLUSTER, "apps/web");
+    store.create(&rev).await.unwrap();
+    api.patch_object(KIND, &rev.name, |o| {
+        o["status"] = json!({ "applied": ["not", "a", "map"] });
+    });
+    assert!(matches!(
+        store.get(&rev.name).await,
+        Err(RevisionError::Read(ReadError::UnreadableApplied { .. }))
+    ));
+    let before = api.requests().len();
+    assert_eq!(store.create(&rev).await.unwrap(), Created::Exists);
+    assert!(
+        api.requests()[before..]
+            .iter()
+            .all(|r| !r.starts_with("DELETE")),
+        "{:?}",
+        &api.requests()[before..]
+    );
+    assert_eq!(store.get(&rev.name).await.unwrap(), Some(rev));
+}
+
 #[tokio::test]
 async fn list_returns_only_the_named_clusters_revisions() {
     let api = FakeApi::new([]);

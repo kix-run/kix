@@ -1,0 +1,3 @@
+# 2026-11-28 · `cli/kix/src/cluster/revision/store.rs` · Repairing a revision deletes one that reads as broken only because the CRD prunes a field.
+
+If the installed `PackageInstanceRevision` CRD drops a field this Kix writes, a good stored revision reads as `NameMismatch`. `Revisions::create` deletes it, creates it again, sees the server store a different `spec`, deletes that, and returns `StoredDifferently`. The deploy stops with the right message, but the original object and its applied hashes are gone, so after the CRD is fixed the next deploy applies those objects again. It needs a CRD edited outside Kix, so it is rare. A fix would check the CRD before the repair delete.
