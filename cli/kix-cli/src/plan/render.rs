@@ -242,6 +242,16 @@ fn reason_lines(writes: &[&ObjectWrite]) -> Vec<String> {
             output::yellow("↻"),
         ));
     }
+    let (n, names) = records(|r| match r {
+        WriteReason::UnfinishedDeploy { record } => Some(record),
+        _ => None,
+    });
+    if n > 0 {
+        lines.push(format!(
+            "{} {n} object(s) may have been written by deployment(s) {names} that did not finish, so this deploy reapplies them from the current build",
+            output::yellow("↻"),
+        ));
+    }
     let n = count(|r| matches!(r, WriteReason::AppliedHashMissing));
     if n > 0 {
         lines.push(format!(

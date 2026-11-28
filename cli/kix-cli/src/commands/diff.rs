@@ -12,7 +12,7 @@ use kix::cluster::apply::ApplyError;
 use kix::cluster::binding::Connection;
 use kix::cluster::drift::{self, DriftReport, DriftVerdict};
 use kix::cluster::field_manager::FieldManager;
-use kix::cluster::migrate::{MigrationPair, detect_migration_pairs};
+use kix::cluster::migrate::{Instances, MigrationPair, detect_migration_pairs};
 use kix::cluster::owned_view;
 use kix::cluster::revision::AppliedHashes;
 use kix::cluster::scheduler::PrunePolicy;
@@ -291,9 +291,15 @@ fn set_spinner(spinner: &Option<indicatif::ProgressBar>, msg: &str) {
 fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detail) -> DiffResult {
     let new_manifests: Vec<Value> = new.resources.values().map(|n| n.manifest.clone()).collect();
     let old_manifests: Vec<Value> = old.resources.values().map(|n| n.manifest.clone()).collect();
-    // Live objects that predate the lifecycle stamp carry no `kix.run/lifecycle`,
-    // so `detect_migration_pairs` produces no pairs for them.
-    let migration_pairs = detect_migration_pairs(&new_manifests, &old_manifests);
+    // A live object carries no instance notes unless an older Kix wrote it,
+    // so its instance and lifecycle come from the current record's
+    // revisions.
+    let none = Instances::default();
+    let instances = match side {
+        OldSide::Live(live) => &live.instances,
+        OldSide::Build | OldSide::Manifests => &none,
+    };
+    let migration_pairs = detect_migration_pairs(&new_manifests, &old_manifests, instances);
     // Against the cluster, compare what a deploy sends, as `kix plan` does.
     // Between two builds, a change of dependencies alone still shows.
     let mut packages = match side {
@@ -473,6 +479,9 @@ struct LiveSide {
     /// The package index of the current record's build: from its
     /// revisions, or its stored index ([`kix::cluster::tenancy::Tenancy::index_of`]).
     deployed: Option<RecordPackageIndex>,
+    /// The package instance and lifecycle the current record's revisions
+    /// give each object, which a migration pair reads for a live object.
+    instances: Instances,
     /// Full live objects including `managedFields`, used to attribute drift to
     /// field managers.
     managed: HashMap<ResourceId, Value>,
@@ -506,9 +515,12 @@ impl LiveSide {
     /// them only as orphans. Without the deployed record's package index,
     /// every orphan stays in `manifests`.
     fn set_aside_left_earlier(&mut self, new: &StoreGraph, deployed: Option<&RecordPackageIndex>) {
+        // A build does not make its import markers, so a marker an older Kix
+        // applied left the build, as a deploy finds.
         let in_build: HashSet<ResourceId> = new
             .resources
             .values()
+            .filter(|r| !lifecycle::is_marker(&r.manifest))
             .map(|r| ResourceId::from_value(&r.manifest))
             .collect();
         let is_orphan = |m: &Value| {
@@ -618,6 +630,7 @@ async fn fetch_live_manifests(
     let in_build: HashSet<ResourceId> = new_graph
         .resources
         .values()
+        .filter(|r| !lifecycle::is_marker(&r.manifest))
         .map(|r| ResourceId::from_value(&r.manifest))
         .collect();
     let mut namespaceless = kix::cluster::apply::namespaceless(&discovery, &in_build);
@@ -656,10 +669,16 @@ async fn fetch_live_manifests(
                 .is_some_and(|c| c.metadata.name == obj.metadata.name)
     });
 
-    let deployed = current
+    let current_record = current.as_ref().map(activation::Record::of);
+    let deployed = current_record
         .as_ref()
-        .map(activation::Record::of)
-        .and_then(|record| tenancy.index_of(&record));
+        .and_then(|record| tenancy.index_of(record));
+    let instances = match current_record.as_ref().and_then(|r| r.revisions.as_ref()) {
+        Some(Ok(map)) => {
+            Instances::of_revisions(map.instances.values().filter_map(|n| tenancy.revision(n)))
+        }
+        _ => Instances::default(),
+    };
     let manager = tenancy.manager_of(&new_graph.cluster_name);
     let preferred = current.as_ref().and_then(|c| c.metadata.name.clone());
     let (drifted, drift_unchecked) =
@@ -687,13 +706,19 @@ async fn fetch_live_manifests(
                 .collect()
         })
         .unwrap_or_default();
-    let manifests = owned_view::kix_owned_manifests_against(compared, &built, &applied, &manager);
+    let mut manifests =
+        owned_view::kix_owned_manifests_against(compared, &built, &applied, &manager);
+    if let Some(index) = &deployed {
+        let imports = owned_view::imports_as_built(index, &built, &manifests);
+        manifests.extend(imports);
+    }
 
     Ok(LiveSide {
         manifests,
         namespaceless,
         current,
         deployed,
+        instances,
         managed,
         manager,
         drifted,
@@ -960,6 +985,7 @@ mod tests {
             namespaceless: Vec::new(),
             current: None,
             deployed: None,
+            instances: Instances::default(),
             managed: HashMap::new(),
             manager: FieldManager::unmigrated("a"),
             drifted,
@@ -1025,6 +1051,7 @@ mod tests {
             cluster_level: vec!["d".repeat(32), "r".repeat(32)],
             names: Default::default(),
             groups: None,
+            imports: Default::default(),
         };
         let left = manifest("Job", "bootstrap-old", &"j".repeat(32));
         let removed = manifest("ConfigMap", "removed", &"r".repeat(32));
@@ -1033,6 +1060,7 @@ mod tests {
             namespaceless: Vec::new(),
             current: None,
             deployed: None,
+            instances: Instances::default(),
             managed: HashMap::new(),
             manager: FieldManager::unmigrated("a"),
             drifted: Vec::new(),

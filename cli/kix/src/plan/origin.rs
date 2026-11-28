@@ -33,8 +33,9 @@ pub enum ChangeLabel {
     /// applies this object, so it puts the build's value back.
     RevertsDrift,
     /// The live object differs from the deployed build here, and the deploy
-    /// leaves this object alone because its identity hash did not change, so
-    /// the difference stays. `kix deploy --reconcile` applies it.
+    /// leaves this object alone because the fields Kix owns on it still
+    /// match what Kix last applied, so the difference stays. `kix deploy
+    /// --reconcile` applies it.
     DriftKept,
     /// The live object differs from the deployed build here because a deploy
     /// that did not finish wrote it: the live value is the one that deploy's

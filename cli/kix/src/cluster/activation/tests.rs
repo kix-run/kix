@@ -995,6 +995,7 @@ mod revision_map_tests {
             cluster_level: Vec::new(),
             names: BTreeMap::new(),
             groups: None,
+            imports: Default::default(),
         };
         let mut old = record("c-old");
         old["status"] = json!({

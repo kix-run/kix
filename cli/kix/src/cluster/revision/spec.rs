@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 use crate::eval::package_index::InstanceGroups;
 use crate::eval::store_graph::{StoreGraph, store_hash};
 use crate::manifest::keys;
+use crate::manifest::lifecycle;
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 /// Hex digits of the spec's hash in a revision's name. It is as long as a
@@ -224,6 +225,89 @@ impl RevisionObject {
     }
 }
 
+/// One import marker of a revision: an object of the build that stands for
+/// something Kix does not make, such as a CRD another tool installs. Kix
+/// writes no object for it. Edges pass through it, so a custom resource that
+/// needs a CRD marker still orders after the operator the marker needs.
+///
+/// A marker is always a `PackageInstance` of the group `kix.run`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RevisionImport {
+    /// `None` for a marker with no namespace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    pub name: String,
+    /// The object hash of the marker's manifest, as for a
+    /// [`RevisionObject`].
+    pub hash: String,
+    /// What the marker stands for, or `None` for a marker that names no
+    /// target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<ImportedObject>,
+    /// The objects the marker depends on, sorted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub needs: Vec<Need>,
+}
+
+/// The object an import marker stands for.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ImportedObject {
+    #[serde(rename = "apiVersion")]
+    pub api_version: String,
+    pub kind: String,
+    /// `None` for a cluster-scoped object.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    pub name: String,
+}
+
+impl ImportedObject {
+    /// Return the group, kind, namespace, and name of the object.
+    pub fn resource_id(&self) -> ResourceId {
+        ResourceId::new(
+            crate::manifest::types::api_group(&self.api_version),
+            &self.kind,
+            self.namespace.as_deref().unwrap_or(CLUSTER_SCOPED),
+            &self.name,
+        )
+    }
+}
+
+impl RevisionImport {
+    /// Return the import the built marker `manifest` describes, with its
+    /// object hash and `needs`. A marker whose target cannot be read records
+    /// no target: planning refuses such a build before it writes anything.
+    pub fn of_marker(manifest: &Value, needs: Vec<Need>) -> RevisionImport {
+        let rid = ResourceId::from_value(manifest);
+        let target = crate::cluster::readiness::import_target_from_manifest(manifest)
+            .ok()
+            .flatten()
+            .map(|t| ImportedObject {
+                api_version: t.api_version,
+                kind: t.kind,
+                namespace: t.namespace,
+                name: t.name,
+            });
+        RevisionImport {
+            namespace: (rid.namespace != CLUSTER_SCOPED).then_some(rid.namespace),
+            name: rid.name,
+            hash: crate::manifest::hash::object_hash(manifest),
+            target,
+            needs,
+        }
+    }
+
+    /// Return the marker's group, kind, namespace, and name.
+    pub fn resource_id(&self) -> ResourceId {
+        ResourceId::new(
+            keys::GROUP,
+            crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND,
+            self.namespace.as_deref().unwrap_or(CLUSTER_SCOPED),
+            &self.name,
+        )
+    }
+}
+
 /// Which part of a Kix cluster a revision covers.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -256,7 +340,11 @@ pub struct RevisionSpec {
     pub cluster: String,
     pub slot: Slot,
     /// Sorted, so two machines with the same build write the same bytes.
+    /// Import markers are not among them.
     pub objects: Vec<RevisionObject>,
+    /// The instance's import markers, sorted. Empty before format 2.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub imports: Vec<RevisionImport>,
 }
 
 impl RevisionSpec {
@@ -287,7 +375,30 @@ impl RevisionSpec {
             cluster: cluster.to_string(),
             slot,
             objects,
+            imports: Vec::new(),
         }
+    }
+
+    /// Return this spec with `imports`, sorted and once each.
+    pub fn with_imports(mut self, imports: impl IntoIterator<Item = RevisionImport>) -> Self {
+        self.imports = imports.into_iter().collect();
+        self.imports.sort();
+        self.imports.dedup();
+        self
+    }
+
+    /// Return this spec with the markers of `imports` that its objects
+    /// depend on, directly or through other markers. A kept-orphans list
+    /// that keeps some of its objects keeps the markers they still need.
+    pub fn with_imports_reached(self, imports: impl IntoIterator<Item = RevisionImport>) -> Self {
+        let all = Revision::new(self.clone().with_imports(imports));
+        let rids: Vec<ResourceId> = self
+            .objects
+            .iter()
+            .map(RevisionObject::resource_id)
+            .collect();
+        let reached = crate::cluster::edges::Edges::of_revisions([&all]).imports_reached(&rids);
+        self.with_imports(reached)
     }
 
     /// Return whether the revision records each object's edges.
@@ -305,6 +416,7 @@ impl RevisionSpec {
 pub fn name_of(spec: &RevisionSpec) -> String {
     let mut sorted = spec.clone();
     sorted.objects.sort();
+    sorted.imports.sort();
     let bytes = serde_json::to_vec(&sorted).expect("a revision spec serializes");
     let hash = &format!("{:x}", Sha256::digest(&bytes))[..HASH_LEN];
     let room = MAX_NAME - HASH_LEN - 1;
@@ -441,50 +553,53 @@ impl RevisionSet {
         // names no object the build makes: the build leaves Kix's own CRDs
         // out, and Kix installs them before a deploy writes anything. The
         // graph a deploy orders by drops such an entry too.
+        let needs =
+            |manifest: &Value| Need::of_depends_on(manifest, |hash| by_hash.get(hash).cloned());
         let object = |path: &Path| {
-            graph.resources.get(path).map(|node| {
+            let node = graph.resources.get(path)?;
+            (!lifecycle::is_marker(&node.manifest)).then(|| {
                 RevisionObject::with_hash(
                     crate::manifest::hash::object_hash(&node.manifest),
                     &node.manifest,
                 )
-                .with_needs(Need::of_depends_on(&node.manifest, |hash| {
-                    by_hash.get(hash).cloned()
-                }))
+                .with_needs(needs(&node.manifest))
             })
+        };
+        let import = |path: &Path| {
+            let node = graph.resources.get(path)?;
+            lifecycle::is_marker(&node.manifest)
+                .then(|| RevisionImport::of_marker(&node.manifest, needs(&node.manifest)))
+        };
+        let revision = |slot: Slot, paths: &[&Path]| {
+            let objects = paths.iter().filter_map(|p| object(p)).collect();
+            let imports: Vec<RevisionImport> = paths.iter().filter_map(|p| import(p)).collect();
+            Revision::new(RevisionSpec::new(cluster, slot, objects).with_imports(imports))
         };
         let instances = groups
             .instances
             .iter()
             .map(|(key, group)| {
                 let node = &graph.packages[group.instance];
-                let objects = std::iter::once(group.instance)
+                let paths: Vec<&Path> = std::iter::once(group.instance)
                     .chain(group.resources.iter().map(|p| p.as_path()))
-                    .filter_map(object)
                     .collect();
                 let slot = Slot::Instance {
                     namespace: node.namespace.clone(),
                     name: node.instance_name.clone(),
                     lifecycle: node.lifecycle.clone(),
                 };
-                (
-                    key.clone(),
-                    Revision::new(RevisionSpec::new(cluster, slot, objects)),
-                )
+                (key.clone(), revision(slot, &paths))
             })
             .collect();
-        let cluster_objects = groups
+        let cluster_paths: Vec<&Path> = groups
             .cluster_level
             .iter()
-            .filter(|p| **p != graph.activation_path)
-            .filter_map(|p| object(p))
+            .copied()
+            .filter(|p| *p != graph.activation_path)
             .collect();
         RevisionSet {
             instances,
-            cluster_level: Revision::new(RevisionSpec::new(
-                cluster,
-                Slot::ClusterLevel,
-                cluster_objects,
-            )),
+            cluster_level: revision(Slot::ClusterLevel, &cluster_paths),
         }
     }
 

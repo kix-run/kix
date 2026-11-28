@@ -36,6 +36,26 @@ pub(crate) fn definition() -> Value {
             "needs": { "type": "array", "items": need },
         },
     });
+    let import = json!({
+        "type": "object",
+        "required": ["hash", "name"],
+        "properties": {
+            "namespace": { "type": "string" },
+            "name": { "type": "string" },
+            "hash": { "type": "string" },
+            "target": {
+                "type": "object",
+                "required": ["apiVersion", "kind", "name"],
+                "properties": {
+                    "apiVersion": { "type": "string" },
+                    "kind": { "type": "string" },
+                    "namespace": { "type": "string" },
+                    "name": { "type": "string" },
+                },
+            },
+            "needs": { "type": "array", "items": need },
+        },
+    });
     let slot = json!({
         "type": "object",
         "required": ["kind"],
@@ -81,6 +101,7 @@ pub(crate) fn definition() -> Value {
                                 "cluster": { "type": "string" },
                                 "slot": slot,
                                 "objects": { "type": "array", "items": object },
+                                "imports": { "type": "array", "items": import },
                             },
                         },
                         "status": {

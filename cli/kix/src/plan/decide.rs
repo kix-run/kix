@@ -57,6 +57,14 @@
 //! could not read this Kix cluster's records or revisions gives an error, so
 //! the plan fails closed.
 //!
+//! An import marker stands for an object Kix does not make, such as a CRD
+//! another tool installs. It is a node of the build's graph, and Kix writes
+//! nothing for it: [`decide`] leaves it unchanged without reading the
+//! cluster, and it is not one of the objects a build makes ([`made_by`]). A
+//! marker an older Kix applied is therefore an object that left the build,
+//! like any other. The scheduler checks that the marker's target exists
+//! when something the deploy writes depends on it.
+//!
 //! [`decide`] also lists each object that needs the migration write
 //! ([`crate::cluster::migration_write`]). It judges drift on such an object
 //! as the write leaves it: the entry under `kix` that the write moves to
@@ -474,6 +482,15 @@ impl Ledger {
     }
 }
 
+/// Return the objects the build manifests `manifests` make: every one but
+/// the import markers, which stand for objects Kix does not make.
+pub(crate) fn made_by(manifests: &[Value]) -> impl Iterator<Item = ResourceId> + '_ {
+    manifests
+        .iter()
+        .filter(|m| !lifecycle::is_marker(m))
+        .map(ResourceId::from_value)
+}
+
 /// Return the build hash the live Activation record `obj` carries.
 fn record_hash(obj: &kube::api::DynamicObject) -> Option<&str> {
     obj.metadata
@@ -485,10 +502,11 @@ fn record_hash(obj: &kube::api::DynamicObject) -> Option<&str> {
 /// Decide what a deploy does to each object of `new` and which live objects
 /// it takes in as orphans.
 ///
-/// `new` holds the objects the runner applies. `made` holds every object of
-/// the new build, which can be more: the operator leaves CRDs and the
+/// `new` holds the objects the runner applies, and the import markers of
+/// the build, which [`decide`] leaves unchanged without reading them. `made`
+/// holds every object of the new build ([`made_by`]), which can be more: the operator leaves CRDs and the
 /// Activation record out of `new`, and they are still not orphans. `live`
-/// holds the live objects of `new` and of every object the ledger names
+/// holds the live objects of `made` and of every object the ledger names
 /// that `made` lacks ([`Ledger::candidates`]). With `reconcile`, an
 /// unchanged object is written again. `forces` says whether the runner
 /// applies the objects that revert drift with force, as the CLI does and
@@ -508,6 +526,14 @@ pub(crate) fn decide(
     let mut forbidden: BTreeSet<String> = BTreeSet::new();
     for manifest in new {
         let id = ResourceId::from_value(manifest);
+        if lifecycle::is_marker(manifest) {
+            out.decisions.push(Decision {
+                action: ChangeAction::Skip(id.clone()),
+                id,
+                label: Label::Unchanged,
+            });
+            continue;
+        }
         let (action, label) = match live.get(&id) {
             Live::Unread => {
                 forbidden.extend(live.forbidden_resource(&id).map(str::to_string));

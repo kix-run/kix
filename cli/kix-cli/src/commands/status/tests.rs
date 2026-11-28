@@ -137,7 +137,7 @@ fn object(
 ) -> ObjectView {
     let present = matches!(presence, Presence::Present | Presence::External);
     ObjectView {
-        identity_hash: h(c),
+        hash: h(c),
         rid: ResourceId {
             group: String::new(),
             kind: kind.into(),
@@ -405,7 +405,7 @@ fn an_unknown_package_names_the_closest_of_many() {
         .enumerate()
     {
         let mut o = template.clone();
-        o.identity_hash = format!("{i:032}");
+        o.hash = format!("{i:032}");
         o.rid.name = name.to_string();
         o.package = Some(format!("apps/{name}"));
         seen.clusters[0].objects.push(o);

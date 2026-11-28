@@ -1017,6 +1017,20 @@ impl Tenancy {
         }
     }
 
+    /// Return the import markers the kept-orphans revision of `active`
+    /// lists, or none when it names no such revision or this read did not
+    /// find it.
+    pub fn kept_imports(&self, active: &Record) -> &[crate::cluster::revision::RevisionImport] {
+        match &active.revisions {
+            Some(Ok(map)) => map
+                .kept_orphans
+                .as_deref()
+                .and_then(|name| self.claims.revisions.get(name))
+                .map_or(&[], |r| r.spec.imports.as_slice()),
+            _ => &[],
+        }
+    }
+
     /// Return every revision that a needed record of a Kix cluster read
     /// from revisions names and that this read found.
     pub fn revisions(&self) -> impl Iterator<Item = &Revision> {

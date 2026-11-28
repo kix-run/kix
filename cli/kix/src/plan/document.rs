@@ -630,6 +630,10 @@ pub enum WriteReason {
     /// the values agree it adds this Kix cluster's own entry, and when they
     /// differ Kubernetes refuses it and the deploy stops.
     HeldByOtherCluster { changed_by: Vec<DriftOwner> },
+    /// A deploy of this Kix cluster that did not finish may have written the
+    /// object: the stopped deploy `record` lists it, and Kix has no record
+    /// of what that deploy applied. The deploy applies the build again.
+    UnfinishedDeploy { record: String },
 }
 
 /// A field manager other than Kix that owns fields Kix applied.
@@ -802,8 +806,8 @@ pub struct DriftChange {
     /// Kubernetes recorded no other owner.
     pub managers: Vec<String>,
     /// The deploy applies this object and puts the deployed value back.
-    /// False when it leaves the object alone (its identity hash did not
-    /// change).
+    /// False when it leaves the object alone, because the fields Kix owns on
+    /// it still match what Kix last applied.
     pub reverted: bool,
 }
 

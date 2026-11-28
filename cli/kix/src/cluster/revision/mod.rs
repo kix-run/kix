@@ -6,8 +6,11 @@
 //!   name of each object, and the objects it depends on by name (`needs`).
 //!   For an instance it also holds the lifecycle of the instance's package.
 //!   Kubernetes refuses a change to `spec`.
-//! - Format 1, which an earlier build of Kix wrote, has no `needs` and no
-//!   lifecycle. Kix still reads it, and takes the edges of an object that
+//! - An instance's import markers are listed apart from its objects, in
+//!   `imports`, with what each stands for and its own `needs`. Kix writes no
+//!   object for a marker.
+//! - Format 1, which an earlier build of Kix wrote, has no `needs`, no
+//!   `imports`, and no lifecycle. Its objects include the markers. Kix still reads it, and takes the edges of an object that
 //!   only a format 1 revision names from the object's `kix.run/depends-on`
 //!   annotation ([`crate::cluster::edges`]).
 //! - The name is the Kix cluster's name and a hash of `spec`
@@ -48,8 +51,8 @@ pub use applied::AppliedHashes;
 pub use convert::Conversion;
 pub use map::{RevisionMap, UnreadableMap};
 pub use spec::{
-    AppliedKey, FORMAT, MAX_BYTES, Need, REBUILT, ReadError, Revision, RevisionObject, RevisionSet,
-    RevisionSpec, Slot, TooLarge, name_of,
+    AppliedKey, FORMAT, ImportedObject, MAX_BYTES, Need, REBUILT, ReadError, Revision,
+    RevisionImport, RevisionObject, RevisionSet, RevisionSpec, Slot, TooLarge, name_of,
 };
 pub use store::{Created, Listed, RevisionError, Revisions};
 

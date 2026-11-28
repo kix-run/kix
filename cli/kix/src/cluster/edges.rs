@@ -12,15 +12,20 @@
 //!   records the same edges by name in each object's `needs`, so they
 //!   describe a live object without reading anything on it.
 //!
+//! An import marker is a node of the edges like any object, with its own
+//! needs, and it also names the object it stands for ([`Edges::import`]).
+//! Kix writes no object for a marker, so a set of live objects never holds
+//! one, and an edge to it passes on to what the marker needs.
+//!
 //! Edges Kix derives from content, such as a RoleBinding to the workload
 //! whose ServiceAccount it names, are not recorded edges. The graph code
 //! derives them from the manifests in hand ([`crate::cluster::graph`]).
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde_json::Value;
 
-use crate::cluster::revision::{Need, Revision};
+use crate::cluster::revision::{Need, Revision, RevisionImport};
 use crate::cluster::tenancy::Tenancy;
 use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
@@ -34,6 +39,8 @@ pub struct Edges {
     /// Objects that only format 1 revisions name, which do not record
     /// edges.
     unrecorded: HashSet<ResourceId>,
+    /// Each import marker, by marker. Its needs are in `needs`.
+    imports: HashMap<ResourceId, RevisionImport>,
 }
 
 impl Edges {
@@ -43,10 +50,7 @@ impl Edges {
     /// cluster wrote it last. An entry whose hash names no manifest of the
     /// set is left out.
     pub fn of_build(manifests: &[Value]) -> Edges {
-        Edges {
-            needs: annotated(manifests, |_| true),
-            unrecorded: HashSet::new(),
-        }
+        annotated(manifests, |_| true)
     }
 
     /// Return the edges that `revisions` record. An object that several of
@@ -57,7 +61,19 @@ impl Edges {
     pub fn of_revisions<'a>(revisions: impl IntoIterator<Item = &'a Revision>) -> Edges {
         let mut needs: HashMap<ResourceId, BTreeSet<Need>> = HashMap::new();
         let mut unrecorded = HashSet::new();
+        let mut imports = HashMap::new();
         for revision in revisions {
+            for import in &revision.spec.imports {
+                let rid = import.resource_id();
+                needs
+                    .entry(rid.clone())
+                    .or_default()
+                    .extend(import.needs.iter().cloned());
+                imports.entry(rid).or_insert_with(|| RevisionImport {
+                    needs: Vec::new(),
+                    ..import.clone()
+                });
+            }
             for object in &revision.spec.objects {
                 if revision.spec.records_edges() {
                     needs
@@ -70,7 +86,11 @@ impl Edges {
             }
         }
         unrecorded.retain(|rid| !needs.contains_key(rid));
-        Edges { needs, unrecorded }
+        Edges {
+            needs,
+            unrecorded,
+            imports,
+        }
     }
 
     /// Return the edges that the revisions of the records of the Kix cluster
@@ -89,6 +109,9 @@ impl Edges {
         for (rid, needs) in other.needs {
             self.needs.entry(rid).or_insert(needs);
         }
+        for (marker, target) in other.imports {
+            self.imports.entry(marker).or_insert(target);
+        }
         self
     }
 
@@ -103,8 +126,9 @@ impl Edges {
             return self;
         }
         let unrecorded = std::mem::take(&mut self.unrecorded);
-        self.needs
-            .extend(annotated(manifests, |rid| unrecorded.contains(rid)));
+        let noted = annotated(manifests, |rid| unrecorded.contains(rid));
+        self.needs.extend(noted.needs);
+        self.imports.extend(noted.imports);
         self
     }
 
@@ -113,10 +137,7 @@ impl Edges {
     /// Kix wrote, which has no revisions: such a Kix recorded the edges on
     /// the objects and nowhere else.
     pub fn of_older_kix_notes(manifests: &[Value]) -> Edges {
-        Edges {
-            needs: annotated(manifests, |_| true),
-            unrecorded: HashSet::new(),
-        }
+        annotated(manifests, |_| true)
     }
 
     /// Return whether the edges of `rid` are recorded, even as none.
@@ -132,6 +153,68 @@ impl Edges {
     /// Return the objects whose edges are recorded.
     pub fn objects(&self) -> impl Iterator<Item = &ResourceId> {
         self.needs.keys()
+    }
+
+    /// Return the object the import marker `rid` stands for, or `None` when
+    /// `rid` is not a marker these edges know or names no target.
+    pub fn import(&self, rid: &ResourceId) -> Option<ResourceId> {
+        self.imports
+            .get(rid)?
+            .target
+            .as_ref()
+            .map(|t| t.resource_id())
+    }
+
+    /// Return the import markers that the objects `rids` depend on, directly
+    /// or through other markers, each with its needs. A revision that lists
+    /// those objects lists these markers too, so an edge that passes through
+    /// a marker stays whole.
+    pub fn imports_reached<'a>(
+        &self,
+        rids: impl IntoIterator<Item = &'a ResourceId>,
+    ) -> Vec<RevisionImport> {
+        let mut out: BTreeMap<ResourceId, RevisionImport> = BTreeMap::new();
+        let mut queue: Vec<ResourceId> = rids.into_iter().cloned().collect();
+        while let Some(rid) = queue.pop() {
+            for need in self.needs(&rid) {
+                let target = need.resource_id();
+                let Some(import) = self.imports.get(&target) else {
+                    continue;
+                };
+                if out.contains_key(&target) {
+                    continue;
+                }
+                let mut import = import.clone();
+                import.needs = self.needs(&target).cloned().collect();
+                out.insert(target.clone(), import);
+                queue.push(target);
+            }
+        }
+        out.into_values().collect()
+    }
+
+    /// Return the objects `rid` depends on that `holds` accepts. An edge to
+    /// an import marker that `holds` does not accept passes on to what the
+    /// marker needs, so an object that needs a CRD marker still depends on
+    /// the operator the marker needs when no manifest of the marker is at
+    /// hand.
+    pub fn needs_through_imports<'a>(
+        &'a self,
+        rid: &ResourceId,
+        holds: impl Fn(&ResourceId) -> bool,
+    ) -> Vec<&'a Need> {
+        let mut out = Vec::new();
+        let mut seen: HashSet<ResourceId> = HashSet::new();
+        let mut queue: Vec<&Need> = self.needs(rid).collect();
+        while let Some(need) = queue.pop() {
+            let target = need.resource_id();
+            if holds(&target) {
+                out.push(need);
+            } else if self.imports.contains_key(&target) && seen.insert(target.clone()) {
+                queue.extend(self.needs(&target));
+            }
+        }
+        out
     }
 }
 
@@ -196,11 +279,9 @@ impl Prior {
 
 /// Return the edges that the `kix.run/depends-on` annotations of the
 /// manifests that `wanted` picks record, with each hash resolved to the
-/// manifest of `manifests` that carries it.
-fn annotated(
-    manifests: &[Value],
-    wanted: impl Fn(&ResourceId) -> bool,
-) -> HashMap<ResourceId, BTreeSet<Need>> {
+/// manifest of `manifests` that carries it, and the target of each import
+/// marker among them.
+fn annotated(manifests: &[Value], wanted: impl Fn(&ResourceId) -> bool) -> Edges {
     let by_hash: HashMap<&str, ResourceId> = manifests
         .iter()
         .filter_map(|m| {
@@ -210,15 +291,21 @@ fn annotated(
             ))
         })
         .collect();
-    manifests
+    let mut edges = Edges::default();
+    for (rid, m) in manifests
         .iter()
         .map(|m| (ResourceId::from_value(m), m))
         .filter(|(rid, _)| wanted(rid))
-        .map(|(rid, m)| {
-            let needs = Need::of_depends_on(m, |hash| by_hash.get(hash).cloned());
-            (rid, needs.into_iter().collect())
-        })
-        .collect()
+    {
+        let needs = Need::of_depends_on(m, |hash| by_hash.get(hash).cloned());
+        if crate::manifest::lifecycle::is_marker(m) {
+            edges
+                .imports
+                .insert(rid.clone(), RevisionImport::of_marker(m, Vec::new()));
+        }
+        edges.needs.insert(rid, needs.into_iter().collect());
+    }
+    edges
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use std::collections::HashSet;
 
+use crate::cluster::edges::Edges;
 use crate::manifest::types::ResourceId;
 
 use super::super::activation::{KeptOrphans, Record, Records, WaveRecord, WaveStatus};
@@ -236,6 +237,7 @@ impl ActivationRecord {
             .collect();
         let kept = &self.config.kept_orphans;
         objects.extend(kept.unknown.iter().cloned());
+        let mut edges = left.prior.edges.clone();
         if kept.carry_current {
             let earlier = match current.and_then(|c| c.revisions.as_ref()) {
                 None => None,
@@ -257,13 +259,20 @@ impl ActivationRecord {
                             "current deployment record names kept-orphans revision `{earlier}`, which is missing from the cluster. Run `kix gc --full-scan` to rebuild it, then deploy again"
                         ))
                     })?;
+                edges = edges.or(Edges::of_revisions([&revision]));
                 objects.extend(revision.spec.objects);
             }
         }
         if objects.is_empty() {
             return Ok(None);
         }
-        let revision = Revision::new(RevisionSpec::new(set.cluster(), Slot::KeptOrphans, objects));
+        // The markers the kept objects need keep the edges that pass through
+        // them, such as a custom resource to its CRD marker to its operator.
+        let rids: Vec<ResourceId> = objects.iter().map(RevisionObject::resource_id).collect();
+        let imports = edges.imports_reached(&rids);
+        let revision = Revision::new(
+            RevisionSpec::new(set.cluster(), Slot::KeptOrphans, objects).with_imports(imports),
+        );
         store
             .create(&revision)
             .await

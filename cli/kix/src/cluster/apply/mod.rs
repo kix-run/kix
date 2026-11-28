@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 use crate::manifest::hash::object_hash;
 use crate::manifest::keys;
 use crate::manifest::kinds::{self, GroupKind};
-use crate::manifest::lifecycle::lifecycle_of;
+use crate::manifest::lifecycle::{self, lifecycle_of};
 #[cfg(test)]
 use crate::manifest::types::CLUSTER_SCOPED;
 use crate::manifest::types::ResourceId;
@@ -158,7 +158,8 @@ pub(crate) fn changed(
 /// Matches resources by Kubernetes identity ([`ResourceId`]) and compares
 /// their object hashes ([`crate::manifest::hash::object_hash`]), which a
 /// deploy compares too: an object whose dependencies changed and whose own
-/// manifest did not is skipped. Returns [`ChangeAction::Apply`] or
+/// manifest did not is skipped. An import marker is always skipped, because
+/// Kix writes nothing for it. Returns [`ChangeAction::Apply`] or
 /// [`ChangeAction::Skip`] for each manifest in `new_manifests`, followed by
 /// [`ChangeAction::Orphan`] for prunable stamped resources present in
 /// `old_manifests` but absent from `new_manifests`.
@@ -182,6 +183,11 @@ pub(crate) fn detect_changes(
 
     for manifest in new_manifests {
         let rid = ResourceId::from_value(manifest);
+        // Kix writes nothing for an import marker.
+        if lifecycle::is_marker(manifest) {
+            actions.push(ChangeAction::Skip(rid));
+            continue;
+        }
 
         match old_by_k8s_id.get(&rid) {
             Some(old)
@@ -207,9 +213,13 @@ pub(crate) fn detect_changes(
 
     // Only stamped, prunable resources can become orphans. Unstamped manifests
     // may belong to controller children or external tools, and Activation
-    // records are superseded during finalization rather than pruned here.
+    // records are superseded during finalization rather than pruned here. A
+    // build does not make its import markers, so a marker of the old build
+    // is no orphan of it.
     for old_manifest in old_manifests {
-        if manifest_identity_hash(old_manifest).is_none() || !lifecycle_of(old_manifest).prunable()
+        if manifest_identity_hash(old_manifest).is_none()
+            || !lifecycle_of(old_manifest).prunable()
+            || lifecycle::is_marker(old_manifest)
         {
             continue;
         }

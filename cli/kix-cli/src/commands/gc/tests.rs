@@ -1177,6 +1177,7 @@ mod revision_tests {
         };
         KeptUpdate::Objects {
             listed: listed.into_iter().cloned().collect(),
+            imports: Vec::new(),
             live: ["left", "stuck", "added"]
                 .map(|n| ResourceId::new("", "ConfigMap", "d", n))
                 .into(),
@@ -1201,6 +1202,7 @@ mod revision_tests {
         let unread: HashSet<ResourceId> = listed.iter().map(|o| o.resource_id()).collect();
         let update = KeptUpdate::Objects {
             listed: listed.clone(),
+            imports: Vec::new(),
             live: HashSet::new(),
             unknown: unread,
             in_build,

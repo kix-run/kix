@@ -544,11 +544,12 @@ fn unchanged_record_is_skip_not_apply() {
     );
 }
 
-/// Markers and plain PackageInstances are ordinary desired state for
-/// orphan detection: one that left the build is an orphan. Pins
+/// A plain PackageInstance is ordinary desired state for orphan detection:
+/// one that left the build is an orphan. A build does not make its import
+/// markers, so a marker of the old build is no orphan. Pins
 /// `Lifecycle::prunable()` against a mutant that only prunes `Desired`.
 #[test]
-fn markers_and_plain_package_instances_can_be_orphans() {
+fn plain_package_instances_can_be_orphans_and_markers_cannot() {
     let mut marker = manifest("PackageInstance", "pi-import", "ns", "m1", "");
     marker["metadata"]["annotations"][keys::MODE] = serde_json::json!("import");
     let plain = manifest("PackageInstance", "pi-plain", "ns", "p1", "");
@@ -559,10 +560,7 @@ fn markers_and_plain_package_instances_can_be_orphans() {
     orphans.sort();
     assert_eq!(
         orphans,
-        vec![
-            format!("PackageInstance.{}/pi-import@ns", keys::GROUP),
-            format!("PackageInstance.{}/pi-plain@ns", keys::GROUP)
-        ]
+        vec![format!("PackageInstance.{}/pi-plain@ns", keys::GROUP)]
     );
 }
 

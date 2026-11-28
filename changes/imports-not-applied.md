@@ -1,0 +1,4 @@
++++
+kind = "silent"
++++
+Kix no longer creates a `PackageInstance` object for an import marker, which `kix.mkImport`, `scope.mkCRDRef`, `mkSecretRef`, and `mkServiceRef` declare. The revision of the marker's package instance lists it under `imports` instead, with the object it stands for, and `kubectl get packageinstances` lists only the instances Kix deployed. A deploy still checks that an imported object exists before it writes an object that depends on it. Two Kix clusters on one Kubernetes cluster no longer conflict on a marker that both declare, such as the ones a flavor gives every Kix cluster. Markers that an earlier version of Kix created stay on the cluster as objects that left the build: `kix deploy --prune` or `kix gc` deletes them, and a marker that another Kix cluster still creates stays. Update scripts that read marker `PackageInstance` objects to read the `imports` of the revisions instead.

@@ -226,12 +226,28 @@ fn a_delete_the_plan_does_not_show_is_refused() {
     );
 }
 
-/// A first deploy writes every object, each listed as added.
+/// Return how many objects `graph` makes: every resource but the import
+/// markers, for which Kix writes nothing.
+fn made(graph: &StoreGraph) -> usize {
+    stamp(graph)
+        .0
+        .resources
+        .values()
+        .filter(|n| !crate::manifest::lifecycle::is_marker(&n.manifest))
+        .count()
+}
+
+/// A first deploy writes every object, each listed as added, and nothing
+/// for an import marker.
 #[test]
 fn a_first_deploy_writes_every_object_the_plan_shows() {
     let new = build();
+    assert!(
+        made(&new) < stamp(&new).0.resources.len(),
+        "the build has a marker"
+    );
     let objects = objects(None, &new, &[]).unwrap();
-    assert_eq!(objects.writes.len(), stamp(&new).0.resources.len());
+    assert_eq!(objects.writes.len(), made(&new));
     assert!(
         objects
             .writes
@@ -321,7 +337,7 @@ fn a_redeploy_lists_an_unchanged_rerun_job_as_a_write_only_if_it_failed() {
 fn reconcile_reapplies_the_deployed_build() {
     let build = build();
     let objects = objects(Some(&build), &build, &["--reconcile"]).unwrap();
-    assert_eq!(objects.writes.len(), stamp(&build).0.resources.len());
+    assert_eq!(objects.writes.len(), made(&build));
     assert!(
         objects
             .writes

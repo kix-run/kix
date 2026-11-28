@@ -54,6 +54,7 @@ fn index(with_names: bool) -> RecordPackageIndex {
             BTreeMap::new()
         },
         groups: with_names.then(|| BTreeMap::from([(h(JOB), "batch".to_string())])),
+        imports: Default::default(),
     }
 }
 
@@ -473,7 +474,7 @@ fn a_record_without_an_index_follows_depends_on() {
         .objects
         .iter()
         .filter(|o| o.presence == Presence::Missing)
-        .map(|o| o.identity_hash.clone())
+        .map(|o| o.hash.clone())
         .collect();
     assert_eq!(missing, [h(SECRET)]);
     assert_eq!(view.objects.len(), 6);
@@ -986,4 +987,77 @@ async fn status_judges_an_object_by_the_applied_hash_it_matches() {
             web.content
         );
     }
+}
+
+/// `kix status` reads an import marker from the revision that lists it
+/// under `imports`. Kix writes no object for it, so it is external and not
+/// missing, and the object that needs it depends on it and is not at risk.
+#[tokio::test]
+async fn status_reads_imports_from_the_revisions() {
+    use crate::cluster::revision::{
+        ImportedObject, Need, Revision, RevisionImport, RevisionObject, RevisionSpec, Slot,
+    };
+    use crate::cluster::tenancy_fixture::{Rec, Written, revision_value, state};
+    use crate::manifest::lifecycle::PHASE_ACTIVE;
+    let recs = [Rec {
+        name: "a-cur",
+        cluster: "a",
+        hash: "acur",
+        phase: PHASE_ACTIVE,
+        current: true,
+        objects: &["web", "old"],
+        ..Rec::default()
+    }];
+    let mut state = state(&recs, |_| Written::Revisions);
+    let rid = |name: &str| ResourceId::new("", "ConfigMap", "d", name);
+    let marker = |name: &str| ResourceId::new(keys::GROUP, "PackageInstance", "d", name);
+    let import = RevisionImport {
+        namespace: Some("d".into()),
+        name: "secret-ref-app-creds".into(),
+        hash: "h-import".into(),
+        target: Some(ImportedObject {
+            api_version: "v1".into(),
+            kind: "Secret".into(),
+            namespace: Some("d".into()),
+            name: "creds".into(),
+        }),
+        needs: Vec::new(),
+    };
+    let instance = Revision::new(
+        RevisionSpec::new(
+            "a",
+            Slot::Instance {
+                namespace: "d".into(),
+                name: "app".into(),
+                lifecycle: None,
+            },
+            vec![
+                RevisionObject::of_id("h-web", &rid("web"))
+                    .with_needs([Need::of(&marker("secret-ref-app-creds"), None)]),
+            ],
+        )
+        .with_imports([import]),
+    );
+    let old = state.revision_named("a-cur", "instance");
+    state.remove_revision(&old);
+    state.revisions.push(revision_value(&instance));
+    state.records[0]["status"]["revisions"]["instances"]["d/app"] = json!(instance.name);
+    state.objects.retain(|o| o["metadata"]["name"] == "web");
+    for object in &mut state.objects {
+        let annotations = object["metadata"]["annotations"].as_object_mut().unwrap();
+        annotations.remove(keys::IDENTITY_HASH);
+        annotations.remove(keys::DEPENDS_ON);
+    }
+    let api = FakeApi::new(state.all());
+
+    let seen = observe_fake(&api, ObserveScope::Cluster("a")).await;
+    let [view] = seen.clusters.as_slice() else {
+        panic!("one cluster: {:?}", seen.clusters);
+    };
+    let imported = by_name(view, "secret-ref-app-creds");
+    assert_eq!(imported.presence, Presence::External);
+    assert_eq!(imported.readiness, Readiness::NotApplicable);
+    assert!(imported.content.is_none());
+    assert_eq!(by_name(view, "web").depends_on, ["h-import"]);
+    assert!(!at_risk(view).contains("h-web"));
 }

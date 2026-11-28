@@ -89,7 +89,7 @@ fn each_definition_has_the_number_of_its_content() {
         (
             crate::cluster::revision::crd_name(),
             2,
-            "2d15ae991387a6e509a5b8723ec34a7d5646f7fff9162bbb489ad84112ce7b8d",
+            "6086e6e86d95a9d44801c588992dde97a7f158250e779acfc4f56919111d616e",
         ),
     ];
     let found: Vec<(String, u32, String)> = all()

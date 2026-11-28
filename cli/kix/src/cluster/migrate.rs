@@ -7,8 +7,12 @@
 //!
 //! # Logical slot identity
 //!
-//! A resource's logical slot is the pair of `kix.run/package-namespace` and
-//! `kix.run/package` annotations.
+//! A resource's logical slot is its package instance. A build stamps it as
+//! the `kix.run/package-namespace` and `kix.run/package` annotations, and
+//! its lifecycle as `kix.run/lifecycle`. Kix does not send those to the
+//! cluster, so a live object carries them only when an older Kix wrote it.
+//! For any other live object, the `slot` of the revision that names it says
+//! both ([`Instances`]).
 //!
 //! # Which objects pair
 //!
@@ -45,6 +49,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+use crate::cluster::revision::{Revision, Slot};
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{Lifecycle, lifecycle_of};
 use crate::manifest::types::{self, ResourceId};
@@ -81,12 +86,65 @@ impl MigrationPair {
     }
 }
 
-/// Pull `(ns, instance)` from stamped annotations. Returns `None` when the
-/// resource is not owned by a package.
-fn slot_of(manifest: &Value) -> Option<String> {
-    let anns = manifest.pointer("/metadata/annotations")?;
-    let ns = anns.get(keys::PACKAGE_NAMESPACE).and_then(Value::as_str)?;
-    let inst = anns.get(keys::PACKAGE).and_then(Value::as_str)?;
+/// The package instance and lifecycle that revisions give each object they
+/// name. A migration pair reads them for a live object, which carries no
+/// instance note unless an older Kix wrote it.
+#[derive(Debug, Clone, Default)]
+pub struct Instances(HashMap<ResourceId, InstanceOf>);
+
+#[derive(Debug, Clone)]
+struct InstanceOf {
+    /// The instance, keyed `namespace/instance`.
+    slot: String,
+    lifecycle: Option<String>,
+}
+
+impl Instances {
+    /// Return the instance and lifecycle the instance revisions among
+    /// `revisions` give each of their objects.
+    pub fn of_revisions<'a>(revisions: impl IntoIterator<Item = &'a Revision>) -> Instances {
+        let mut out = HashMap::new();
+        for revision in revisions {
+            let Slot::Instance {
+                namespace,
+                name,
+                lifecycle,
+            } = &revision.spec.slot
+            else {
+                continue;
+            };
+            for object in &revision.spec.objects {
+                out.entry(object.resource_id())
+                    .or_insert_with(|| InstanceOf {
+                        slot: format!("{namespace}/{name}"),
+                        lifecycle: lifecycle.clone(),
+                    });
+            }
+        }
+        Instances(out)
+    }
+
+    /// Return the `namespace/instance` the revisions give `rid`.
+    pub fn instance(&self, rid: &ResourceId) -> Option<&str> {
+        self.0.get(rid).map(|of| of.slot.as_str())
+    }
+}
+
+/// Return the `namespace/instance` of the package instance that owns
+/// `manifest`, from its stamped notes or else from `instances`. Return
+/// `None` when no package owns it.
+fn slot_of(manifest: &Value, instances: &Instances) -> Option<String> {
+    let noted = || {
+        let anns = manifest.pointer("/metadata/annotations")?;
+        let ns = anns.get(keys::PACKAGE_NAMESPACE).and_then(Value::as_str)?;
+        let inst = anns.get(keys::PACKAGE).and_then(Value::as_str)?;
+        Some((ns.to_string(), inst.to_string()))
+    };
+    let (ns, inst) = noted().or_else(|| {
+        let of = instances.0.get(&ResourceId::from_value(manifest))?;
+        let (ns, inst) = of.slot.split_once('/')?;
+        Some((ns.to_string(), inst.to_string()))
+    })?;
     if ns == "_cluster" || inst == "_cluster" {
         return None;
     }
@@ -94,15 +152,18 @@ fn slot_of(manifest: &Value) -> Option<String> {
 }
 
 /// Return whether the resource can be one side of a migration pair: its
-/// package is classified `lifecycle = "stateful"` and it is desired state,
-/// not an import marker or the deploy record.
-fn is_stateful(manifest: &Value) -> bool {
-    lifecycle_of(manifest) == Lifecycle::Desired
-        && manifest
-            .pointer("/metadata/annotations")
-            .and_then(|a| a.get(keys::LIFECYCLE))
-            .and_then(Value::as_str)
-            == Some(LIFECYCLE_STATEFUL)
+/// package is classified `lifecycle = "stateful"`, by its stamped note or
+/// else by `instances`, and it is desired state, not an import marker or the
+/// deploy record.
+fn is_stateful(manifest: &Value, instances: &Instances) -> bool {
+    let lifecycle = keys::get(manifest, keys::LIFECYCLE).or_else(|| {
+        instances
+            .0
+            .get(&ResourceId::from_value(manifest))?
+            .lifecycle
+            .as_deref()
+    });
+    lifecycle_of(manifest) == Lifecycle::Desired && lifecycle == Some(LIFECYCLE_STATEFUL)
 }
 
 /// Return whether the manifest declares storage of its own. That is a
@@ -197,7 +258,9 @@ fn derive_reason(source: &Value, target: &Value) -> String {
     "content changed".to_string()
 }
 
-/// Detect migration pairs from raw stamped manifests.
+/// Detect migration pairs from raw stamped manifests. `old_instances` gives
+/// the instance and lifecycle of each old object that carries no instance
+/// notes, such as a live object this version of Kix wrote.
 ///
 /// Scans `old_manifests` for resources that:
 ///   1. are lifecycle=stateful desired state (see [`is_stateful`]),
@@ -215,7 +278,9 @@ fn derive_reason(source: &Value, target: &Value) -> String {
 pub fn detect_migration_pairs(
     new_manifests: &[Value],
     old_manifests: &[Value],
+    old_instances: &Instances,
 ) -> Vec<MigrationPair> {
+    let none = Instances::default();
     // Index new manifests by K8s identity for "is this removed?" lookups.
     let new_by_k8s_id: HashMap<ResourceId, &Value> = new_manifests
         .iter()
@@ -231,7 +296,7 @@ pub fn detect_migration_pairs(
     // Bucket added stateful manifests by slot.
     let mut added_by_slot: HashMap<String, Vec<(ResourceId, &Value)>> = HashMap::new();
     for manifest in new_manifests {
-        if !is_stateful(manifest) || !may_hold_data(manifest) {
+        if !is_stateful(manifest, &none) || !may_hold_data(manifest) {
             continue;
         }
         let rid = ResourceId::from_value(manifest);
@@ -240,7 +305,7 @@ pub fn detect_migration_pairs(
             // place rather than replaced.
             continue;
         }
-        let Some(slot) = slot_of(manifest) else {
+        let Some(slot) = slot_of(manifest, &none) else {
             continue;
         };
         added_by_slot.entry(slot).or_default().push((rid, manifest));
@@ -252,14 +317,14 @@ pub fn detect_migration_pairs(
     let mut consumed: std::collections::HashSet<&ResourceId> = std::collections::HashSet::new();
 
     for manifest in old_manifests {
-        if !is_stateful(manifest) || !may_hold_data(manifest) {
+        if !is_stateful(manifest, old_instances) || !may_hold_data(manifest) {
             continue;
         }
         let rid = ResourceId::from_value(manifest);
         if new_by_k8s_id.contains_key(&rid) {
             continue;
         }
-        let Some(slot) = slot_of(manifest) else {
+        let Some(slot) = slot_of(manifest, old_instances) else {
             continue;
         };
         let Some(candidates) = added_by_slot.get(&slot) else {
@@ -369,7 +434,7 @@ mod tests {
             Some("200Gi"),
             "bbbb",
         )];
-        let pairs = detect_migration_pairs(&new, &old);
+        let pairs = detect_migration_pairs(&new, &old, &Instances::default());
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].slot, "immich/storage");
         assert!(pairs[0].reason.contains("storageClass"));
@@ -420,7 +485,7 @@ mod tests {
             "storage",
             json!({ "size": "10Gi" }),
         )];
-        let pairs = detect_migration_pairs(&new, &old);
+        let pairs = detect_migration_pairs(&new, &old, &Instances::default());
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].reason, "StatefulSet removed, Cluster added");
     }
@@ -437,7 +502,7 @@ mod tests {
             in_postgres("Cluster", "postgres", "bbbb"),
             "postgresql.cnpg.io/v1",
         )];
-        let pairs = detect_migration_pairs(&new, &old);
+        let pairs = detect_migration_pairs(&new, &old, &Instances::default());
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].reason, "SGCluster removed, Cluster added");
     }
@@ -451,7 +516,7 @@ mod tests {
             in_postgres("Cluster", "postgres", "bbbb"),
             "postgresql.cnpg.io/v1",
         )];
-        assert!(detect_migration_pairs(&new, &old).is_empty());
+        assert!(detect_migration_pairs(&new, &old, &Instances::default()).is_empty());
     }
 
     #[test]
@@ -466,7 +531,7 @@ mod tests {
             in_postgres("Cluster", "postgres", "bbbb"),
             "postgresql.cnpg.io/v1",
         )];
-        let pairs = detect_migration_pairs(&new, &old);
+        let pairs = detect_migration_pairs(&new, &old, &Instances::default());
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].reason, "PersistentVolume removed, Cluster added");
     }
@@ -485,7 +550,7 @@ mod tests {
     fn detects_same_kind_rename() {
         let old = vec![postgres_statefulset("postgres", "aaaa")];
         let new = vec![postgres_statefulset("postgres-v2", "bbbb")];
-        let pairs = detect_migration_pairs(&new, &old);
+        let pairs = detect_migration_pairs(&new, &old, &Instances::default());
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].target.name, "postgres-v2");
     }
@@ -500,7 +565,7 @@ mod tests {
             ),
             postgres_statefulset("postgres-v2", "cccc"),
         ];
-        let pairs = detect_migration_pairs(&new, &old);
+        let pairs = detect_migration_pairs(&new, &old, &Instances::default());
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].target.name, "postgres-v2");
     }
@@ -518,7 +583,10 @@ mod tests {
         ] {
             let old = vec![with_api(in_postgres(kind, "postgres", "aaaa"), api)];
             let new = vec![with_api(in_postgres(kind, "postgres-v2", "bbbb"), api)];
-            assert!(detect_migration_pairs(&new, &old).is_empty(), "{kind}");
+            assert!(
+                detect_migration_pairs(&new, &old, &Instances::default()).is_empty(),
+                "{kind}"
+            );
         }
     }
 
@@ -547,7 +615,7 @@ mod tests {
             job("postgres-data-bootstrap", "cccc"),
             claim("data-new", "dddd"),
         ];
-        let pairs = detect_migration_pairs(&new, &old);
+        let pairs = detect_migration_pairs(&new, &old, &Instances::default());
         assert_eq!(pairs.len(), 1, "{pairs:?}");
         assert_eq!(pairs[0].source.name, "data-old");
         assert_eq!(pairs[0].target.name, "data-new");
@@ -566,7 +634,7 @@ mod tests {
             in_postgres("PodDisruptionBudget", "postgres", "bbbb"),
             "policy/v1",
         )];
-        assert!(detect_migration_pairs(&new, &old).is_empty());
+        assert!(detect_migration_pairs(&new, &old, &Instances::default()).is_empty());
     }
 
     #[test]
@@ -578,7 +646,7 @@ mod tests {
             "secret-ref-password",
             "bbbb",
         ))];
-        assert!(detect_migration_pairs(&new, &old).is_empty());
+        assert!(detect_migration_pairs(&new, &old, &Instances::default()).is_empty());
     }
 
     #[test]
@@ -589,7 +657,7 @@ mod tests {
             "apps/v1",
         )];
         let new = vec![in_postgres("ConfigMap", "postgres", "bbbb")];
-        assert!(detect_migration_pairs(&new, &old).is_empty());
+        assert!(detect_migration_pairs(&new, &old, &Instances::default()).is_empty());
     }
 
     #[test]
@@ -607,7 +675,7 @@ mod tests {
             "aaaa",
         )];
         let new = vec![in_postgres("Service", "postgres", "bbbb")];
-        assert!(detect_migration_pairs(&new, &old).is_empty());
+        assert!(detect_migration_pairs(&new, &old, &Instances::default()).is_empty());
     }
 
     #[test]
@@ -636,7 +704,7 @@ mod tests {
             Some("200Gi"),
             "bbbb",
         )];
-        let pairs = detect_migration_pairs(&new, &old);
+        let pairs = detect_migration_pairs(&new, &old, &Instances::default());
         assert!(pairs.is_empty());
     }
 
@@ -665,7 +733,7 @@ mod tests {
             Some("5Gi"),
             "bbbb",
         )];
-        let pairs = detect_migration_pairs(&new, &old);
+        let pairs = detect_migration_pairs(&new, &old, &Instances::default());
         assert!(pairs.is_empty());
     }
 
@@ -686,7 +754,7 @@ mod tests {
             None,
             "bbbb",
         )];
-        let pairs = detect_migration_pairs(&new, &old);
+        let pairs = detect_migration_pairs(&new, &old, &Instances::default());
         assert!(pairs.is_empty());
     }
 
@@ -705,7 +773,7 @@ mod tests {
             "aaaa",
         )];
         let new: Vec<Value> = vec![];
-        let pairs = detect_migration_pairs(&new, &old);
+        let pairs = detect_migration_pairs(&new, &old, &Instances::default());
         assert!(pairs.is_empty());
     }
 
@@ -760,7 +828,7 @@ mod tests {
                 "dddd",
             ),
         ];
-        let pairs = detect_migration_pairs(&new, &old);
+        let pairs = detect_migration_pairs(&new, &old, &Instances::default());
         assert_eq!(pairs.len(), 2);
         let slots: std::collections::HashSet<_> = pairs.iter().map(|p| p.slot.clone()).collect();
         assert!(slots.contains("immich/storage"));
@@ -790,10 +858,17 @@ mod tests {
             )
         };
         assert!(
-            detect_migration_pairs(&[marked(rule(), "false")], &[marked(monitor(), "false")])
-                .is_empty()
+            detect_migration_pairs(
+                &[marked(rule(), "false")],
+                &[marked(monitor(), "false")],
+                &Instances::default()
+            )
+            .is_empty()
         );
-        assert_eq!(detect_migration_pairs(&[rule()], &[monitor()]).len(), 1);
+        assert_eq!(
+            detect_migration_pairs(&[rule()], &[monitor()], &Instances::default()).len(),
+            1
+        );
     }
 
     #[test]
@@ -812,7 +887,7 @@ mod tests {
             ),
             "true",
         )];
-        let pairs = detect_migration_pairs(&new, &old);
+        let pairs = detect_migration_pairs(&new, &old, &Instances::default());
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].reason, "SGCluster removed, Cluster added");
     }
@@ -839,7 +914,7 @@ mod tests {
             ),
             "true",
         )];
-        assert!(detect_migration_pairs(&new, &old).is_empty());
+        assert!(detect_migration_pairs(&new, &old, &Instances::default()).is_empty());
     }
 
     #[test]
@@ -858,10 +933,13 @@ mod tests {
             ),
             "true",
         )];
-        assert_eq!(detect_migration_pairs(&new, &old).len(), 1);
+        assert_eq!(
+            detect_migration_pairs(&new, &old, &Instances::default()).len(),
+            1
+        );
         // An unmarked ConfigMap holds no data by its shape.
         let old = vec![in_postgres("ConfigMap", "postgres", "aaaa")];
-        assert!(detect_migration_pairs(&new, &old).is_empty());
+        assert!(detect_migration_pairs(&new, &old, &Instances::default()).is_empty());
     }
 
     /// The CLI and the library draw the built-in boundary from the same

@@ -1276,8 +1276,11 @@ impl<'a> Planner<'a> {
         };
         // A half-applied closure is not a previous intended state, so
         // pairing against it would invent migrations nobody declared.
-        let mut migration_pairs =
-            detect_migration_pairs(&new_manifests, &baseline.active_manifests);
+        let mut migration_pairs = detect_migration_pairs(
+            &new_manifests,
+            &baseline.active_manifests,
+            &baseline.instances(),
+        );
         let read = match client {
             Some((client, connection)) => {
                 let head = read_head(&client, &new_graph.cluster_name).await?;
@@ -1404,7 +1407,7 @@ impl<'a> Planner<'a> {
         ledger: &Ledger,
         live: &LiveObjects,
     ) -> Result<Changes, PlanError> {
-        let made: HashSet<ResourceId> = new_manifests.iter().map(ResourceId::from_value).collect();
+        let made: HashSet<ResourceId> = decide::made_by(new_manifests).collect();
         let decided = decide::decide(
             new_manifests,
             &made,
@@ -1714,10 +1717,10 @@ pub(crate) async fn refuse_older_operator(client: &Client, cluster: &str) -> Res
     }
 }
 
-/// Return the objects a plan lists on the cluster: those of
-/// `new_manifests`, and those `ledger` names that the build does not make.
+/// Return the objects a plan lists on the cluster: those `new_manifests`
+/// make, and those `ledger` names that the build does not make.
 fn listed_ids(new_manifests: &[Value], ledger: Option<&Ledger>) -> Vec<ResourceId> {
-    let made: HashSet<ResourceId> = new_manifests.iter().map(ResourceId::from_value).collect();
+    let made: HashSet<ResourceId> = decide::made_by(new_manifests).collect();
     let candidates: Vec<ResourceId> = ledger
         .map(|l| l.candidates(&made).cloned().collect())
         .unwrap_or_default();
@@ -1745,11 +1748,13 @@ fn write_reason(label: &Label) -> Option<WriteReason> {
         Label::HeldByOtherCluster(report) => Some(WriteReason::HeldByOtherCluster {
             changed_by: super::document::DriftOwner::of_report(report),
         }),
-        Label::Intended
-        | Label::Unfinished { drift: None, .. }
-        | Label::Reconciled
-        | Label::Unchanged
-        | Label::DriftReported(_) => None,
+        Label::Unfinished {
+            record,
+            drift: None,
+        } => Some(WriteReason::UnfinishedDeploy {
+            record: record.clone(),
+        }),
+        Label::Intended | Label::Reconciled | Label::Unchanged | Label::DriftReported(_) => None,
     }
 }
 

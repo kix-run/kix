@@ -93,6 +93,20 @@ impl Baseline {
         }
     }
 
+    /// Return the package instance and lifecycle that the Active record's
+    /// revisions give each of its objects, or none when it has no readable
+    /// revisions.
+    pub fn instances(&self) -> crate::cluster::migrate::Instances {
+        let Some(Ok(map)) = self.active.as_ref().and_then(|a| a.revisions.as_ref()) else {
+            return crate::cluster::migrate::Instances::default();
+        };
+        crate::cluster::migrate::Instances::of_revisions(
+            map.instances
+                .values()
+                .filter_map(|name| self.tenancy.revision(name)),
+        )
+    }
+
     /// Return the Active record that the plan compares against, or `None` on
     /// a first deploy.
     pub fn active(&self) -> Option<&Record> {
@@ -194,16 +208,18 @@ impl Baseline {
         mut write_again: impl FnMut(&ResourceId) -> bool,
     ) -> Vec<ChangeAction> {
         let actions = apply::detect_changes(new_manifests, &self.active_manifests);
+        // Kix writes nothing for an import marker, also under `--reconcile`.
         let by_id: std::collections::HashMap<ResourceId, &Value> = new_manifests
             .iter()
+            .filter(|m| !lifecycle::is_marker(m))
             .map(|m| (ResourceId::from_value(m), m))
             .collect();
         actions
             .into_iter()
             .map(|action| match &action {
-                ChangeAction::Skip(rid) if write_again(rid) => by_id
-                    .get(rid)
-                    .map_or(action.clone(), |m| ChangeAction::Apply((*m).clone())),
+                ChangeAction::Skip(rid) if by_id.contains_key(rid) && write_again(rid) => {
+                    ChangeAction::Apply(by_id[rid].clone())
+                }
                 _ => action,
             })
             .collect()
@@ -500,6 +516,9 @@ pub struct KeptBaseline {
     /// Kix cluster is read from revisions. `closures` then holds one closure
     /// of the ones still on the cluster.
     pub listed: Option<Vec<crate::cluster::revision::RevisionObject>>,
+    /// The import markers the kept-orphans revision lists, which the
+    /// objects of `listed` depend on.
+    pub imports: Vec<crate::cluster::revision::RevisionImport>,
     /// The objects of `listed` that the read could not find out about,
     /// because the cluster does not serve their kind or this account may
     /// not read it. They are not known to be gone.
@@ -1057,9 +1076,10 @@ async fn of_live(
         .filter(|obj| lifecycle::lifecycle_of_live(obj).prunable())
         .collect();
     let applied = AppliedHashes::of(tenancy.own_records(), tenancy.revisions());
-    let manifests = owned_view::kix_owned_manifests_against(
+    let built = new.manifests_by_hash();
+    let mut manifests = owned_view::kix_owned_manifests_against(
         objects.iter().cloned(),
-        &new.manifests_by_hash(),
+        &built,
         &applied,
         &tenancy.manager_of(cluster),
     );
@@ -1069,6 +1089,10 @@ async fn of_live(
         &tenancy,
         active.identity_hash.as_deref(),
     );
+    if let Some(index) = tenancy.index_of(active) {
+        let imports = owned_view::imports_as_built(&index, &built, &manifests);
+        manifests.extend(imports);
+    }
     Ok(LiveRead {
         manifests,
         closures,
@@ -1141,6 +1165,7 @@ pub async fn kept_of(
             vec![manifests]
         },
         listed: Some(objects.into_iter().cloned().collect()),
+        imports: tenancy.kept_imports(active).to_vec(),
         unknown,
         ..KeptBaseline::default()
     })
@@ -1547,7 +1572,14 @@ mod tests {
             of_keeper(cm("keeper", "")),
             of_keeper(cm("keeper-monitor", "")),
         ];
-        assert!(crate::cluster::migrate::detect_migration_pairs(&new, &old).is_empty());
+        assert!(
+            crate::cluster::migrate::detect_migration_pairs(
+                &new,
+                &old,
+                &crate::cluster::migrate::Instances::default()
+            )
+            .is_empty()
+        );
         assert!(
             !apply::detect_changes(&new, &old)
                 .iter()

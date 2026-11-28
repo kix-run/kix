@@ -18,7 +18,7 @@
 //! `groups`, a separate field so that readers which do not know it still
 //! read `names`.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -64,6 +64,11 @@ pub struct RecordPackageIndex {
     /// whose names do not say their group, and in an index without names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub groups: Option<BTreeMap<String, String>>,
+    /// The hashes of the index's import markers, which stand for objects Kix
+    /// does not make. Kix writes no object for one. Empty in an index written
+    /// before the field existed, whose markers Kix applied.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub imports: BTreeSet<String>,
 }
 
 /// The name an index gives one object.
@@ -186,9 +191,13 @@ impl RecordPackageIndex {
         cluster_level.sort();
         let mut names = BTreeMap::new();
         let mut groups = BTreeMap::new();
+        let mut imports = BTreeSet::new();
         for (path, node) in &graph.resources {
             let rid = ResourceId::from_value(&node.manifest);
             let hash = store_hash(path);
+            if crate::manifest::lifecycle::is_marker(&node.manifest) {
+                imports.insert(hash.clone());
+            }
             if !rid.group.is_empty() {
                 groups.insert(hash.clone(), rid.group.clone());
             }
@@ -200,6 +209,7 @@ impl RecordPackageIndex {
             cluster_level,
             names,
             groups: Some(groups),
+            imports,
         }
     }
 

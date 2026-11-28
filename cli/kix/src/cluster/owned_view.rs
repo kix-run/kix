@@ -278,6 +278,37 @@ pub fn kix_owned_manifests_against(
         .collect()
 }
 
+/// Return the manifests of `built`, the manifests of a build keyed by
+/// identity hash, for the import markers the deployed build's package index
+/// `deployed` lists with the same object hash. Kix writes no object for a
+/// marker, so a comparison of the cluster with a build takes such a marker
+/// as the build has it, as it takes an object the build does not change
+/// ([`kix_owned_manifests_against`]). A marker another object of
+/// `already` stands for, such as one an older Kix applied, is left out.
+pub fn imports_as_built(
+    deployed: &crate::eval::package_index::RecordPackageIndex,
+    built: &HashMap<String, &serde_json::Value>,
+    already: &[serde_json::Value],
+) -> Vec<serde_json::Value> {
+    let held: std::collections::HashSet<ResourceId> =
+        already.iter().map(ResourceId::from_value).collect();
+    built
+        .values()
+        .filter(|m| crate::manifest::lifecycle::is_marker(m))
+        .filter(|m| !held.contains(&ResourceId::from_value(m)))
+        .filter(|m| {
+            let hash = crate::manifest::hash::object_hash(m);
+            deployed.imports.contains(&hash)
+                && matches!(
+                    deployed.name_of(&hash),
+                    Some(crate::eval::package_index::IndexedName::Named(rid))
+                        if rid == ResourceId::from_value(m)
+                )
+        })
+        .map(|m| (*m).clone())
+        .collect()
+}
+
 /// Return whether Kix last wrote the build manifest `manifest` to `obj`: a
 /// revision holds an applied hash for the object with the manifest's object
 /// hash, and the live object does not match an applied hash a revision holds
@@ -1359,5 +1390,39 @@ mod tests {
         assert!(!meta.contains_key("uid"));
         assert!(!meta.contains_key("resourceVersion"));
         assert_eq!(value.pointer("/spec/replicas").unwrap(), &json!(1));
+    }
+
+    /// The live side of a comparison takes the build's marker when the
+    /// deployed index lists an import with its object hash, and not when
+    /// the hash differs or a live object already stands for it.
+    #[test]
+    fn an_import_the_deployed_build_listed_reads_as_built() {
+        use crate::eval::package_index::{ObjectName, RecordPackageIndex};
+        let marker = json!({
+            "apiVersion": crate::manifest::keys::API_VERSION,
+            "kind": "PackageInstance",
+            "metadata": {
+                "name": "platform-dns",
+                "namespace": "kube-system",
+                "annotations": { (crate::manifest::keys::MODE): "import" },
+            },
+        });
+        let hash = crate::manifest::hash::object_hash(&marker);
+        let rid = ResourceId::from_value(&marker);
+        let index = |hash: &str| RecordPackageIndex {
+            format: crate::eval::package_index::FORMAT,
+            packages: BTreeMap::new(),
+            cluster_level: vec![hash.to_string()],
+            names: [(hash.to_string(), ObjectName::of(&rid))].into(),
+            groups: Some([(hash.to_string(), rid.group.clone())].into()),
+            imports: [hash.to_string()].into(),
+        };
+        let built: HashMap<String, &Value> = [("h".to_string(), &marker)].into();
+        assert_eq!(
+            imports_as_built(&index(&hash), &built, &[]),
+            std::slice::from_ref(&marker)
+        );
+        assert!(imports_as_built(&index("other"), &built, &[]).is_empty());
+        assert!(imports_as_built(&index(&hash), &built, std::slice::from_ref(&marker)).is_empty());
     }
 }

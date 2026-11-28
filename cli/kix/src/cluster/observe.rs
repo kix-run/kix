@@ -146,7 +146,7 @@ pub struct ObjectView {
     /// The hash the deploy's revision gives the object
     /// ([`super::revision::RevisionObject::hash`]), or its
     /// `kix.run/identity-hash` in the build of a record an older Kix wrote.
-    pub identity_hash: String,
+    pub hash: String,
     /// The object's kind, namespace, and name. When Kix cannot name a missing
     /// object, the kind is `Unknown` and `named` is false.
     pub rid: ResourceId,
@@ -172,7 +172,8 @@ pub struct ObjectView {
 pub enum Presence {
     Present,
     /// An import marker: a `PackageInstance` that stands for an object Kix
-    /// does not manage. The marker is on the cluster.
+    /// does not manage. A revision lists it, or an older Kix applied it and
+    /// it is on the cluster.
     External,
     /// Kix can read the object's kind, and the cluster has no object with its
     /// identity hash or its name.
@@ -215,18 +216,16 @@ pub fn at_risk(view: &ClusterView) -> BTreeSet<String> {
         .objects
         .iter()
         .filter(|o| o.presence == Presence::Missing)
-        .map(|o| o.identity_hash.as_str())
+        .map(|o| o.hash.as_str())
         .collect();
     let mut out = BTreeSet::new();
     loop {
         let found: Vec<&str> = view
             .objects
             .iter()
-            .filter(|o| {
-                o.presence != Presence::Missing && !broken.contains(o.identity_hash.as_str())
-            })
+            .filter(|o| o.presence != Presence::Missing && !broken.contains(o.hash.as_str()))
             .filter(|o| o.depends_on.iter().any(|d| broken.contains(d.as_str())))
-            .map(|o| o.identity_hash.as_str())
+            .map(|o| o.hash.as_str())
             .collect();
         if found.is_empty() {
             return out;
@@ -292,7 +291,12 @@ pub async fn observe(
             &manager,
             lookup,
         );
-        view.leaving = leaving(&view, &sweep.managed, |obj| tenancy.owners_of(obj));
+        let instances = super::migrate::Instances::of_revisions(
+            tenancy.revisions().filter(|r| r.spec.cluster == cluster),
+        );
+        view.leaving = leaving(&view, &sweep.managed, &instances, |obj| {
+            tenancy.owners_of(obj)
+        });
         view.failed = deploy.failed_since.map(|record| {
             let index = tenancy.index_of(&record);
             let edges = edges_of(tenancy, &record);
@@ -523,8 +527,13 @@ fn view(
                     .contains(&(rid.group.clone(), rid.kind.clone())),
                 None => !apis.unreadable.is_empty(),
             };
+            // Kix writes no object for an import marker a revision lists, so
+            // nothing on the cluster is read for it.
+            let import = index.as_ref().is_some_and(|i| i.imports.contains(&e.hash));
+            let obj = obj.filter(|_| !import);
             let deleting = obj.and_then(Deleting::of);
             let (presence, content, readiness, depends_on) = match obj {
+                None if import => (Presence::External, None, Readiness::NotApplicable, vec![]),
                 Some(obj) => {
                     let marker = lifecycle_of_live(obj) == Lifecycle::Marker;
                     let recorded = name.as_ref().is_some_and(|rid| edges.records(rid));
@@ -567,7 +576,7 @@ fn view(
             ObjectView {
                 named: name.is_some(),
                 rid: name.unwrap_or_else(|| unnamed_rid(&e.hash)),
-                identity_hash: e.hash.clone(),
+                hash: e.hash.clone(),
                 package: e.package.clone(),
                 presence,
                 content,
@@ -583,7 +592,7 @@ fn view(
     let hash_by_rid: HashMap<ResourceId, String> = objects
         .iter()
         .filter(|o| o.named)
-        .map(|o| (o.rid.clone(), o.identity_hash.clone()))
+        .map(|o| (o.rid.clone(), o.hash.clone()))
         .collect();
     for object in &mut objects {
         let on_cluster = matches!(object.presence, Presence::Present | Presence::External);
@@ -608,10 +617,13 @@ fn view(
 
 /// Return the objects of `live` that belong to `view`'s Kix cluster, are not
 /// among the objects of its current deploy, and are being deleted. `owners`
-/// names the Kix clusters an object belongs to.
+/// names the Kix clusters an object belongs to. An object's package comes
+/// from the revisions of that Kix cluster (`instances`), or from its live
+/// note when an older Kix wrote it.
 fn leaving(
     view: &ClusterView,
     live: &[DynamicObject],
+    instances: &super::migrate::Instances,
     owners: impl Fn(&DynamicObject) -> Vec<String>,
 ) -> Vec<Leaving> {
     let rids: HashSet<&ResourceId> = view.objects.iter().map(|o| &o.rid).collect();
@@ -620,10 +632,16 @@ fn leaving(
         .filter(|obj| !rids.contains(&drift::resource_id(obj)))
         .filter_map(|obj| Some((obj, Deleting::of(obj)?)))
         .filter(|(obj, _)| owners(obj).contains(&view.cluster))
-        .map(|(obj, deleting)| Leaving {
-            rid: drift::resource_id(obj),
-            package: package_of(obj),
-            deleting,
+        .map(|(obj, deleting)| {
+            let rid = drift::resource_id(obj);
+            Leaving {
+                package: instances
+                    .instance(&rid)
+                    .map(str::to_string)
+                    .or_else(|| package_of(obj)),
+                rid,
+                deleting,
+            }
         })
         .collect();
     out.sort_by(|a, b| a.rid.cmp(&b.rid));
@@ -696,7 +714,7 @@ async fn describe_from_pods(client: &Client, objects: &mut [ObjectView], live: &
         }
         let obj = live
             .by_hash
-            .get(o.identity_hash.as_str())
+            .get(o.hash.as_str())
             .or_else(|| live.by_rid.get(&o.rid))
             .copied()?;
         if !readiness::is_rollout(o.rid.group_kind()) {

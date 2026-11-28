@@ -65,7 +65,9 @@ use kix::cluster::graph::DeleteOrder;
 use kix::cluster::inventory;
 use kix::cluster::prune_guard::{self, Pruned, Removal, Step};
 use kix::cluster::readiness::{self, DeletePath};
-use kix::cluster::revision::{self, Revision, RevisionObject, RevisionSpec, Revisions, Slot, keep};
+use kix::cluster::revision::{
+    self, Revision, RevisionImport, RevisionObject, RevisionSpec, Revisions, Slot, keep,
+};
 use kix::cluster::tenancy::{self, Kept, Source, Tenancy};
 use kix::eval::store;
 use kix::eval::store_graph::{StoreGraph, store_hash};
@@ -497,6 +499,9 @@ pub(super) enum KeptUpdate {
     /// Active build does not hold (`in_build`).
     Objects {
         listed: Vec<RevisionObject>,
+        /// The import markers the revision lists. The new one lists those
+        /// the remaining objects depend on.
+        imports: Vec<RevisionImport>,
         live: HashSet<ResourceId>,
         unknown: HashSet<ResourceId>,
         in_build: HashSet<ResourceId>,
@@ -516,6 +521,7 @@ impl KeptUpdate {
         match &kept.listed {
             Some(listed) => KeptUpdate::Objects {
                 listed: listed.clone(),
+                imports: kept.imports.clone(),
                 live: kept
                     .closures
                     .iter()
@@ -541,6 +547,7 @@ impl KeptUpdate {
             live,
             unknown,
             in_build,
+            ..
         } = self
         else {
             return None;
@@ -615,7 +622,7 @@ async fn update_kept(
             }
             Ok(())
         }
-        KeptUpdate::Objects { .. } => {
+        KeptUpdate::Objects { imports, .. } => {
             let Some(remaining) = update.remaining(&done.gone) else {
                 return Ok(());
             };
@@ -632,7 +639,10 @@ async fn update_kept(
                 );
                 return Ok(());
             }
-            let revision = Revision::new(RevisionSpec::new(cluster, Slot::KeptOrphans, remaining));
+            let revision = Revision::new(
+                RevisionSpec::new(cluster, Slot::KeptOrphans, remaining)
+                    .with_imports_reached(imports.iter().cloned()),
+            );
             Revisions::new(records.client())
                 .create(&revision)
                 .await
@@ -924,6 +934,11 @@ async fn run_hard_async(
                 .filter(|rid| not_known(rid))
                 .collect(),
             listed: objects.into_iter().cloned().collect(),
+            imports: retirement
+                .active
+                .as_ref()
+                .map(|a| tenancy.kept_imports(a).to_vec())
+                .unwrap_or_default(),
             live: live.iter().map(kix::cluster::drift::resource_id).collect(),
             in_build: in_build.clone(),
         },

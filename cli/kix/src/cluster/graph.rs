@@ -423,14 +423,16 @@ pub fn removal_pairs(manifests: &[serde_json::Value], edges: &Edges) -> Vec<(usi
 
 /// Return the pairs of each edge of `edges` between two manifests of
 /// `manifests`. An edge may name an object outside the set, such as an
-/// imported one.
+/// imported one. An edge to an import marker the set does not hold passes
+/// on to what the marker needs ([`Edges::needs_through_imports`]).
 fn recorded_pairs(manifests: &[serde_json::Value], edges: &Edges) -> Vec<(usize, usize)> {
     let by_id = index_by_id(manifests);
     let mut pairs = Vec::new();
     for (i, m) in manifests.iter().enumerate() {
         pairs.extend(
             edges
-                .needs(&ResourceId::from_value(m))
+                .needs_through_imports(&ResourceId::from_value(m), |rid| by_id.contains_key(rid))
+                .into_iter()
                 .filter_map(|need| Some((i, *by_id.get(&need.resource_id())?))),
         );
     }
@@ -726,20 +728,10 @@ fn namespace_of(manifest: &serde_json::Value) -> Option<&str> {
 }
 
 /// Return the object a controller manifest stands for: the workload itself,
-/// or for an import marker, the workload it imports. A marker's target is
-/// read from the marker's manifest in hand, which in a delete order with no
-/// build is the live marker.
+/// or for an import marker, the workload it imports.
 fn controller_id(manifest: &serde_json::Value) -> ResourceId {
     match crate::cluster::readiness::import_target_from_manifest(manifest) {
-        Ok(Some(target)) => ResourceId::new(
-            crate::manifest::types::api_group(&target.api_version),
-            &target.kind,
-            target
-                .namespace
-                .as_deref()
-                .unwrap_or(crate::manifest::types::CLUSTER_SCOPED),
-            &target.name,
-        ),
+        Ok(Some(target)) => target.resource_id(),
         _ => ResourceId::from_value(manifest),
     }
 }
@@ -747,8 +739,10 @@ fn controller_id(manifest: &serde_json::Value) -> ResourceId {
 /// Return the controllers that the kind of each object of `manifests` names,
 /// from its `controller` edges in `edges`, for the objects whose kind names
 /// any. A controller that is an import marker is listed as the object the
-/// marker stands for. An edge to an object with no manifest in `manifests`
-/// is skipped.
+/// marker stands for. `edges` names it for a marker a revision lists, so the
+/// marker needs no manifest in `manifests` ([`Edges::import`]). A marker an
+/// older revision lists as an object names it in its manifest. An edge to
+/// any other object with no manifest in `manifests` is skipped.
 pub fn controllers_of(
     manifests: &[serde_json::Value],
     edges: &Edges,
@@ -761,8 +755,13 @@ pub fn controllers_of(
             let named: Vec<ResourceId> = edges
                 .needs(&rid)
                 .filter(|need| need.is_controller())
-                .filter_map(|need| by_id.get(&need.resource_id()))
-                .map(|&i| controller_id(&manifests[i]))
+                .filter_map(|need| {
+                    let id = need.resource_id();
+                    match edges.import(&id) {
+                        Some(target) => Some(target),
+                        None => by_id.get(&id).map(|&i| controller_id(&manifests[i])),
+                    }
+                })
                 .collect();
             (!named.is_empty()).then_some((rid, named))
         })

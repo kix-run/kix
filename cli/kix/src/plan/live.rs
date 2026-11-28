@@ -218,9 +218,7 @@ impl LivePlan {
         let record = Record::of(activation);
         ledger.deploying(record.identity_hash.as_deref().filter(|_| deploys));
         let made = made_by(desired, revisions.as_ref());
-        let ids: Vec<ResourceId> = desired
-            .iter()
-            .map(ResourceId::from_value)
+        let ids: Vec<ResourceId> = decide::made_by(desired)
             .chain(ledger.candidates(&made).cloned())
             .collect();
         // The sweep's listing holds every labelled object of every kind, so
@@ -423,19 +421,15 @@ struct DecidedChanges {
     unrecorded: Vec<ResourceId>,
 }
 
-/// Return every object of the build `desired` is part of: the objects of
-/// `desired`, and those `revisions` name, which include the objects the
-/// operator leaves out of `desired`.
+/// Return every object of the build `desired` is part of: the objects
+/// `desired` makes ([`decide::made_by`]), and those `revisions` name, which
+/// include the objects the operator leaves out of `desired`.
 fn made_by(desired: &[Value], revisions: Option<&RevisionSet>) -> HashSet<ResourceId> {
     let named = revisions
         .into_iter()
         .flat_map(|set| set.all())
         .flat_map(|r| r.spec.objects.iter().map(|o| o.resource_id()));
-    desired
-        .iter()
-        .map(ResourceId::from_value)
-        .chain(named)
-        .collect()
+    decide::made_by(desired).chain(named).collect()
 }
 
 /// Decide the changes of `desired` with the one planner, as the CLI does
@@ -842,7 +836,12 @@ mod tests {
         /// its head, its current record `a-cur` with the revisions of
         /// `deployed`, and the live objects `live`.
         async fn cluster(deployed: &StoreGraph, live: &[Value]) -> (FakeApi, DynamicObject) {
-            let set = RevisionSet::of("a", deployed);
+            cluster_of_set(&RevisionSet::of("a", deployed), live).await
+        }
+
+        /// Put on a fake API server Kix cluster `a` as [`cluster`] does,
+        /// with the revisions `set`.
+        async fn cluster_of_set(set: &RevisionSet, live: &[Value]) -> (FakeApi, DynamicObject) {
             let record = json!({
                 "apiVersion": keys::API_VERSION,
                 "kind": "Activation",
@@ -853,7 +852,7 @@ mod tests {
                 },
                 "status": {
                     "phase": PHASE_ACTIVE,
-                    "revisions": RevisionMap::of(&set).to_value(),
+                    "revisions": RevisionMap::of(set).to_value(),
                 },
             });
             let head = json!({
@@ -1015,63 +1014,84 @@ mod tests {
             [cli.prune_order(), operator.prune_order()]
         }
 
-        /// With no build on this machine and no graph notes on the live
-        /// objects, the CLI and the operator take the edges from the
-        /// revisions, so they delete a custom resource before the CRD
-        /// marker of its kind, and the marker before the operator.
+        /// Return the live objects a deploy of `graph` leaves: each object
+        /// without its graph notes, and nothing for an import marker.
+        fn deployed_objects(graph: &StoreGraph) -> Vec<Value> {
+            manifests(graph)
+                .into_iter()
+                .filter(|m| !crate::manifest::lifecycle::is_marker(m))
+                .map(without_graph_notes)
+                .collect()
+        }
+
+        /// Assert that `order` deletes the custom resource before its
+        /// operator, and holds no CRD marker, of which the cluster has no
+        /// object.
+        fn assert_custom_resource_first(order: &crate::cluster::graph::DeleteOrder) {
+            assert!(position(order, "cr") < position(order, "operator"));
+            assert!(
+                !order
+                    .ids()
+                    .iter()
+                    .any(|r| r.name == "crd-ref-app-widgets-example-com")
+            );
+        }
+
+        /// With no build on this machine, no graph notes on the live
+        /// objects, and no object for the CRD marker, the CLI and the
+        /// operator take the edges from the revisions. The edge from the
+        /// custom resource to the marker passes on to the operator the
+        /// marker needs, so they delete the custom resource first.
         #[tokio::test]
         async fn a_prune_without_build_or_notes_deletes_a_custom_resource_first() {
             let mut chain = custom_resource_chain();
             chain.push((hash('s'), config_map("stays", "1")));
             let deployed = build_at(&chain);
-            let live: Vec<Value> = manifests(&deployed)
-                .into_iter()
-                .map(without_graph_notes)
-                .collect();
-            let (api, record) = cluster(&deployed, &live).await;
+            let (api, record) = cluster(&deployed, &deployed_objects(&deployed)).await;
             for order in prune_orders(&api, &record).await {
-                assert!(
-                    position(&order, "cr") < position(&order, "crd-ref-app-widgets-example-com")
-                );
-                assert!(
-                    position(&order, "crd-ref-app-widgets-example-com")
-                        < position(&order, "operator")
-                );
+                assert_custom_resource_first(&order);
             }
         }
 
-        /// An orphan an earlier deploy kept keeps its edges in the
-        /// kept-orphans revision that each later deploy writes again. With
-        /// no build and no notes, the prune still deletes the custom
-        /// resource before the marker and the marker before the operator.
+        /// An orphan an earlier deploy kept keeps its edges, and the import
+        /// markers they pass through, in the kept-orphans revision that each
+        /// later deploy writes again. With no build and no notes, the prune
+        /// still deletes the custom resource before the operator.
         #[tokio::test]
         async fn a_kept_orphan_keeps_its_place_in_the_delete_order() {
             let first = build_at(&custom_resource_chain());
             // Two deploys kept the chain: the first wrote the kept-orphans
             // revision from the build it pruned, and the second wrote it
             // again from the first one's revision.
-            let kept_once: Vec<RevisionObject> = RevisionSet::of("a", &first)
-                .all()
-                .flat_map(|r| r.spec.objects.clone())
-                .collect();
-            let once = Revision::new(RevisionSpec::new("a", Slot::KeptOrphans, kept_once));
+            let set = RevisionSet::of("a", &first);
+            let kept_once: Vec<RevisionObject> =
+                set.all().flat_map(|r| r.spec.objects.clone()).collect();
+            let imports = set.all().flat_map(|r| r.spec.imports.clone());
+            let once = Revision::new(
+                RevisionSpec::new("a", Slot::KeptOrphans, kept_once).with_imports(imports),
+            );
+            assert_eq!(once.spec.imports.len(), 1, "the kept list holds the marker");
             let edges = crate::cluster::edges::Edges::of_revisions([&once]);
             let kept_twice: Vec<RevisionObject> = manifests(&first)
                 .iter()
+                .filter(|m| !crate::manifest::lifecycle::is_marker(m))
                 .filter_map(RevisionObject::of_build)
                 .map(|o| {
                     let needs: Vec<_> = edges.needs(&o.resource_id()).cloned().collect();
                     o.with_needs(needs)
                 })
                 .collect();
-            let twice = Revision::new(RevisionSpec::new("a", Slot::KeptOrphans, kept_twice));
-            assert_eq!(twice.spec.objects, once.spec.objects);
+            let rids: Vec<ResourceId> = kept_twice.iter().map(|o| o.resource_id()).collect();
+            let twice = Revision::new(
+                RevisionSpec::new("a", Slot::KeptOrphans, kept_twice)
+                    .with_imports(edges.imports_reached(&rids)),
+            );
+            assert_eq!(twice.spec, once.spec);
 
             let current = build(&[config_map("stays", "1")]);
-            let live: Vec<Value> = manifests(&first)
+            let live: Vec<Value> = deployed_objects(&first)
                 .into_iter()
-                .chain(manifests(&current))
-                .map(without_graph_notes)
+                .chain(deployed_objects(&current))
                 .collect();
             let (api, _) = cluster(&current, &live).await;
             Revisions::new(&api.client()).create(&twice).await.unwrap();
@@ -1083,13 +1103,7 @@ mod tests {
             let record: DynamicObject =
                 serde_json::from_value(api.object(RECORD_KIND, "a-cur").unwrap()).unwrap();
             for order in prune_orders(&api, &record).await {
-                assert!(
-                    position(&order, "cr") < position(&order, "crd-ref-app-widgets-example-com")
-                );
-                assert!(
-                    position(&order, "crd-ref-app-widgets-example-com")
-                        < position(&order, "operator")
-                );
+                assert_custom_resource_first(&order);
             }
         }
 
@@ -1448,12 +1462,24 @@ mod tests {
             cluster: &str,
             graph: &StoreGraph,
         ) -> crate::plan::CheckedPlan {
+            cli_plan_with(api, cluster, graph, &[]).await
+        }
+
+        /// Plan `graph` for Kix cluster `cluster` with the deploy flags
+        /// `flags`, as [`cli_plan_of`] does.
+        async fn cli_plan_with(
+            api: &FakeApi,
+            cluster: &str,
+            graph: &StoreGraph,
+            flags: &[&str],
+        ) -> crate::plan::CheckedPlan {
             let client = api.client();
             let baseline = current_baseline_of(&client, cluster).await;
-            let mut checked = crate::plan::Planner::new(crate::plan::fixtures::flags(&[]), &|_| {})
-                .plan(graph, cluster, &baseline, Some(&client))
-                .await
-                .unwrap();
+            let mut checked =
+                crate::plan::Planner::new(crate::plan::fixtures::flags(flags), &|_| {})
+                    .plan(graph, cluster, &baseline, Some(&client))
+                    .await
+                    .unwrap();
             let target =
                 crate::plan::Target::connect(client, crate::build_source::SopsSources::Local)
                     .await
@@ -1486,6 +1512,17 @@ mod tests {
             cluster: &str,
             checked: crate::plan::CheckedPlan,
         ) -> Result<crate::cluster::stream::DeployResult, DeployError> {
+            cli_run_with(api, cluster, checked, test_config()).await
+        }
+
+        /// Run `checked` for Kix cluster `cluster` with `config`, as
+        /// [`cli_run_of`] does.
+        async fn cli_run_with(
+            api: &FakeApi,
+            cluster: &str,
+            checked: crate::plan::CheckedPlan,
+            config: SchedulerConfig,
+        ) -> Result<crate::cluster::stream::DeployResult, DeployError> {
             let client = api.client();
             let lock = crate::cluster::head::take(
                 &client,
@@ -1511,7 +1548,7 @@ mod tests {
                     target,
                     lock.clone(),
                     None,
-                    test_config(),
+                    config,
                     Arc::new(crate::cluster::stream::NullObserver),
                 )
                 .await;
@@ -2509,6 +2546,567 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!((again.applies(), again.unchanged()), (0, 1));
+        }
+
+        /// Return an import marker `name` in `ns` for the object `target` of
+        /// kind `kind`, labelled as the library labels every object.
+        fn import_marker(
+            ns: &str,
+            name: &str,
+            api_version: &str,
+            kind: &str,
+            target: &str,
+        ) -> Value {
+            json!({
+                "apiVersion": keys::API_VERSION,
+                "kind": crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND,
+                "metadata": {
+                    "name": name,
+                    "namespace": ns,
+                    "labels": { "app.kubernetes.io/managed-by": "kix" },
+                    "annotations": {
+                        (keys::MODE): "import",
+                        (keys::IMPORT_API_VERSION): api_version,
+                        (keys::IMPORT_KIND): kind,
+                        (keys::IMPORT_NAME): target,
+                    },
+                },
+                "spec": { "instanceName": name, "mode": "import" },
+            })
+        }
+
+        /// Return one marker of each kind the library makes: an import
+        /// instance (`kix.mkImport`), a CRD reference (`scope.mkCRDRef`), a
+        /// Secret reference (`mkSecretRef`), and a Service reference
+        /// (`mkServiceRef`).
+        fn four_markers() -> Vec<Value> {
+            let mut crd_ref = import_marker(
+                "app",
+                "crd-ref-app-widgets-example-com",
+                "apiextensions.k8s.io/v1",
+                "CustomResourceDefinition",
+                "widgets.example.com",
+            );
+            crd_ref["metadata"]["annotations"][keys::CRD_KIND] = json!("Widget");
+            crd_ref["metadata"]["annotations"][keys::CRD_SERVED_VERSIONS] = json!("v1");
+            let mut secret_ref =
+                import_marker("app", "secret-ref-app-creds", "v1", "Secret", "creds");
+            secret_ref["metadata"]["annotations"][keys::IMPORT_SECRET_KEYS] = json!("password");
+            vec![
+                import_marker("kube-system", "platform-dns", "v1", "Service", "kube-dns"),
+                crd_ref,
+                secret_ref,
+                import_marker("app", "service-ref-app-db", "v1", "Service", "db"),
+            ]
+        }
+
+        /// Return each request sent from `from` on that names one of the
+        /// objects `names` of kind PackageInstance.
+        fn marker_requests(api: &FakeApi, from: usize, names: &[&str]) -> Vec<String> {
+            api.requests()[from..]
+                .iter()
+                .filter(|line| {
+                    names
+                        .iter()
+                        .any(|n| line.contains(&format!("/packageinstances/{n}")))
+                })
+                .cloned()
+                .collect()
+        }
+
+        fn names_of(markers: &[Value]) -> Vec<String> {
+            markers
+                .iter()
+                .map(|m| m["metadata"]["name"].as_str().unwrap().to_string())
+                .collect()
+        }
+
+        /// No request a deploy sends names an import marker of any of the
+        /// four kinds, from the CLI or from the operator's repair. The
+        /// cluster holds no object for any of them, and the revisions list
+        /// them as imports.
+        #[tokio::test]
+        async fn no_request_is_sent_for_an_import_marker() {
+            let api = FakeApi::new([]);
+            api.track_owners();
+            let markers = four_markers();
+            let names = names_of(&markers);
+            let names: Vec<&str> = names.iter().map(String::as_str).collect();
+            let with = |record: &str, v: &str| {
+                let mut all = markers.clone();
+                all.push(config_map("conf", v));
+                release(record, &all)
+            };
+            let v1 = with("a-v1", "1");
+            let first = cli_deploy(&api, &v1).await.unwrap();
+            assert_eq!(first.failed, 0, "{first:?}");
+            let v2 = with("a-v2", "2");
+            cli_deploy(&api, &v2).await.unwrap();
+            api.patch_object("ConfigMap", "conf", |o| o["data"]["k"] = json!("by hand"));
+            let repair = operator_repair(&api, operator_plan(&api, &v2).await).await;
+            assert_eq!(repair.failed, 0, "{repair:?}");
+            assert_eq!(api.object("ConfigMap", "conf").unwrap()["data"]["k"], "2");
+
+            assert_eq!(marker_requests(&api, 0, &names), Vec::<String>::new());
+            let held = api.names(crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND);
+            assert!(
+                names.iter().all(|n| !held.iter().any(|h| h == n)),
+                "{held:?}"
+            );
+            let imports: std::collections::BTreeSet<String> = Revisions::new(&api.client())
+                .list("a")
+                .await
+                .unwrap()
+                .readable
+                .iter()
+                .flat_map(|r| r.spec.imports.iter().map(|i| i.name.clone()))
+                .collect();
+            assert_eq!(imports, names.iter().map(|n| n.to_string()).collect());
+            assert_eq!(writes(&cli_plan(&api, &v2).await), Vec::<String>::new());
+        }
+
+        /// Two Kix clusters on one Kubernetes cluster whose flavor gives each
+        /// a marker of the same name, with different content. Neither
+        /// writes it, so both deploy in either order with no conflict and
+        /// then plan nothing.
+        #[tokio::test]
+        async fn two_kix_clusters_whose_markers_differ_share_a_kubernetes_cluster() {
+            let dns = import_marker("kube-system", "platform-dns", "v1", "Service", "kube-dns");
+            let mut other = dns.clone();
+            other["metadata"]["annotations"][keys::IMPORT_NAME] = json!("coredns");
+            let a = release_of("a", "a-v1", &[dns, config_map("in-a", "1")]);
+            let d = release_of("d", "d-v1", &[other, config_map("in-d", "1")]);
+            for order in [["a", "d"], ["d", "a"]] {
+                let api = FakeApi::new([]);
+                api.track_owners();
+                for cluster in order {
+                    let graph = if cluster == "a" { &a } else { &d };
+                    let checked = cli_plan_of(&api, cluster, graph).await;
+                    let result = cli_run_of(&api, cluster, checked)
+                        .await
+                        .unwrap_or_else(|e| panic!("{order:?}: {cluster}: {e}"));
+                    assert_eq!(result.failed, 0, "{order:?}: {cluster}: {result:?}");
+                }
+                for (cluster, graph) in [("a", &a), ("d", &d)] {
+                    let again = cli_plan_of(&api, cluster, graph).await;
+                    assert_eq!(writes(&again), Vec::<String>::new(), "{order:?}: {cluster}");
+                }
+                assert_eq!(
+                    marker_requests(&api, 0, &["platform-dns"]),
+                    Vec::<String>::new()
+                );
+            }
+        }
+
+        /// Return the build of Kix cluster `a` with record `record` that
+        /// holds `manifests` at the store paths their pairs name, as
+        /// [`build_at`] does.
+        fn release_at(record: &str, manifests: &[(String, Value)]) -> StoreGraph {
+            let mut all = manifests.to_vec();
+            all.push((
+                hash('r'),
+                json!({
+                    "apiVersion": keys::API_VERSION,
+                    "kind": crate::manifest::lifecycle::RECORD_KIND,
+                    "metadata": { "name": record, "labels": { (keys::CLUSTER_LABEL): "a" } },
+                    "spec": { "cluster": "a" },
+                }),
+            ));
+            let mut graph = build_at(&all);
+            graph.activation_path = graph
+                .resources
+                .iter()
+                .find(|(_, r)| crate::manifest::lifecycle::is_record(&r.manifest))
+                .map(|(p, _)| p.clone())
+                .unwrap();
+            graph
+        }
+
+        /// The scheduler settings of a run that checks what an unchanged
+        /// object it depends on, and that waits one second.
+        fn checking_config(on_error: crate::cluster::scheduler::OnErrorPolicy) -> SchedulerConfig {
+            SchedulerConfig {
+                timeout: std::time::Duration::from_secs(1),
+                on_error,
+                check_unchanged: true,
+                ..test_config()
+            }
+        }
+
+        /// Return whether a write was sent from `from` on for the object
+        /// whose request path ends in `path`.
+        fn written_to(api: &FakeApi, from: usize, path: &str) -> bool {
+            api.requests()[from..]
+                .iter()
+                .any(|line| line.starts_with("PATCH") && line.contains(&format!("{path}?")))
+        }
+
+        /// A custom resource needs the CRD marker of its kind, and the
+        /// marker requires the operator. Kix writes nothing for the marker,
+        /// and the custom resource still waits for the operator: when the
+        /// operator never becomes ready, the custom resource is not written,
+        /// and an object that needs neither is.
+        #[tokio::test]
+        async fn an_object_that_needs_a_marker_waits_for_what_the_marker_needs() {
+            let mut operator = deployment("operator", false);
+            operator.as_object_mut().unwrap().remove("status");
+            let mut crd_ref = import_marker(
+                "app",
+                "crd-ref-app-widgets-example-com",
+                "apiextensions.k8s.io/v1",
+                "CustomResourceDefinition",
+                "widgets.example.com",
+            );
+            crd_ref["metadata"]["annotations"][keys::CRD_KIND] = json!("Widget");
+            crd_ref["metadata"]["annotations"][keys::CRD_SERVED_VERSIONS] = json!("v1");
+            crd_ref["metadata"]["annotations"][keys::DEPENDS_ON] =
+                json!(format!("requires:{}", hash('o')));
+            let cr = depending(config_map("cr", "1"), &hash('m'));
+            let v1 = release_at(
+                "a-v1",
+                &[
+                    (hash('o'), operator),
+                    (hash('m'), crd_ref),
+                    (hash('c'), cr),
+                    (hash('k'), config_map("calm", "1")),
+                ],
+            );
+            let api = FakeApi::new([]);
+            api.track_owners();
+            let checked = cli_plan(&api, &v1).await;
+            let result = cli_run_with(
+                &api,
+                "a",
+                checked,
+                SchedulerConfig {
+                    timeout: std::time::Duration::from_secs(1),
+                    on_error: crate::cluster::scheduler::OnErrorPolicy::Continue,
+                    ..test_config()
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(result.failed, 1, "{result:?}");
+            assert!(
+                written_to(&api, 0, "/deployments/operator"),
+                "{:?}",
+                api.requests()
+            );
+            assert!(
+                written_to(&api, 0, "/configmaps/calm"),
+                "{:?}",
+                api.requests()
+            );
+            assert!(
+                !written_to(&api, 0, "/configmaps/cr"),
+                "{:?}",
+                api.requests()
+            );
+            assert_eq!(
+                marker_requests(&api, 0, &["crd-ref-app-widgets-example-com"]),
+                Vec::<String>::new()
+            );
+        }
+
+        /// The build `user` needs the Secret reference marker for `creds`,
+        /// and `other` needs nothing. `user` and `other` hold `u` and `o`.
+        fn needs_creds(record: &str, u: &str, o: &str) -> StoreGraph {
+            let marker = import_marker("app", "secret-ref-app-creds", "v1", "Secret", "creds");
+            release_at(
+                record,
+                &[
+                    (hash('m'), marker),
+                    (hash('u'), depending(config_map("user", u), &hash('m'))),
+                    (hash('t'), config_map("other", o)),
+                ],
+            )
+        }
+
+        fn secret(name: &str) -> Value {
+            json!({
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": { "name": name, "namespace": "app" },
+                "data": { "password": "c2VjcmV0" },
+            })
+        }
+
+        /// A deploy checks that an import's target exists only when it
+        /// writes an object that depends on the import. With the Secret
+        /// gone, a deploy that changes only `other` succeeds, and one that
+        /// changes `user` stops before it writes `user`.
+        #[tokio::test]
+        async fn a_missing_import_target_stops_only_a_write_that_needs_it() {
+            use crate::cluster::scheduler::OnErrorPolicy;
+            let api = FakeApi::new([secret("creds")]);
+            api.track_owners();
+            let v1 = needs_creds("a-v1", "1", "1");
+            let checked = cli_plan(&api, &v1).await;
+            let first = cli_run_with(&api, "a", checked, checking_config(OnErrorPolicy::Stop))
+                .await
+                .unwrap();
+            assert_eq!(first.failed, 0, "{first:?}");
+
+            api.patch_object("Secret", "creds", |o| o["metadata"]["name"] = json!("gone"));
+            let before = api.requests().len();
+            let v2 = needs_creds("a-v2", "1", "2");
+            let checked = cli_plan(&api, &v2).await;
+            assert_eq!(writes(&checked), ["other"]);
+            let second = cli_run_with(&api, "a", checked, checking_config(OnErrorPolicy::Stop))
+                .await
+                .unwrap();
+            assert_eq!(second.failed, 0, "{second:?}");
+            assert!(written_to(&api, before, "/configmaps/other"));
+
+            let before = api.requests().len();
+            let v3 = needs_creds("a-v3", "2", "2");
+            let checked = cli_plan(&api, &v3).await;
+            assert_eq!(writes(&checked), ["user"]);
+            let third =
+                cli_run_with(&api, "a", checked, checking_config(OnErrorPolicy::Stop)).await;
+            let stopped = match third {
+                Ok(result) => result.failed > 0,
+                Err(_) => true,
+            };
+            assert!(stopped, "the deploy stops on the missing Secret");
+            assert!(
+                !written_to(&api, before, "/configmaps/user"),
+                "{:?}",
+                api.requests()
+            );
+            assert_eq!(
+                marker_requests(&api, 0, &["secret-ref-app-creds"]),
+                Vec::<String>::new()
+            );
+        }
+
+        /// Return `set` as an earlier build of Kix wrote it, in format 1:
+        /// each marker among the objects, with no `needs`, no `imports`, and
+        /// no lifecycle.
+        fn in_format_one(set: &RevisionSet) -> RevisionSet {
+            let old = |r: &Revision| {
+                let mut objects: Vec<RevisionObject> = r
+                    .spec
+                    .objects
+                    .iter()
+                    .map(|o| RevisionObject {
+                        needs: Vec::new(),
+                        ..o.clone()
+                    })
+                    .collect();
+                objects.extend(
+                    r.spec
+                        .imports
+                        .iter()
+                        .map(|i| RevisionObject::of_id(&i.hash, &i.resource_id())),
+                );
+                let slot = match &r.spec.slot {
+                    Slot::Instance {
+                        namespace, name, ..
+                    } => Slot::Instance {
+                        namespace: namespace.clone(),
+                        name: name.clone(),
+                        lifecycle: None,
+                    },
+                    other => other.clone(),
+                };
+                let mut spec = RevisionSpec::new(&r.spec.cluster, slot, objects);
+                spec.format = 1;
+                Revision::new(spec)
+            };
+            RevisionSet {
+                instances: set
+                    .instances
+                    .iter()
+                    .map(|(k, r)| (k.clone(), old(r)))
+                    .collect(),
+                cluster_level: old(&set.cluster_level),
+            }
+        }
+
+        /// A record whose format 1 revisions list a CRD marker among their
+        /// objects, and whose objects, the marker among them, carry the
+        /// notes an earlier Kix wrote. With no build on this machine, a
+        /// prune still deletes the custom resource before the marker and
+        /// the marker before the operator.
+        #[tokio::test]
+        async fn a_format_one_revision_still_orders_the_delete_through_a_live_marker() {
+            let mut chain = custom_resource_chain();
+            chain.push((hash('s'), config_map("stays", "1")));
+            let deployed = build_at(&chain);
+            let set = in_format_one(&RevisionSet::of("a", &deployed));
+            // An earlier Kix owned the notes it wrote.
+            let live: Vec<Value> = manifests(&deployed)
+                .into_iter()
+                .map(|mut m| {
+                    let notes: serde_json::Map<String, Value> = m["metadata"]["annotations"]
+                        .as_object()
+                        .into_iter()
+                        .flatten()
+                        .map(|(k, _)| (format!("f:{k}"), json!({})))
+                        .collect();
+                    m["metadata"]["managedFields"] = json!([{
+                        "manager": "kix/a",
+                        "operation": "Apply",
+                        "apiVersion": "v1",
+                        "fieldsV1": { "f:metadata": { "f:annotations": notes, "f:labels": {} } },
+                    }]);
+                    m
+                })
+                .collect();
+            let (api, record) = cluster_of_set(&set, &live).await;
+            for order in prune_orders(&api, &record).await {
+                assert!(
+                    position(&order, "cr") < position(&order, "crd-ref-app-widgets-example-com")
+                );
+                assert!(
+                    position(&order, "crd-ref-app-widgets-example-com")
+                        < position(&order, "operator")
+                );
+            }
+        }
+
+        /// A marker an earlier Kix applied, which the current record's
+        /// format 1 revision lists among its objects, has left the build.
+        /// A deploy without `--prune` keeps it and lists it as kept. It is no
+        /// write of the plan and no drift, and the run sends it only the
+        /// migration write that removes the retired notes, once. A deploy
+        /// with `--prune` deletes it.
+        #[tokio::test]
+        async fn a_marker_an_older_kix_applied_is_a_leftover() {
+            let marker = import_marker("app", "service-ref-app-db", "v1", "Service", "db");
+            let v1 = release("a-v1", &[marker.clone(), config_map("conf", "1")]);
+            let set = in_format_one(&RevisionSet::of("a", &v1));
+            let mut live_marker = manifests(&v1)
+                .into_iter()
+                .find(crate::manifest::lifecycle::is_marker)
+                .unwrap();
+            live_marker["metadata"]["managedFields"] = json!([{
+                "manager": "kix/a",
+                "operation": "Apply",
+                "apiVersion": keys::API_VERSION,
+                "fieldsV1": { "f:metadata": { "f:labels": {} } },
+            }]);
+            let conf = manifests(&v1)
+                .into_iter()
+                .find(|m| m["metadata"]["name"] == "conf")
+                .unwrap();
+            let (api, _) = cluster_of_set(&set, &[live_marker, without_graph_notes(conf)]).await;
+            api.track_owners();
+
+            let kept = cli_plan(&api, &v1).await;
+            assert_eq!(names(kept.orphans()), ["service-ref-app-db"]);
+            assert!(
+                !writes(&kept).iter().any(|n| n == "service-ref-app-db"),
+                "{:?}",
+                writes(&kept)
+            );
+            let before = api.requests().len();
+            cli_run(&api, kept).await.unwrap();
+            assert!(
+                api.object("PackageInstance", "service-ref-app-db")
+                    .is_some()
+            );
+            // The one write is the migration write every object an earlier
+            // Kix left gets once: it removes the retired notes.
+            let sent: Vec<String> = marker_requests(&api, before, &["service-ref-app-db"])
+                .into_iter()
+                .filter(|r| !r.starts_with("GET"))
+                .collect();
+            assert_eq!(sent.len(), 1, "{sent:?}");
+            assert!(sent[0].starts_with("PATCH"), "{sent:?}");
+            let left = api.object("PackageInstance", "service-ref-app-db").unwrap();
+            assert_eq!(keys::get(&left, keys::IDENTITY_HASH), None);
+            assert_eq!(left["spec"], marker["spec"]);
+            let before = api.requests().len();
+            cli_run(&api, cli_plan(&api, &v1).await).await.unwrap();
+            let sent: Vec<String> = marker_requests(&api, before, &["service-ref-app-db"])
+                .into_iter()
+                .filter(|r| !r.starts_with("GET"))
+                .collect();
+            assert_eq!(sent, Vec::<String>::new());
+            let listed_as_kept = Revisions::new(&api.client())
+                .list("a")
+                .await
+                .unwrap()
+                .readable
+                .iter()
+                .filter(|r| r.spec.slot == Slot::KeptOrphans)
+                .any(|r| {
+                    r.spec
+                        .objects
+                        .iter()
+                        .any(|o| o.name == "service-ref-app-db")
+                });
+            assert!(listed_as_kept);
+
+            let pruned = cli_plan_with(&api, "a", &v1, &["--prune"]).await;
+            assert_eq!(names(pruned.orphans()), ["service-ref-app-db"]);
+            assert!(!writes(&pruned).iter().any(|n| n == "service-ref-app-db"));
+            cli_run(&api, pruned).await.unwrap();
+            assert!(
+                api.object("PackageInstance", "service-ref-app-db")
+                    .is_none()
+            );
+        }
+
+        /// A deploy that keeps a custom resource and its operator as orphans
+        /// writes a kept-orphans revision that lists the CRD marker the
+        /// custom resource needs, with the marker's own needs, so a later
+        /// prune with no build still orders the two.
+        #[tokio::test]
+        async fn a_kept_orphans_revision_lists_the_markers_its_objects_need() {
+            let mut crd_ref = import_marker(
+                "app",
+                "crd-ref-app-widgets-example-com",
+                "apiextensions.k8s.io/v1",
+                "CustomResourceDefinition",
+                "widgets.example.com",
+            );
+            crd_ref["metadata"]["annotations"][keys::CRD_KIND] = json!("Widget");
+            crd_ref["metadata"]["annotations"][keys::CRD_SERVED_VERSIONS] = json!("v1");
+            crd_ref["metadata"]["annotations"][keys::DEPENDS_ON] =
+                json!(format!("requires:{}", hash('o')));
+            let v1 = release_at(
+                "a-v1",
+                &[
+                    (hash('o'), deployment("operator", false)),
+                    (hash('m'), crd_ref),
+                    (hash('c'), depending(config_map("cr", "1"), &hash('m'))),
+                    (hash('s'), config_map("stays", "1")),
+                ],
+            );
+            let v2 = release_at("a-v2", &[(hash('s'), config_map("stays", "1"))]);
+            let api = FakeApi::new([]);
+            api.track_owners();
+            let first = cli_deploy(&api, &v1).await.unwrap();
+            assert_eq!(first.failed, 0, "{first:?}");
+            let second = cli_deploy(&api, &v2).await.unwrap();
+            assert_eq!(second.failed, 0, "{second:?}");
+            let listed = Revisions::new(&api.client())
+                .list("a")
+                .await
+                .unwrap()
+                .readable;
+            let kept = listed
+                .iter()
+                .find(|r| r.spec.slot == Slot::KeptOrphans)
+                .expect("a kept-orphans revision");
+            let kept_names: Vec<&str> = kept.spec.objects.iter().map(|o| o.name.as_str()).collect();
+            assert!(kept_names.contains(&"cr") && kept_names.contains(&"operator"));
+            assert!(!kept_names.contains(&"crd-ref-app-widgets-example-com"));
+            let [import] = kept.spec.imports.as_slice() else {
+                panic!("one import: {:?}", kept.spec.imports);
+            };
+            assert_eq!(import.name, "crd-ref-app-widgets-example-com");
+            assert_eq!(
+                import
+                    .needs
+                    .iter()
+                    .map(|n| n.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["operator"]
+            );
         }
     }
 }

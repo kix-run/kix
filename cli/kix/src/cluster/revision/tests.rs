@@ -10,6 +10,7 @@ use super::*;
 use crate::cluster::fake_api::FakeApi;
 use crate::eval::store_graph::{PackageNode, ResourceNode, StoreGraph};
 use crate::manifest::keys;
+use crate::manifest::types::ResourceId;
 
 const CLUSTER: &str = "c1";
 
@@ -1294,4 +1295,188 @@ mod applied_tests {
             None
         );
     }
+}
+
+/// Return an import marker `name` in `ns` that stands for the object
+/// `target` of kind `kind`, as the library writes one.
+fn marker(ns: &str, name: &str, api_version: &str, kind: &str, target: &str) -> Value {
+    json!({
+        "apiVersion": keys::API_VERSION,
+        "kind": "PackageInstance",
+        "metadata": {
+            "name": name,
+            "namespace": ns,
+            "annotations": {
+                (keys::MODE): "import",
+                (keys::IMPORT_API_VERSION): api_version,
+                (keys::IMPORT_KIND): kind,
+                (keys::IMPORT_NAME): target,
+            },
+        },
+        "spec": { "instanceName": name },
+    })
+}
+
+/// A build with the package `web`, whose custom resource `cr` (written as a
+/// ConfigMap) needs a CRD marker that requires the ConfigMap `a`, and the
+/// import instance `kube-system/platform-dns`, whose own PackageInstance is
+/// a marker for the DNS Service.
+fn graph_with_imports() -> StoreGraph {
+    let mut crd_ref = marker(
+        "apps",
+        "crd-ref-web-widgets-example-com",
+        "apiextensions.k8s.io/v1",
+        "CustomResourceDefinition",
+        "widgets.example.com",
+    );
+    let annotations = &mut crd_ref["metadata"]["annotations"];
+    annotations[keys::CRD_KIND] = json!("Widget");
+    annotations[keys::CRD_SERVED_VERSIONS] = json!("v1");
+    annotations[keys::DEPENDS_ON] = json!(format!("requires:{:a>32}", "2"));
+    let mut cr = cm("apps", "cr");
+    cr["metadata"]["annotations"] = json!({ (keys::DEPENDS_ON): format!("{:a>32}", "9") });
+    let web = Package {
+        namespace: "apps",
+        name: "web",
+        instance: "1",
+        resources: vec![("2", cm("apps", "a")), ("9", crd_ref), ("3", cr)],
+    };
+    let dns = Package {
+        namespace: "kube-system",
+        name: "platform-dns",
+        instance: "4",
+        resources: Vec::new(),
+    };
+    let mut g = graph(&[web, dns], &[], "8");
+    for node in g.resources.values_mut() {
+        if node.manifest["metadata"]["name"] == "platform-dns" {
+            node.manifest = marker("kube-system", "platform-dns", "v1", "Service", "kube-dns");
+        }
+    }
+    g
+}
+
+/// A revision lists an instance's import markers under `imports`, with what
+/// each stands for and its own needs, and not among its objects. An object
+/// that needs a marker names it. An import instance's revision has no
+/// objects.
+#[test]
+fn a_revision_lists_import_markers_apart_from_its_objects() {
+    let set = RevisionSet::of(CLUSTER, &graph_with_imports());
+    let web = &set.instances["apps/web"];
+    let objects: Vec<&str> = web.spec.objects.iter().map(|o| o.name.as_str()).collect();
+    let mut sorted = objects.clone();
+    sorted.sort();
+    assert_eq!(sorted, ["a", "cr", "web"]);
+    assert_eq!(web.spec.imports.len(), 1);
+    let import = &web.spec.imports[0];
+    assert_eq!(import.name, "crd-ref-web-widgets-example-com");
+    assert_eq!(import.namespace.as_deref(), Some("apps"));
+    assert_eq!(
+        import.target,
+        Some(ImportedObject {
+            api_version: "apiextensions.k8s.io/v1".into(),
+            kind: "CustomResourceDefinition".into(),
+            namespace: None,
+            name: "widgets.example.com".into(),
+        })
+    );
+    assert_eq!(
+        import.needs,
+        [Need::of(
+            &ResourceId::new("", "ConfigMap", "apps", "a"),
+            Some("requires")
+        )]
+    );
+    let cr = web.spec.objects.iter().find(|o| o.name == "cr").unwrap();
+    assert_eq!(cr.needs, [Need::of(&import.resource_id(), None)]);
+
+    let dns = &set.instances["kube-system/platform-dns"];
+    assert!(dns.spec.objects.is_empty());
+    assert_eq!(dns.spec.imports.len(), 1);
+    assert_eq!(
+        dns.spec.imports[0].target.as_ref().map(|t| t.resource_id()),
+        Some(ResourceId::new("", "Service", "kube-system", "kube-dns"))
+    );
+    let stored = serde_json::to_value(&web.spec).unwrap();
+    assert_eq!(
+        stored["imports"][0]["target"]["apiVersion"],
+        "apiextensions.k8s.io/v1"
+    );
+}
+
+/// A revision with imports reads back whole and keeps its name.
+#[tokio::test]
+async fn a_revision_with_imports_reads_back() {
+    let api = FakeApi::new([]);
+    let store = Revisions::new(&api.client());
+    for revision in RevisionSet::of(CLUSTER, &graph_with_imports()).all() {
+        store.create(revision).await.unwrap();
+        assert_eq!(
+            store.get(&revision.name).await.unwrap().as_ref(),
+            Some(revision)
+        );
+    }
+}
+
+/// The package index read from revisions lists each marker in its instance,
+/// names it, and says it is an import, so readers place it as the build did
+/// and do not look for it on the cluster.
+#[test]
+fn the_package_index_lists_imports() {
+    let set = RevisionSet::of(CLUSTER, &graph_with_imports());
+    let index = RevisionMap::of(&set).package_index(|name| set.all().find(|r| r.name == name));
+    let dns_hash = &set.instances["kube-system/platform-dns"].spec.imports[0].hash;
+    let crd_ref_hash = &set.instances["apps/web"].spec.imports[0].hash;
+    assert_eq!(
+        &index.packages["kube-system/platform-dns"].instance,
+        dns_hash
+    );
+    assert!(index.packages["apps/web"].resources.contains(crd_ref_hash));
+    assert_eq!(
+        index.imports,
+        [dns_hash.clone(), crd_ref_hash.clone()]
+            .into_iter()
+            .collect()
+    );
+    assert!(matches!(
+        index.name_of(dns_hash),
+        Some(crate::eval::package_index::IndexedName::Named(rid))
+            if rid == ResourceId::new(keys::GROUP, "PackageInstance", "kube-system", "platform-dns")
+    ));
+}
+
+/// The edges of revisions with imports name what each marker stands for,
+/// and an edge to a marker no manifest stands for passes on to what the
+/// marker needs.
+#[test]
+fn edges_pass_through_a_marker_no_manifest_stands_for() {
+    let set = RevisionSet::of(CLUSTER, &graph_with_imports());
+    let edges = crate::cluster::edges::Edges::of_revisions(set.all());
+    let crd_ref = set.instances["apps/web"].spec.imports[0].resource_id();
+    assert_eq!(
+        edges.import(&crd_ref),
+        Some(ResourceId::new(
+            "apiextensions.k8s.io",
+            "CustomResourceDefinition",
+            crate::manifest::types::CLUSTER_SCOPED,
+            "widgets.example.com"
+        ))
+    );
+    let cr = ResourceId::new("", "ConfigMap", "apps", "cr");
+    let a = ResourceId::new("", "ConfigMap", "apps", "a");
+    let through: Vec<ResourceId> = edges
+        .needs_through_imports(&cr, |rid| *rid == a)
+        .into_iter()
+        .map(Need::resource_id)
+        .collect();
+    assert_eq!(through, std::slice::from_ref(&a));
+    let direct: Vec<ResourceId> = edges
+        .needs_through_imports(&cr, |rid| *rid == a || *rid == crd_ref)
+        .into_iter()
+        .map(Need::resource_id)
+        .collect();
+    assert_eq!(direct, std::slice::from_ref(&crd_ref));
+    assert_eq!(edges.imports_reached([&cr]).len(), 1);
+    assert!(edges.imports_reached([&a]).is_empty());
 }
