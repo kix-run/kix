@@ -23,7 +23,11 @@
 //! What a record names comes, in this order, from its format 1 revisions,
 //! from its package index when the index names the objects, from the live
 //! objects whose build hash the index lists, and from the live objects
-//! whose note lists the record. What each object depends on comes from the
+//! whose note lists the record. An object the index does not place goes in
+//! the instance its `kix.run/package` and `kix.run/package-namespace` notes
+//! name. An instance's own PackageInstance, which an older Kix stamped
+//! `_cluster`, goes in its own instance. An object with no package note, or
+//! one stamped `_cluster`, goes in the cluster level. What each object depends on comes from the
 //! `kix.run/depends-on` note of its live object, and an instance's lifecycle
 //! from the `kix.run/lifecycle` note of its live objects, because an older
 //! Kix recorded them nowhere else.
@@ -281,6 +285,25 @@ impl<'a> Live<'a> {
         object.with_needs(needs)
     }
 
+    /// Return the key of the package instance whose revision names
+    /// `object`, read from the notes of its live object, or `None` for the
+    /// cluster level. An older Kix stamped each object with the instance
+    /// that built it, and an instance's own PackageInstance with `_cluster`.
+    /// The notes describe the build that wrote the object last, as
+    /// [`Live::with_noted_needs`] says.
+    fn noted_instance(&self, object: &RevisionObject) -> Option<String> {
+        let obj = self.by_id.get(&object.resource_id())?;
+        let manifest = crate::manifest::types::to_manifest_value(obj);
+        if let Some((namespace, name)) = crate::eval::store_graph::instance_of_record(&manifest) {
+            return Some(format!("{namespace}/{name}"));
+        }
+        let annotations = obj.metadata.annotations.as_ref()?;
+        if keys::get_meta(annotations, keys::PACKAGE)? == crate::manifest::types::CLUSTER_SCOPED {
+            return None;
+        }
+        keys::package_of_meta(annotations)
+    }
+
     /// Return the lifecycle the `kix.run/lifecycle` note gives the first of
     /// `objects` whose live object carries one.
     fn lifecycle_of(&self, objects: &[RevisionObject]) -> Option<String> {
@@ -362,11 +385,15 @@ fn named_by(record: &Record, live: &Live<'_>) -> BTreeMap<Option<String>, Vec<Re
             .flatten()
             .map(RevisionObject::resource_id)
             .collect();
-        let noted = live
+        for object in live
             .noting(hash)
             .into_iter()
-            .filter(|o| !known.contains(&o.resource_id()));
-        out.entry(None).or_default().extend(noted);
+            .filter(|o| !known.contains(&o.resource_id()))
+        {
+            out.entry(live.noted_instance(&object))
+                .or_default()
+                .push(object);
+        }
     }
     for objects in out.values_mut() {
         objects.retain(|o| {
@@ -644,7 +671,9 @@ fn convert(
                 ),
                 objects: set.cluster_level.spec.objects.len(),
                 bytes: set.cluster_level.stored_bytes(),
-                next: "Without a package index, Kix cannot split the record's objects by package instance. \
+                next: "Without a package index, Kix reads package membership from the live objects on the cluster \
+                       and puts cluster-level objects and objects without package annotations into one revision. \
+                       Kix stopped without converting this record. \
                        Deploy an updated build of this cluster once with Kix 0.9 to write a package index, then upgrade Kix and deploy again.",
             })));
         }

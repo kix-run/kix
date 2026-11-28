@@ -1,0 +1,4 @@
++++
+kind = "fixed"
++++
+When converting a deployment record that has no package index (such as records written before Kix 0.6) into `PackageInstanceRevision` resources, Kix now groups objects under their package instances. Kix reads each object's package instance from the `kix.run/package` and `kix.run/package-namespace` annotations on the live object, places each instance's own `PackageInstance` resource in that instance, and records the instance's lifecycle from `kix.run/lifecycle`. Cluster-level objects and objects missing those package annotations remain at the cluster level. Previously, Kix put every object from such a record into a single cluster-level revision with no package instances or lifecycles, whether planning or deploying a cluster or reading it with `cluster::recorded` in the `kix-lib` Rust crate.
