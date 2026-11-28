@@ -1634,7 +1634,7 @@ mod tests {
         assert!(!text.contains("hunter2"), "{text}");
         let footer = render::render_text(&result.doc);
         assert!(
-            footer.contains("comparison with objects saved from the cluster"),
+            footer.contains("comparing against a saved snapshot or manifest directory"),
             "{footer}"
         );
         assert!(!footer.contains("comparison with the cluster."), "{footer}");

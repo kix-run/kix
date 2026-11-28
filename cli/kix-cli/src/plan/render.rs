@@ -1209,7 +1209,7 @@ fn live_read_note(plan: &Plan) -> &'static str {
             "Made by a read-only comparison with the cluster. Not checked: admission webhooks, admission policies, field ownership conflicts, and invalid objects; `kix plan` checks them."
         }
         None => {
-            "Made by a comparison with objects saved from the cluster, such as a snapshot, not with the cluster itself. Not checked: admission webhooks, admission policies, field ownership conflicts, and invalid objects; `kix plan` checks them."
+            "Made by comparing against a saved snapshot or manifest directory, without reading the cluster. Not checked: admission webhooks, admission policies, field ownership conflicts, and invalid objects. Run `kix plan` to check them against the cluster."
         }
     }
 }
