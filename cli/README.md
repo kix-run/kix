@@ -1674,8 +1674,13 @@ head's, else the newest by phase) and each `Failed` or `Partial` record
 (`convert::targets`). What a record names comes from its package index with
 names, else from the live objects carrying the hashes the index lists, else
 from the live objects whose note lists it; revisions are split by package
-instance and refused past the size limit (a record without an index, whose
-objects all go to the cluster level, gets its own advice). When a record
+instance and refused past the size limit. An object the index does not
+place goes in the instance its `kix.run/package` and
+`kix.run/package-namespace` notes name (an instance's own PackageInstance,
+stamped `_cluster`, in its own instance, by `store_graph::instance_of_record`),
+and one with no package note or stamped `_cluster` in the cluster level
+(`Live::noted_instance`). A record without an index whose cluster level is
+too large gets its own advice. When a record
 needs the listing (no index, an index without names, or a kept build without
 a map) and the listing missed a kind (`inventory::Listed::forbidden`),
 `convert::plan` refuses with `Refusal::NotListed` (`[K9558]`), in the run

@@ -523,6 +523,66 @@ fn a_record_without_an_index_too_large_for_one_revision_is_refused() {
     );
 }
 
+/// A record without a package index, as Kix before 0.6 wrote it, places
+/// each object by the package notes on its live object: a member by
+/// `kix.run/package` and `kix.run/package-namespace`, an instance's own
+/// PackageInstance (stamped `_cluster`) in its own instance, and an object
+/// stamped `_cluster` or with no package note in the cluster level. The
+/// instance's lifecycle comes along.
+#[test]
+fn a_record_without_an_index_places_objects_by_their_package_notes() {
+    let own = parsed(&[record("cur", PHASE_ACTIVE, None, &[])]);
+    let cur = h("cur");
+    let stamp = |mut v: Value, package: &str, namespace: &str| {
+        v["metadata"]["annotations"][keys::PACKAGE] = json!(package);
+        v["metadata"]["annotations"][keys::PACKAGE_NAMESPACE] = json!(namespace);
+        v
+    };
+    let mut member = stamp(live("web", &h("web"), &[&cur]), "web", "app");
+    member["metadata"]["annotations"][keys::LIFECYCLE] = json!("stateful");
+    let mut pi = stamp(live("web", &h("pi"), &[&cur]), "_cluster", "_cluster");
+    pi["apiVersion"] = json!(keys::API_VERSION);
+    pi["kind"] = json!("PackageInstance");
+    pi["spec"] = json!({ "instanceName": "web", "namespaceName": "app" });
+    let namespace = stamp(live("ns", &h("ns"), &[&cur]), "_cluster", "_cluster");
+    let unstamped = live("loose", &h("loose"), &[&cur]);
+    let live_values = [member, pi, namespace, unstamped];
+    let conversion = plan(
+        CLUSTER,
+        current_of(None, &own),
+        &own,
+        &[],
+        &objects(&live_values),
+        &[],
+        &Default::default(),
+    )
+    .unwrap();
+    let converted = &conversion.records()[0];
+    let instance = converted
+        .revisions
+        .iter()
+        .find(|r| r.name == converted.map.instances["app/web"])
+        .unwrap();
+    let mut kinds: Vec<(&str, &str)> = instance
+        .spec
+        .objects
+        .iter()
+        .map(|o| (o.kind.as_str(), o.name.as_str()))
+        .collect();
+    kinds.sort();
+    assert_eq!(kinds, [("ConfigMap", "web"), ("PackageInstance", "web")]);
+    assert!(matches!(
+        &instance.spec.slot,
+        Slot::Instance { lifecycle: Some(l), .. } if l == "stateful"
+    ));
+    let cluster_level = converted
+        .revisions
+        .iter()
+        .find(|r| r.name == converted.map.cluster_level)
+        .unwrap();
+    assert_eq!(names(cluster_level), ["loose", "ns"]);
+}
+
 /// An older Kix recorded an object's dependencies only in its
 /// `kix.run/depends-on` note, and an instance's lifecycle only in its
 /// objects' `kix.run/lifecycle` note. The conversion writes both into the
