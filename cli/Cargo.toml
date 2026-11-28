@@ -6,7 +6,7 @@ members = ["kix-cli", "kix", "kix-core", "kix-container", "kix-bundle", "kix-ope
 name = "kix"
 
 [workspace.package]
-version = "0.10.0-rc.6"
+version = "0.10.0-rc.7"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/kix-run/kix"
