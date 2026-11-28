@@ -57,7 +57,7 @@ pub enum RevisionError {
 }
 
 /// The revisions one list request returned.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Listed {
     /// The revisions that match their names, sorted by name.
     pub readable: Vec<Revision>,

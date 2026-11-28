@@ -243,6 +243,30 @@ struct Raw {
     heads_problem: Option<Problem>,
 }
 
+/// What one read of Kix's state found, as `kix snapshot` saves it: the
+/// heads, the records, and the revisions of every Kix cluster on the
+/// Kubernetes cluster. [`Tenancy::of_saved`] reads it back the way
+/// [`read`] reads the live state.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SavedState {
+    pub heads: BTreeMap<String, HeadStatus>,
+    pub records: Vec<DynamicObject>,
+    pub revisions: SavedRevisions,
+}
+
+/// The revisions one read found.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", tag = "read")]
+pub enum SavedRevisions {
+    /// No current record had a readable map, so the read did not list them.
+    NotListed,
+    Listed(Listed),
+    /// The list request failed for this reason.
+    Failed {
+        reason: String,
+    },
+}
+
 /// The objects earlier deploys left on the cluster, as a record lists them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kept<'a> {
@@ -400,6 +424,32 @@ impl Tenancy {
         }
         tenancy.read_legacy(records, &parsed);
         tenancy
+    }
+
+    /// Return what this tenancy was read from, for `kix snapshot` to save.
+    pub fn saved(&self) -> SavedState {
+        SavedState {
+            heads: self.raw.heads.clone(),
+            records: self.raw.records.clone(),
+            revisions: match &self.raw.revisions {
+                Ok(None) => SavedRevisions::NotListed,
+                Ok(Some(listed)) => SavedRevisions::Listed(listed.clone()),
+                Err(reason) => SavedRevisions::Failed {
+                    reason: reason.clone(),
+                },
+            },
+        }
+    }
+
+    /// Read the tenancy of `cluster` from `saved`, as [`read`] reads it from
+    /// the live state.
+    pub fn of_saved(cluster: &str, saved: &SavedState) -> Tenancy {
+        let revisions = match &saved.revisions {
+            SavedRevisions::NotListed => Ok(None),
+            SavedRevisions::Listed(listed) => Ok(Some(listed)),
+            SavedRevisions::Failed { reason } => Err(reason.clone()),
+        };
+        Tenancy::from_state(cluster, &saved.heads, &saved.records, revisions)
     }
 
     /// Return this tenancy as it reads once `conversion` is written: each

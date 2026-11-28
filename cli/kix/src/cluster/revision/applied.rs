@@ -207,13 +207,34 @@ impl AppliedHashes {
         manager: &crate::cluster::field_manager::FieldManager,
         prefer: Option<&str>,
     ) -> Option<&'a str> {
+        let live = crate::cluster::fieldsv1::applied_content_hash(obj, manager);
+        self.for_hash(obj, live.as_deref(), prefer)
+    }
+
+    /// Return [`AppliedHashes::for_live`] for `observed`, reading what it
+    /// holds now from the applied hash computed when it was read.
+    pub fn for_observed<'a>(
+        &'a self,
+        observed: &'a crate::cluster::owned_view::Observed,
+        prefer: Option<&str>,
+    ) -> Option<&'a str> {
+        self.for_hash(&observed.obj, observed.applied.as_deref(), prefer)
+    }
+
+    /// Return [`AppliedHashes::for_live`] for `obj`, whose applied hash as
+    /// it is now is `live`.
+    fn for_hash<'a>(
+        &'a self,
+        obj: &'a DynamicObject,
+        live: Option<&str>,
+        prefer: Option<&str>,
+    ) -> Option<&'a str> {
         let rid = drift::resource_id(obj);
         if self.named.contains_key(&rid) {
-            let live = crate::cluster::fieldsv1::applied_content_hash(obj, manager);
             if let Some(live) = live
                 && let Some(e) = self
                     .entries(&rid)
-                    .find(|e| e.applied.as_deref() == Some(live.as_str()))
+                    .find(|e| e.applied.as_deref() == Some(live))
             {
                 return e.applied.as_deref();
             }

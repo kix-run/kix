@@ -43,17 +43,23 @@ Kubernetes records which tool set each field through server-side apply, and
 Kix reads that record to keep only its own fields. Server defaults, status,
 and fields written by controllers or by `kubectl` are left out.
 
-Included:
+The YAML files are for inspecting the cluster's resources directly. Alongside
+them, `kix snapshot` writes `kix-snapshot.json`, which `kix diff --from` uses
+to compare builds against the snapshot (see [The state file](#the-state-file)).
+
+The YAML files include:
 
 - every namespaced and cluster-scoped resource Kix applied for the cluster,
-  including `PackageInstance` records and the cluster's `Activation` records;
+  including `PackageInstance` records;
+- the cluster's current `Activation` record (the newest `Active` or `Degraded`
+  record; older records are omitted, matching `kix plan --read-only`);
 - the `kix.run/*` annotations that Kix applies to live objects, such as
   `kix.run/holds-data` and `kix.run/readiness` (resources applied by earlier
   versions of Kix also retain their retired package, identity-hash, and
   dependency annotations until upgraded; see
   [Retired annotations](/docs/reference/annotations-crds-and-receipts/#retired-annotations)).
 
-Excluded:
+The YAML files omit:
 
 - `status` and anything a controller wrote;
 - server-side defaults Kix never sent;
@@ -63,16 +69,40 @@ Excluded:
 - resources that only carry the label because a controller copied it, such as
   Pods and EndpointSlices.
 
-A resource Kix manages can be a `Secret`. `owned_view::kix_owned_manifests`
-redacts every `data` and `stringData` value on `Secret` manifests to
-`"(live value differs from the build, not shown)"`, while `ConfigMap` data and
-literal values in other resources are written as applied.
+`kix snapshot` never writes `Secret` values to either the YAML files or
+`kix-snapshot.json`. On `Secret` resources, it replaces every `data` value with
+`"(live value differs from the build, not shown)"` and removes `stringData` and
+the `kubectl.kubernetes.io/last-applied-configuration` annotation. `ConfigMap`
+data and literal values in other resources are written as applied.
+
+## The state file
+
+`kix-snapshot.json` stores the cluster state that
+[`kix plan --read-only`](/docs/reference/cli/plan/#read-only-plans) reads
+from the live cluster, allowing `kix diff --from` to run the same comparison
+offline:
+
+- the `ActivationHead`, `Activation`, and `PackageInstanceRevision` objects of
+  every Kix cluster on the Kubernetes cluster;
+- every resource of the named cluster as returned by the API server, including
+  `metadata.managedFields`, with `Secret` values redacted as described above;
+- the hash of the fields Kix owns on each resource, computed before redacting
+  `Secret` values. Revisions record this same hash during `kix deploy`, so Kix
+  can tell whether a resource still matches what it last applied without storing
+  plaintext secrets.
+
+Snapshots saved by older versions of Kix have no `kix-snapshot.json`. For those
+directories, `kix diff --from` compares the YAML files directly, which can
+report `Secret` values and fields modified by the API server as differences (see
+[`kix diff`](/docs/reference/cli/diff/#baseline)). If `kix-snapshot.json` uses a
+newer format than Kix supports, `kix diff` stops with an error.
 
 ## Directory layout
 
 ```text
 <DIR>/
   README.md                       # timestamp, cluster, context, resource count
+  kix-snapshot.json               # cluster state read by kix diff --from
   <namespace>/<name>-<kind>.yaml  # one file per namespaced resource
   _cluster/<name>-<kind>.yaml     # one file per cluster-scoped resource
 ```

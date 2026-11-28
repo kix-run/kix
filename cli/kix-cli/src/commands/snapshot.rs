@@ -4,9 +4,11 @@ use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
 use crate::client;
-use kix::cluster::activation::Records;
+use kix::cluster::activation::{self, Records};
 use kix::cluster::field_manager::FieldManager;
-use kix::cluster::{discovery, inventory, owned_view};
+use kix::cluster::owned_view::{self, Observed};
+use kix::cluster::snapshot::Snapshot;
+use kix::cluster::{discovery, inventory};
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use kube::Client;
 use kube::api::DynamicObject;
@@ -19,7 +21,10 @@ use super::CommandContext;
 ///
 /// Runs the domain gate via [`Records::open`] so an unmigrated cluster is
 /// rejected rather than attributing all objects to `cluster`.
-async fn sweep_cluster(client: &Client, cluster: &str) -> Result<inventory::ManagedSweep> {
+pub(super) async fn sweep_cluster(
+    client: &Client,
+    cluster: &str,
+) -> Result<inventory::ManagedSweep> {
     crate::esay!("Discovering API resources...");
 
     let discovery = discovery::discover_resources(client)
@@ -75,9 +80,6 @@ pub fn run(args: &SnapshotArgs, ctx: &mut CommandContext) -> Result<()> {
         for note in sweep.scope_notes() {
             crate::esay!("{note}");
         }
-        let manager = sweep.tenancy.manager_of(&cluster);
-        let resources = snapshot_resources(sweep.managed, &manager);
-
         // Stage files in a sibling temporary directory and swap into place so
         // an interrupted snapshot does not leave a partial output directory.
         let parent = out_dir.parent().unwrap_or(Path::new("."));
@@ -86,7 +88,7 @@ pub fn run(args: &SnapshotArgs, ctx: &mut CommandContext) -> Result<()> {
         let tmp_dir = tempfile::tempdir_in(parent).into_diagnostic()?;
         let tmp_path = tmp_dir.path();
 
-        let written = write_resources(tmp_path, &resources)?;
+        let written = write_snapshot(tmp_path, &cluster, sweep)?;
 
         let timestamp = chrono_timestamp();
         let readme = format!(
@@ -114,6 +116,32 @@ pub fn run(args: &SnapshotArgs, ctx: &mut CommandContext) -> Result<()> {
 
         Ok(())
     })
+}
+
+/// Write the snapshot of Kix cluster `cluster` that `sweep` read into `dir`,
+/// and return how many resources it wrote.
+///
+/// Each object is written as its Kix-owned view, one YAML file each, for
+/// people and for an older Kix to read. Only the current Activation record
+/// is written there. The state file ([`Snapshot`]) holds what `kix diff`
+/// reads: every object as served, with its applied hash, and the Kix state.
+pub(super) fn write_snapshot(
+    dir: &Path,
+    cluster: &str,
+    sweep: inventory::ManagedSweep,
+) -> Result<usize> {
+    let manager = sweep.tenancy.manager_of(cluster);
+    let observed: Vec<Observed> = sweep
+        .managed
+        .into_iter()
+        .map(|o| Observed::read(o, &manager))
+        .collect();
+    let state = Snapshot::of(cluster, &sweep.tenancy, observed.clone());
+    let mut objects: Vec<DynamicObject> = observed.into_iter().map(|o| o.obj).collect();
+    activation::keep_current_record(&mut objects);
+    let written = write_resources(dir, &snapshot_resources(objects, &manager))?;
+    state.write(dir).into_diagnostic()?;
+    Ok(written)
 }
 
 /// Extract the Kix-owned manifest view for each live object, redacting Secret

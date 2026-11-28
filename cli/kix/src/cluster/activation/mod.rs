@@ -47,7 +47,7 @@ use thiserror::Error;
 
 pub use record::{
     FailedRequest, KeptOrphanSource, PartialDeploy, PinnedInterface, Record, WaveRecord,
-    WaveStatus, current_record, new_request,
+    WaveStatus, current_record, keep_current_record, new_request,
 };
 pub use retention::{
     DEFAULT_KEEP_MAX, DEFAULT_KEEP_MIN, RetentionPolicy, RetireReason, Retired, Retirement,

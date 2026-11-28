@@ -131,9 +131,12 @@ fn diff_graphs_as(old: &StoreGraph, new: &StoreGraph, compare: Compare) -> Packa
                 continue;
             }
             // A PackageInstance that changed alone is a change: the deploy
-            // applies it.
+            // applies it. Its manifest is in the resource map, so the diff
+            // sees it. Store paths that differ while every object compares
+            // equal are no change: an object read from the cluster has a
+            // synthesized path although it is what the build would send.
             let change = diff_package_resources(key, old_pkg, new_pkg, old, new, &config, compare);
-            if same_resources && !change.any() {
+            if !change.any() {
                 unchanged += 1;
                 continue;
             }

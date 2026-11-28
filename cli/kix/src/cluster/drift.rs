@@ -121,6 +121,32 @@ pub fn check_object(
     applied: Option<&str>,
     manager: &FieldManager,
 ) -> DriftReport {
+    check(
+        obj,
+        fieldsv1::applied_content_hash(obj, manager),
+        applied,
+        manager,
+    )
+}
+
+/// Run [`check_object`] on `observed`, reading what it holds now from the
+/// applied hash computed when it was read.
+pub fn check_observed(
+    observed: &super::owned_view::Observed,
+    applied: Option<&str>,
+    manager: &FieldManager,
+) -> DriftReport {
+    check(&observed.obj, observed.applied.clone(), applied, manager)
+}
+
+/// Compare `current`, the applied hash of what `obj` holds now, with
+/// `applied`, the one Kix recorded.
+fn check(
+    obj: &DynamicObject,
+    current: Option<String>,
+    applied: Option<&str>,
+    manager: &FieldManager,
+) -> DriftReport {
     let rid = resource_id(obj);
 
     let Some(stamped) = applied else {
@@ -130,9 +156,7 @@ pub fn check_object(
         };
     };
 
-    // Project onto Kix's current fieldset without the ceded fields, strip
-    // `kix.run/*` annotations, and hash canonical JSON.
-    let Some(current) = fieldsv1::applied_content_hash(obj, manager) else {
+    let Some(current) = current else {
         return DriftReport {
             rid,
             verdict: DriftVerdict::NoFieldset,
