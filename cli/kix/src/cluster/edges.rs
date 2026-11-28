@@ -255,6 +255,10 @@ impl Prior {
 
     /// Return the objects `revisions` name, as `manifests` describe them,
     /// with the edges and hashes the revisions give them.
+    ///
+    /// An import marker counts with the hash its revision records. An older
+    /// Kix applied markers, so one can be on the cluster as an orphan, and
+    /// the kept-orphans revision must be able to name it.
     pub fn of_revisions<'a>(
         manifests: Vec<Value>,
         revisions: impl IntoIterator<Item = &'a Revision> + Clone,
@@ -266,9 +270,16 @@ impl Prior {
                 .or_default()
                 .insert(object.hash.clone());
         }
+        let edges = Edges::of_revisions(revisions);
+        for (rid, import) in &edges.imports {
+            hashes
+                .entry(rid.clone())
+                .or_default()
+                .insert(import.hash.clone());
+        }
         Prior {
             manifests,
-            edges: Edges::of_revisions(revisions),
+            edges,
             hashes,
         }
     }

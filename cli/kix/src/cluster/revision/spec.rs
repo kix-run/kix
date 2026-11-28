@@ -34,8 +34,9 @@ const APPLIED_BYTES: usize = 120;
 /// Room for `apiVersion`, `kind`, and `metadata`.
 const OVERHEAD_BYTES: usize = 4096;
 
-/// The hash a kept-orphans list that `kix gc` rebuilt gives each object.
-/// The rebuild cannot know what build wanted the object to be. An object
+/// The hash a kept-orphans list gives an object when nothing records what
+/// a build wanted it to be: every object of a list that `kix gc` rebuilt,
+/// and an orphan that no earlier revision or build gives a hash. An object
 /// hash is hex digits only, so this value never equals one, and no plan
 /// skips an object for it.
 pub const REBUILT: &str = "rebuilt";
@@ -64,7 +65,7 @@ pub struct RevisionObject {
     /// build's manifest ([`crate::manifest::hash::object_hash`]). In a
     /// revision converted from a record an older Kix wrote, it is that
     /// build's Nix store hash, which never equals an object hash. In a
-    /// kept-orphans list that `kix gc` rebuilt, it is [`REBUILT`]. No reader
+    /// kept-orphans list that cannot know it, it is [`REBUILT`]. No reader
     /// joins it with a build's store hashes: every join between a revision
     /// and a build goes by the object's group, kind, namespace, and name.
     pub hash: String,

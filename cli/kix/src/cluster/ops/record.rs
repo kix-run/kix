@@ -341,7 +341,8 @@ impl ActivationRecord {
 
 /// Return the kept-orphans revision of Kix cluster `cluster`, or `None` when
 /// it would name nothing. It names each object of `wanted` with every hash
-/// `prior` gives it and the edges `prior` records, the objects `unknown`
+/// `prior` gives it, or with [`crate::cluster::revision::REBUILT`] when
+/// `prior` gives none, and the edges `prior` records, the objects `unknown`
 /// names, and the objects of `carried`, the current record's kept-orphans
 /// revision when a run carries it forward unexamined.
 ///
@@ -359,12 +360,16 @@ pub(crate) fn kept_orphans_revision<'a>(
         .iter()
         .flat_map(|rid| {
             let needs: Vec<_> = prior.edges.needs(rid).cloned().collect();
-            prior
-                .hashes
-                .get(*rid)
+            // An orphan stays named even when nothing records what a build
+            // wanted it to be, or no later plan or gc would find it.
+            let hashes: Vec<&str> = match prior.hashes.get(*rid) {
+                Some(hashes) if !hashes.is_empty() => hashes.iter().map(String::as_str).collect(),
+                _ => vec![crate::cluster::revision::REBUILT],
+            };
+            hashes
                 .into_iter()
-                .flatten()
-                .map(move |hash| RevisionObject::of_id(hash, rid).with_needs(needs.clone()))
+                .map(|hash| RevisionObject::of_id(hash, rid).with_needs(needs.clone()))
+                .collect::<Vec<_>>()
         })
         .collect();
     objects.extend(unknown.iter().cloned());
@@ -1877,6 +1882,52 @@ mod tests {
             one.finalize(false, none_left()).await.unwrap();
             lock.release().await.unwrap();
             assert_eq!(kept_objects(&api, "one"), ["unserved"]);
+        }
+
+        /// A marker an older Kix applied is an orphan on the cluster, and
+        /// its revision records it as an import. The kept-orphans revision
+        /// names it with the hash that import gives.
+        #[test]
+        fn the_kept_orphans_revision_names_a_marker_its_revision_imports() {
+            use crate::cluster::revision::{RevisionImport, RevisionSpec, Slot};
+            let marker = ResourceId::new(keys::GROUP, "PackageInstance", "kube-system", "dns");
+            let hash = format!("{:a>32}", "m");
+            let earlier = Revision::new(
+                RevisionSpec::new("c", Slot::KeptOrphans, Vec::new()).with_imports(vec![
+                    RevisionImport {
+                        namespace: Some("kube-system".into()),
+                        name: "dns".into(),
+                        hash: hash.clone(),
+                        target: None,
+                        needs: Vec::new(),
+                    },
+                ]),
+            );
+            let prior = crate::cluster::edges::Prior::of_revisions(Vec::new(), [&earlier]);
+            let kept = kept_orphans_revision("c", [&marker], &prior, &[], None).unwrap();
+            assert_eq!(
+                kept.spec.objects,
+                [RevisionObject::of_id(&hash, &marker)],
+                "{kept:?}"
+            );
+        }
+
+        /// An orphan that no earlier revision or build gives a hash stays
+        /// named, with the hash that says nothing records what a build
+        /// wanted.
+        #[test]
+        fn the_kept_orphans_revision_names_an_orphan_with_no_recorded_hash() {
+            let orphan = ResourceId::new("", "ConfigMap", "app", "stray");
+            let prior = crate::cluster::edges::Prior::default();
+            let kept = kept_orphans_revision("c", [&orphan], &prior, &[], None).unwrap();
+            assert_eq!(
+                kept.spec.objects,
+                [RevisionObject::of_id(
+                    crate::cluster::revision::REBUILT,
+                    &orphan
+                )],
+                "{kept:?}"
+            );
         }
     }
 }
