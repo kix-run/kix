@@ -1,7 +1,6 @@
 ---
+import { Play } from '@lucide/astro';
 import Container from '../Container.astro';
-import Button from '../Button.astro';
-import { DOCS_URL } from '@/lib/links';
 ---
 
 <section aria-labelledby="hero-title" class="bg-paper">
@@ -34,7 +33,23 @@ import { DOCS_URL } from '@/lib/links';
             <span class="check-icon hidden">Copied</span>
           </button>
         </div>
-        <Button href={DOCS_URL} variant="outline" data-event="Read Docs" data-event-place="hero">Read the Docs</Button>
+        <button
+          type="button"
+          data-open-walkthrough
+          data-event="Watch Video"
+          data-event-place="hero"
+          data-event-video="kix-explainer"
+          class="group inline-flex cursor-pointer items-center justify-center gap-2.5 rounded-lg border border-line bg-paper px-4 py-[11px] text-[14.5px] font-semibold whitespace-nowrap text-ink shadow-[0_2px_8px_rgba(11,19,43,0.04)] transition-all hover:border-accent-brand hover:text-accent-brand"
+        >
+          <span
+            aria-hidden="true"
+            class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-brand transition-colors group-hover:bg-accent-brand group-hover:text-white"
+          >
+            <Play size={12} class="translate-x-[0.5px] fill-current" />
+          </span>
+          <span>Watch walkthrough</span>
+          <span class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[12px] font-medium text-ink-2">1:42</span>
+        </button>
       </div>
       <p class="mt-4 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-[13.5px] text-ink-2">
         <span>Apache 2.0 open source</span>
