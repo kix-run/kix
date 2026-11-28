@@ -1407,7 +1407,7 @@ impl<'a> Planner<'a> {
         ledger: &Ledger,
         live: &LiveObjects,
     ) -> Result<Changes, PlanError> {
-        let made: HashSet<ResourceId> = decide::made_by(new_manifests).collect();
+        let made: HashSet<ResourceId> = lifecycle::made_by(new_manifests).collect();
         let decided = decide::decide(
             new_manifests,
             &made,
@@ -1720,7 +1720,7 @@ pub(crate) async fn refuse_older_operator(client: &Client, cluster: &str) -> Res
 /// Return the objects a plan lists on the cluster: those `new_manifests`
 /// make, and those `ledger` names that the build does not make.
 fn listed_ids(new_manifests: &[Value], ledger: Option<&Ledger>) -> Vec<ResourceId> {
-    let made: HashSet<ResourceId> = decide::made_by(new_manifests).collect();
+    let made: HashSet<ResourceId> = lifecycle::made_by(new_manifests).collect();
     let candidates: Vec<ResourceId> = ledger
         .map(|l| l.candidates(&made).cloned().collect())
         .unwrap_or_default();

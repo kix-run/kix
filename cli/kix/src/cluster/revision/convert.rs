@@ -200,13 +200,13 @@ fn format_one_map<'a>(map: &RevisionMap, listed: &'a [Revision]) -> Option<Vec<&
 pub struct BuildHashes(HashMap<ResourceId, (String, String)>);
 
 impl BuildHashes {
-    /// Return the hashes of the objects of the build whose manifests are
-    /// `manifests`.
+    /// Return the hashes of the objects the build whose manifests are
+    /// `manifests` makes on the cluster ([`lifecycle::makes`]).
     pub fn of(manifests: &[Value]) -> BuildHashes {
         BuildHashes(
             manifests
                 .iter()
-                .filter(|m| !lifecycle::is_record(m))
+                .filter(|m| lifecycle::makes(m) && !lifecycle::is_record(m))
                 .filter_map(|m| {
                     let identity = keys::get(m, keys::IDENTITY_HASH)?;
                     Some((

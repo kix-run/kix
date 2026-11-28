@@ -1168,9 +1168,10 @@ async fn handle_delete(
         if let Some(path) = source_path(activation)
             && let Ok(manifests) = load_manifests(&path)
         {
-            let all_rids: Vec<ResourceId> = manifests
-                .iter()
-                .map(ResourceId::from_value)
+            // Only the objects the build makes: Kix writes no object for an
+            // import marker, and one of that name may be another Kix
+            // cluster's.
+            let all_rids: Vec<ResourceId> = kix::manifest::lifecycle::made_by(&manifests)
                 .filter(|rid| !kix::manifest::lifecycle::is_record_kind(&rid.kind))
                 .collect();
 

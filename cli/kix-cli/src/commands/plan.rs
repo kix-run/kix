@@ -754,13 +754,12 @@ fn prune_entries(
         answers,
         left_behind,
     );
-    entries.extend(checked.shared_orphans().iter().map(|s| {
-        PruneEntry::new(
-            s.rid.display_id(),
-            PruneFate::KeptShared,
-            Some(s.describe()),
-        )
-    }));
+    entries.extend(
+        checked
+            .shared_orphans()
+            .iter()
+            .map(|s| PruneEntry::new(s.rid.display_id(), PruneFate::KeptShared, Some(s.why()))),
+    );
     entries.sort_by(|a, b| a.resource.cmp(&b.resource));
     entries
 }

@@ -211,7 +211,7 @@ impl Baseline {
         // Kix writes nothing for an import marker, also under `--reconcile`.
         let by_id: std::collections::HashMap<ResourceId, &Value> = new_manifests
             .iter()
-            .filter(|m| !lifecycle::is_marker(m))
+            .filter(|m| lifecycle::makes(m))
             .map(|m| (ResourceId::from_value(m), m))
             .collect();
         actions

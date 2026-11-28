@@ -184,7 +184,7 @@ pub(crate) fn detect_changes(
     for manifest in new_manifests {
         let rid = ResourceId::from_value(manifest);
         // Kix writes nothing for an import marker.
-        if lifecycle::is_marker(manifest) {
+        if !lifecycle::makes(manifest) {
             actions.push(ChangeAction::Skip(rid));
             continue;
         }
@@ -219,7 +219,7 @@ pub(crate) fn detect_changes(
     for old_manifest in old_manifests {
         if manifest_identity_hash(old_manifest).is_none()
             || !lifecycle_of(old_manifest).prunable()
-            || lifecycle::is_marker(old_manifest)
+            || !lifecycle::makes(old_manifest)
         {
             continue;
         }

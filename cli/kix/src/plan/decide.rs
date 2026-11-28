@@ -60,7 +60,7 @@
 //! An import marker stands for an object Kix does not make, such as a CRD
 //! another tool installs. It is a node of the build's graph, and Kix writes
 //! nothing for it: [`decide`] leaves it unchanged without reading the
-//! cluster, and it is not one of the objects a build makes ([`made_by`]). A
+//! cluster, and it is not one of the objects a build makes ([`lifecycle::made_by`]). A
 //! marker an older Kix applied is therefore an object that left the build,
 //! like any other. The scheduler checks that the marker's target exists
 //! when something the deploy writes depends on it.
@@ -482,15 +482,6 @@ impl Ledger {
     }
 }
 
-/// Return the objects the build manifests `manifests` make: every one but
-/// the import markers, which stand for objects Kix does not make.
-pub(crate) fn made_by(manifests: &[Value]) -> impl Iterator<Item = ResourceId> + '_ {
-    manifests
-        .iter()
-        .filter(|m| !lifecycle::is_marker(m))
-        .map(ResourceId::from_value)
-}
-
 /// Return the build hash the live Activation record `obj` carries.
 fn record_hash(obj: &kube::api::DynamicObject) -> Option<&str> {
     obj.metadata
@@ -504,7 +495,7 @@ fn record_hash(obj: &kube::api::DynamicObject) -> Option<&str> {
 ///
 /// `new` holds the objects the runner applies, and the import markers of
 /// the build, which [`decide`] leaves unchanged without reading them. `made`
-/// holds every object of the new build ([`made_by`]), which can be more: the operator leaves CRDs and the
+/// holds every object of the new build ([`lifecycle::made_by`]), which can be more: the operator leaves CRDs and the
 /// Activation record out of `new`, and they are still not orphans. `live`
 /// holds the live objects of `made` and of every object the ledger names
 /// that `made` lacks ([`Ledger::candidates`]). With `reconcile`, an
@@ -526,7 +517,7 @@ pub(crate) fn decide(
     let mut forbidden: BTreeSet<String> = BTreeSet::new();
     for manifest in new {
         let id = ResourceId::from_value(manifest);
-        if lifecycle::is_marker(manifest) {
+        if !lifecycle::makes(manifest) {
             out.decisions.push(Decision {
                 action: ChangeAction::Skip(id.clone()),
                 id,

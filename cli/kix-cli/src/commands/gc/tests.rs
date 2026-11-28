@@ -1351,4 +1351,234 @@ mod revision_tests {
             json!(name)
         );
     }
+
+    /// Return the state that `kix deploy a` without `--prune` leaves on a
+    /// Kubernetes cluster an older Kix deployed: the current record of `a`
+    /// keeps the import marker `platform-dns`, which left the build, in its
+    /// kept-orphans revision. With `older`, Kix cluster `b`, which an older
+    /// Kix deployed, still names the marker, so it keeps its notes.
+    fn leftover_marker(older: bool) -> State {
+        use kix::cluster::revision::{Revision, RevisionObject, RevisionSpec, Slot};
+        let mut recs = vec![Rec {
+            name: "a-cur",
+            cluster: "a",
+            hash: "cur",
+            phase: PHASE_ACTIVE,
+            current: true,
+            objects: &["web"],
+            kept: &["platform-dns"],
+            ..Rec::default()
+        }];
+        if older {
+            recs.push(Rec {
+                name: "b-cur",
+                cluster: "b",
+                hash: "bcur",
+                phase: PHASE_ACTIVE,
+                current: true,
+                objects: &["platform-dns"],
+                ..Rec::default()
+            });
+        }
+        let mut state = state(&recs, |c| {
+            if c == "a" {
+                Written::Revisions
+            } else {
+                Written::Records
+            }
+        });
+        let marker = state
+            .objects
+            .iter_mut()
+            .find(|o| o["metadata"]["name"] == "platform-dns")
+            .unwrap();
+        marker["apiVersion"] = json!(keys::API_VERSION);
+        marker["kind"] = json!("PackageInstance");
+        let notes = marker["metadata"]["annotations"].as_object_mut().unwrap();
+        notes.insert(keys::MODE.into(), json!("import"));
+        notes.insert(keys::IMPORT_API_VERSION.into(), json!("v1"));
+        notes.insert(keys::IMPORT_KIND.into(), json!("Service"));
+        notes.insert(keys::IMPORT_NAME.into(), json!("kube-dns"));
+        let mut managers = vec![json!({
+            "manager": "kix/a",
+            "operation": "Apply",
+            "apiVersion": keys::API_VERSION,
+        })];
+        if older {
+            managers.push(json!({
+                "manager": "kix",
+                "operation": "Apply",
+                "apiVersion": keys::API_VERSION,
+            }));
+        } else {
+            notes.remove(keys::IDENTITY_HASH);
+        }
+        marker["metadata"]["managedFields"] = json!(managers);
+        let kept = Revision::new(RevisionSpec::new(
+            "a",
+            Slot::KeptOrphans,
+            vec![RevisionObject::of_id(
+                "h-platform-dns",
+                &ResourceId::new(keys::GROUP, "PackageInstance", "d", "platform-dns"),
+            )],
+        ));
+        let old = state.revision_named("a-cur", "keptOrphans");
+        state.remove_revision(&old);
+        state
+            .revisions
+            .push(kix::cluster::tenancy_fixture::revision_value(&kept));
+        state.records[0]["status"]["revisions"]["keptOrphans"] = json!(kept.name);
+        state
+    }
+
+    /// Return the build of `a`: the ConfigMap `web` and the marker
+    /// `platform-dns` as an import, which Kix writes no object for.
+    fn build_with_marker(state: &State) -> StoreGraph {
+        let manifests: Vec<Value> = ["web", "platform-dns"]
+            .iter()
+            .map(|n| kix::manifest::types::to_manifest_value(&state.object(n)))
+            .collect();
+        StoreGraph::synthesize(&manifests, &StoreGraph::empty("a"))
+    }
+
+    /// Run a soft gc of `a` against `graph` as `kix gc a --yes` does: judge
+    /// the kept orphans, keep what another Kix cluster still deploys, delete
+    /// the rest, and rewrite the kept-orphans list. Return the garbage and
+    /// what was kept as shared.
+    async fn soft_gc(api: &FakeApi, graph: &StoreGraph) -> (Vec<String>, Vec<String>) {
+        let client = api.client();
+        let retirement = retirement_of(api).await;
+        let records = retirement.records.as_ref().unwrap();
+        let tenancy = read_tenancy(records, "a").await.unwrap();
+        let discovery = kix::cluster::discovery::discover_resources(&client)
+            .await
+            .unwrap();
+        let active = retirement.active.clone().unwrap();
+        let kept = baseline::kept_of(
+            &client,
+            &discovery,
+            &tenancy,
+            &active,
+            None,
+            &Default::default(),
+            &|_| {},
+            None,
+        )
+        .await
+        .unwrap();
+        let (garbage, update) = judge_soft(graph, &kept, active.identity_hash.as_deref());
+        let rids: Vec<ResourceId> = garbage.iter().map(ResourceId::from_value).collect();
+        let (rids, shared) = kix::plan::keep_shared(&client, "a", rids).await.unwrap();
+        let done = delete_resources(
+            &client,
+            "a",
+            DeleteOrder::unordered(rids),
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        update_kept("a", &retirement, &update, &done).await.unwrap();
+        (
+            garbage
+                .iter()
+                .map(|m| m["metadata"]["name"].as_str().unwrap().to_string())
+                .collect(),
+            shared.iter().map(|s| s.rid.name.clone()).collect(),
+        )
+    }
+
+    /// Return the names the current record's kept-orphans revision lists,
+    /// or none when it names no such revision.
+    fn kept_names(api: &FakeApi) -> Vec<String> {
+        let record = api.object("Activation", "a-cur").unwrap();
+        let Some(name) = record["status"]["revisions"]["keptOrphans"].as_str() else {
+            return Vec::new();
+        };
+        api.object(kix::cluster::revision::KIND, name).unwrap()["spec"]["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["name"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    /// The build still holds the marker `platform-dns`, but Kix writes no
+    /// object for it, so the marker an older Kix applied is a kept orphan
+    /// like any other. `kix gc` deletes it and then lists nothing kept.
+    #[tokio::test]
+    async fn gc_deletes_a_leftover_marker() {
+        let state = leftover_marker(false);
+        let api = FakeApi::new(state.all());
+        let graph = build_with_marker(&state);
+        assert_eq!(kept_names(&api), ["platform-dns"]);
+        let (garbage, shared) = soft_gc(&api, &graph).await;
+        assert_eq!(garbage, ["platform-dns"]);
+        assert!(shared.is_empty());
+        assert!(api.object("PackageInstance", "platform-dns").is_none());
+        assert!(kept_names(&api).is_empty());
+    }
+
+    /// A leftover marker that another Kix cluster, deployed by an older Kix,
+    /// still names is kept, and the kept-orphans list still names it, so a
+    /// later gc deletes it once that Kix cluster lets it go.
+    #[tokio::test]
+    async fn gc_keeps_a_leftover_marker_an_older_kix_cluster_still_names() {
+        let state = leftover_marker(true);
+        let api = FakeApi::new(state.all());
+        let graph = build_with_marker(&state);
+        let (garbage, shared) = soft_gc(&api, &graph).await;
+        assert_eq!(garbage, ["platform-dns"]);
+        assert_eq!(shared, ["platform-dns"]);
+        assert!(api.object("PackageInstance", "platform-dns").is_some());
+        assert_eq!(kept_names(&api), ["platform-dns"]);
+    }
+
+    /// A full scan judges a marker the build holds as an object that left
+    /// the build, so it finds a marker an older Kix left that no record names
+    /// any more, by its field manager.
+    #[test]
+    fn a_full_scan_judges_a_leftover_marker_as_not_in_the_build() {
+        let state = leftover_marker(false);
+        let graph = build_with_marker(&state);
+        let live = [state.object("web"), state.object("platform-dns")];
+        let judged = judge_hard(&live, &identities(&graph), &state.tenancy("a"));
+        assert_eq!(names(&judged.garbage), ["platform-dns"]);
+    }
+
+    /// A cluster that an earlier gc left with a marker no record names: the
+    /// marker is on the cluster under `kix/a`, and the current record names
+    /// no kept-orphans revision. A full scan finds it by its field manager
+    /// as an object no revision names, and deletes it with
+    /// `--include unattributed`, not without.
+    #[test]
+    fn a_full_scan_with_unattributed_finds_a_marker_no_record_names() {
+        let mut state = leftover_marker(false);
+        let old = state.revision_named("a-cur", "keptOrphans");
+        state.remove_revision(&old);
+        state.records[0]["status"]["revisions"]["keptOrphans"] = Value::Null;
+        let graph = build_with_marker(&state);
+        let tenancy = state.tenancy("a");
+        let sweep = || {
+            inventory::scope_sweep(
+                inventory::partition_sweep(vec![state.object("web"), state.object("platform-dns")]),
+                inventory::SweepScope::Cluster("a"),
+                tenancy.clone(),
+            )
+        };
+        let scoped = sweep();
+        let unattributed: Vec<&str> = scoped
+            .unattributed
+            .iter()
+            .map(|o| o.metadata.name.as_deref().unwrap())
+            .collect();
+        assert_eq!(unattributed, ["platform-dns"]);
+        let expected = identities(&graph);
+        let without = judged_objects(scoped, false, false);
+        assert!(judge_hard(&without, &expected, &tenancy).garbage.is_empty());
+        let with = judged_objects(sweep(), true, false);
+        assert_eq!(
+            names(&judge_hard(&with, &expected, &tenancy).garbage),
+            ["platform-dns"]
+        );
+    }
 }

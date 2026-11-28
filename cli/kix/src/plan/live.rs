@@ -218,7 +218,7 @@ impl LivePlan {
         let record = Record::of(activation);
         ledger.deploying(record.identity_hash.as_deref().filter(|_| deploys));
         let made = made_by(desired, revisions.as_ref());
-        let ids: Vec<ResourceId> = decide::made_by(desired)
+        let ids: Vec<ResourceId> = crate::manifest::lifecycle::made_by(desired)
             .chain(ledger.candidates(&made).cloned())
             .collect();
         // The sweep's listing holds every labelled object of every kind, so
@@ -422,14 +422,16 @@ struct DecidedChanges {
 }
 
 /// Return every object of the build `desired` is part of: the objects
-/// `desired` makes ([`decide::made_by`]), and those `revisions` name, which
+/// `desired` makes ([`crate::manifest::lifecycle::made_by`]), and those `revisions` name, which
 /// include the objects the operator leaves out of `desired`.
 fn made_by(desired: &[Value], revisions: Option<&RevisionSet>) -> HashSet<ResourceId> {
     let named = revisions
         .into_iter()
         .flat_map(|set| set.all())
         .flat_map(|r| r.spec.objects.iter().map(|o| o.resource_id()));
-    decide::made_by(desired).chain(named).collect()
+    crate::manifest::lifecycle::made_by(desired)
+        .chain(named)
+        .collect()
 }
 
 /// Decide the changes of `desired` with the one planner, as the CLI does

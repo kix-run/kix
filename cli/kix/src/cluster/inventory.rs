@@ -416,16 +416,18 @@ pub struct SharedOrphan {
 impl SharedOrphan {
     /// Format the line a plan prints for this shared orphan.
     pub fn describe(&self) -> String {
+        format!("kept {}, {}", self.rid, self.why())
+    }
+
+    /// Say why the orphan stays, without naming it, for a line that names
+    /// it already.
+    pub fn why(&self) -> String {
         let clusters = if self.clusters.len() == 1 {
             "Kix cluster"
         } else {
             "Kix clusters"
         };
-        format!(
-            "kept {}, still deployed by {clusters} {}",
-            self.rid,
-            self.clusters.join(", ")
-        )
+        format!("still deployed by {clusters} {}", self.clusters.join(", "))
     }
 }
 

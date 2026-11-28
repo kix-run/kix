@@ -408,6 +408,12 @@ impl StoreGraph {
         }
     }
 
+    /// Return the objects the build makes on the cluster: every resource but
+    /// its import markers ([`crate::manifest::lifecycle::made_by`]).
+    pub fn made(&self) -> std::collections::HashSet<ResourceId> {
+        crate::manifest::lifecycle::made_by(self.resources.values().map(|r| &r.manifest)).collect()
+    }
+
     /// Return each resource manifest keyed by its identity hash, the hash part
     /// of its store path.
     pub fn manifests_by_hash(&self) -> HashMap<String, &serde_json::Value> {

@@ -119,6 +119,26 @@ pub fn is_marker(manifest: &Value) -> bool {
     lifecycle_of(manifest) == Lifecycle::Marker
 }
 
+/// Return whether a deploy writes an object for the build manifest
+/// `manifest`. It writes one for every manifest but an import marker, which
+/// stands for an object Kix does not make. This is the one definition of the
+/// objects a build makes on the cluster: whatever compares a build with live
+/// objects or records reads it, through [`made_by`].
+pub fn makes(manifest: &Value) -> bool {
+    !is_marker(manifest)
+}
+
+/// Return the objects the build manifests `manifests` make on the cluster
+/// ([`makes`]).
+pub fn made_by<'a>(
+    manifests: impl IntoIterator<Item = &'a Value>,
+) -> impl Iterator<Item = crate::manifest::types::ResourceId> {
+    manifests
+        .into_iter()
+        .filter(|m| makes(m))
+        .map(crate::manifest::types::ResourceId::from_value)
+}
+
 /// Return the deploy record in `manifests`, if present.
 pub fn record_of(manifests: &[Value]) -> Option<&Value> {
     manifests.iter().find(|m| is_record(m))

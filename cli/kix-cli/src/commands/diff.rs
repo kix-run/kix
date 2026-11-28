@@ -517,12 +517,7 @@ impl LiveSide {
     fn set_aside_left_earlier(&mut self, new: &StoreGraph, deployed: Option<&RecordPackageIndex>) {
         // A build does not make its import markers, so a marker an older Kix
         // applied left the build, as a deploy finds.
-        let in_build: HashSet<ResourceId> = new
-            .resources
-            .values()
-            .filter(|r| !lifecycle::is_marker(&r.manifest))
-            .map(|r| ResourceId::from_value(&r.manifest))
-            .collect();
+        let in_build = new.made();
         let is_orphan = |m: &Value| {
             lifecycle::lifecycle_of(m).prunable() && !in_build.contains(&ResourceId::from_value(m))
         };
@@ -627,12 +622,7 @@ async fn fetch_live_manifests(
 
     // Exclude resources that this build drops when another Kix cluster still
     // deploys them, matching `kix deploy --prune`.
-    let in_build: HashSet<ResourceId> = new_graph
-        .resources
-        .values()
-        .filter(|r| !lifecycle::is_marker(&r.manifest))
-        .map(|r| ResourceId::from_value(&r.manifest))
-        .collect();
+    let in_build = new_graph.made();
     let mut namespaceless = kix::cluster::apply::namespaceless(&discovery, &in_build);
     namespaceless.sort();
     let tenancy = &sweep.tenancy;

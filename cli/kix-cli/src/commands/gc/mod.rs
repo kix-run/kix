@@ -129,11 +129,11 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     };
     let graph = active_build(args, ctx, &cluster, active, &stopped)?;
 
-    let hashes: HashSet<String> = graph.resources.keys().map(|p| store_hash(p)).collect();
-    let ids: HashSet<String> = graph
+    let hashes: HashSet<String> = graph
         .resources
-        .values()
-        .map(|r| k8s_identity(&r.manifest))
+        .iter()
+        .filter(|(_, r)| lifecycle::makes(&r.manifest))
+        .map(|(p, _)| store_hash(p))
         .collect();
     let records = retirement.records.clone().ok_or_else(|| {
         miette!("could not read deployment records for '{cluster}'. Nothing was deleted.")
@@ -159,13 +159,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         .await
         .map_err(|e| miette!("{e}"))
     })?;
-    let garbage = kept_garbage(&kept_baseline.closures, &ids);
-    let update = KeptUpdate::of(
-        &kept_baseline,
-        &graph,
-        active.identity_hash.as_deref(),
-        kept_baseline.unresolved.is_empty(),
-    );
+    let (garbage, update) = judge_soft(&graph, &kept_baseline, active.identity_hash.as_deref());
 
     if garbage.is_empty() && retirement.plan.retire.is_empty() {
         if !args.dry_run {
@@ -579,12 +573,36 @@ impl KeptUpdate {
     }
 }
 
-/// Return the group, kind, namespace, and name of every object of `graph`.
+/// Return the kept orphans a soft gc of the Active build `graph`, whose
+/// Activation record has identity hash `build_hash`, deletes from `kept`, and
+/// how it rewrites the kept-orphans list once the deletes are done. An
+/// object the build makes again is neither garbage nor kept. An import
+/// marker is not one ([`StoreGraph::made`]), so a marker an older Kix left
+/// is garbage.
+pub(super) fn judge_soft(
+    graph: &StoreGraph,
+    kept: &baseline::KeptBaseline,
+    build_hash: Option<&str>,
+) -> (Vec<Value>, KeptUpdate) {
+    let garbage = kept_garbage(&kept.closures, &identities(graph));
+    let update = KeptUpdate::of(kept, graph, build_hash, kept.unresolved.is_empty());
+    (garbage, update)
+}
+
+/// Return the group, kind, namespace, and name of every object `graph`
+/// makes on the cluster ([`StoreGraph::made`]). An import marker is not one,
+/// so a marker an older Kix applied is a leftover gc may delete.
 fn ids_of(graph: &StoreGraph) -> HashSet<ResourceId> {
+    graph.made()
+}
+
+/// Return the kind, namespace, and name, as [`k8s_identity`] writes them, of
+/// every object `graph` makes on the cluster ([`StoreGraph::made`]).
+fn identities(graph: &StoreGraph) -> HashSet<String> {
     graph
-        .resources
-        .values()
-        .map(|r| ResourceId::from_value(&r.manifest))
+        .made()
+        .iter()
+        .map(|rid| format!("{}/{}/{}", rid.kind, rid.namespace, rid.name))
         .collect()
 }
 
@@ -757,11 +775,7 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         None => files_build(args, ctx, &cluster)?,
     };
 
-    let expected_ids: HashSet<String> = graph
-        .resources
-        .values()
-        .map(|r| k8s_identity(&r.manifest))
-        .collect();
+    let expected_ids = identities(&graph);
 
     let compared = match &active {
         Some(active) => format!("the build of active deployment {}", active.name),
