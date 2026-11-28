@@ -874,6 +874,44 @@ async fn a_clean_run_finalizes_and_never_aborts() {
     );
 }
 
+/// A run whose nodes all end unchanged, and that keeps an orphan, still
+/// finalizes, so the record's kept-orphans revision names the orphan.
+#[tokio::test(start_paused = true)]
+async fn a_run_that_changes_nothing_finalizes_with_its_orphans() {
+    let manifests = vec![m("ConfigMap", "a", &[]), m("ConfigMap", "b", &["a"])];
+    let orphan = m("ConfigMap", "gone", &[]);
+    let ops = Arc::new(ScriptedOps::new());
+    let cfg = config(quiet_watchdog());
+    let rec = Arc::new(Recorder::default());
+
+    let result = run_with_orphans(
+        &ops,
+        plan_with_skips(&manifests, &["a", "b"]),
+        &[ResourceId::from_value(&orphan)],
+        &[orphan],
+        PrunePolicy::WarnOnly,
+        &cfg,
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (result.created, result.configured, result.unchanged),
+        (0, 0, 2),
+        "{result:?}"
+    );
+
+    let calls = ops.calls();
+    assert!(
+        calls.contains(&Call::Finalize {
+            had_failures: false,
+            orphans_left: true,
+        }),
+        "a run that keeps an orphan must finalize: {calls:?}",
+    );
+    assert!(!calls.iter().any(|c| matches!(c, Call::Abort { .. })));
+}
+
 /// A record that cannot be begun stops the run before any node is
 /// applied, and the run does not abort a record it never began.
 #[tokio::test(start_paused = true)]

@@ -440,7 +440,7 @@ pub struct Revision {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ReadError {
     #[error(
-        "{} `{name}` has a `spec` that does not match its name (expected `{expected}` from its `spec`), so Kix cannot trust its object list. Either someone changed it outside Kix, or the API server dropped fields from its `spec` because the installed {} definition is older than this version of Kix",
+        "{} `{name}` has a `spec` that does not match its name (expected `{expected}`), so Kix cannot trust its object list. Either `{name}` was modified outside Kix, or the Kubernetes API server dropped fields from `spec` because the {} CustomResourceDefinition on the cluster is older than this version of Kix",
         super::KIND,
         super::KIND
     )]

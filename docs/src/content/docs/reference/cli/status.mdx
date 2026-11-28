@@ -248,10 +248,10 @@ there. Kix names it from the first of these that has it:
 The line for a missing object names the objects that depend on it, such as
 `missing, needed by Deployment.apps vault/vaultwarden`.
 
-A record with neither revisions nor a package index lists no objects. Such a
-record comes from an earlier version of Kix, which wrote `kix.run/depends-on`
-on the objects it deployed. Kix then finds the deploy's objects through those
-annotations on the live objects. When such a record's own object is also gone, Kix cannot
+Deployment records from very old versions of Kix have neither revisions nor a
+package index, so Kix finds their objects by following the legacy
+`kix.run/depends-on` annotations on live objects. When that record itself is
+also missing, Kix cannot
 tell which objects the deploy made, says so, and exits `1`.
 
 ## JSON and YAML output
@@ -283,9 +283,9 @@ Each entry of `resources[]`:
 | --- | --- |
 | `kind`, `namespace`, `name` | The object. `namespace` is `null` for a cluster-scoped object. `kind` is `Unknown` when Kix cannot name a missing object. |
 | `group` | The kind's API group, such as `apps`. Omitted for core `v1` kinds. |
-| `hash` | The hash the deploy record gives the object. For a deploy by this version of Kix, it is a hash of the manifest Kix sends for the object (`spec.objects[].hash` in its [revision](/docs/reference/annotations-crds-and-receipts/#packageinstancerevision)). For a deploy by an earlier version, it is the object's identity hash. |
+| `hash` | Hash recorded for the object in the deployment record: a hash of the sent manifest (`spec.objects[].hash` on its [revision](/docs/reference/annotations-crds-and-receipts/#packageinstancerevision)) for deploys made by this version of Kix, or the build identity hash for deploys made by earlier versions. |
 | `named` | `false` when Kix could not name a missing object. |
-| `present` | `yes`, `no`, `external` (an import marker, which stands for an object Kix does not manage), `unknown` (the account may not list the kind), or `ambiguous` (no live object matches its identity hash, multiple API groups serve its kind, and an older deploy record lacks its API group; run `kix deploy <cluster> --reconcile` to record it). |
+| `present` | `yes`, `no`, `external` (an import marker for an external object not managed by Kix), `unknown` (the account may not list the kind), or `ambiguous` (no live object matches its identity hash, multiple API groups serve its kind, and an older deploy record lacks its API group; run `kix deploy <cluster> --reconcile` to record it). |
 | `drift` | `null` when the drift check did not run or the object is gone. Otherwise `verdict` (`in_sync`, `changed`, `unstamped`, or `no_fieldset`), `foreign_owners` (other field managers, each with `manager`, `operation`, `subresource`, `time`, `paths`, and `unshared_paths`; `unshared_paths` lists the paths Kix does not co-own, which can conflict on deploy), and `unrecorded_scale` (a replica count changed through `/scale` that Kubernetes recorded no owner for). |
 | `ready` | `true` or `false` (always `false` while an object is being deleted). `null` when the readiness check did not run, when the object is gone, or when the object is not being deleted and has no readiness check (such as a ConfigMap, or a Service of a type other than `LoadBalancer`). |
 | `not_ready_reason` | Why the object is not ready, such as `0/1 ready, 0/1 updated`. |

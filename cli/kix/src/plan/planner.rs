@@ -1950,7 +1950,7 @@ fn check_kept_orphans_size(
             what: "the list of orphaned objects this deploy keeps".to_string(),
             objects: revision.spec.objects.len(),
             bytes: revision.stored_bytes(),
-            next: "Run `kix gc` to delete orphaned objects from earlier deploys, or deploy with `--prune`, then run the deploy again.",
+            next: "Pass `--prune` to delete orphaned objects during this deploy, or run `kix gc` first to delete orphaned objects kept from earlier deploys.",
         },
     )))
 }

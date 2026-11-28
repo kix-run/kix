@@ -248,7 +248,7 @@ fn reason_lines(writes: &[&ObjectWrite]) -> Vec<String> {
     });
     if n > 0 {
         lines.push(format!(
-            "{} {n} object(s) may have been written by deployment(s) {names} that did not finish, so this deploy reapplies them from the current build",
+            "{} {n} object(s) may have been written by unfinished deployment(s) {names}, so this deploy reapplies them from the current build",
             output::yellow("↻"),
         ));
     }

@@ -526,7 +526,7 @@ impl ResourceIo for KubeResources {
     async fn release(&self, rid: &ResourceId) -> Result<bool, String> {
         let Some((ar, scope)) = self.cached(rid).await else {
             return Err(format!(
-                "could not release {}: the cluster's API discovery does not list its kind",
+                "could not release field ownership on {}: the Kubernetes API server does not serve its resource kind",
                 rid.display_id()
             ));
         };
@@ -574,7 +574,7 @@ impl ResourceIo for KubeResources {
         // judge the object Kubernetes returns rather than the answer's status.
         if applies(&after) {
             return Err(format!(
-                "Kubernetes accepted the release of {} but kept this Kix cluster's `Apply` entry `{}` on it",
+                "could not release field ownership on {}: Kubernetes kept field manager `{}` in `metadata.managedFields`",
                 rid.display_id(),
                 self.manager.name()
             ));

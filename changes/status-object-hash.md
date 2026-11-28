@@ -2,4 +2,4 @@
 kind = "silent"
 cli = ["kix status --output json", "kix status --output yaml"]
 +++
-In `kix status -o json` and `-o yaml`, the field `resources[].identity_hash` is now `resources[].hash`. Kix no longer writes `kix.run/identity-hash` on objects, so the field holds the hash that the deploy record gives the object: for a deploy by this version of Kix, a hash of the manifest Kix sends for it, and for a deploy by an earlier version, its identity hash as before. Update scripts that read `identity_hash` from `resources[]`. The deploy record's own `identity_hash` keeps its name.
+Update scripts that read `kix status -o json` or `-o yaml` to read `resources[].hash` instead of `resources[].identity_hash` (`deploy.identity_hash` and `failed_deploy.identity_hash` keep their names). Because Kix no longer writes `kix.run/identity-hash` onto deployed objects, `resources[].hash` holds the hash recorded for the object in the deployment record: a hash of the sent manifest for deploys made by this version of Kix, or the build identity hash for deploys made by earlier versions.

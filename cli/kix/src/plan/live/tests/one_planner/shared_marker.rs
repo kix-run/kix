@@ -492,3 +492,152 @@ async fn a_marker_an_older_kix_still_deploys_survives() {
     assert!(!named_by(&api, "a").await);
     assert!(!named_by(&api, "b").await);
 }
+
+/// Return the kept-orphans revision the current record of Kix cluster
+/// `cluster` names, or `None` when its revision map names none.
+async fn kept_orphans_of(api: &FakeApi, cluster: &str) -> Option<Revision> {
+    let head = api.object(crate::cluster::head::KIND, cluster).unwrap();
+    let current = head["status"]["current"].as_str().unwrap().to_string();
+    let record = api.object(RECORD_KIND, &current).unwrap();
+    let map = RevisionMap::read(&record["status"]["revisions"]).unwrap();
+    let name = map.kept_orphans?;
+    Revisions::new(&api.client()).get(&name).await.unwrap()
+}
+
+/// Put on a fake API server Kix cluster `a` as an earlier Kix left it
+/// after deploying `graph`: `graph`'s record as the current one, with
+/// format 1 revisions that name the marker among their objects and hold
+/// the applied hash of each other object, the ConfigMap, and the marker
+/// with `a`'s `Apply` entry.
+async fn deployed_by_an_earlier_kix_as(graph: &StoreGraph) -> FakeApi {
+    let set = in_format_one(&RevisionSet::of("a", graph));
+    let mut record = manifests(graph)
+        .into_iter()
+        .find(crate::manifest::lifecycle::is_record)
+        .unwrap();
+    record["metadata"]["labels"]["app.kubernetes.io/managed-by"] = json!("kix");
+    record["status"] = json!({
+        "phase": PHASE_ACTIVE,
+        "revisions": RevisionMap::of(&set).to_value(),
+    });
+    let current = record["metadata"]["name"].as_str().unwrap().to_string();
+    let head = json!({
+        "apiVersion": keys::API_VERSION,
+        "kind": crate::cluster::head::KIND,
+        "metadata": { "name": "a" },
+        "status": { "current": current, "generation": 1 },
+    });
+    let mut live = vec![record, head];
+    for mut m in manifests(graph) {
+        if crate::manifest::lifecycle::is_record(&m) {
+            continue;
+        }
+        if crate::manifest::lifecycle::is_marker(&m) {
+            m["metadata"]["managedFields"] = json!([entry_of("a")]);
+        } else {
+            m = without_graph_notes(m);
+        }
+        live.push(m);
+    }
+    let api = FakeApi::new(live.clone());
+    let store = Revisions::new(&api.client());
+    let manager = crate::cluster::field_manager::FieldManager::of("a");
+    for revision in set.all() {
+        store.create(revision).await.unwrap();
+        let applied: std::collections::BTreeMap<String, String> = revision
+            .spec
+            .objects
+            .iter()
+            .filter_map(|o| {
+                let m = live
+                    .iter()
+                    .find(|m| ResourceId::from_value(m) == o.resource_id())?;
+                if crate::manifest::lifecycle::is_marker(m) {
+                    return None;
+                }
+                let obj: DynamicObject = serde_json::from_value(m.clone()).unwrap();
+                let hash = crate::cluster::fieldsv1::applied_content_hash(&obj, &manager)?;
+                Some((o.hash.clone(), hash))
+            })
+            .collect();
+        if !applied.is_empty() {
+            store.write_applied(&revision.name, &applied).await.unwrap();
+        }
+    }
+    api.track_owners();
+    api
+}
+
+/// Plan `graph` for Kix cluster `a` with `flags`, as `kix deploy` does when
+/// this machine holds the current record's build, which is `graph`.
+async fn plan_same_build(
+    api: &FakeApi,
+    graph: &StoreGraph,
+    flags: &[&str],
+) -> crate::plan::CheckedPlan {
+    let client = api.client();
+    let baseline = crate::plan::baseline::Baseline {
+        active_manifests: manifests(graph),
+        source: crate::plan::baseline::ActiveSource::Build(Box::new(graph.clone())),
+        ..current_baseline_of(&client, "a").await
+    };
+    let mut checked = crate::plan::Planner::new(crate::plan::fixtures::flags(flags), &|_| {})
+        .plan(graph, "a", &baseline, Some(&client))
+        .await
+        .unwrap();
+    let target = crate::plan::Target::connect(client, crate::build_source::SopsSources::Local)
+        .await
+        .unwrap();
+    checked.ask_takes_back(&target).await;
+    checked
+}
+
+/// The state a real cluster reached: one Kix cluster an earlier Kix
+/// deployed, whose format 1 revisions name the marker among their objects.
+/// This Kix deploys the same build. The plan writes nothing, and the run
+/// only converts the revisions and rewrites metadata. The run still
+/// finalizes, so the record's kept-orphans revision names the marker, a
+/// second deploy keeps it named, and a deploy with `--prune` deletes it.
+#[tokio::test]
+async fn a_deploy_of_the_same_build_keeps_the_marker_named() {
+    let graph = new_build("a", "a-v1");
+    let api = deployed_by_an_earlier_kix_as(&graph).await;
+    assert_eq!(kept_orphans_of(&api, "a").await, None);
+    assert_no_leak(&api, "before").await;
+
+    for when in ["first deploy", "second deploy"] {
+        let checked = plan_same_build(&api, &graph, &[]).await;
+        assert!(
+            written(checked.plan()).is_empty(),
+            "{when}: {:?}",
+            written(checked.plan())
+        );
+        assert_eq!(names(checked.orphans()), [MARKER], "{when}");
+        let result = cli_run_of(&api, "a", checked).await.unwrap();
+        assert_eq!(
+            (
+                result.created,
+                result.configured,
+                result.pruned,
+                result.kept,
+                result.failed
+            ),
+            (0, 0, 0, 0, 0),
+            "{when}: {result:?}"
+        );
+        let kept = kept_orphans_of(&api, "a")
+            .await
+            .unwrap_or_else(|| panic!("{when}: no kept-orphans revision"));
+        assert!(
+            kept.spec.objects.iter().any(|o| o.name == MARKER),
+            "{when}: {kept:?}"
+        );
+        assert_eq!(appliers(&api), Some(vec!["a".into()]), "{when}");
+        assert_no_leak(&api, when).await;
+    }
+
+    let pruned = plan_same_build(&api, &graph, &["--prune"]).await;
+    assert_eq!(names(pruned.orphans()), [MARKER]);
+    cli_run_of(&api, "a", pruned).await.unwrap();
+    assert_eq!(appliers(&api), None);
+}

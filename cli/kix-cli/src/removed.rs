@@ -524,7 +524,7 @@ pub const GC_INCLUDE_UNSTAMPED: Removed = Removed {
     old: "kix gc --include unstamped",
     new: "kix gc --full-scan --include unattributed",
     id: "K5538",
-    note: "Kix now treats every object it wrote as its own, whether or not the object has Kix's identity hash annotation. An object Kix wrote that no deployment record names is unattributed.",
+    note: "Kix now identifies its objects from Kubernetes field-manager metadata instead of Kix's identity hash annotation, so `kix gc --full-scan` already checks objects belonging to this cluster. Pass `--include unattributed` only when no deployment record or `kix/<cluster>` field manager ties the object to a Kix cluster.",
 };
 
 /// The variable `KIX_OUTPUT`, which set `-o` for every command.

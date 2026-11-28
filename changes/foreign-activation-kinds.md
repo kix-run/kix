@@ -1,4 +1,4 @@
 +++
 kind = "fixed"
 +++
-A build may hold an `Activation` or `PackageInstance` object of another API group. Kix used to refuse such a build with "the build must hold 1 deployment record", or treat the object as one of its own records. Kix now treats only the `Activation` and `PackageInstance` kinds of its own API group (`kix.run`) as its records, and deploys, prunes, and exports another group's kinds of those names like any other object.
+Clusters can now include custom resources named `Activation` or `PackageInstance` from other API groups. Previously, Kix rejected the build with "the build must hold 1 deployment record" or treated those objects as its own records. Kix now treats only `Activation` and `PackageInstance` in its own API group (`kix.run`) as Kix records, and deploys, prunes, and exports resources of the same kind in other API groups like any other object.

@@ -34,7 +34,7 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--plan <FILE>] [--prune | --skip-orphan-c
 | `--skip-orphan-check` | Do not look for orphans at all in this run, and prune nothing. The orphans stay on the cluster for `kix gc` to find. Not with `--prune`. |
 | `--timeout <DURATION>` | How long to wait without progress for each resource to become ready or for each deleted object to be removed (capped at `5m` total per object). Accepts `5m`, `300s`, or a bare number of seconds. Default `180s`. Not with `--operator`. |
 | `--on-error <MODE>` | `stop` (default) stops before applying anything when the plan shows a refused write, and halts the run at the first failure and cancels what has not started. `continue` applies the plan even when it shows refused writes, cancels only the dependents of a failed resource, and carries on with the rest. Either way, a run in which any resource failed exits `1`. |
-| `--reconcile` | Re-apply every resource, including those the deploy would skip because they still match what Kix last applied. Use it to put back fields that were changed on the cluster. |
+| `--reconcile` | Re-apply every resource, including unchanged resources that still match what Kix last applied. Use it to put back fields that were changed on the cluster. |
 | `--force-conflicts` | Take ownership of fields another field manager owns. Fields listed in `ownership.cede` that another manager holds are left to that manager. Without the flag, a conflict is a refused write in the plan, naming the fields and their current owner, and under `--on-error stop` the deploy stops before applying anything. |
 | `--accept-migrations` | Proceed when the plan removes an object that holds data from a stateful package and adds another that holds data in its place. Without it such a deploy stops, even with `--yes`. Kix does not copy data. |
 | `--only <NAMESPACE/INSTANCE>` | Deploy only this package instance and the instances and resources it depends on, leaving the rest of the build for a later `kix deploy`. Repeatable. Cannot be combined with `--prune` or `--operator`. See [Deploy one instance at a time](#deploy-one-instance-at-a-time). |
@@ -67,12 +67,12 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
    cache.
 3. Resources from an earlier deploy that stopped part way or ran with `--only`
    are folded into the plan: they are re-applied or reported as orphans. Kix
-   counts a resource from an unfinished deploy as present on the cluster only
-   when that deployment record's revision lists it and either holds an applied
-   hash for it or the live object has an `Apply` entry under this Kix
-   cluster's field manager (`kix/<cluster>`). The shared field manager `kix`
-   of an earlier version does not count. Resources that deploy never created
-   are neither reported as orphans nor deleted. Fields written by an unfinished deploy
+   counts a resource from an unfinished deploy as written by this cluster only
+   when that record's revision lists it and either records an applied hash for it
+   or the live object has an `Apply` entry for `kix/<cluster>` in
+   `metadata.managedFields` (the legacy shared `kix` manager does not count).
+   Resources that the unfinished deploy never reached are neither reported as
+   orphans nor deleted. Fields written by an unfinished deploy
    appear under `earlier_deploys` attributed to that deployment record instead
    of appearing as drift.
 4. Sends every write and prune delete of the plan as a server-side dry run,
@@ -123,15 +123,15 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
 
    An orphan that another Kix cluster still deploys is not pruned. The plan
    lists it as kept (`kept <resource>, still deployed by Kix cluster <name>`),
-   determined from that Kix cluster's deployment records and revisions. Its
-   field manager entry in `metadata.managedFields` keeps the resource only
-   while its kept-orphans list names it. At the start of pruning, Kix
-   releases this cluster's field ownership on each shared resource that
-   carries this cluster's field manager entry, with an empty Server-Side
-   Apply so the other Kix cluster owns it alone. If that apply fails, or
-   Kubernetes accepts it but keeps the entry, the resource stays on the
-   kept-orphans list so the next deploy retries. A deploy whose only work is
-   such a release runs and does not print "Nothing to apply". `kix rollback --prune` and default `kix gc` follow the same rule.
+   determined from that other cluster's deployment records and revisions (a
+   field-manager entry for another Kix cluster keeps the resource only while
+   that cluster's kept-orphans revision lists it). At the start of pruning, if a
+   shared resource still carries this cluster's `kix/<cluster>` field-manager
+   entry, Kix sends an empty Server-Side Apply to release field ownership so the
+   other Kix cluster owns it alone. If that request fails or Kubernetes keeps
+   the entry, the resource stays on this cluster's kept-orphans list so the next
+   deploy retries; a deploy whose only remaining work is releasing shared
+   ownership still runs instead of printing "Nothing to apply". `kix rollback --prune` and default `kix gc` follow the same rule.
    With `--offline` the plan has not read
    the cluster yet, so it says the check comes once the deploy connects.
    The prune checks each orphan again right before deleting it, and leaves
@@ -223,25 +223,23 @@ non-interactive.
 
 ## How a deploy decides what to write
 
-`kix plan`, `kix deploy`, `kix rollback`, and the Kix operator evaluate each
-object in the build against the live cluster and the cluster's revisions with
-one rule. Kix skips the object when a revision of this Kix cluster holds an
-applied hash for the object's new manifest, the live object still matches
-that applied hash, and each field listed in `ownership.cede` that this Kix
-cluster still owns holds the value the build sends (the applied hash leaves
-ceded fields out). Kix applies every other object and records its applied
-hash. An object whose own manifest did not change is skipped even when an
-object it depends on changed. Kix writes nothing for an import marker. The
-plan tells the cases apart:
+`kix plan`, `kix deploy`, `kix rollback`, and the Kix operator skip an object
+when a revision for this Kix cluster holds an applied hash for the object's
+manifest, the live fields Kix owns still match that hash, and any fields in
+`ownership.cede` still owned by `kix/<cluster>` match the build (ceded fields
+are excluded from the applied hash). An unchanged manifest is skipped even
+when one of its dependencies changed, and import markers are never written to
+the cluster. Every other object is applied and its applied hash is recorded,
+falling into one of three cases in the plan:
 
 1. **The object is missing, being deleted, or its manifest changed in the build.**
    Kix applies it. If the live object matches what an earlier `Failed` or
    `Partial` deploy applied, the plan notes that deployment record.
 2. **Kix has no recorded applied hash for the object.** Kix reapplies it and
-   records the hash. The plan counts these objects on a `↻` line. When a
-   deploy of this Kix cluster that stopped before it finished lists the
-   object, the plan names that deployment record on its own `↻` line, because
-   that deploy may have written the object.
+   records the hash, counting these objects on a `↻` line. If an unfinished
+   deploy of this Kix cluster lists the object without an applied hash, the
+   plan names that deployment record on its own `↻` line because that deploy
+   may have modified the object.
 3. **A field Kix applied changed on the cluster.** The plan counts these
    objects on a `↺` line and lists each modified field and its current field
    manager under `Drift:`. `kix deploy` reapplies the object with force to take

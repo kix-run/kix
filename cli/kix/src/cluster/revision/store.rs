@@ -134,7 +134,7 @@ impl Revisions {
                     tracing::warn!(
                         name = %revision.name,
                         error = %e,
-                        "could not delete a revision the API server stored with a different spec"
+                        "could not delete PackageInstanceRevision after the API server altered its spec"
                     );
                 }
                 Err(RevisionError::StoredDifferently {

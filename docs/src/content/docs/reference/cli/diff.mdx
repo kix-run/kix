@@ -81,7 +81,7 @@ Within a changed package, each resource is reported as one of:
 | --- | --- |
 | `+` added or `-` removed | The resource exists on one side only |
 | `~` modified | The content differs. Text output shows each differing path with a unified diff of the values. |
-| `~` tracking annotation only | Only the identity hash changed, because a dependency of this resource changed. The content is the same, so a deploy does not write the resource. Text and Markdown output mark these "tracking annotation only"; JSON calls them `dep_affected_resources`. Only a comparison of two builds lists them. Against the live cluster (`kix plan`, `kix plan --read-only`), such a resource is unchanged. |
+| `~` tracking annotation only | Only `kix.run/identity-hash` changed because a dependency of this resource changed. Its own manifest is unchanged, so `kix deploy` leaves it untouched. Text and Markdown output mark these "tracking annotation only", and JSON lists them under `dep_affected_resources`. Appears only in `kix diff` between two builds; in `kix plan` and `kix plan --read-only`, the resource is unchanged. |
 
 Two more sections follow the packages:
 
@@ -107,12 +107,12 @@ Kix sets the label `app.kubernetes.io/managed-by=kix` on every object it applies
 | `kix plan --read-only` | Shown as removed (`-`) in the package report when the live object carries the Kix label and one of this cluster's deployment records references it (via revisions, or via `kix.run/activations` on clusters not yet upgraded to revisions). Prune fates are not checked. | Never listed or compared. |
 | [`kix status`](/docs/reference/cli/status/) `--check presence` / `--check drift` | Never reported. Checks only the objects listed in the current deploy record, reporting missing or changed objects. | Never listed, compared, or counted. |
 | [`kix gc`](/docs/reference/cli/gc/) | Deletes orphans found by comparing the deployed builds against a fresh build. | Never listed or deleted. |
-| `kix gc --full-scan` | Scans every labelled object of the named cluster and deletes those whose kind, namespace, and name are not among the objects the fresh build makes. | Never listed or deleted. |
+| `kix gc --full-scan` | Scans every labelled object belonging to the named cluster and deletes those whose kind, namespace, and name are absent from the resources deployed by the fresh build. | Never listed or deleted. |
 
 Even when an object carries `app.kubernetes.io/managed-by=kix`, Kix separates what it wrote from objects created by other tools or controllers:
 
 - **Managed objects** have a `managedFields` entry for a Kix field manager (`kix/<cluster>`, or `kix` from an earlier version of Kix). Kix's `Activation` records also count as managed.
-- **Copies** carry the label without a `managedFields` entry for a Kix field manager, excluding objects with an `ownerReference` (controller-owned children) and `Endpoints` named after a labelled Service in the same namespace, which Kix ignores. Another controller or tool copied Kix's labels, and sometimes its annotations, onto a new object, such as a database operator's volume claim or an Event posted for a custom resource. An object whose `managedFields` a restore from backup dropped counts as a copy until Kix applies it again.
+- **Copies** carry the label without a `managedFields` entry for a Kix field manager, excluding objects with an `ownerReference` (controller-owned children) and `Endpoints` named after a labelled Service in the same namespace, which Kix ignores. Another controller or tool copied Kix's labels, and sometimes its annotations, onto a new object, such as a database operator's volume claim or an Event posted for a custom resource. If a cluster backup restore stripped `metadata.managedFields` from an object, Kix also treats it as a copy until the next apply restores its field-manager entry.
 
 If Kubernetes serves the same object under multiple API groups (such as `Event` under `v1` and `events.k8s.io/v1`), Kix includes it once, preferring the API group Kix applied it with.
 

@@ -3,4 +3,4 @@ kind = "error"
 cli = ["kix gc --include unstamped"]
 id = "K5538"
 +++
-`kix gc --full-scan --include unstamped` is removed. Kix now decides that an object is its own from the field managers Kubernetes records on it, not from its `kix.run/identity-hash` annotation, so every object Kix wrote counts as Kix's. An object Kix wrote that no deployment record names is unattributed: use `kix gc --full-scan --include unattributed` to delete such objects. `--include unstamped` fails with an error that names `--include unattributed`.
+Remove `unstamped` from `kix gc --full-scan --include`, or replace it with `unattributed` when deleting Kix-applied objects that no deployment record or `kix/<cluster>` field manager ties to a Kix cluster. `--include unstamped` was removed and now stops with `[K5538]`. Kix now identifies its objects from Kubernetes `metadata.managedFields` entries instead of the retired `kix.run/identity-hash` annotation, so `kix gc --full-scan` checks objects belonging to the named cluster without an `--include` flag.

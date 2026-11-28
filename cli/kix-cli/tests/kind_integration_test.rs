@@ -1033,8 +1033,9 @@ fn two_kix_clusters_share_one_kind_cluster() {
     let (ok, out) = flake.kix(&ctx, &["deploy", "sweep-a", "--prune", "--yes"]);
     assert!(ok, "{out}");
     assert!(
-        out.contains("kept ClusterRole.rbac.authorization.k8s.io/sweep-test-reader")
-            && out.contains("still deployed by Kix cluster sweep-b"),
+        out.contains(
+            "ClusterRole.rbac.authorization.k8s.io/sweep-test-reader still deployed by Kix cluster sweep-b"
+        ),
         "{out}"
     );
     assert_b_intact(&ctx);
@@ -1727,11 +1728,11 @@ fn drift_is_reverted_and_ceded_fields_are_left_alone() {
 
 /// Put Kix cluster `kix_cluster` on `ctx` back into the state an older Kix
 /// left: every object it applied has its `Apply` entry under the legacy
-/// manager `kix`, and an `Update` entry under `kix` that owns the two notes
-/// naming the current record and the applied hash. The record names no
-/// revisions, and the head and the revisions are gone. This binary cannot
-/// deploy the way an older Kix did, so the test writes that state through
-/// the API.
+/// manager `kix`, and an `Update` entry under `kix` that owns the notes an
+/// older Kix wrote to live objects: the object's build hash, the current
+/// record, and the applied hash. The record names no revisions, and the
+/// head and the revisions are gone. This binary cannot deploy the way an
+/// older Kix did, so the test writes that state through the API.
 fn put_back_in_the_older_state(ctx: &str, kix_cluster: &str) {
     let selector = format!("{}={kix_cluster}", keys::CLUSTER_LABEL);
     let records: serde_json::Value = serde_json::from_str(&kubectl_stdout(
@@ -1751,28 +1752,33 @@ fn put_back_in_the_older_state(ctx: &str, kix_cluster: &str) {
         .as_str()
         .unwrap()
         .to_string();
-    let revisions: serde_json::Value = serde_json::from_str(&kubectl_stdout(
-        ctx,
-        &[
-            "get",
-            &kix::cluster::revision::crd_name(),
-            "-l",
-            &selector,
-            "-o",
-            "json",
-        ],
-    ))
-    .unwrap();
-    let mut applied = std::collections::HashMap::new();
-    for revision in revisions["items"].as_array().unwrap() {
-        for (hash, value) in revision["status"]["applied"]
-            .as_object()
-            .into_iter()
-            .flatten()
-        {
-            applied.insert(hash.clone(), value.as_str().unwrap().to_string());
-        }
-    }
+    // This Kix sends no build hash to live objects, so read each object's
+    // from the build.
+    let kind_cluster = ctx.strip_prefix("kind-").unwrap();
+    let build = kix(kind_cluster)
+        .args(["build", kix_cluster, "-o", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let manifests: Vec<serde_json::Value> = serde_json::from_slice(&build.stdout).unwrap();
+    let key_of = |m: &serde_json::Value| {
+        (
+            m["kind"].as_str().unwrap_or_default().to_string(),
+            m["metadata"]["namespace"].as_str().map(str::to_string),
+            m["metadata"]["name"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+        )
+    };
+    let built: std::collections::HashMap<_, String> = manifests
+        .iter()
+        .filter_map(|m| Some((key_of(m), keys::get(m, keys::IDENTITY_HASH)?.to_string())))
+        .collect();
     let objects: serde_json::Value = serde_json::from_str(&kubectl_stdout(
         ctx,
         &[
@@ -1790,7 +1796,7 @@ fn put_back_in_the_older_state(ctx: &str, kix_cluster: &str) {
     let own = format!("kix/{kix_cluster}");
     let mut moved = 0;
     for obj in objects["items"].as_array().unwrap() {
-        let Some(hash) = obj["metadata"]["annotations"][keys::IDENTITY_HASH].as_str() else {
+        let Some(hash) = built.get(&key_of(obj)) else {
             continue;
         };
         let Some(index) = obj["metadata"]["managedFields"]
@@ -1801,6 +1807,10 @@ fn put_back_in_the_older_state(ctx: &str, kix_cluster: &str) {
         else {
             continue;
         };
+        assert!(
+            obj["metadata"]["annotations"][keys::CEDE_FIELDS].is_null(),
+            "older_applied_hash does not leave out ceded fields"
+        );
         let kind = obj["kind"].as_str().unwrap();
         let name = obj["metadata"]["name"].as_str().unwrap();
         let mut target = vec![kind.to_string(), name.to_string()];
@@ -1814,22 +1824,31 @@ fn put_back_in_the_older_state(ctx: &str, kix_cluster: &str) {
         .to_string();
         let mut args: Vec<&str> = vec!["patch"];
         args.extend(target.iter().map(String::as_str));
-        args.extend(["--type=json", "-p", &rename]);
+        args.extend([
+            "--type=json",
+            "-p",
+            &rename,
+            "--show-managed-fields",
+            "-o",
+            "json",
+        ]);
         let out = kubectl(ctx, &args);
         assert!(
             out.status.success(),
             "{}",
             String::from_utf8_lossy(&out.stderr)
         );
+        let renamed: kube::api::DynamicObject = serde_json::from_slice(&out.stdout).unwrap();
+        let identity = format!("{}={hash}", keys::IDENTITY_HASH);
         let activations = format!("{}={record_hash}", keys::ACTIVATIONS);
         let stamp = format!(
             "{}={}",
             keys::APPLIED_HASH,
-            applied.get(hash).cloned().unwrap_or_default()
+            older_applied_hash(&renamed, kix_cluster)
         );
         let mut args: Vec<&str> = vec!["annotate", "--overwrite", "--field-manager=kix"];
         args.extend(target.iter().map(String::as_str));
-        args.extend([activations.as_str(), stamp.as_str()]);
+        args.extend([identity.as_str(), activations.as_str(), stamp.as_str()]);
         let out = kubectl(ctx, &args);
         assert!(
             out.status.success(),
@@ -1893,6 +1912,21 @@ fn put_back_in_the_older_state(ctx: &str, kix_cluster: &str) {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// Return the applied hash an older Kix wrote for `obj` after applying it
+/// under the manager `kix` for Kix cluster `kix_cluster`: the canonical
+/// Blake3 hash of the fields its `Apply` entry owns, without any `kix.run/*`
+/// annotation. It leaves out no ceded fields, so it holds only for an
+/// object that cedes none.
+fn older_applied_hash(obj: &kube::api::DynamicObject, kix_cluster: &str) -> String {
+    use kix::cluster::fieldsv1;
+    use kix::manifest::hash;
+    let manager = kix::cluster::field_manager::FieldManager::unmigrated(kix_cluster);
+    let fields = fieldsv1::kix_fieldset(obj, &manager).expect("an Apply entry under kix");
+    let mut projection = fieldsv1::project(&fieldsv1::merge_typed_metadata(obj), &fields);
+    hash::strip_kix_annotations(&mut projection);
+    hash::hash_value(&hash::sort_keys(&projection))
 }
 
 /// Verify that the first deploy by this Kix of a Kix cluster an older Kix
@@ -1993,6 +2027,10 @@ fn the_first_deploy_moves_a_cluster_an_older_kix_deployed() {
         ],
     ))
     .unwrap();
+    assert!(
+        annotations.get(keys::IDENTITY_HASH).is_none(),
+        "{annotations}"
+    );
     assert!(
         annotations.get(keys::ACTIVATIONS).is_none(),
         "{annotations}"

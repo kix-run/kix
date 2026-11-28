@@ -62,7 +62,7 @@ const ATTEMPTS: usize = 5;
 #[derive(Debug, Error)]
 pub enum WriteError {
     #[error(
-        "could not update Kix metadata on {resource} because Kubernetes refused the patch that renames field manager `{legacy}` and removes retired `{domain}` annotations: {source}. Check permissions on {resource}, then run the deploy again",
+        "could not update Kix metadata on {resource}: Kubernetes rejected the patch that renames field manager `{legacy}` and removes retired `{domain}/*` annotations ({source}). Check permissions on {resource}, then run the deploy again",
         legacy = field_manager::LEGACY,
         domain = keys::DOMAIN,
     )]

@@ -190,7 +190,7 @@ fn why(write: &ObjectWrite) -> String {
             )
         }
         Some(WriteReason::UnfinishedDeploy { record }) => {
-            format!("may have been written by deployment record {record}, which did not finish")
+            format!("may have been written by unfinished deployment {record}")
         }
         Some(WriteReason::HeldByOtherCluster { changed_by }) => {
             let by: Vec<&str> = changed_by.iter().map(|o| o.manager.as_str()).collect();
