@@ -80,11 +80,11 @@ struct Rec {
     phase: &'static str,
     current: bool,
     /// Each object its instance revision names, with its hash.
-    objects: Vec<(String, String)>,
+    objects: Vec<(ResourceId, String)>,
     /// The applied hash recorded for each hash.
     applied: Vec<(String, String)>,
     /// Each object its kept-orphans revision names, with its hash.
-    kept: Vec<(String, String)>,
+    kept: Vec<(ResourceId, String)>,
 }
 
 impl Rec {
@@ -101,41 +101,48 @@ impl Rec {
 
     /// Name `name` at `v`, with no applied hash.
     fn names(mut self, name: &str, v: &str) -> Rec {
-        self.objects.push((name.into(), oh(name, v)));
+        self.objects.push((id(name), oh(name, v)));
         self
     }
 
     /// Name `name` at `v`, with the applied hash of [`live`] at `v`.
     fn applied(mut self, name: &str, v: &str) -> Rec {
-        self.objects.push((name.into(), oh(name, v)));
+        self.objects.push((id(name), oh(name, v)));
         self.applied.push((oh(name, v), applied(name, v)));
         self
     }
 
     /// Name `name` with hash `hash` and applied hash `recorded`.
-    fn recorded(mut self, name: &str, hash: &str, recorded: &str) -> Rec {
-        self.objects.push((name.into(), hash.into()));
+    fn recorded(self, name: &str, hash: &str, recorded: &str) -> Rec {
+        self.recorded_as(id(name), hash, recorded)
+    }
+
+    /// Name the object `rid` with hash `hash` and applied hash `recorded`.
+    fn recorded_as(mut self, rid: ResourceId, hash: &str, recorded: &str) -> Rec {
+        self.objects.push((rid, hash.into()));
         self.applied.push((hash.into(), recorded.into()));
         self
     }
 
+    /// Name the object `rid` with hash `hash`, with no applied hash.
+    fn names_as(mut self, rid: ResourceId, hash: &str) -> Rec {
+        self.objects.push((rid, hash.into()));
+        self
+    }
+
     fn kept(mut self, name: &str, hash: &str) -> Rec {
-        self.kept.push((name.into(), hash.into()));
+        self.kept.push((id(name), hash.into()));
         self
     }
 }
 
-fn revision_object(name: &str, hash: &str) -> RevisionObject {
-    RevisionObject::of_id(hash, &id(name))
-}
-
-fn revision(slot: Slot, objects: &[(String, String)]) -> Revision {
+fn revision(slot: Slot, objects: &[(ResourceId, String)]) -> Revision {
     Revision::new(RevisionSpec::new(
         CLUSTER,
         slot,
         objects
             .iter()
-            .map(|(name, hash)| revision_object(name, hash))
+            .map(|(rid, hash)| RevisionObject::of_id(hash, rid))
             .collect(),
     ))
 }
@@ -515,7 +522,10 @@ fn an_unserved_kind_is_absent_for_the_build_and_not_known_for_a_candidate() {
     let decided = decide(&new, &made, &live, &ledger, false, true).unwrap();
     assert_eq!(shown(&decided), ["web: apply intended"]);
     assert!(decided.orphans.is_empty());
-    assert_eq!(decided.unknown, [revision_object("old", &oh("old", "1"))]);
+    assert_eq!(
+        decided.unknown,
+        [RevisionObject::of_id(&oh("old", "1"), &id("old"))]
+    );
 }
 
 /// The plan refuses when the account may neither list nor get the objects
@@ -587,7 +597,7 @@ fn a_kix_annotation_changed_by_a_stopped_deploy_is_applied() {
     assert_eq!(shown(&decided), ["web: apply applied by failed"]);
 
     let mut killed = Rec::new("killed", PHASE_FAILED, false);
-    killed.objects.push(("web".into(), two.clone()));
+    killed.objects.push((id("web"), two.clone()));
     let killed = ledger(&[cur(), killed]);
     let decided = decide_cli(&[with_rule("r1")], vec![live_with_rule("r2")], &killed);
     assert_eq!(
@@ -737,6 +747,65 @@ fn an_autoscaled_ceded_field_is_not_drift() {
     }
 }
 
+/// A `Failed` or killed deploy of a build with `replicas: 0` wrote that
+/// value while Kix's own entry still owned the ceded field. The applied hash
+/// leaves the field out, so it is the one the current record holds, and
+/// only the third clause of the rule sees the other build's value. The
+/// deploy of the earlier build applies it, without force. Once an
+/// autoscaler holds the field, its value is the autoscaler's: the object is
+/// skipped and nothing reports drift.
+#[test]
+fn a_ceded_field_another_build_wrote_while_kix_owned_it_is_applied() {
+    let rid = ResourceId::new("apps", "Deployment", "d", "web");
+    let with_replicas = |n: i64| {
+        let mut m = deployment_manifest();
+        m["spec"]["replicas"] = json!(n);
+        m
+    };
+    let (one, zero) = (
+        object_hash(&with_replicas(1)),
+        object_hash(&with_replicas(0)),
+    );
+    assert_ne!(one, zero);
+    let applied_of =
+        |obj: &DynamicObject| fieldsv1::applied_content_hash(obj, &FieldManager::of(CLUSTER));
+    let applied = applied_of(&deployment(0, None, None)).unwrap();
+    assert_eq!(
+        applied_of(&deployment(1, None, None)),
+        Some(applied.clone())
+    );
+    let cur = || Rec::new("cur", PHASE_ACTIVE, true).recorded_as(rid.clone(), &one, &applied);
+    let failed = ledger(&[
+        cur(),
+        Rec::new("failed", PHASE_FAILED, false).recorded_as(rid.clone(), &zero, &applied),
+    ]);
+    let killed = ledger(&[
+        cur(),
+        Rec::new("killed", PHASE_FAILED, false).names_as(rid.clone(), &zero),
+    ]);
+    let wrote_zero = || vec![deployment(0, None, None)];
+
+    let decided = decide_cli(&[with_replicas(1)], wrote_zero(), &failed);
+    assert_eq!(shown(&decided), ["web: apply applied by failed"]);
+    assert!(!forced(&decided, "web"));
+    let decided = decide_cli(&[with_replicas(1)], wrote_zero(), &killed);
+    assert_eq!(shown(&decided), ["web: apply intended"]);
+    assert!(!forced(&decided, "web"));
+    // The build that wrote the value leaves it alone.
+    let decided = decide_cli(&[with_replicas(0)], wrote_zero(), &failed);
+    assert_eq!(shown(&decided), ["web: skip unchanged"]);
+
+    let scaled = LiveObjects::of([deployment(5, Some("hpa"), None)], []);
+    let new = [with_replicas(1)];
+    let made = new.iter().map(ResourceId::from_value).collect();
+    for ledger in [&failed, &killed] {
+        for forces in [true, false] {
+            let decided = decide(&new, &made, &scaled, ledger, false, forces).unwrap();
+            assert_eq!(shown(&decided), ["web: skip unchanged"], "forces {forces}");
+        }
+    }
+}
+
 /// A forced revert of drift hands the run the whole manifest: the forced
 /// apply leaves out each ceded field another manager holds on the object it
 /// reads right before it writes, so the autoscaler keeps the replicas count
@@ -835,25 +904,27 @@ fn written_by(mut obj: DynamicObject, managers: &[&str]) -> DynamicObject {
     obj
 }
 
-/// An object that a `Degraded` current record names is taken in only when
-/// it has an entry under this Kix cluster's field manager, or the legacy
-/// one when the migration write moves that entry here. One that a `Failed`
-/// record names is taken in only with an `Apply` entry under this Kix
-/// cluster's own manager. One that only another Kix cluster wrote came from
+/// An object that a `Degraded` current record or a `Failed` record names is
+/// taken in only when this Kix cluster wrote it: the record's revision holds
+/// an applied hash for it, or it has an `Apply` entry under this Kix
+/// cluster's own manager. An entry under the shared manager `kix` alone
+/// does not count, and one that only another Kix cluster wrote came from
 /// elsewhere and stays. An `Active` current record's objects and kept
-/// orphans need no entry.
+/// orphans need neither.
 #[test]
-fn leftovers_are_taken_in_only_with_the_clusters_own_entry() {
+fn leftovers_are_taken_in_only_when_this_cluster_wrote_them() {
     let recs = |phase| {
         [
             Rec::new("cur", phase, true)
                 .names("own", "1")
                 .names("legacy", "1")
+                .applied("legacy-applied", "1")
                 .names("other", "1")
                 .kept("kept-other", "h-ko"),
             Rec::new("failed", PHASE_FAILED, false)
                 .names("failed-own", "1")
                 .names("failed-legacy", "1")
+                .applied("failed-applied", "1")
                 .names("failed-other", "1"),
         ]
     };
@@ -861,10 +932,12 @@ fn leftovers_are_taken_in_only_with_the_clusters_own_entry() {
         [
             written_by(live("own", "1"), &["kix/a"]),
             written_by(live("legacy", "1"), &[LEGACY]),
+            written_by(live("legacy-applied", "1"), &[LEGACY]),
             written_by(live("other", "1"), &["kix/b"]),
             written_by(live("kept-other", "1"), &["kix/b"]),
             written_by(live("failed-own", "1"), &["kix/a", "kix/b"]),
             written_by(live("failed-legacy", "1"), &[LEGACY]),
+            written_by(live("failed-applied", "1"), &[LEGACY]),
             written_by(live("failed-other", "1"), &["kix/b"]),
         ],
         [],
@@ -875,7 +948,13 @@ fn leftovers_are_taken_in_only_with_the_clusters_own_entry() {
     let decided = decide(&[], &made, &live, &degraded, false, true).unwrap();
     assert_eq!(
         decided.orphans,
-        [id("failed-own"), id("kept-other"), id("legacy"), id("own")]
+        [
+            id("failed-applied"),
+            id("failed-own"),
+            id("kept-other"),
+            id("legacy-applied"),
+            id("own")
+        ]
     );
 
     let active = ledger(&recs(PHASE_ACTIVE));
@@ -883,9 +962,11 @@ fn leftovers_are_taken_in_only_with_the_clusters_own_entry() {
     assert_eq!(
         decided.orphans,
         [
+            id("failed-applied"),
             id("failed-own"),
             id("kept-other"),
             id("legacy"),
+            id("legacy-applied"),
             id("other"),
             id("own")
         ]
@@ -1055,4 +1136,54 @@ fn a_cluster_an_older_kix_deployed_is_read_after_its_conversion() {
     );
     assert_eq!(names(&decided.renamed), ["edited", "left", "same"]);
     assert_eq!(names(&decided.orphan_migrations), ["gone", "kept"]);
+}
+
+/// Another group's `Activation` and `PackageInstance`, such as Crossplane's
+/// `Activation`, are objects like any other. The rule decides them by their
+/// applied hash, even with `kix.run/mode: import`, and one the build stops
+/// making is an orphan.
+#[test]
+fn another_groups_record_and_instance_kinds_follow_the_rule() {
+    let as_foreign = |mut m: Value, kind: &str| {
+        m["apiVersion"] = json!("ssm.aws.upbound.io/v1beta1");
+        m["kind"] = json!(kind);
+        m["metadata"]["annotations"][keys::MODE] = json!("import");
+        m
+    };
+    let live_foreign = |name: &str, v: &str, kind: &str| {
+        let mut obj = live(name, v);
+        let types = obj.types.as_mut().unwrap();
+        types.api_version = "ssm.aws.upbound.io/v1beta1".into();
+        types.kind = kind.into();
+        obj
+    };
+    let rid = |kind: &str, name: &str| ResourceId::new("ssm.aws.upbound.io", kind, "d", name);
+    let act = as_foreign(manifest("act", "1"), "Activation");
+    let pi = as_foreign(manifest("pi", "1"), "PackageInstance");
+    let applied_of = |obj: &DynamicObject| {
+        fieldsv1::applied_content_hash(obj, &FieldManager::of(CLUSTER)).unwrap()
+    };
+    let ledger = ledger(&[Rec::new("cur", PHASE_ACTIVE, true)
+        .recorded_as(
+            rid("Activation", "act"),
+            &object_hash(&act),
+            &applied_of(&live_foreign("act", "1", "Activation")),
+        )
+        .recorded_as(
+            rid("PackageInstance", "pi"),
+            &object_hash(&pi),
+            &applied_of(&live_foreign("pi", "1", "PackageInstance")),
+        )
+        .recorded_as(rid("Activation", "gone"), "h-gone", "a-gone")]);
+    let live = vec![
+        live_foreign("act", "1", "Activation"),
+        live_foreign("pi", "by hand", "PackageInstance"),
+        live_foreign("gone", "1", "Activation"),
+    ];
+    let decided = decide_cli(&[act, pi], live, &ledger);
+    assert_eq!(
+        shown(&decided),
+        ["act: skip unchanged", "pi: apply reverts drift on pi"]
+    );
+    assert_eq!(decided.orphans, [rid("Activation", "gone")]);
 }

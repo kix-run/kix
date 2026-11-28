@@ -739,11 +739,16 @@ impl Records {
 
     /// Name `revision` as the kept-orphans revision in the map of record
     /// `name`, and leave the rest of the map as it is. Create the revision
-    /// before this write, so the map names only revisions that exist.
+    /// before this write, so the map names only revisions that exist. The
+    /// map then names a revision in this release's format, so the write
+    /// sets the map's format too.
     pub async fn name_kept_orphans(&self, name: &str, revision: &str) -> Result<(), RecordsError> {
         self.patch_status(
             name,
-            &json!({ "status": { REVISIONS_FIELD: { "keptOrphans": revision } } }),
+            &json!({ "status": { REVISIONS_FIELD: {
+                "format": crate::cluster::revision::MAP_FORMAT,
+                "keptOrphans": revision,
+            } } }),
         )
         .await
     }

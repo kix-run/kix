@@ -46,7 +46,6 @@ pub(super) struct GarbageEntry {
     pub(super) identity_hash: Option<String>,
     pub(super) package: Option<String>,
     pub(super) package_namespace: Option<String>,
-    pub(super) activations: Option<String>,
     pub(super) reason: GarbageReason,
     /// What the object waits for when it is already being deleted.
     pub(super) deleting: Option<String>,
@@ -245,7 +244,6 @@ pub(super) fn judge_hard(
             identity_hash: ann_get(keys::IDENTITY_HASH),
             package,
             package_namespace,
-            activations: ann_get(keys::ACTIVATIONS),
             reason: GarbageReason::NotInBuild,
             deleting: kix::cluster::readiness::deletion_reason(obj),
         });
@@ -431,7 +429,6 @@ pub(super) fn record_garbage(plan: &Retirement) -> Vec<GarbageEntry> {
             identity_hash: retired.record.identity_hash.clone(),
             package: None,
             package_namespace: None,
-            activations: None,
             reason: GarbageReason::RetiredActivation,
             deleting: None,
         })

@@ -1361,7 +1361,7 @@ fn plan_and_check(
                             == kix::manifest::hash::object_hash(manifest)
                 })
             }
-            _ if lifecycle::is_record_kind(kind) => {
+            _ if lifecycle::is_record_kind(id.group_kind()) => {
                 package == CLUSTER_LEVEL_KEY
                     && doc.activation.as_ref().and_then(|a| a.new.as_deref()) == Some(name.as_str())
             }

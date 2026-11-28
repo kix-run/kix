@@ -73,7 +73,9 @@ pub fn run(args: &ExportArgs, ctx: &mut CommandContext) -> Result<()> {
 
         // Omit Kix-internal custom resources that only apply to Kix
         // deployments, unless the export keeps Kix's metadata.
-        if !args.with_kix_metadata && kix::manifest::lifecycle::is_kix_internal_kind(&rid.kind) {
+        if !args.with_kix_metadata
+            && kix::manifest::lifecycle::is_kix_internal_kind(rid.group_kind())
+        {
             skipped_internal += 1;
             continue;
         }

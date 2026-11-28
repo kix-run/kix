@@ -280,6 +280,29 @@ async fn a_read_refuses_a_revision_whose_spec_does_not_match_its_name() {
     assert!(message.contains(&rev.name), "{message}");
 }
 
+/// A revision in a later format may hold fields this version drops, so its
+/// name would not match. The read says a newer Kix wrote it instead of
+/// saying someone changed it.
+#[tokio::test]
+async fn a_read_refuses_a_revision_a_newer_kix_wrote() {
+    let api = FakeApi::new([]);
+    let store = Revisions::new(&api.client());
+    let rev = revision(CLUSTER, "apps/web");
+    store.create(&rev).await.unwrap();
+    api.patch_object(KIND, &rev.name, |o| {
+        o["spec"]["format"] = json!(FORMAT + 1);
+        o["spec"]["later"] = json!("a field this version does not know");
+    });
+    match store.get(&rev.name).await {
+        Err(RevisionError::Read(e @ ReadError::Newer { .. })) => {
+            let message = e.to_string();
+            assert!(message.contains("a newer version of Kix"), "{message}");
+            assert!(message.contains("Upgrade Kix"), "{message}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn list_returns_only_the_named_clusters_revisions() {
     let api = FakeApi::new([]);
@@ -360,34 +383,39 @@ fn a_map_round_trips_and_names_every_revision() {
     expected.sort();
     assert_eq!(names, expected);
 
-    let mut other = map.to_value();
-    other["format"] = json!(2);
-    let later = RevisionMap::read(&other).unwrap_err().to_string();
-    assert!(later.contains("format 2"), "{later}");
+    // A map names format 2 revisions, so it is written in format 2, which
+    // a release that reads only format 1 refuses as written by a newer Kix.
+    assert_eq!(map.to_value()["format"], json!(2));
+    let mut older = map.to_value();
+    older["format"] = json!(1);
+    assert_eq!(RevisionMap::read(&older), Ok(map.clone()));
+    let mut later = map.to_value();
+    later["format"] = json!(3);
+    let later = RevisionMap::read(&later).unwrap_err().to_string();
+    assert!(later.contains("format 3"), "{later}");
     assert!(RevisionMap::read(&json!({})).is_err());
 }
 
 #[test]
-fn a_build_manifest_names_its_object_by_its_object_hash() {
+fn a_manifest_names_its_object_by_its_object_hash() {
     let mut manifest = cm("apps", "a");
-    assert_eq!(RevisionObject::of_build(&manifest), None, "a live object");
     manifest["metadata"]["annotations"] = json!({ (keys::IDENTITY_HASH): "h1" });
     assert_eq!(
-        RevisionObject::of_build(&manifest),
-        Some(RevisionObject {
+        RevisionObject::of_manifest(&manifest),
+        RevisionObject {
             hash: crate::manifest::hash::object_hash(&manifest),
             group: String::new(),
             kind: "ConfigMap".into(),
             namespace: Some("apps".into()),
             name: "a".into(),
             needs: Vec::new(),
-        })
+        }
     );
 }
 
 /// A create whose stored `spec` differs from the one sent, as when the
 /// installed definition prunes a field this version writes, is refused
-/// with a message that names the definition.
+/// with a message that names the definition, and leaves no object.
 #[tokio::test]
 async fn create_refuses_a_spec_the_server_stored_differently() {
     let api = FakeApi::new([]);
@@ -402,6 +430,9 @@ async fn create_refuses_a_spec_the_server_stored_differently() {
         "{err}"
     );
     assert!(err.to_string().contains(&crd_name()), "{err}");
+    // The object is gone, so a later create does not find it and count the
+    // revision as created.
+    assert_eq!(api.object(KIND, &rev.name), None);
 }
 
 /// A build with an instance too large to store as one revision is refused,
@@ -881,7 +912,7 @@ mod keep_tests {
         let api = FakeApi::new([]);
         let (_, old) = one_needed_one_not(&api).await;
         let mut later = RevisionMap::of(&old).to_value();
-        later["format"] = json!(2);
+        later["format"] = json!(3);
         let mut record = activation("later", PHASE_FAILED, &RevisionMap::of(&old));
         record["status"]["revisions"] = later;
         api.insert(record);

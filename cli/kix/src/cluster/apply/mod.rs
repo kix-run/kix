@@ -25,7 +25,7 @@ use serde_json::Value;
 pub use ssa::{ApplyAction, ApplyError, ApplyPreview, namespaceless};
 pub(crate) use ssa::{
     ApplyResult, Seg, TAKEOVER_ATTEMPTS, Takeover, Takes, apply_resource, bound_to, ceded_fields,
-    conflict_paths, covers, forced_manifest, remove_covered, remove_path, takes_back,
+    conflict_paths, covered_part, covers, forced_manifest, remove_covered, remove_path, takes_back,
 };
 #[cfg(test)]
 use ssa::{
@@ -97,14 +97,6 @@ impl ChangeAction {
     }
 }
 
-/// Return the `kix.run/identity-hash` annotation from a manifest, if present.
-fn manifest_identity_hash(manifest: &Value) -> Option<&str> {
-    manifest
-        .pointer("/metadata/annotations")
-        .and_then(|a| a.get(keys::IDENTITY_HASH))
-        .and_then(Value::as_str)
-}
-
 /// Return the `kix.run/rerun-hash` annotation from a manifest, if present.
 fn manifest_rerun_hash(manifest: &Value) -> Option<&str> {
     manifest
@@ -161,8 +153,10 @@ pub(crate) fn changed(
 /// manifest did not is skipped. An import marker is always skipped, because
 /// Kix writes nothing for it. Returns [`ChangeAction::Apply`] or
 /// [`ChangeAction::Skip`] for each manifest in `new_manifests`, followed by
-/// [`ChangeAction::Orphan`] for prunable stamped resources present in
-/// `old_manifests` but absent from `new_manifests`.
+/// [`ChangeAction::Orphan`] for prunable resources present in
+/// `old_manifests` but absent from `new_manifests`. Pass the manifests of
+/// builds only, as the offline plan does: the deployed build from this
+/// machine's cache.
 pub(crate) fn detect_changes(
     new_manifests: &[Value],
     old_manifests: &[Value],
@@ -172,10 +166,7 @@ pub(crate) fn detect_changes(
     // short-circuit; records are excluded from the orphan set below.
     let old_by_k8s_id: HashMap<ResourceId, &Value> = old_manifests
         .iter()
-        .filter_map(|m| {
-            manifest_identity_hash(m)?;
-            Some((ResourceId::from_value(m), m))
-        })
+        .map(|m| (ResourceId::from_value(m), m))
         .collect();
 
     let mut matched_old_ids: HashSet<ResourceId> = HashSet::new();
@@ -190,10 +181,7 @@ pub(crate) fn detect_changes(
         }
 
         match old_by_k8s_id.get(&rid) {
-            Some(old)
-                if manifest_identity_hash(manifest).is_some()
-                    && object_hash(old) == object_hash(manifest) =>
-            {
+            Some(old) if object_hash(old) == object_hash(manifest) => {
                 matched_old_ids.insert(rid.clone());
                 actions.push(ChangeAction::Skip(rid));
             }
@@ -211,16 +199,11 @@ pub(crate) fn detect_changes(
         }
     }
 
-    // Only stamped, prunable resources can become orphans. Unstamped manifests
-    // may belong to controller children or external tools, and Activation
-    // records are superseded during finalization rather than pruned here. A
-    // build does not make its import markers, so a marker of the old build
-    // is no orphan of it.
+    // Activation records are superseded during finalization rather than
+    // pruned here. A build does not make its import markers, so a marker of
+    // the old build is no orphan of it.
     for old_manifest in old_manifests {
-        if manifest_identity_hash(old_manifest).is_none()
-            || !lifecycle_of(old_manifest).prunable()
-            || !lifecycle::makes(old_manifest)
-        {
+        if !lifecycle_of(old_manifest).prunable() || !lifecycle::makes(old_manifest) {
             continue;
         }
         let rid = ResourceId::from_value(old_manifest);

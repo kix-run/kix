@@ -49,7 +49,7 @@ use crate::manifest::keys;
 
 pub use applied::AppliedHashes;
 pub use convert::Conversion;
-pub use map::{RevisionMap, UnreadableMap};
+pub use map::{FORMAT as MAP_FORMAT, RevisionMap, UnreadableMap};
 pub use spec::{
     AppliedKey, FORMAT, ImportedObject, MAX_BYTES, Need, REBUILT, ReadError, Revision,
     RevisionImport, RevisionObject, RevisionSet, RevisionSpec, Slot, TooLarge, name_of,

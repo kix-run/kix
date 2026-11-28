@@ -194,9 +194,7 @@ fn diff_graphs_as(old: &StoreGraph, new: &StoreGraph, compare: Compare) -> Packa
     {
         for (path, node) in &new.resources {
             let m = &node.manifest;
-            if m.get("kind")
-                .and_then(Value::as_str)
-                .is_some_and(lifecycle::is_record_kind)
+            if lifecycle::is_record(m)
                 && m.pointer("/metadata/name").and_then(Value::as_str) == Some(name)
             {
                 let id = ResourceId::from_value(m);
@@ -237,7 +235,7 @@ fn unowned_resources(graph: &StoreGraph) -> BTreeMap<ResourceId, (&PathBuf, &Val
                 (path, &node.manifest),
             )
         })
-        .filter(|(id, _)| !lifecycle::is_record_kind(&id.kind))
+        .filter(|(id, _)| !lifecycle::is_record_kind(id.group_kind()))
         .collect()
 }
 
@@ -257,11 +255,7 @@ fn record_name(graph: &StoreGraph) -> Option<String> {
         .resources
         .values()
         .map(|node| &node.manifest)
-        .find(|m| {
-            m.get("kind")
-                .and_then(Value::as_str)
-                .is_some_and(lifecycle::is_record_kind)
-        })
+        .find(|m| lifecycle::is_record(m))
         .and_then(|m| m.pointer("/metadata/name").and_then(Value::as_str))
         .map(str::to_string)
 }

@@ -275,9 +275,7 @@ fn unrequestable_field(manifest: &serde_json::Value) -> Option<&'static str> {
 /// `secret-ref-*`, ...) and that is stamped with that package is a resource
 /// of the package, so it returns `None`.
 pub fn instance_of_record(m: &serde_json::Value) -> Option<(String, String)> {
-    if m.get("kind").and_then(serde_json::Value::as_str)
-        != Some(crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND)
-    {
+    if !crate::manifest::lifecycle::is_package_instance(m) {
         return None;
     }
     let stamped = m
@@ -672,8 +670,7 @@ impl StoreGraph {
             let Some(pi) = self.resources.get(pi_path) else {
                 return fail(format!("{} is not among the resources", shown(pi_path)));
             };
-            let kind = pi.manifest.get("kind");
-            if kind.and_then(|k| k.as_str()) != Some(lifecycle::PACKAGE_INSTANCE_KIND) {
+            if !lifecycle::is_package_instance(&pi.manifest) {
                 return fail(format!(
                     "{} is not a PackageInstance record",
                     shown(pi_path)

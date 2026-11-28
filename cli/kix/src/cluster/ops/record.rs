@@ -222,22 +222,8 @@ impl ActivationRecord {
             return Ok(None);
         };
         let store = Revisions::new(self.resources.client());
-        let wanted: HashSet<&ResourceId> = left.orphans.iter().chain(left.never_pruned).collect();
-        let mut objects: Vec<RevisionObject> = wanted
-            .iter()
-            .flat_map(|rid| {
-                let needs: Vec<_> = left.prior.edges.needs(rid).cloned().collect();
-                left.prior
-                    .hashes
-                    .get(*rid)
-                    .into_iter()
-                    .flatten()
-                    .map(move |hash| RevisionObject::of_id(hash, rid).with_needs(needs.clone()))
-            })
-            .collect();
         let kept = &self.config.kept_orphans;
-        objects.extend(kept.unknown.iter().cloned());
-        let mut edges = left.prior.edges.clone();
+        let mut carried = None;
         if kept.carry_current {
             let earlier = match current.and_then(|c| c.revisions.as_ref()) {
                 None => None,
@@ -259,20 +245,19 @@ impl ActivationRecord {
                             "current deployment record names kept-orphans revision `{earlier}`, which is missing from the cluster. Run `kix gc --full-scan` to rebuild it, then deploy again"
                         ))
                     })?;
-                edges = edges.or(Edges::of_revisions([&revision]));
-                objects.extend(revision.spec.objects);
+                carried = Some(revision);
             }
         }
-        if objects.is_empty() {
+        let wanted = left.orphans.iter().chain(left.never_pruned);
+        let Some(revision) = kept_orphans_revision(
+            set.cluster(),
+            wanted,
+            left.prior,
+            &kept.unknown,
+            carried.as_ref(),
+        ) else {
             return Ok(None);
-        }
-        // The markers the kept objects need keep the edges that pass through
-        // them, such as a custom resource to its CRD marker to its operator.
-        let rids: Vec<ResourceId> = objects.iter().map(RevisionObject::resource_id).collect();
-        let imports = edges.imports_reached(&rids);
-        let revision = Revision::new(
-            RevisionSpec::new(set.cluster(), Slot::KeptOrphans, objects).with_imports(imports),
-        );
+        };
         store
             .create(&revision)
             .await
@@ -352,6 +337,52 @@ impl ActivationRecord {
             ),
         }
     }
+}
+
+/// Return the kept-orphans revision of Kix cluster `cluster`, or `None` when
+/// it would name nothing. It names each object of `wanted` with every hash
+/// `prior` gives it and the edges `prior` records, the objects `unknown`
+/// names, and the objects of `carried`, the current record's kept-orphans
+/// revision when a run carries it forward unexamined.
+///
+/// A run writes this revision when it finalizes, and a plan builds it from
+/// what it knows to refuse one too large to store before the lock.
+pub(crate) fn kept_orphans_revision<'a>(
+    cluster: &str,
+    wanted: impl IntoIterator<Item = &'a ResourceId>,
+    prior: &crate::cluster::edges::Prior,
+    unknown: &[RevisionObject],
+    carried: Option<&Revision>,
+) -> Option<Revision> {
+    let wanted: HashSet<&ResourceId> = wanted.into_iter().collect();
+    let mut objects: Vec<RevisionObject> = wanted
+        .iter()
+        .flat_map(|rid| {
+            let needs: Vec<_> = prior.edges.needs(rid).cloned().collect();
+            prior
+                .hashes
+                .get(*rid)
+                .into_iter()
+                .flatten()
+                .map(move |hash| RevisionObject::of_id(hash, rid).with_needs(needs.clone()))
+        })
+        .collect();
+    objects.extend(unknown.iter().cloned());
+    let mut edges = prior.edges.clone();
+    if let Some(carried) = carried {
+        edges = edges.or(Edges::of_revisions([carried]));
+        objects.extend(carried.spec.objects.iter().cloned());
+    }
+    if objects.is_empty() {
+        return None;
+    }
+    // The markers the kept objects need keep the edges that pass through
+    // them, such as a custom resource to its CRD marker to its operator.
+    let rids: Vec<ResourceId> = objects.iter().map(RevisionObject::resource_id).collect();
+    let imports = edges.imports_reached(&rids);
+    Some(Revision::new(
+        RevisionSpec::new(cluster, Slot::KeptOrphans, objects).with_imports(imports),
+    ))
 }
 
 #[async_trait]

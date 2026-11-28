@@ -16,6 +16,12 @@
 //!   other resource (an unchanged build is a `Skip`) but never marks an older
 //!   `Activation` as a prunable orphan.
 //!
+//! Both are Kix's kinds only in Kix's API group, or in a group Kix used
+//! before (`legacy_domain::DOMAINS`), which a build from before the move
+//! still holds until loading upgrades it. Another group may serve a kind of
+//! the same name, such as Crossplane's `Activation`, and that is an object
+//! like any other.
+//!
 //! All classification goes through this module; no other module may compare a
 //! kind string directly to `"Activation"` or `"PackageInstance"` (enforced by a
 //! test in this module).
@@ -83,30 +89,47 @@ impl Lifecycle {
     }
 }
 
-/// Classify a resource from its kind and `kix.run/mode` annotation.
-pub fn classify(kind: &str, mode: Option<&str>) -> Lifecycle {
-    if kind == RECORD_KIND {
+/// Classify a resource from its API group and kind and its `kix.run/mode`
+/// annotation.
+pub fn classify(kind: GroupKind<'_>, mode: Option<&str>) -> Lifecycle {
+    if is_record_kind(kind) {
         Lifecycle::Record
-    } else if kind == PACKAGE_INSTANCE_KIND && mode == Some(IMPORT_MODE) {
+    } else if is_package_instance_kind(kind) && mode == Some(IMPORT_MODE) {
         Lifecycle::Marker
     } else {
         Lifecycle::Desired
     }
 }
 
-/// Return whether `kind` is the `Activation` record kind.
-pub fn is_record_kind(kind: &str) -> bool {
-    kind == RECORD_KIND
+/// Return whether `group` is Kix's API group or one Kix used before.
+fn is_kix_group(group: &str) -> bool {
+    group == keys::GROUP || crate::legacy_domain::DOMAINS.contains(&group)
+}
+
+/// Return whether `kind` is the deploy record's group and kind.
+pub fn is_record_kind(kind: GroupKind<'_>) -> bool {
+    kind.kind == RECORD_KIND && is_kix_group(kind.group)
+}
+
+/// Return whether `kind` is the group and kind of Kix's package instances
+/// and import markers.
+pub fn is_package_instance_kind(kind: GroupKind<'_>) -> bool {
+    kind.kind == PACKAGE_INSTANCE_KIND && is_kix_group(kind.group)
+}
+
+/// Return whether `manifest` is one of Kix's `PackageInstance` objects: a
+/// package instance or an import marker.
+pub fn is_package_instance(manifest: &Value) -> bool {
+    is_package_instance_kind(GroupKind::of_manifest(manifest))
 }
 
 /// Classify a rendered manifest.
 pub fn lifecycle_of(manifest: &Value) -> Lifecycle {
-    let kind = manifest.get("kind").and_then(Value::as_str).unwrap_or("");
     let mode = manifest
         .pointer("/metadata/annotations")
         .and_then(|a| a.get(keys::MODE))
         .and_then(Value::as_str);
-    classify(kind, mode)
+    classify(GroupKind::of_manifest(manifest), mode)
 }
 
 /// Return whether `manifest` is the deploy record (`Activation`).
@@ -145,9 +168,10 @@ pub fn record_of(manifests: &[Value]) -> Option<&Value> {
 }
 
 /// Return whether `kind` is a Kix-internal bookkeeping kind (`Activation` or
-/// `PackageInstance`) that `kix export` omits without `--with-kix-metadata`.
-pub fn is_kix_internal_kind(kind: &str) -> bool {
-    kind == RECORD_KIND || kind == PACKAGE_INSTANCE_KIND
+/// `PackageInstance` in Kix's group) that `kix export` omits without
+/// `--with-kix-metadata`.
+pub fn is_kix_internal_kind(kind: GroupKind<'_>) -> bool {
+    is_record_kind(kind) || is_package_instance_kind(kind)
 }
 
 /// Return whether `kind` is reported as an orphan when it leaves the build but
@@ -246,7 +270,11 @@ mod tests {
     use serde_json::json;
 
     fn m(kind: &str, mode: Option<&str>) -> Value {
-        let mut v = json!({ "apiVersion": "v1", "kind": kind, "metadata": { "name": "x" } });
+        let api_version = match kind {
+            RECORD_KIND | PACKAGE_INSTANCE_KIND => keys::API_VERSION,
+            _ => "v1",
+        };
+        let mut v = json!({ "apiVersion": api_version, "kind": kind, "metadata": { "name": "x" } });
         if let Some(mode) = mode {
             v["metadata"]["annotations"] = json!({ keys::MODE: mode });
         }
@@ -294,8 +322,36 @@ mod tests {
             Some("Activation")
         );
         assert_eq!(set.iter().filter(|m| is_record(m)).count(), 1);
-        assert!(is_kix_internal_kind("PackageInstance"));
-        assert!(!is_kix_internal_kind("Deployment"));
+        assert!(is_kix_internal_kind(GroupKind::new(
+            keys::GROUP,
+            PACKAGE_INSTANCE_KIND
+        )));
+        assert!(!is_kix_internal_kind(GroupKind::new("", "Deployment")));
+    }
+
+    /// Another group's `Activation` or `PackageInstance`, such as
+    /// Crossplane's `Activation`, is an object like any other.
+    #[test]
+    fn another_groups_record_and_instance_kinds_are_desired() {
+        let foreign = |kind: &str, mode: Option<&str>| {
+            let mut v = m(kind, mode);
+            v["apiVersion"] = json!("ssm.aws.upbound.io/v1beta1");
+            v
+        };
+        assert_eq!(
+            lifecycle_of(&foreign("Activation", None)),
+            Lifecycle::Desired
+        );
+        assert_eq!(
+            lifecycle_of(&foreign("PackageInstance", Some("import"))),
+            Lifecycle::Desired
+        );
+        assert!(!is_package_instance(&foreign("PackageInstance", None)));
+        assert!(is_package_instance(&m("PackageInstance", None)));
+        assert!(!is_kix_internal_kind(GroupKind::new(
+            "ssm.aws.upbound.io",
+            "Activation"
+        )));
     }
 
     /// Verify that the record and marker kind strings (`"Activation"` and

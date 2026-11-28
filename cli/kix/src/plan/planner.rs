@@ -68,7 +68,9 @@ use crate::cluster::inventory::{Live, LiveObjects};
 use crate::cluster::kubernetes_version;
 use crate::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use crate::cluster::ops::ResourceIo;
-use crate::cluster::ops::{Cluster, DryRun, Force, KubeResources, RecordConfig};
+use crate::cluster::ops::{
+    Cluster, DryRun, Force, KubeResources, RecordConfig, kept_orphans_revision,
+};
 use crate::cluster::preview::{DryRunAnswer, DryRunOutcome, PruneAnswer};
 use crate::cluster::revision::RevisionSet;
 use crate::cluster::scheduler::{
@@ -1612,6 +1614,25 @@ impl<'a> Planner<'a> {
                 .into_iter()
                 .filter(|rid| orphans.contains(rid) && !deleted.contains(rid)),
         );
+        let prior = {
+            let manifests = crate::cluster::apply::baseline_manifests(
+                &baseline.manifests(),
+                &[orphan_manifests],
+            );
+            match ledger {
+                Some(ledger) => ledger.prior(manifests),
+                None => Prior::of_build(manifests),
+            }
+        };
+        check_kept_orphans_size(
+            cluster,
+            self.flags.prune,
+            &orphans,
+            &deleted,
+            &shared_orphans,
+            &prior,
+            &kept_orphans,
+        )?;
 
         Ok(CheckedPlan {
             flags: self.flags.clone(),
@@ -1627,16 +1648,7 @@ impl<'a> Planner<'a> {
             record: record.cloned(),
             consumed_failed,
             cluster: cluster.to_string(),
-            prior: {
-                let manifests = crate::cluster::apply::baseline_manifests(
-                    &baseline.manifests(),
-                    &[orphan_manifests],
-                );
-                match ledger {
-                    Some(ledger) => ledger.prior(manifests),
-                    None => Prior::of_build(manifests),
-                }
-            },
+            prior,
             revisions,
             target_checks: TargetChecks::of(new_graph),
             left_alone: selection.as_ref().map(|s| s.left_alone),
@@ -1886,6 +1898,47 @@ fn manifests_of(graph: &StoreGraph) -> Vec<Value> {
 
 /// Return the orphans that a run's prune deletes under `PrunePolicy::Delete`,
 /// excluding kinds protected by `lifecycle::never_pruned`.
+/// Refuse a plan whose run would write a kept-orphans revision too large
+/// to store, as the run finalizes after every apply and every delete. The
+/// revision names what the run keeps when it goes as planned: each orphan
+/// the prune does not delete, and with `--skip-orphan-check` the orphans
+/// another Kix cluster shares, which the run does not release. It is built
+/// as the run builds it ([`kept_orphans_revision`]), without the current
+/// record's kept orphans that an offline plan carries forward unread.
+fn check_kept_orphans_size(
+    cluster: &str,
+    prune: PrunePolicy,
+    orphans: &[ResourceId],
+    deleted: &HashSet<ResourceId>,
+    shared: &[SharedOrphan],
+    prior: &Prior,
+    kept: &KeptOrphans,
+) -> Result<(), PlanError> {
+    let unshared = if prune == PrunePolicy::Skip {
+        shared
+    } else {
+        &[]
+    };
+    let wanted = orphans
+        .iter()
+        .filter(|rid| !deleted.contains(*rid))
+        .chain(unshared.iter().map(|s| &s.rid));
+    let Some(revision) = kept_orphans_revision(cluster, wanted, prior, &kept.unknown, None) else {
+        return Ok(());
+    };
+    if revision.stored_bytes() <= crate::cluster::revision::MAX_BYTES {
+        return Ok(());
+    }
+    Err(PlanError::RevisionTooLarge(Box::new(
+        crate::cluster::revision::TooLarge {
+            what: "the list of orphaned objects this deploy keeps".to_string(),
+            objects: revision.spec.objects.len(),
+            bytes: revision.stored_bytes(),
+            next: "Run `kix gc` to delete orphaned objects from earlier deploys, or deploy with `--prune`, then run the deploy again.",
+        },
+    )))
+}
+
 pub(crate) fn deletes_of(prune: PrunePolicy, orphans: &[ResourceId]) -> Vec<ResourceId> {
     if prune != PrunePolicy::Delete {
         return Vec::new();

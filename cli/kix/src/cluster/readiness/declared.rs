@@ -35,7 +35,7 @@ pub fn is_immediate_kind(kind: GroupKind<'_>) -> bool {
             | kinds::SERVICE_MONITOR
             | kinds::PRIORITY_CLASS
             | kinds::STORAGE_CLASS
-    ) || crate::manifest::lifecycle::is_kix_internal_kind(kind.kind)
+    ) || crate::manifest::lifecycle::is_kix_internal_kind(kind)
 }
 
 /// Return true when the object of `kind` whose manifest or live state is

@@ -240,28 +240,6 @@ fn immutable_rejection_is_not_a_stored_version_one() {
 }
 
 #[test]
-fn unstamped_old_manifest_is_never_an_orphan() {
-    let mut inherited = manifest("EndpointSlice", "web-abc", "default", "unused", "");
-    inherited["metadata"]
-        .as_object_mut()
-        .unwrap()
-        .remove("annotations");
-    let old = vec![
-        inherited,
-        manifest("Deployment", "gone", "default", "id-gone", ""),
-    ];
-    let actions = detect_changes(&[], &old);
-    let orphans: Vec<_> = actions
-        .iter()
-        .filter_map(|a| match a {
-            ChangeAction::Orphan(rid) => Some(rid.name.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(orphans, vec!["gone"]);
-}
-
-#[test]
 fn detect_new_resource() {
     let new = vec![manifest("Deployment", "app", "default", "id1", "")];
     let old: Vec<Value> = vec![];
@@ -486,7 +464,7 @@ fn baseline_keeps_active_and_adds_only_what_is_missing() {
 
     let merged = baseline_manifests(&active, &[failed]);
     assert_eq!(merged.len(), 2);
-    assert_eq!(manifest_identity_hash(&merged[0]), Some("h1"));
+    assert_eq!(keys::get(&merged[0], keys::IDENTITY_HASH), Some("h1"));
     assert_eq!(
         ResourceId::from_value(&merged[1]).display_id(),
         "ConfigMap/leftover@app"

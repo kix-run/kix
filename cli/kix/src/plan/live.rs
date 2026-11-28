@@ -217,7 +217,7 @@ impl LivePlan {
             Ledger::of(&sweep.tenancy, true).map_err(|e| LivePlanError::Tenancy(Box::new(e)))?;
         let record = Record::of(activation);
         ledger.deploying(record.identity_hash.as_deref().filter(|_| deploys));
-        let made = made_by(desired, revisions.as_ref());
+        let made = objects_of_build(desired, revisions.as_ref());
         let ids: Vec<ResourceId> = crate::manifest::lifecycle::made_by(desired)
             .chain(ledger.candidates(&made).cloned())
             .collect();
@@ -424,7 +424,7 @@ struct DecidedChanges {
 /// Return every object of the build `desired` is part of: the objects
 /// `desired` makes ([`crate::manifest::lifecycle::made_by`]), and those `revisions` name, which
 /// include the objects the operator leaves out of `desired`.
-fn made_by(desired: &[Value], revisions: Option<&RevisionSet>) -> HashSet<ResourceId> {
+fn objects_of_build(desired: &[Value], revisions: Option<&RevisionSet>) -> HashSet<ResourceId> {
     let named = revisions
         .into_iter()
         .flat_map(|set| set.all())
@@ -573,7 +573,7 @@ mod tests {
         .unwrap();
         let tenancy = &tenancy.with_conversion(&conversion);
         let ledger = Ledger::of(tenancy, true).unwrap();
-        let made = made_by(desired, None);
+        let made = objects_of_build(desired, None);
         let live = LiveObjects::of(objects.iter().cloned(), []);
         let decided = decided_changes(desired, &made, &live, &ledger, tenancy).unwrap();
         (decided.actions, decided.shared)
@@ -1077,7 +1077,7 @@ mod tests {
             let kept_twice: Vec<RevisionObject> = manifests(&first)
                 .iter()
                 .filter(|m| !crate::manifest::lifecycle::is_marker(m))
-                .filter_map(RevisionObject::of_build)
+                .map(RevisionObject::of_manifest)
                 .map(|o| {
                     let needs: Vec<_> = edges.needs(&o.resource_id()).cloned().collect();
                     o.with_needs(needs)

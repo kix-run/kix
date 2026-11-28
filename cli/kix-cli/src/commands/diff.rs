@@ -925,7 +925,7 @@ mod tests {
                 Revision, RevisionMap, RevisionObject, RevisionSpec, Slot,
             };
             let built = &new.resources.values().next().unwrap().manifest;
-            let object = RevisionObject::of_build(built).unwrap();
+            let object = RevisionObject::of_manifest(built);
             let mut revision = Revision::new(RevisionSpec::new(
                 "a",
                 Slot::ClusterLevel,

@@ -1172,7 +1172,7 @@ async fn handle_delete(
             // import marker, and one of that name may be another Kix
             // cluster's.
             let all_rids: Vec<ResourceId> = kix::manifest::lifecycle::made_by(&manifests)
-                .filter(|rid| !kix::manifest::lifecycle::is_record_kind(&rid.kind))
+                .filter(|rid| !kix::manifest::lifecycle::is_record_kind(rid.group_kind()))
                 .collect();
 
             let mut order = DeleteOrder::of_build(&manifests);

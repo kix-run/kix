@@ -28,7 +28,7 @@ mod kept_garbage_tests {
             vec![
                 m("Deployment", "web", "h0"),
                 m("ConfigMap", "old", "h1"),
-                json!({"kind": lifecycle::RECORD_KIND, "metadata": {"name": "c-v1", "annotations": { keys::IDENTITY_HASH: "h2" }}}),
+                json!({"apiVersion": keys::API_VERSION, "kind": lifecycle::RECORD_KIND, "metadata": {"name": "c-v1", "annotations": { keys::IDENTITY_HASH: "h2" }}}),
             ],
             vec![m("ConfigMap", "old", "h1"), m("Secret", "listed", "h3")],
         ];
@@ -808,6 +808,7 @@ mod hard_scope_tests {
             obj
         };
         let mut record = stamped("PackageInstance", "_cluster", "_cluster");
+        record.types.as_mut().unwrap().api_version = keys::API_VERSION.into();
         record.data["spec"] = json!({ "instanceName": "web2", "namespaceName": "baseline" });
         let deployment = stamped("Deployment", "web2", "baseline");
         let tenancy = kix::cluster::tenancy::Tenancy::fixture(&[], "a");
@@ -854,7 +855,6 @@ mod live_order_tests {
             identity_hash: None,
             package: None,
             package_namespace: None,
-            activations: None,
             reason: GarbageReason::NotInBuild,
             deleting: None,
         }
@@ -1139,7 +1139,6 @@ mod revision_tests {
             identity_hash: None,
             package: None,
             package_namespace: None,
-            activations: None,
             reason: GarbageReason::NotInBuild,
             deleting: None,
         };

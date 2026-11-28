@@ -187,6 +187,58 @@ fn a_record_is_converted_from_its_index_and_the_notes() {
     assert_eq!(names(kept), ["kept"]);
 }
 
+/// A revision of a converted record holds an applied hash only for an
+/// object the record's deploy wrote, which its note lists. Another Kix
+/// cluster that builds the same file stamps the same build hash, so an
+/// object only that cluster wrote, whose note does not list the record,
+/// gets none.
+#[test]
+fn an_applied_hash_is_carried_only_for_an_object_the_record_wrote() {
+    let own_values = [
+        record("cur", PHASE_ACTIVE, None, &[]),
+        record(
+            "fail",
+            PHASE_FAILED,
+            Some(index(
+                &[("mine", &h("mine")), ("theirs", &h("theirs"))],
+                true,
+            )),
+            &[],
+        ),
+    ];
+    let own = parsed(&own_values);
+    let live_values = [
+        live("mine", &h("mine"), &[&h("fail")]),
+        live("theirs", &h("theirs"), &[&h("retired")]),
+    ];
+    let conversion = plan(
+        CLUSTER,
+        current_of(None, &own),
+        &own,
+        &[],
+        &objects(&live_values),
+        &[],
+        &Default::default(),
+    )
+    .unwrap();
+    let converted = conversion
+        .records()
+        .iter()
+        .find(|c| c.record == "fail")
+        .unwrap();
+    let instance = converted
+        .revisions
+        .iter()
+        .find(|r| r.name == converted.map.instances["app/web"])
+        .unwrap();
+    assert_eq!(names(instance), ["mine", "theirs", "web-instance"]);
+    assert_eq!(
+        instance.applied.get(&h("mine")).map(String::as_str),
+        Some("applied-mine")
+    );
+    assert!(!instance.applied.contains_key(&h("theirs")));
+}
+
 /// An index without names, as releases before 0.10 wrote, is read through
 /// the live objects that carry its hashes.
 #[test]

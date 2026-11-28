@@ -59,7 +59,7 @@ pub mod scripted;
 mod sops;
 
 pub(crate) use dry_run::DryRun;
-pub(crate) use record::{ActivationRecord, RecordConfig};
+pub(crate) use record::{ActivationRecord, RecordConfig, kept_orphans_revision};
 pub(crate) use resources::{Force, KubeResources};
 pub(crate) use sops::SopsHydrator;
 

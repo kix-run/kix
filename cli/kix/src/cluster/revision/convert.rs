@@ -30,10 +30,12 @@
 //!
 //! An older Kix's applied hash left out every `kix.run/*` annotation, and
 //! this Kix's covers each one it sends, so no old value can be kept as it
-//! is. When the live object still carries the build hash the record gives
-//! it and matches the old applied hash, the conversion stores this Kix's
-//! applied hash of the live object. Otherwise it stores the old value,
-//! which no live object can match, so a plan reports the drift. When the
+//! is. The conversion carries an applied hash only for an object the
+//! record's deploy wrote: its note lists the record and it carries the
+//! build hash the record gives it. When such an object still matches the
+//! old applied hash, the conversion stores this Kix's applied hash of the
+//! live object. Otherwise it stores the old value, which no live object can
+//! match, so a plan reports the drift. When the
 //! new build makes the same build file for an object, the entry takes the
 //! new build's object hash ([`BuildHashes`]), so a deploy that changes
 //! nothing writes nothing to it.
@@ -367,7 +369,7 @@ fn named_by(record: &Record, live: &Live<'_>) -> BTreeMap<Option<String>, Vec<Re
         out.entry(None).or_default().extend(noted);
     }
     for objects in out.values_mut() {
-        objects.retain(|o| o.kind != lifecycle::RECORD_KIND);
+        objects.retain(|o| !lifecycle::is_record_kind(o.resource_id().group_kind()));
         *objects = std::mem::take(objects)
             .into_iter()
             .map(|o| live.with_noted_needs(o))
@@ -377,21 +379,30 @@ fn named_by(record: &Record, live: &Live<'_>) -> BTreeMap<Option<String>, Vec<Re
 }
 
 /// Return the `kix.run/applied-hash` note of the live object of `object`
-/// when the object carries the build hash the revision gives it.
-fn noted_applied(object: &RevisionObject, live: &Live<'_>) -> Option<String> {
+/// when the deploy of the record whose hash is `record` wrote it: the
+/// object carries the build hash the revision gives it, and its
+/// `kix.run/activations` note lists the record. Another Kix cluster that
+/// builds the same file stamps the same build hash, so the build hash alone
+/// does not say which Kix cluster wrote the object.
+///
+/// A revision holds an applied hash only for an object a deploy of its Kix
+/// cluster wrote, and a plan reads it so ([`crate::plan::decide`]).
+fn noted_applied(object: &RevisionObject, record: &str, live: &Live<'_>) -> Option<String> {
     let obj = live.by_id.get(&object.resource_id())?;
     let annotations = obj.metadata.annotations.as_ref()?;
-    (keys::get_meta(annotations, keys::IDENTITY_HASH) == Some(object.hash.as_str()))
-        .then(|| keys::get_meta(annotations, keys::APPLIED_HASH))
-        .flatten()
-        .map(str::to_string)
+    (keys::get_meta(annotations, keys::IDENTITY_HASH) == Some(object.hash.as_str())
+        && notes(obj).any(|h| h == record))
+    .then(|| keys::get_meta(annotations, keys::APPLIED_HASH))
+    .flatten()
+    .map(str::to_string)
 }
 
 /// Where a conversion reads the applied hash an older Kix recorded for an
 /// object.
 enum OldApplied<'a> {
-    /// The `kix.run/applied-hash` notes on the live objects.
-    Notes(&'a Live<'a>),
+    /// The `kix.run/applied-hash` notes on the live objects, for the record
+    /// whose hash is `record`.
+    Notes { live: &'a Live<'a>, record: &'a str },
     /// The `status.applied` of the record's format 1 revisions.
     Revisions(&'a [&'a Revision]),
 }
@@ -399,7 +410,7 @@ enum OldApplied<'a> {
 impl OldApplied<'_> {
     fn of(&self, object: &RevisionObject) -> Option<String> {
         match self {
-            OldApplied::Notes(live) => noted_applied(object, live),
+            OldApplied::Notes { live, record } => noted_applied(object, record, live),
             OldApplied::Revisions(revisions) => revisions
                 .iter()
                 .filter(|r| {
@@ -534,7 +545,13 @@ pub fn plan(
                 named_by_revisions(record, revisions, &live),
                 OldApplied::Revisions(revisions),
             ),
-            None => (named_by(record, &live), OldApplied::Notes(&live)),
+            None => (
+                named_by(record, &live),
+                OldApplied::Notes {
+                    live: &live,
+                    record: record.identity_hash.as_deref().unwrap_or_default(),
+                },
+            ),
         };
         let old = |o: &RevisionObject| source.of(o);
         let instances: BTreeMap<String, Revision> = groups

@@ -234,16 +234,13 @@ pub struct Prior {
 }
 
 impl Prior {
-    /// Return the objects of earlier builds whose manifests are all from
-    /// builds, with the edges their annotations record and their object
-    /// hashes.
+    /// Return the objects of earlier builds whose manifests are `manifests`,
+    /// with the edges their annotations record and their object hashes.
+    /// Pass the manifests of builds only, as for [`Edges::of_build`].
     pub fn of_build(manifests: Vec<Value>) -> Prior {
         let edges = Edges::of_build(&manifests);
         let mut hashes: HashMap<ResourceId, BTreeSet<String>> = HashMap::new();
-        for m in manifests
-            .iter()
-            .filter(|m| keys::get(m, keys::IDENTITY_HASH).is_some())
-        {
+        for m in &manifests {
             hashes
                 .entry(ResourceId::from_value(m))
                 .or_default()

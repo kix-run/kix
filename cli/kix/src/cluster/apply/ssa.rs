@@ -1033,6 +1033,29 @@ pub(crate) fn remove_covered(v: &mut Value, ceded: &[Seg]) {
     }
 }
 
+/// Return the part of `v` that `ceded` covers, with the maps and lists that
+/// lead to it. A [`Seg::Any`] segment covers each element of a list. A path
+/// that `v` does not hold gives `null`.
+pub(crate) fn covered_part(v: &Value, ceded: &[Seg]) -> Value {
+    let items = |keep: &dyn Fn(&Value) -> bool, rest: &[Seg]| {
+        Value::Array(
+            v.as_array()
+                .into_iter()
+                .flatten()
+                .filter(|item| keep(item))
+                .map(|item| covered_part(item, rest))
+                .collect(),
+        )
+    };
+    match ceded {
+        [] => v.clone(),
+        [Seg::Any, rest @ ..] => items(&|_| true, rest),
+        [Seg::Key(keys), rest @ ..] => items(&|item| picks(keys, item), rest),
+        [Seg::Field(f), rest @ ..] => v.get(f).map_or(Value::Null, |c| covered_part(c, rest)),
+        [Seg::Index(i), rest @ ..] => v.get(*i).map_or(Value::Null, |c| covered_part(c, rest)),
+    }
+}
+
 /// Strip the conflicting fields named in `message` from `manifest` if every
 /// conflicting path is covered by `kix.run/cede-fields`. Return `None` if no
 /// fields are ceded, `message` names no field paths, or any conflicting path

@@ -71,15 +71,15 @@ pub enum Problem {
         kept: bool,
     },
     #[error(
-        "deployment record `{record}` of Kix cluster '{cluster}' references {} `{revision}`, which Kix cannot read: {reason}. {}",
+        "deployment record `{record}` of Kix cluster '{cluster}' references {} `{revision}`, which Kix cannot read: {source}.{}",
         revision::KIND,
-        remedy(*kept, cluster)
+        unreadable_remedy(source, *kept, cluster)
     )]
     UnreadableRevision {
         cluster: String,
         record: String,
         revision: String,
-        reason: String,
+        source: Box<revision::ReadError>,
         kept: bool,
     },
     #[error(
@@ -102,6 +102,15 @@ pub enum Problem {
         revision::crd_name()
     )]
     Revisions { reason: String },
+}
+
+/// Return what to do about a revision Kix cannot read because of `source`,
+/// with a leading space, or nothing when `source` already says it.
+fn unreadable_remedy(source: &revision::ReadError, kept: bool, cluster: &str) -> String {
+    match source {
+        revision::ReadError::Newer { .. } => String::new(),
+        _ => format!(" {}", remedy(kept, cluster)),
+    }
 }
 
 fn remedy(kept: bool, cluster: &str) -> String {
@@ -532,12 +541,12 @@ impl Tenancy {
                 .map(|n| (n, false))
                 .chain(map.kept_orphans.iter().map(|n| (n, true)));
             for (name, kept) in named {
-                let problem = |reason: Option<String>| match reason {
-                    Some(reason) => Problem::UnreadableRevision {
+                let problem = |source: Option<Box<revision::ReadError>>| match source {
+                    Some(source) => Problem::UnreadableRevision {
                         cluster: cluster.to_string(),
                         record: record.name.clone(),
                         revision: name.clone(),
-                        reason,
+                        source,
                         kept,
                     },
                     None => Problem::MissingRevision {
@@ -548,8 +557,10 @@ impl Tenancy {
                     },
                 };
                 let Some(revision) = readable.get(name.as_str()) else {
-                    let reason = unreadable.get(name.as_str()).map(|e| e.to_string());
-                    self.problems.push(problem(reason));
+                    let source = unreadable
+                        .get(name.as_str())
+                        .map(|e| Box::new((*e).clone()));
+                    self.problems.push(problem(source));
                     continue;
                 };
                 for object in &revision.spec.objects {

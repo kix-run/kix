@@ -1,0 +1,3 @@
+# 2026-11-28 · `cli/kix/src/cluster/migration_write.rs` · Each deploy by an older Kix cluster makes the upgraded cluster's next deploy rewrite shared objects' metadata.
+
+While another Kix cluster on the same Kubernetes cluster still runs an older Kix, shared objects, such as a Namespace both clusters make, keep the retired notes for it. The older Kix rewrites `kix.run/activations` with its own record hashes on every deploy. `migration_write::needed` then finds a kept note that does not name the upgraded cluster's record, so that cluster's next deploy patches the note again. The two clusters trade one metadata write per deploy until the older one upgrades.

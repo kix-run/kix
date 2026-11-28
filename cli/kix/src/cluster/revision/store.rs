@@ -102,7 +102,9 @@ impl Revisions {
     ///
     /// Refuse when the server stored a `spec` other than the one sent. The
     /// definition prunes fields it does not know, and a revision whose
-    /// stored `spec` no longer matches its name cannot be read.
+    /// stored `spec` no longer matches its name cannot be read. The object
+    /// just created is deleted again, because a later create of the same
+    /// name would find it and count the revision as created.
     pub async fn create(&self, revision: &Revision) -> Result<Created, RevisionError> {
         let obj = json!({
             "apiVersion": keys::API_VERSION,
@@ -119,12 +121,25 @@ impl Revisions {
                 let sent =
                     serde_json::to_value(&revision.spec).expect("a revision spec serializes");
                 if stored.data.get("spec") == Some(&sent) {
-                    Ok(Created::Created)
-                } else {
-                    Err(RevisionError::StoredDifferently {
-                        name: revision.name.clone(),
-                    })
+                    return Ok(Created::Created);
                 }
+                let only_this = DeleteParams {
+                    preconditions: Some(kube::api::Preconditions {
+                        uid: stored.metadata.uid.clone(),
+                        resource_version: None,
+                    }),
+                    ..DeleteParams::default()
+                };
+                if let Err(e) = self.api.delete(&revision.name, &only_this).await {
+                    tracing::warn!(
+                        name = %revision.name,
+                        error = %e,
+                        "could not delete a revision the API server stored with a different spec"
+                    );
+                }
+                Err(RevisionError::StoredDifferently {
+                    name: revision.name.clone(),
+                })
             }
             Err(kube::Error::Api(e)) if e.code == 409 => Ok(Created::Exists),
             Err(source) => Err(RevisionError::Api {

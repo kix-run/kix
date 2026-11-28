@@ -111,8 +111,8 @@ pub(super) fn print_copies(objects: &[kube::api::DynamicObject], included: bool,
     println!("  {}", output::dim(&note));
 }
 
-/// Print the grouped per-resource garbage plan with reasons and owning
-/// activations. `compared` names the build the live objects were compared
+/// Print the grouped per-resource garbage plan with reasons and packages.
+/// `compared` names the build the live objects were compared
 /// with. Not every object was ever in one of this cluster's builds, so the
 /// heading does not say they left one.
 pub(super) fn print_garbage_plan(garbage: &[GarbageEntry], compared: &str) {
@@ -165,18 +165,6 @@ pub(super) fn print_garbage_plan(garbage: &[GarbageEntry], compared: &str) {
                         _ => format!("package: {pkg}"),
                     };
                     println!("        {}", output::dim(&pkg_display));
-                }
-                if let Some(acts) = &entry.activations {
-                    let acts_short: Vec<String> = acts
-                        .split(',')
-                        .map(|a| a.trim())
-                        .filter(|a| !a.is_empty())
-                        .map(|a| a[..12.min(a.len())].to_string())
-                        .collect();
-                    if !acts_short.is_empty() {
-                        let line = format!("deployments: {}", acts_short.join(", "));
-                        println!("        {}", output::dim(&line));
-                    }
                 }
             }
         }

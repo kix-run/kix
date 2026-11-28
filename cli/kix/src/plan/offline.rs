@@ -597,6 +597,56 @@ mod tests {
         assert_eq!(differs.writes_added.len(), 2, "{differs:?}");
     }
 
+    /// A plan made without the deployed build on this machine reads the
+    /// old side from the live objects. A live object this Kix wrote carries
+    /// no build hash, and with no applied hash recorded it stands in as the
+    /// fields Kix owns on it. Its object hash is the new file's, so the
+    /// plan lists the write as a re-apply instead of refusing it as one the
+    /// plan does not show.
+    #[tokio::test]
+    async fn a_plan_without_the_deployed_build_reapplies_an_object_with_no_applied_hash() {
+        let new = build(&[config_map("web", "1")], "a-cur");
+        let graph = new.graph().clone();
+        let live: Vec<Value> = live_of(&graph)
+            .into_iter()
+            .map(|mut m| {
+                if let Some(a) = m["metadata"]["annotations"].as_object_mut() {
+                    a.remove(keys::IDENTITY_HASH);
+                }
+                // Kix's entry owns every label and annotation it sent.
+                let mut metadata = serde_json::Map::new();
+                for part in ["labels", "annotations"] {
+                    if let Some(map) = m["metadata"][part].as_object() {
+                        let owned = map.keys().map(|k| (format!("f:{k}"), json!({})));
+                        metadata.insert(format!("f:{part}"), owned.collect());
+                    }
+                }
+                m["metadata"]["managedFields"][0]["fieldsV1"]["f:metadata"] = metadata.into();
+                m
+            })
+            .collect();
+        let api = cluster(&graph, None, &live, &[], &[]).await;
+        let client = api.client();
+        let baseline = crate::plan::baseline::Baseline::of_cluster(&client, &new, &|_| {})
+            .await
+            .unwrap();
+        let checked = Planner::new(crate::plan::fixtures::flags(&[]), &|_| {})
+            .plan(new.graph(), "a", &baseline, Some(&client))
+            .await
+            .map_err(|e| e.to_string())
+            .unwrap();
+        let changes: Vec<_> = checked
+            .objects()
+            .writes
+            .iter()
+            .map(|w| (w.name.as_str(), w.change))
+            .collect();
+        assert_eq!(
+            changes,
+            [("web", crate::plan::document::WriteChange::Reapplied)]
+        );
+    }
+
     /// A drifted object, an object with no applied hash, and the leftover
     /// of a `Failed` record each make the live plan write what the offline
     /// plan did not, and the deploy is refused before it takes the lock.

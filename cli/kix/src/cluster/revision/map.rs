@@ -12,8 +12,15 @@ use crate::manifest::keys;
 use crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND;
 use crate::manifest::types::ResourceId;
 
-/// The format of `status.revisions` this release reads and writes.
-pub const FORMAT: u64 = 1;
+/// The format of `status.revisions` this release writes. A format 2 map
+/// may name format 2 revisions ([`super::spec::FORMAT`]), which a release
+/// that reads only format 1 cannot read correctly, so that release refuses
+/// the map and says a newer Kix wrote it.
+pub const FORMAT: u64 = 2;
+
+/// The formats of `status.revisions` this release reads. Format 1 has the
+/// same fields as format 2.
+const READS: [u64; 2] = [1, FORMAT];
 
 /// A `status.revisions` this release cannot read: it does not parse, or it
 /// is in a format a later release wrote. The record may name revisions this
@@ -65,11 +72,10 @@ impl RevisionMap {
     /// a format this release does not read.
     pub fn read(value: &Value) -> Result<RevisionMap, UnreadableMap> {
         let format = value.get("format").and_then(Value::as_u64);
-        if format.is_some_and(|f| f != FORMAT) {
+        if let Some(format) = format.filter(|f| !READS.contains(f)) {
             return Err(UnreadableMap {
                 reason: format!(
-                    "uses format {} (this version of Kix supports format {FORMAT})",
-                    format.unwrap_or_default()
+                    "uses format {format} (this version of Kix reads formats 1 and {FORMAT})"
                 ),
             });
         }

@@ -187,15 +187,9 @@ impl RevisionObject {
         self
     }
 
-    /// Return the object the built manifest `manifest` describes, with its
-    /// object hash, or `None` when `manifest` is not a manifest of a build:
-    /// it carries no `kix.run/identity-hash`, as a live object does not.
-    pub fn of_build(manifest: &Value) -> Option<RevisionObject> {
-        keys::get(manifest, keys::IDENTITY_HASH).filter(|h| !h.is_empty())?;
-        Some(RevisionObject::with_hash(
-            crate::manifest::hash::object_hash(manifest),
-            manifest,
-        ))
+    /// Return the object `manifest` describes, with its object hash.
+    pub fn of_manifest(manifest: &Value) -> RevisionObject {
+        RevisionObject::with_hash(crate::manifest::hash::object_hash(manifest), manifest)
     }
 
     /// Return the object's group, kind, namespace, and name, without its
@@ -445,12 +439,18 @@ pub struct Revision {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ReadError {
     #[error(
-        "{} `{name}` has a `spec` that does not match its name (expected `{expected}` from its `spec`). It was modified outside Kix, so Kix cannot trust its object list",
+        "{} `{name}` has a `spec` that does not match its name (expected `{expected}` from its `spec`), so Kix cannot trust its object list. Either someone changed it outside Kix, or the API server dropped fields from its `spec` because the installed {} definition is older than this version of Kix",
+        super::KIND,
         super::KIND
     )]
     NameMismatch { name: String, expected: String },
     #[error("{} `{name}` is invalid: {reason}", super::KIND)]
     Malformed { name: String, reason: String },
+    #[error(
+        "{} `{name}` uses format {format}, which a newer version of Kix wrote (this version reads formats 1 and {FORMAT}). Upgrade Kix to read it",
+        super::KIND
+    )]
+    Newer { name: String, format: u32 },
 }
 
 /// A revision too large for the API server to store.
@@ -472,7 +472,9 @@ impl ReadError {
     /// Return the name of the revision that cannot be read.
     pub fn name(&self) -> &str {
         match self {
-            ReadError::NameMismatch { name, .. } | ReadError::Malformed { name, .. } => name,
+            ReadError::NameMismatch { name, .. }
+            | ReadError::Malformed { name, .. }
+            | ReadError::Newer { name, .. } => name,
         }
     }
 }
@@ -495,8 +497,8 @@ impl Revision {
         }
     }
 
-    /// Read a revision from the API. Refuse one whose name does not match
-    /// its `spec`.
+    /// Read a revision from the API. Refuse one in a format a newer Kix
+    /// wrote, and one whose name does not match its `spec`.
     pub fn from_object(obj: &DynamicObject) -> Result<Revision, ReadError> {
         let name = obj.metadata.name.clone().unwrap_or_default();
         let malformed = |reason: String| ReadError::Malformed {
@@ -509,6 +511,14 @@ impl Revision {
             .ok_or_else(|| malformed("missing `spec`".into()))?;
         let spec: RevisionSpec = serde_json::from_value(spec_value.clone())
             .map_err(|e| malformed(format!("`spec` could not be parsed: {e}")))?;
+        // A later format may hold fields this version drops when it parses
+        // the `spec`, which would change the name computed from it.
+        if spec.format > FORMAT {
+            return Err(ReadError::Newer {
+                name,
+                format: spec.format,
+            });
+        }
         let expected = name_of(&spec);
         if expected != name {
             return Err(ReadError::NameMismatch { name, expected });
@@ -558,11 +568,7 @@ impl RevisionSet {
         let object = |path: &Path| {
             let node = graph.resources.get(path)?;
             (!lifecycle::is_marker(&node.manifest)).then(|| {
-                RevisionObject::with_hash(
-                    crate::manifest::hash::object_hash(&node.manifest),
-                    &node.manifest,
-                )
-                .with_needs(needs(&node.manifest))
+                RevisionObject::of_manifest(&node.manifest).with_needs(needs(&node.manifest))
             })
         };
         let import = |path: &Path| {

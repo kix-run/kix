@@ -82,7 +82,7 @@ pub(crate) fn field_changes(live: &Value, result: &Value) -> Vec<Difference> {
 pub fn not_kept(answers: &[DryRunAnswer], skip: impl Fn(&ResourceId) -> bool) -> Vec<FieldNotKept> {
     let mut out: Vec<FieldNotKept> = answers
         .iter()
-        .filter(|a| !lifecycle::is_record_kind(&a.rid.kind) && !skip(&a.rid))
+        .filter(|a| !lifecycle::is_record_kind(a.rid.group_kind()) && !skip(&a.rid))
         .flat_map(|a| {
             let fields = match &a.outcome {
                 DryRunOutcome::Applied(p) => p.not_kept.as_slice(),
@@ -174,7 +174,7 @@ impl Overlay<'_> {
 
         for answer in answers {
             let rid = &answer.rid;
-            if lifecycle::is_record_kind(&rid.kind) {
+            if lifecycle::is_record_kind(rid.group_kind()) {
                 continue;
             }
             let recreated = matches!(answer.outcome, DryRunOutcome::Recreated { .. });
@@ -476,7 +476,7 @@ mod tests {
             widget("skip", json!({"colour": "red"})),
             widget("skip", json!({})),
         );
-        let mut record = served(&json!({"apiVersion": "x/v1",
+        let mut record = served(&json!({"apiVersion": keys::API_VERSION,
             "kind": crate::manifest::lifecycle::RECORD_KIND,
             "metadata": {"name": "r"}, "spec": {"a": 1}}));
         let record_sent = record.clone();

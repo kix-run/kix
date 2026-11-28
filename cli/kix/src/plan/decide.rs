@@ -7,15 +7,23 @@
 //! decide through it. For each object of the new build it applies one rule:
 //!
 //! > Skip the object when a revision this Kix cluster needs holds an applied
-//! > hash for the object with the new build's object hash, and the live
-//! > object still matches that applied hash. In every other case, apply it
-//! > and record the applied hash.
+//! > hash for the object with the new build's object hash, the live object
+//! > still matches that applied hash, and each field the object cedes that
+//! > this Kix cluster's own entry still owns holds the value the build
+//! > sends. In every other case, apply it and record the applied hash.
 //!
-//! The object hash ([`crate::manifest::hash::object_hash`]) and the applied
-//! hash ([`crate::cluster::fieldsv1::applied_content_hash`]) cover the same
-//! things: every field Kix sends, every `kix.run/*` annotation among them,
-//! and none of the retired notes. Nothing on the live object says which build
-//! wrote it, so the revisions say it, by the object's name.
+//! The rule needs "the live object matches the applied hash" to mean "every
+//! field this Kix cluster owns holds what the build sends". The object hash
+//! ([`crate::manifest::hash::object_hash`]) covers every field Kix sends,
+//! every `kix.run/*` annotation among them, and none of the retired notes.
+//! The applied hash ([`crate::cluster::fieldsv1::applied_content_hash`])
+//! covers the same, except the fields named in `kix.run/cede-fields`, so
+//! that another manager can take them without the object reading as
+//! drifted. Two builds that differ only in a ceded value therefore share an
+//! applied hash, and the third clause compares those fields with the build
+//! while Kix still owns them ([`drift::owned_ceded_fields_match`]). Nothing
+//! on the live object says which build wrote it, so the revisions say it,
+//! by the object's name.
 //!
 //! When the revision holds an applied hash for the new build's object hash
 //! and the live object differs from it, the apply reverts drift
@@ -44,11 +52,11 @@
 //! current record's revisions, the kept-orphans revision, or a `Failed` or
 //! `Partial` record's revisions name. An object that a `Degraded`, `Failed`,
 //! or `Partial` record names is taken in only when this Kix cluster wrote
-//! it, because that deploy may never have reached it. For a `Failed` or
-//! `Partial` record that means an `Apply` entry under this Kix cluster's own
-//! field manager. The manager `kix` an older Kix shared between Kix clusters
-//! does not count, so a deploy never takes in an object only another Kix
-//! cluster wrote before the upgrade.
+//! it, because that deploy may never have reached it: the record's revision
+//! holds an applied hash for it, or it has an `Apply` entry under this Kix
+//! cluster's own field manager. The manager `kix` an older Kix shared
+//! between Kix clusters does not count, so a deploy never takes in an
+//! object only another Kix cluster wrote before the upgrade.
 //!
 //! Every record a plan reads has a revision map: a run gives the records an
 //! older Kix wrote revisions before it writes anything
@@ -460,24 +468,23 @@ impl Ledger {
     /// in: an `Active` current record or its kept orphans name it, or a
     /// record whose deploy may not have reached it names it and this Kix
     /// cluster wrote it. Such a record is a `Degraded` current record, or a
-    /// `Failed` or `Partial` record. For the latter only an `Apply` entry
-    /// under this Kix cluster's own manager counts, not the entry under
-    /// `kix` that an older Kix shared between Kix clusters. An object with
-    /// no entry of this cluster came from elsewhere, such as another Kix
-    /// cluster that deploys an object of the same name.
+    /// `Failed` or `Partial` record.
+    ///
+    /// This Kix cluster wrote the object when the record's revision holds
+    /// an applied hash for it, or the object has an `Apply` entry under
+    /// this Kix cluster's own field manager. A revision holds an applied
+    /// hash only for an object a deploy of its Kix cluster applied, and a
+    /// conversion only for one whose note lists the record. The entry is
+    /// for a run killed before it recorded what it applied. The manager
+    /// `kix` an older Kix shared between Kix clusters does not count, so an
+    /// object only another Kix cluster wrote before the upgrade stays.
     fn takes_in(&self, rid: &ResourceId, obj: &kube::api::DynamicObject) -> bool {
         let entries = obj.metadata.managed_fields.as_deref().unwrap_or_default();
-        let view = self.view_of(obj);
-        let written_here = || {
-            entries
-                .iter()
-                .any(|e| view.counts_as_own(e.manager.as_deref()))
-        };
         let applied_here = || self.manager.apply_entry(entries).is_some();
         self.named(rid).any(|n| match n.role {
-            Role::Current if n.phase == PHASE_DEGRADED => written_here(),
-            Role::Current | Role::Kept => true,
-            Role::Stopped => applied_here(),
+            Role::Current if n.phase != PHASE_DEGRADED => true,
+            Role::Kept => true,
+            Role::Current | Role::Stopped => n.applied.is_some() || applied_here(),
         })
     }
 }
@@ -624,7 +631,10 @@ fn decide_present(
     let manager = ledger.view_of(obj);
     let live = fieldsv1::applied_content_hash(obj, &manager);
     let recorded = ledger.applied.entry(id, &hash);
-    if recorded.is_some() && recorded == live.as_deref() {
+    if recorded.is_some()
+        && recorded == live.as_deref()
+        && drift::owned_ceded_fields_match(manifest, obj, &manager)
+    {
         return None;
     }
     if let Some(by) = live.as_deref().and_then(|l| ledger.applied_by(id, l)) {

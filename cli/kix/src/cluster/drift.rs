@@ -491,6 +491,34 @@ pub(crate) fn without_ceded_taken(
     out
 }
 
+/// Return whether each field `manifest` cedes that `manager`'s own `Apply`
+/// entry owns on `obj` holds the value Kix sends for it
+/// ([`apply::forced_manifest`]).
+///
+/// The applied hash leaves ceded fields out, so that another manager can
+/// change them without the object reading as drifted. While Kix's own
+/// entry still owns a ceded field, nobody else changed it, and Kix sends
+/// it. A value that differs from the build's was written by another
+/// deploy of this Kix cluster, and an apply changes it.
+pub(crate) fn owned_ceded_fields_match(
+    manifest: &Value,
+    obj: &DynamicObject,
+    manager: &FieldManager,
+) -> bool {
+    let ceded = apply::ceded_fields(manifest);
+    if ceded.is_empty() {
+        return true;
+    }
+    let Some(fields) = fieldsv1::kix_fieldset(obj, manager) else {
+        return true;
+    };
+    let live = fieldsv1::project(&fieldsv1::merge_typed_metadata(obj), &fields);
+    let sent = fieldsv1::project(&apply::forced_manifest(manifest, obj, manager), &fields);
+    ceded
+        .iter()
+        .all(|c| apply::covered_part(&live, c) == apply::covered_part(&sent, c))
+}
+
 /// Return the manifest Kix sends for `manifest` ([`sent::of`]) without each
 /// field another manager took from Kix on `obj`, ceded or not. An apply of
 /// the result without force is not refused on those fields, and leaves them

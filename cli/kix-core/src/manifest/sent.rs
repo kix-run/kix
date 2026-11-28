@@ -69,42 +69,23 @@ pub fn strip_retired_notes(manifest: &mut Value) {
 }
 
 /// Return the manifest Kix sends for the built manifest `manifest`: the
-/// manifest without the annotations in [`GRAPH_NOTES`].
+/// manifest without the retired notes ([`is_retired_note`]), and without
+/// its `annotations` map when that leaves it empty. What this removes is
+/// what every hash Kix stores leaves out.
 ///
 /// Kix's own Activation record is returned as it is. It belongs to one Kix
-/// cluster, and its annotations say which build it records.
+/// cluster, and its build hash annotation says which build it records:
+/// Kix reads that annotation from the live record.
 pub fn of(manifest: &Value) -> Cow<'_, Value> {
-    without(manifest, GRAPH_NOTES)
-}
-
-/// Return `manifest` without the annotations `notes`, leaving an Activation
-/// record as it is. An `annotations` map left empty is removed.
-fn without<'a>(manifest: &'a Value, notes: &[&str]) -> Cow<'a, Value> {
-    let carries = |a: &serde_json::Map<String, Value>| notes.iter().any(|n| a.contains_key(*n));
-    let Some(annotations) = manifest
+    let carries = manifest
         .pointer("/metadata/annotations")
         .and_then(Value::as_object)
-    else {
-        return Cow::Borrowed(manifest);
-    };
-    if !carries(annotations) || is_record(manifest) {
+        .is_some_and(|a| a.keys().any(|k| is_retired_note(k)));
+    if !carries || is_record(manifest) {
         return Cow::Borrowed(manifest);
     }
     let mut out = manifest.clone();
-    if let Some(meta) = out.get_mut("metadata").and_then(Value::as_object_mut) {
-        let emptied = meta
-            .get_mut("annotations")
-            .and_then(Value::as_object_mut)
-            .is_some_and(|a| {
-                for note in notes {
-                    a.remove(*note);
-                }
-                a.is_empty()
-            });
-        if emptied {
-            meta.remove("annotations");
-        }
-    }
+    strip_retired_notes(&mut out);
     Cow::Owned(out)
 }
 
@@ -114,8 +95,6 @@ mod tests {
     use crate::manifest::keys;
     use crate::manifest::lifecycle::RECORD_KIND;
     use serde_json::json;
-
-    const NOTES: &[&str] = &[keys::IDENTITY_HASH, keys::DEPENDS_ON];
 
     fn config_map(annotations: Value) -> Value {
         json!({
@@ -134,7 +113,7 @@ mod tests {
             keys::READINESS: "none",
             "example.com/owner": "team",
         }));
-        let sent = without(&built, NOTES);
+        let sent = of(&built);
         assert!(matches!(sent, Cow::Owned(_)));
         assert_eq!(
             *sent,
@@ -145,7 +124,7 @@ mod tests {
     #[test]
     fn annotations_left_empty_are_removed() {
         let built = config_map(json!({ keys::IDENTITY_HASH: "h1", keys::DEPENDS_ON: "h2" }));
-        let sent = without(&built, NOTES);
+        let sent = of(&built);
         assert_eq!(sent.pointer("/metadata/annotations"), None);
         assert_eq!(sent.pointer("/data/k"), Some(&json!("v")));
     }
@@ -153,9 +132,9 @@ mod tests {
     #[test]
     fn a_manifest_without_notes_is_borrowed() {
         let built = config_map(json!({ "example.com/owner": "team" }));
-        assert!(matches!(without(&built, NOTES), Cow::Borrowed(_)));
+        assert!(matches!(of(&built), Cow::Borrowed(_)));
         let bare = json!({ "apiVersion": "v1", "kind": "ConfigMap", "metadata": { "name": "a" } });
-        assert!(matches!(without(&bare, NOTES), Cow::Borrowed(_)));
+        assert!(matches!(of(&bare), Cow::Borrowed(_)));
     }
 
     #[test]
@@ -168,13 +147,24 @@ mod tests {
                 "annotations": { keys::IDENTITY_HASH: "h1", keys::DEPENDS_ON: "h2" },
             },
         });
-        assert!(matches!(without(&record, NOTES), Cow::Borrowed(_)));
+        assert!(matches!(of(&record), Cow::Borrowed(_)));
     }
 
+    /// What Kix sends leaves out exactly the retired notes, every one of
+    /// them under every domain, so a manifest that carries one, copied from
+    /// a dump of a live object for example, is not sent with it.
     #[test]
-    fn of_removes_the_graph_notes() {
-        let built = config_map(json!({ keys::IDENTITY_HASH: "h1", keys::DEPENDS_ON: "h2" }));
-        assert_eq!(*of(&built), *without(&built, GRAPH_NOTES));
+    fn of_removes_every_retired_note() {
+        let mut annotations = serde_json::Map::new();
+        for note in GRAPH_NOTES.iter().chain(AFTER_APPLY_NOTES) {
+            annotations.insert(note.to_string(), json!("x"));
+            for old in crate::legacy_domain::legacy_spellings(note) {
+                annotations.insert(old, json!("x"));
+            }
+        }
+        annotations.insert(keys::READINESS.into(), json!("none"));
+        let built = config_map(Value::Object(annotations));
+        assert_eq!(*of(&built), config_map(json!({ keys::READINESS: "none" })));
     }
 
     #[test]

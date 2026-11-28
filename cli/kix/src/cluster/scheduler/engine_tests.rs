@@ -36,6 +36,7 @@ fn m(kind: &str, name: &str, deps: &[&str]) -> Value {
     let api_version = match kind {
         "Job" => "batch/v1",
         "CustomResourceDefinition" => "apiextensions.k8s.io/v1",
+        lifecycle::PACKAGE_INSTANCE_KIND | lifecycle::RECORD_KIND => keys::API_VERSION,
         _ => "v1",
     };
     json!({ "apiVersion": api_version, "kind": kind, "metadata": metadata })

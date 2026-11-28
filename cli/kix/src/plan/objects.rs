@@ -25,11 +25,15 @@
 //!
 //! A write's hash comes from its store path, the file's content hash, never
 //! from its stamped manifest's annotation. The files of the builds the
-//! cluster ran are the manifests of those builds, and on a plan without a
-//! deployed build the build manifests that live objects read as
-//! ([`crate::cluster::owned_view::kix_owned_manifests_against`]). A re-apply
-//! is only a write the diff does not list, and the diff lists every object
-//! whose sent manifest differs from the old side, list order included.
+//! cluster ran are the manifests of those builds. On a plan without a
+//! deployed build they are what the live objects read as
+//! ([`crate::cluster::owned_view::kix_owned_manifests_against`]): the build
+//! manifest when a revision holds its applied hash and the object still
+//! matches it, and otherwise the fields Kix owns on the live object. An
+//! old-side manifest with the new file's object hash sends the same
+//! manifest, wherever it came from. A re-apply is only a write the diff does
+//! not list, and the diff lists every object whose sent manifest differs
+//! from the old side, list order included.
 //!
 //! The plan document lists these objects as `objects` and their [`digest`]
 //! as `objects_digest`, and `kix deploy --plan` refuses a deploy whose
@@ -52,7 +56,6 @@ use crate::cluster::apply::ChangeAction;
 use crate::cluster::scheduler::DeployPlan;
 use crate::eval::store_graph::{StoreGraph, store_hash};
 use crate::manifest::hash::object_hash;
-use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
 use serde_json::Value;
 
@@ -83,7 +86,6 @@ pub(crate) fn of<'a>(
     }
     let ran: HashSet<(ResourceId, String)> = old
         .into_iter()
-        .filter(|m| keys::get(m, keys::IDENTITY_HASH).is_some())
         .map(|m| (ResourceId::from_value(m), object_hash(m)))
         .collect();
 
