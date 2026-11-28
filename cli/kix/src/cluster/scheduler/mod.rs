@@ -352,10 +352,6 @@ struct Run<'a> {
     /// recovery. Excluded from post-deploy pruning because they now belong to
     /// the new build.
     consumed_orphans: HashSet<ResourceId>,
-    /// Whether the run gave up its fields on an orphan another Kix cluster
-    /// still deploys. The record must then stop naming that orphan, so the
-    /// run finalizes.
-    released: bool,
 }
 
 impl<'a> Run<'a> {
@@ -420,7 +416,6 @@ impl<'a> Run<'a> {
             discovery_failed: None,
             skipped: Vec::new(),
             consumed_orphans: HashSet::new(),
-            released: false,
         }
     }
 
@@ -1179,10 +1174,7 @@ impl<'a> Run<'a> {
                 tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, self.resources.release(&rid))
                     .await;
             let message = match released {
-                Ok(Ok(wrote)) => {
-                    self.released |= wrote;
-                    continue;
-                }
+                Ok(Ok(_)) => continue,
                 Ok(Err(e)) => e,
                 Err(_) => format!(
                     "{}: no answer within {}s",
@@ -1506,8 +1498,14 @@ impl<'a> Run<'a> {
         })
     }
 
-    /// Finalize the Activation record unless the run was a no-op or a dry run.
-    /// `left` names the orphans the prune left on the cluster.
+    /// Finalize the Activation record unless the run was a dry run. `left`
+    /// names the orphans the prune left on the cluster.
+    ///
+    /// The plan decides whether a run starts, and a run that starts has
+    /// begun its record, so every run finalizes. A run whose writes all
+    /// turned out unneeded still finalizes. Its record may name converted
+    /// revisions or leave out an object it handed over, and only the
+    /// kept-orphans revision written here names what stays on the cluster.
     async fn finalize(self, left: Vec<ResourceId>) -> Result<DeployResult, DeployError> {
         let never_pruned: Vec<ResourceId> = self
             .orphan_rids
@@ -1516,16 +1514,7 @@ impl<'a> Run<'a> {
             .cloned()
             .collect();
         let r = &self.result;
-        let actually_changed = r.created > 0
-            || r.configured > 0
-            || r.pruned > 0
-            || r.already_gone > 0
-            || r.kept > 0
-            || r.failed > 0
-            || self.released;
-        if let Some(record) = &self.record
-            && actually_changed
-        {
+        if let Some(record) = &self.record {
             match tokio::time::timeout(
                 INLINE_BEST_EFFORT_TIMEOUT,
                 record.finalize(
